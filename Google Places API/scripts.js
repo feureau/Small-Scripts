@@ -1,5 +1,6 @@
 var mainArray=[];
 var latestMarker;
+var searchString;
 
 //initialize map. When user clicks on map, adds marker, and add that marker coordinate to mainArray.
 function initMap(){
@@ -47,5 +48,21 @@ function LoopThroughArray(thisArray){
 }
 
 function PrintResult(){
-    WriteToHTML('output','PrintResult() '+LoopThroughArray(mainArray));
+    searchString= document.getElementById("searchString").value;
+    var thingsThatAreEmpty='';
+    if (latestMarker==null){
+        thingsThatAreEmpty+= 'marker ';
+    }
+    if (searchString==''){
+        if (latestMarker==null){
+            thingsThatAreEmpty+= 'and search string ';
+        }else{
+            thingsThatAreEmpty+= 'search string ';
+        }
+    }
+    if(latestMarker==null||searchString==''){
+        WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
+    }else{
+        WriteToHTML('output','searchString '+ searchString + ' latestMarker '+latestMarker.coords);
+    }
 }

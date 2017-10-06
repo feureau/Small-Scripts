@@ -11,13 +11,22 @@
     </head>
     <body>
         <center><h1>Google Maps Places Listing</h1>
+            <p>How to use:</br>
+                <ol>
+                    <li> Click on map to add marker. </br>
+                        The last marker placed will be used as center of search radius. </br>
+                        Previous marker is not removed as reminder to where you've previously searched. </br>
+                        Refresh page to clean up markers.</li>
+                    <li>Search will be conducted on latest marker. Put the type of places you'd like to search in search string box.</li>
+                </ol>
+            </p>
         <script src="scripts.js"></script>
         <p>  <center><div id="map">Map goes here</div>
               <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og&callback=initMap"></script></p>
-        <label>Search String&nbsp<input id="searchString" type="text" value="" /></label>&nbsp<button type="button">Search!</button>
+        <label>Search String&nbsp<input id="searchString" type="text" value="" onclick='PrintResult()'/></label>
 
         <p> </p>
-        <p>        <button onclick='PrintResult()'>Print Result</button>  </p>
+        <p>        <button onclick='PrintResult()'>Search!</button>  </p>
         <p id="output"></p></center>
     </body>
 </html>
