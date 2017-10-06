@@ -1,4 +1,5 @@
 var mainArray=[];
+var latestMarker;
 
 //initialize map. When user clicks on map, adds marker, and add that marker coordinate to mainArray.
 function initMap(){
@@ -16,13 +17,8 @@ function initMap(){
       // Add marker
       addMarker({coords:event.latLng});
       mainArray.push({coords:event.latLng});
+      latestMarker={coords:event.latLng};
     });
-
-    // Loop through markers
-    for(var i = 0;i < mainArray.length;i++){
-      // Add marker
-      addMarker(mainArray[i]);
-    }
 
     // Add Marker Function
     function addMarker(props){
