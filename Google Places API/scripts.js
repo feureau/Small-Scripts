@@ -15,75 +15,32 @@ function initMap(){
     google.maps.event.addListener(map, 'click', function(event){
       // Add marker
       addMarker({coords:event.latLng});
-      WriteToHTML('output',event.latLng);
+      mainArray.push({coords:event.latLng});
     });
-
-    /*
-    // Add marker
-    var marker = new google.maps.Marker({
-      position:{lat:42.4668,lng:-70.9495},
-      map:map,
-      icon:'https://developers.google.com/maps/documentation/javascript/examples/full/images/beachflag.png'
-    });
-
-    var infoWindow = new google.maps.InfoWindow({
-      content:'<h1>Lynn MA</h1>'
-    });
-
-    marker.addListener('click', function(){
-      infoWindow.open(map, marker);
-    });
-    */
-
-    // Array of markers
-    var markers = [
-        {
-            coords:{lat:42.4668,lng:-70.9495},
-            iconImage:'https://developers.google.com/maps/documentation/javascript/examples/full/images/beachflag.png',
-            content:'<h1>Lynn MA</h1>'
-        },
-        {
-            coords:{lat:42.8584,lng:-70.9300},
-            content:'<h1>Amesbury MA</h1>'
-        },
-        {
-            coords:{lat:42.7762,lng:-71.0773}
-        }
-    ];
 
     // Loop through markers
-    for(var i = 0;i < markers.length;i++){
+    for(var i = 0;i < mainArray.length;i++){
       // Add marker
-      addMarker(markers[i]);
+      addMarker(mainArray[i]);
     }
 
     // Add Marker Function
     function addMarker(props){
-      var marker = new google.maps.Marker({
-        position:props.coords,
-        map:map,
-        //icon:props.iconImage
-      });
+        var marker = new google.maps.Marker( { position:props.coords, map:map, } ); //icon:props.iconImage
 
-      // Check for customicon
-      if(props.iconImage){
-        // Set icon image
-        marker.setIcon(props.iconImage);
-      }
+        // Check for customicon
+        if(props.iconImage){ marker.setIcon(props.iconImage); }// Set icon image
 
-      // Check content
-      if(props.content){
-        var infoWindow = new google.maps.InfoWindow({
-          content:props.content
-        });
-
-        marker.addListener('click', function(){
-          infoWindow.open(map, marker);
-        });
-      }
+        // Check content
+        if(props.content){var infoWindow = new google.maps.InfoWindow({content:props.content});
+            marker.addListener('click', function(){infoWindow.open(map, marker);});
+        }
     }
   }
 
+function AddToMainArray(itemToAdd){
+    mainArray.push(itemToAdd);
+}
 
 function WriteToHTML(elementByID, stringToWrite){
     document.getElementById(elementByID).innerHTML = stringToWrite;
@@ -91,13 +48,12 @@ function WriteToHTML(elementByID, stringToWrite){
 
 function LoopThroughArray(thisArray){
     var stringToReturn = 'text ';
-    WriteToHTML('output', "Length " +thisArray.length);
-    for ( i=0; thisArray.length<1; i++ ){
-        stringToReturn = stringToReturn + thisArray[i].position;
+    for ( i=0; thisArray.length>i; i++ ){
+        stringToReturn = stringToReturn + thisArray[i].coords;
     }
     return stringToReturn;
 }
 
 function PrintResult(){
-    WriteToHTML('output','print this '+ mainArray);
+    WriteToHTML('output','PrintResult() '+LoopThroughArray(mainArray));
 }
