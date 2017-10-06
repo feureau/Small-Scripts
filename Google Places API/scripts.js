@@ -47,8 +47,9 @@ function LoopThroughArray(thisArray){
     return stringToReturn;
 }
 
-function PrintResult(){
+function DoSearch(){
     searchString= document.getElementById("searchString").value;
+
     var thingsThatAreEmpty='';
     if (latestMarker==null){
         thingsThatAreEmpty+= 'marker ';
@@ -60,6 +61,7 @@ function PrintResult(){
             thingsThatAreEmpty+= 'search string ';
         }
     }
+
     if(latestMarker==null||searchString==''){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
     }else{
