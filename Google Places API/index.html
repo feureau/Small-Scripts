@@ -1,14 +1,23 @@
 <!DOCTYPE html>
 <html>
+    <head>
+        <style>
+        #map{
+          text-align:center;
+          height:400px;
+          width:50%;
+        }
+      </style>
+    </head>
     <body>
-        <h1>Hello World</h1>
-        <p>I'm hosted with GitHub Pages.</p>
-        <label>Search String
-            <input id="searchString" type="text" value="" />
-        </label>
+        <center><h1>Google Maps Places Listing</h1></center>
         <script src="scripts.js"></script>
-        <button type="button">Search!</button>
+        <p>  <center><div id="map">Map goes here</div></center>
+              <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og&callback=initMap"></script></p>
+        <label>Search String<input id="searchString" type="text" value="" /></label>
+
+        <p> <button type="button">Search!</button></p>
+        <p>        <button onclick='WriteToHTML("output","Test")'>Print Result</button>  </p>
         <p id="output"></p>
-        <button onclick='WriteToHTML("output","Test")'>Print Result</button>  
     </body>
 </html>
