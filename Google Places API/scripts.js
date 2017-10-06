@@ -1,6 +1,6 @@
 var mainArray=[];
 
-
+//initialize map. When user clicks on map, adds marker, and add that marker coordinate to mainArray.
 function initMap(){
     // Map options
     var options = {
@@ -37,10 +37,6 @@ function initMap(){
         }
     }
   }
-
-function AddToMainArray(itemToAdd){
-    mainArray.push(itemToAdd);
-}
 
 function WriteToHTML(elementByID, stringToWrite){
     document.getElementById(elementByID).innerHTML = stringToWrite;
