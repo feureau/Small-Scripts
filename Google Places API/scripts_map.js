@@ -65,7 +65,7 @@ function DoSearch(){
     //     }
     // }
 
-    if(latestMarker==null||searchKeyword==''){
+    if(latestMarker==null){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
     }else{
         WriteToHTML('output','type ' + searchType + ' keyword '+ searchKeyword + ' latestMarker '+latestMarker.coords);
