@@ -20,14 +20,19 @@
                     <li>Search will be conducted on latest marker. Put the type of places you'd like to search in search string box.</li>
                 </ol>
             </p>
-        <script src="scripts.js"></script>
+        <script src="scripts_map.js"></script>
         <p><center><div id="map">Map goes here</div>
         <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og&callback=initMap"></script></p>
+        <p><center><div id="places"><!--Places goes here-->
+            <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?key=AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og&libraries=places"></script></div></p>
+        
+        
         <p><label>type&nbsp<input id="type" type="text" value=""/></label></p>
         <p><label>keyword&nbsp<input id="keyword" type="text" value=""/></label></p>
 
         <p> </p>
         <p>        <button onclick='DoSearch()'>Search!</button>  </p>
+        <p id="output_JSONURL"></p></center>
         <p id="output"></p></center>
     </body>
 </html>

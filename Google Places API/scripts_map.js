@@ -40,7 +40,7 @@ function WriteToHTML(elementByID, stringToWrite){
     document.getElementById(elementByID).innerHTML = stringToWrite;
 }
 
-function LoopThroughArray(thisArray){
+function LoopThroughArrayAndConvertToString(thisArray){
     var stringToReturn = 'text ';
     for ( i=0; thisArray.length>i; i++ ){
         stringToReturn = stringToReturn + thisArray[i].coords;
@@ -67,13 +67,12 @@ function DoSearch(){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
     }else{
         WriteToHTML('output','type ' + type + ' keyword '+ keyword + ' latestMarker '+latestMarker.coords);
-        GetGooglePlaceNearbySearchResults(latestMarker.coords,500,type,keyword,null);
+        GetGooglePlaceNearbySearchResultsJSONURL(latestMarker.coords,500,type,keyword,null);
     }
    
 }
 
-function GetGooglePlaceNearbySearchResults(uncleanedMarkerCoords,searchRadius,type,keyword,next_page_token){
-
+function GetGooglePlaceNearbySearchResultsJSONURL(uncleanedMarkerCoords,searchRadius,type,keyword,next_page_token){
     var url;
     var latestMarkerCoords=CleanUpLongLatString(uncleanedMarkerCoords);
     if(next_page_token==null){
@@ -82,27 +81,7 @@ function GetGooglePlaceNearbySearchResults(uncleanedMarkerCoords,searchRadius,ty
         url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?pagetoken="+next_page_token+"&key="+GetAPIKey();
     }
     
-    WriteToHTML('output',url);
-    
-  fetch(url, {
-    mode: 'no-cors' // 'cors' by default
-  }) 
-    .then(function(response) {
-      if (!response.ok) {
-        throw Error(response.statusText);
-      }
-      // Read the response as json.
-      return response.json();
-    })
-    .then(function(responseAsJson) { 
-      // Do stuff with the JSON
-      console.log(responseAsJson);
-    })
-    .catch(function(error) {
-      console.log('Looks like there was a problem: \n', error);
-    });
-
-    
+    WriteToHTML('output_JSONURL','<a href="'+url+'">Click here for JSON URL</a>');   
 }
 
 function GetAPIKey(){
