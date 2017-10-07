@@ -57,13 +57,13 @@ function DoSearch(){
     if (latestMarker==null){
         thingsThatAreEmpty+= 'marker ';
     }
-    if (searchKeyword==''){
-        if (latestMarker==null){
-            thingsThatAreEmpty+= 'and keyword ';
-        }else{
-            thingsThatAreEmpty+= 'keyword ';
-        }
-    }
+    // if (searchKeyword==''){
+    //     if (latestMarker==null){
+    //         thingsThatAreEmpty+= 'and keyword ';
+    //     }else{
+    //         thingsThatAreEmpty+= 'keyword ';
+    //     }
+    // }
 
     if(latestMarker==null||searchKeyword==''){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
