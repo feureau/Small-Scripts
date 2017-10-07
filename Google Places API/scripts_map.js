@@ -4,6 +4,8 @@ var searchKeyword;
 var searchType;
 var map;
 
+var arrayOfMarkers=[];
+
 //initialize map. When user clicks on map, adds marker, and add that marker coordinate to mainArray.
 function initMap(){
     // Map options
@@ -35,6 +37,12 @@ function initMap(){
         if(props.content){var infoWindow = new google.maps.InfoWindow({content:props.content});
             marker.addListener('click', function(){infoWindow.open(map, marker);});
         }
+        if (arrayOfMarkers.length>0){
+            for (i=0;arrayOfMarkers.length>i;i++){
+                arrayOfMarkers[i].setMap(null);
+            }
+        }
+        arrayOfMarkers.push(marker);
     }
   }
 
