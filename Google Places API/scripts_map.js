@@ -1,6 +1,8 @@
 var mainArray=[];
 var latestMarker;
-var keyword;
+var searchKeyword;
+var searchType;
+var map;
 
 //initialize map. When user clicks on map, adds marker, and add that marker coordinate to mainArray.
 function initMap(){
@@ -11,7 +13,7 @@ function initMap(){
     }
 
     // New map
-    var map = new google.maps.Map(document.getElementById('map'), options);
+    map = new google.maps.Map(document.getElementById('map'), options);
 
     // Listen for click on map
     google.maps.event.addListener(map, 'click', function(event){
@@ -49,13 +51,13 @@ function LoopThroughArrayAndConvertToString(thisArray){
 }
 
 function DoSearch(){
-    var type= document.getElementById("type").value;
-    var keyword= document.getElementById("keyword").value;
+    searchType= document.getElementById("type").value;
+    searchKeyword= document.getElementById("keyword").value;
     var thingsThatAreEmpty='';
     if (latestMarker==null){
         thingsThatAreEmpty+= 'marker ';
     }
-    if (keyword==''){
+    if (searchKeyword==''){
         if (latestMarker==null){
             thingsThatAreEmpty+= 'and keyword ';
         }else{
@@ -63,25 +65,25 @@ function DoSearch(){
         }
     }
 
-    if(latestMarker==null||keyword==''){
+    if(latestMarker==null||searchKeyword==''){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
     }else{
-        WriteToHTML('output','type ' + type + ' keyword '+ keyword + ' latestMarker '+latestMarker.coords);
-        GetGooglePlaceNearbySearchResultsJSONURL(latestMarker.coords,500,type,keyword,null);
+        WriteToHTML('output','type ' + searchType + ' keyword '+ searchKeyword + ' latestMarker '+latestMarker.coords);
+        GetGooglePlaceNearbySearchResultsJSONURL(latestMarker.coords,500,searchType,searchKeyword,null);
     }
-   
+    initializePlaces();
 }
 
-function GetGooglePlaceNearbySearchResultsJSONURL(uncleanedMarkerCoords,searchRadius,type,keyword,next_page_token){
+function GetGooglePlaceNearbySearchResultsJSONURL(uncleanedMarkerCoords,searchRadius,searchType,searchKeyword,next_page_token){
     var url;
     var latestMarkerCoords=CleanUpLongLatString(uncleanedMarkerCoords);
     if(next_page_token==null){
-        url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?location="+latestMarkerCoords+"&radius="+searchRadius+"&type="+type+"&keyword="+keyword+"&sensor=false&key="+GetAPIKey();
+        url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?location="+latestMarkerCoords+"&radius="+searchRadius+"&type="+searchType+"&keyword="+searchKeyword+"&sensor=false&key="+GetAPIKey();
     }else{
         url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?pagetoken="+next_page_token+"&key="+GetAPIKey();
     }
     
-    WriteToHTML('output_JSONURL','<a href="'+url+'">Click here for JSON URL</a>');   
+    WriteToHTML('output_JSONURL','<a href="'+url+'">Click here for JSON URL</a>');
 }
 
 function GetAPIKey(){
