@@ -18,7 +18,8 @@ function initMap(){
       // Add marker
       addMarker({coords:event.latLng});
       mainArray.push({coords:event.latLng});
-      latestMarker={coords:event.latLng};
+        latestMarker={coords:event.latLng};
+      //latestMarker={coords:event.lat,coords:event.lng};
     });
 
     // Add Marker Function
@@ -48,8 +49,8 @@ function LoopThroughArray(thisArray){
 }
 
 function DoSearch(){
-    keyword= document.getElementById("keyword").value;
-
+    var type= document.getElementById("type").value;
+    var keyword= document.getElementById("keyword").value;
     var thingsThatAreEmpty='';
     if (latestMarker==null){
         thingsThatAreEmpty+= 'marker ';
@@ -65,6 +66,87 @@ function DoSearch(){
     if(latestMarker==null||keyword==''){
         WriteToHTML('output','You forgot to add a '+ thingsThatAreEmpty+'on the map.');
     }else{
-        WriteToHTML('output','keyword '+ keyword + ' latestMarker '+latestMarker.coords);
+        WriteToHTML('output','type ' + type + ' keyword '+ keyword + ' latestMarker '+latestMarker.coords);
+        GetGooglePlaceNearbySearchResults(latestMarker.coords,500,type,keyword,null);
     }
+   
+}
+
+function GetGooglePlaceNearbySearchResults(uncleanedMarkerCoords,searchRadius,type,keyword,next_page_token){
+
+    var url;
+    var latestMarkerCoords=CleanUpLongLatString(uncleanedMarkerCoords);
+    if(next_page_token==null){
+        url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?location="+latestMarkerCoords+"&radius="+searchRadius+"&type="+type+"&keyword="+keyword+"&sensor=false&key="+GetAPIKey();
+    }else{
+        url="https://maps.googleapis.com/maps/api/place/nearbysearch/json?pagetoken="+next_page_token+"&key="+GetAPIKey();
+    }
+    
+    WriteToHTML('output',url);
+    
+  fetch(url, {
+    mode: 'no-cors' // 'cors' by default
+  }) 
+    .then(function(response) {
+      if (!response.ok) {
+        throw Error(response.statusText);
+      }
+      // Read the response as json.
+      return response.json();
+    })
+    .then(function(responseAsJson) { 
+      // Do stuff with the JSON
+      console.log(responseAsJson);
+    })
+    .catch(function(error) {
+      console.log('Looks like there was a problem: \n', error);
+    });
+
+    
+}
+
+function GetAPIKey(){
+    return 'AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og';
+}
+
+function GetDesiredDataFromJSON(desiredDataType, theJSONArrayToSearchFrom){
+    var dataToReturn;
+
+    if (desiredDataType == 'next_page_token'){
+        for (i = 0; i < theJSONArrayToSearchFrom.results.length; i++) {
+            dataToReturn[i] = theJSONArrayToSearchFrom.results[i].next_page_token;
+        }
+    }
+
+    if (desiredDataType == 'name'){
+        for (i = 0; i < theJSONArrayToSearchFrom.results.length; i++) {
+            dataToReturn[i] = theJSONArrayToSearchFrom.results[i].name;
+        }
+    }
+
+    if (desiredDataType == 'formatted_address'){
+        for (i = 0; i < theJSONArrayToSearchFrom.results.length; i++) {
+            dataToReturn[i] = theJSONArrayToSearchFrom.results[i].formatted_address;
+        }
+    }
+
+    if (desiredDataType == 'place_id'){
+        for (i = 0; i < theJSONArrayToSearchFrom.results.length; i++) {
+            dataToReturn[i] = theJSONArrayToSearchFrom.results[i].place_id;
+        }
+    }
+    
+    return dataToReturn;
+}
+
+function CleanUpLongLatString(inputLongLatObject){
+    var stringToCleanup=''+inputLongLatObject;
+    var returnString='';
+    for (i=0;i<stringToCleanup.length;i++){
+        if (stringToCleanup.charAt(i)!='(' && stringToCleanup.charAt(i)!=')' && stringToCleanup.charAt(i)!=' '){
+            returnString+=stringToCleanup.charAt(i);
+        }
+    }
+    
+    return returnString;
 }
