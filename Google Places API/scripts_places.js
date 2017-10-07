@@ -5,6 +5,9 @@ var infowindow;
 var addressHolder;
 var phoneNumberHolder;
 
+var tempArray;
+
+var finalOutputArray;
 var finalOutputString;
 
 function initializePlaces() {
@@ -14,10 +17,11 @@ function initializePlaces() {
     //       center: gmapsLatLngLatestMarkerCoords,
     //       zoom: 15
     //     });
-
+    finalOutputArray=[];
+    finalOutputString='';
     var request = {
         location: latestMarker.coords,
-        radius: '500',
+        radius: '50000',
         type: [searchType],
         keyword: [searchKeyword]
     };
@@ -28,20 +32,16 @@ function initializePlaces() {
 }
 
 function PlacesCallback(results, status) {
-    finalOutputString='';
     var stringOutput='Results: ';
     if (status == google.maps.places.PlacesServiceStatus.OK) {
         for (var i = 0; i < results.length; i++) {
             var place = results[i];
-            finalOutputString+=place.name + ', ';
-            finalOutputString+=place.place_id + ', ';
+ 
             var requestForGetDetails = {
                 placeId: place.place_id
               };
             service.getDetails(requestForGetDetails, GetDetailsCallback);
             
-            finalOutputString+='<br>';  
-            //createMarker(results[i]);
     }
     //wait(10000);
     WriteToHTML('output_PLACES', finalOutputString );
@@ -50,20 +50,29 @@ function PlacesCallback(results, status) {
 
 function GetDetailsCallback(place, status) {
     if (status == google.maps.places.PlacesServiceStatus.OK) {
-        finalOutputString+=place.formatted_address + ', ';
-        finalOutputString+=place.formatted_phone_number + ', ';
+        AppendToFinalOutputString(place.name,true);
+        AppendToFinalOutputString(place.formatted_address,true);
+        AppendToFinalOutputString(place.formatted_phone_number,true);
+        AppendToFinalOutputString(place.website,true);
+        AppendToFinalOutputString(place.place_id,true);
+        AppendToFinalOutputString('<br>',false);
+        WriteToHTML('output_PLACES', finalOutputString );
     }
     
-  }
+}
+
+function AppendToFinalOutputString(stringToAdd,withComma){
+    if (withComma==true){
+
+        finalOutputString+=stringToAdd + ', ';
+    }
+    else{
+        finalOutputString+=stringToAdd;
+    }
+}
+
 
 function GetAPIKey(){
     return 'AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og';
 }
 
-function wait(ms){
-    var start = new Date().getTime();
-    var end = start;
-    while(end < start + ms) {
-      end = new Date().getTime();
-   }
- }
