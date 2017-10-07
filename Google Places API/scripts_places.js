@@ -2,6 +2,11 @@ var map;
 var service;
 var infowindow;
 
+var addressHolder;
+var phoneNumberHolder;
+
+var finalOutputString;
+
 function initializePlaces() {
     // var gmapsLatLngLatestMarkerCoords = new google.maps.LatLng(latestMarker.coords);
 
@@ -12,29 +17,53 @@ function initializePlaces() {
 
     var request = {
         location: latestMarker.coords,
-        radius: '50000',
-        type: [searchType]
+        radius: '500',
+        type: [searchType],
+        keyword: [searchKeyword]
     };
-    WriteToHTML('output','Search type: '+searchType+' Search coords: '+latestMarker.coords);
+    // WriteToHTML('output','Search type: '+searchType+' Search coords: '+latestMarker.coords);
     service = new google.maps.places.PlacesService(map);
     service.nearbySearch(request, PlacesCallback);
     
 }
 
 function PlacesCallback(results, status) {
+    finalOutputString='';
     var stringOutput='Results: ';
     if (status == google.maps.places.PlacesServiceStatus.OK) {
         for (var i = 0; i < results.length; i++) {
             var place = results[i];
-            stringOutput+=place.name+', ';
-            stringOutput+=place.formatted_address +', ';
-            stringOutput+=place.formatted_phone_number +', ';
+            finalOutputString+=place.name + ', ';
+            finalOutputString+=place.place_id + ', ';
+            var requestForGetDetails = {
+                placeId: place.place_id
+              };
+            service.getDetails(requestForGetDetails, GetDetailsCallback);
+            
+            finalOutputString+='<br>';  
             //createMarker(results[i]);
     }
-    WriteToHTML('output_PLACES', stringOutput );
+    //wait(10000);
+    WriteToHTML('output_PLACES', finalOutputString );
   }
 }
+
+function GetDetailsCallback(place, status) {
+    if (status == google.maps.places.PlacesServiceStatus.OK) {
+        finalOutputString+=place.formatted_address + ', ';
+        finalOutputString+=place.formatted_phone_number + ', ';
+    }
+    
+  }
 
 function GetAPIKey(){
     return 'AIzaSyASDYuvialF6b8cR5HCUq6MsFuxxckw3og';
 }
+
+function wait(ms){
+    var start = new Date().getTime();
+    var end = start;
+    while(end < start + ms) {
+      end = new Date().getTime();
+   }
+ }
