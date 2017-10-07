@@ -31,8 +31,11 @@ function initializePlaces() {
     
 }
 
-function PlacesCallback(results, status) {
+function PlacesCallback(results, status, pagination) {
     var stringOutput='Results: ';
+    
+
+
     if (status == google.maps.places.PlacesServiceStatus.OK) {
         for (var i = 0; i < results.length; i++) {
             var place = results[i];
@@ -44,6 +47,9 @@ function PlacesCallback(results, status) {
             
     }
     //wait(10000);
+    if (pagination.hasNextPage) {
+        pagination.nextPage();
+    }
     WriteToHTML('output_PLACES', finalOutputString );
   }
 }
