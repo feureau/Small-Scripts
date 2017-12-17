@@ -1,42 +1,52 @@
 # How to delete the commit history in github
 
-from [Hellocoding](https://hellocoding.wordpress.com/2015/01/19/delete-all-commit-history-github/).
+### First Method
 
-Sometimes you may find deleting the commit history of your github project repository useful. You can easily delete the commit history by following the procedure below.
+Deleting the `.git` folder may cause problems in our git repository. If we want to delete all of our commits history, but keep the code in its current state, try this:
 
-It is always useful to keep the backup of your repository in your computer before removing all the commit history.
+```
+# Check out to a temporary branch:
+git checkout --orphan TEMP_BRANCH
 
-Let us start by cloning a github project. I am cloning ‘myproject’, you clone yours.
+# Add all the files:
+git add -A
 
-    $ git clone https://github.com/acsudeep/myproject.git
+# Commit the changes:
+git commit -am "Initial commit"
 
-Since all the commit history are in the “.git” folder, we have to remove it. So, go inside your project folder. For me the project folder is ‘myproject’.
+# Delete the old branch:
+git branch -D master
 
-    $ cd myproject
+# Rename the temporary branch to master:
+git branch -m master
 
-And delete the ‘.git folder’ with this command.
+# Finally, force update to our repository:
+git push -f origin master
+```
 
-    $ sudo rm -rf .git
+This will not keep our old commits history around. **But if this doesn't work, try the next method below.**
 
-Now, let us re-initialize the repository.
+### Second Method
+```
+# Clone the project, e.g. `myproject` is my project repository:
+git clone https://github/heiswayi/myproject.git
 
-    $ git init
+# Since all of the commits history are in the `.git` folder, we have to remove it:
+cd myproject
 
-    $ git remote add origin https://github.com/acsudeep/myproject.git
-    # add remote url
+# And delete the `.git` folder:
+rm -rf .git
 
-    $ git remote -v
-    # verify
+# Now, re-initialize the repository:
+git init
+git remote add origin https://github.com/heiswayi/myproject.git
+git remote -v
 
-Next, let us add all our files and commit the changes.
+# Add all the files and commit the changes:
+git add --all
+git commit -am "Initial commit"
 
-    $ git add --all
-    $ git commit -am 'initial commit'
-
-Now, since we just have one commit i.e ‘initial commit’. Let us force push update to our master branch of our project repository.
-
-    $ git push -f origin master
-
-You may need to provide the credentials for your account.
-
-Go and check your project repository in github, you should see only one commit.
+# Force push update to the master branch of our project repository:
+git push -f origin master
+```
+**NOTE:** You might need to provide the credentials for your GitHub account.
