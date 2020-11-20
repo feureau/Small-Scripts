@@ -1,12 +1,15 @@
 [Bookmarks]
-[Recent]
-D:\Lego\LEGO Review Ep1\Shots\60 fps\
-D:\Lego\LEGO Review Ep1\
-C:\Users\Feureau\Documents\MEGA\Blender\Blender Config\
-D:\Lego\Minifigs\Ultron\
+C:\Users\Feureau\Documents\MEGA\Lego\
 C:\Users\Feureau\Documents\MEGA\Lego\LEGO Review Ep1\
-C:\Users\Feureau\Documents\MEGA\Lego\LEGO Review Ep1\Shots\60 fps\
-C:\Users\Feureau\Documents\MEGA\Lego\ZMBX\
-C:\Users\Feureau\Documents\MEGA\Blender\Blender Config\Addons\Mecabricks addons\Blender Advanced\
-C:\Users\Feureau\Documents\MEGA\Lego\LEGO Review Ep1\Assets\Flags\
-C:\Users\Feureau\Documents\MEGA\Lego\LEGO Review Ep1\Assets\Flags\textures\
+C:\Users\Feureau\Dropbox\
+[Recent]
+D:\Lego\Tunas - Teacher Virtual Concert\
+D:\Lego\Tunas - Teacher Virtual Concert\Shots\
+D:\Lego\Tunas - Teacher Virtual Concert\zmbx\
+D:\Lego\Renders\
+D:\Lego\Tunas - Teacher Virtual Concert\Logo\
+C:\Users\Feureau\Documents\MEGA\Blender\Blender Addons\importldraw1.1.11_for_blender_281\io_scene_importldraw\loadldraw\
+C:\Users\Feureau\Desktop\
+C:\Users\Feureau\Documents\MEGA\Blender\Blender Addons\
+C:\Users\Feureau\Documents\MEGA\Blender\
+C:\Users\Feureau\Dropbox\Lego\
