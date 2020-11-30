@@ -14,5 +14,9 @@
 
  (setq w32-use-visible-system-caret nil)
  
- (global-set-key [(control ?h)] 'delete-backward-char)
- (normal-erase-is-backspace-mode 1)
+;; (global-set-key [(control ?h)] 'delete-backward-char)
+;; (normal-erase-is-backspace-mode 1)
+
+  (global-set-key [?\C-h] 'delete-backward-char)
+  (global-set-key [?\C-x ?h] 'help-command)
+                           ;; overrides mark-whole-buffer
