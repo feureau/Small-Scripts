@@ -12,6 +12,9 @@
  ;; If there is more than one, they won't work right.
  )
 
+(global-visual-line-mode 1)
+(global-whitespace-mode 1)
+
  (setq w32-use-visible-system-caret nil)
  
 ;; (global-set-key [(control ?h)] 'delete-backward-char)
