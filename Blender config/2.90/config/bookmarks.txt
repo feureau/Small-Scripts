@@ -1,15 +1,14 @@
 [Bookmarks]
-C:\Users\Feureau\Documents\MEGA\Lego\
-C:\Users\Feureau\Documents\MEGA\Lego\LEGO Review Ep1\
+D:\Lego\
 C:\Users\Feureau\Dropbox\
 [Recent]
-D:\Lego\Tunas - Teacher Virtual Concert\
-D:\Lego\Tunas - Teacher Virtual Concert\Shots\
+D:\Lego\Tunas - Teacher Virtual Concert\Synced Video\
+D:\Lego\Tunas - Teacher Virtual Concert\Source Material\
 D:\Lego\Tunas - Teacher Virtual Concert\zmbx\
+D:\Lego\Tunas - Teacher Virtual Concert\
+C:\Users\Feureau\Documents\
 D:\Lego\Renders\
-D:\Lego\Tunas - Teacher Virtual Concert\Logo\
-C:\Users\Feureau\Documents\MEGA\Blender\Blender Addons\importldraw1.1.11_for_blender_281\io_scene_importldraw\loadldraw\
-C:\Users\Feureau\Desktop\
-C:\Users\Feureau\Documents\MEGA\Blender\Blender Addons\
-C:\Users\Feureau\Documents\MEGA\Blender\
 C:\Users\Feureau\Dropbox\Lego\
+D:\Lego\Tunas - Teacher Virtual Concert\Output\Playblast\
+D:\Lego\Tunas - Teacher Virtual Concert\Output\
+D:\Lego\Parts\
