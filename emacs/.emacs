@@ -13,3 +13,6 @@
  )
 
  (setq w32-use-visible-system-caret nil)
+ 
+ (global-set-key [(control ?h)] 'delete-backward-char)
+ (normal-erase-is-backspace-mode 1)
