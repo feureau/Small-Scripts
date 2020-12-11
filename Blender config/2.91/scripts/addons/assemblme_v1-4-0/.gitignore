@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+error_log/
+backups/
+assemblme_updater/
+assemblme_purchase_verification.txt

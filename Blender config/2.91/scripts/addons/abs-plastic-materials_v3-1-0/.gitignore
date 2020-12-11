@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.blend1
+abs-plastic-materials_updater/
+abs_plastic_materials_updater/
+abs_plastic_materials (2.79 backup).blend
+abs_plastic_purchase_verification.txt

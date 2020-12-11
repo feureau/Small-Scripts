@@ -1,0 +1,51 @@
+### revision 2019.1.2 ### (20 Jan 2020)
+MecaFig:
+	- updated the importer to read .zmbx format (v2.0.0).
+		(.dae (Collada) export with the new version of the Workshop is no longer
+		supported)
+	Shading:
+		- added "3815uv4", "3816uv5" & "3817uv5" UV Maps.
+		- updated "Mecabricks Color Palette".
+Misc:
+	- code improvements.
+
+### revision 2019.1.1 ### (17 Dec 2019)
+MecaFig:
+	- added "Add From File" function allowing to add a MecaFig with the colors &
+		maps for each MiniFig(s) from one (or multiple) file(s) (both .dae & .zmbx
+		formats are supported, extra parts are ignored).
+	Geometry:
+		- reworked "Geometry" Panel.
+		- added "Mesh" selection for "Legs", "Body" & "Head".
+		- fixed issue with Subsurf.
+	Armature:
+		- added bones for the fingers of the "Hands".
+		- added "SP_Hand.L" & "SP_Hand.R" bones for control special movements of
+		  the fingers.
+		- added "SP_Head_Roll" bone allowing to roll the head on itself whatever
+		  its position.
+		- fixed issue with "Rigid / Soft" & "FK / IK" switches when animated.
+		- fixed by default the "Scale" parameter for the Armature to 10 for matching
+		  with Mecabricks add-ons.
+		- misc improvements.
+	Shading:
+		- added support for dual-molded parts.
+		- added normal maps for extra details (mold lines, injection point,
+		  LEGO(R) logo, etc...).
+		- added "Use Normal Map" option.
+		- added support for new "Color" & "Data" maps.
+		- added "Workflow" option for select between "Decoration/Metalness" &
+		  "Color/Data" maps workflow.
+		- removed "Bump Map".
+		- fixed issue with scale of the Shader when the "Scale" parameter of the
+		  Armature is set to a value different from 1.
+		- misc improvements.
+Help:
+	- added "MecaFig Video Tutorials" web link to the "Help" Panel.
+Misc:
+	- code improvements
+	- updated "MecaFig Manual" to version 2019.1.1.
+	- updated "MecaFig Quick Install".
+
+### revision 2019.0.1 ### (18 Sep 2019)
+- first release.
