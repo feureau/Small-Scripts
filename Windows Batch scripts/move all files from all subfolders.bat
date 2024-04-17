@@ -1,0 +1,1 @@
+FOR /R "." %%i IN (*.*) DO MOVE /Y "%%i" "."
