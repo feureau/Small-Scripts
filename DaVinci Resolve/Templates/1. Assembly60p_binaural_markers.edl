@@ -1,0 +1,126 @@
+TITLE: 1. Assembly60p_binaural_markers
+FCM: NON-DROP FRAME
+
+001  001      V     C        00:00:00:00 00:00:00:01 00:00:00:00 00:00:00:01  
+ |C:ResolveColorBlue |M:Marker 41 |D:1
+
+002  001      V     C        00:01:00:00 00:01:00:01 00:01:00:00 00:01:00:01  
+ |C:ResolveColorBlue |M:Marker 1 |D:1
+
+003  001      V     C        00:02:00:00 00:02:00:01 00:02:00:00 00:02:00:01  
+ |C:ResolveColorBlue |M:Marker 2 |D:1
+
+004  001      V     C        00:03:00:00 00:03:00:01 00:03:00:00 00:03:00:01  
+ |C:ResolveColorBlue |M:Marker 3 |D:1
+
+005  001      V     C        00:04:00:00 00:04:00:01 00:04:00:00 00:04:00:01  
+ |C:ResolveColorBlue |M:Marker 4 |D:1
+
+006  001      V     C        00:05:00:00 00:05:00:01 00:05:00:00 00:05:00:01  
+ |C:ResolveColorBlue |M:Marker 5 |D:1
+
+007  001      V     C        00:06:00:00 00:06:00:01 00:06:00:00 00:06:00:01  
+ |C:ResolveColorBlue |M:Marker 6 |D:1
+
+008  001      V     C        00:07:00:00 00:07:00:01 00:07:00:00 00:07:00:01  
+ |C:ResolveColorBlue |M:Marker 7 |D:1
+
+009  001      V     C        00:08:00:00 00:08:00:01 00:08:00:00 00:08:00:01  
+ |C:ResolveColorBlue |M:Marker 8 |D:1
+
+010  001      V     C        00:09:00:00 00:09:00:01 00:09:00:00 00:09:00:01  
+ |C:ResolveColorBlue |M:Marker 9 |D:1
+
+011  001      V     C        00:10:00:00 00:10:00:01 00:10:00:00 00:10:00:01  
+ |C:ResolveColorBlue |M:Marker 10 |D:1
+
+012  001      V     C        00:11:00:00 00:11:00:01 00:11:00:00 00:11:00:01  
+ |C:ResolveColorBlue |M:Marker 11 |D:1
+
+013  001      V     C        00:12:00:00 00:12:00:01 00:12:00:00 00:12:00:01  
+ |C:ResolveColorBlue |M:Marker 12 |D:1
+
+014  001      V     C        00:13:00:00 00:13:00:01 00:13:00:00 00:13:00:01  
+ |C:ResolveColorBlue |M:Marker 13 |D:1
+
+015  001      V     C        00:14:00:00 00:14:00:01 00:14:00:00 00:14:00:01  
+ |C:ResolveColorBlue |M:Marker 14 |D:1
+
+016  001      V     C        00:15:00:00 00:15:00:01 00:15:00:00 00:15:00:01  
+ |C:ResolveColorBlue |M:Marker 15 |D:1
+
+017  001      V     C        00:16:00:00 00:16:00:01 00:16:00:00 00:16:00:01  
+ |C:ResolveColorBlue |M:Marker 16 |D:1
+
+018  001      V     C        00:17:00:00 00:17:00:01 00:17:00:00 00:17:00:01  
+ |C:ResolveColorBlue |M:Marker 17 |D:1
+
+019  001      V     C        00:18:00:00 00:18:00:01 00:18:00:00 00:18:00:01  
+ |C:ResolveColorBlue |M:Marker 18 |D:1
+
+020  001      V     C        00:19:00:00 00:19:00:01 00:19:00:00 00:19:00:01  
+ |C:ResolveColorBlue |M:Marker 19 |D:1
+
+021  001      V     C        00:20:00:00 00:20:00:01 00:20:00:00 00:20:00:01  
+ |C:ResolveColorBlue |M:Marker 20 |D:1
+
+022  001      V     C        00:21:00:00 00:21:00:01 00:21:00:00 00:21:00:01  
+ |C:ResolveColorBlue |M:Marker 21 |D:1
+
+023  001      V     C        00:22:00:00 00:22:00:01 00:22:00:00 00:22:00:01  
+ |C:ResolveColorBlue |M:Marker 22 |D:1
+
+024  001      V     C        00:23:00:00 00:23:00:01 00:23:00:00 00:23:00:01  
+ |C:ResolveColorBlue |M:Marker 23 |D:1
+
+025  001      V     C        00:24:00:00 00:24:00:01 00:24:00:00 00:24:00:01  
+ |C:ResolveColorBlue |M:Marker 24 |D:1
+
+026  001      V     C        00:25:00:00 00:25:00:01 00:25:00:00 00:25:00:01  
+ |C:ResolveColorBlue |M:Marker 25 |D:1
+
+027  001      V     C        00:26:00:00 00:26:00:01 00:26:00:00 00:26:00:01  
+ |C:ResolveColorBlue |M:Marker 26 |D:1
+
+028  001      V     C        00:27:00:00 00:27:00:01 00:27:00:00 00:27:00:01  
+ |C:ResolveColorBlue |M:Marker 27 |D:1
+
+029  001      V     C        00:28:00:00 00:28:00:01 00:28:00:00 00:28:00:01  
+ |C:ResolveColorBlue |M:Marker 28 |D:1
+
+030  001      V     C        00:29:00:00 00:29:00:01 00:29:00:00 00:29:00:01  
+ |C:ResolveColorBlue |M:Marker 29 |D:1
+
+031  001      V     C        00:30:00:00 00:30:00:01 00:30:00:00 00:30:00:01  
+ |C:ResolveColorBlue |M:Marker 30 |D:1
+
+032  001      V     C        00:31:00:00 00:31:00:01 00:31:00:00 00:31:00:01  
+ |C:ResolveColorBlue |M:Marker 31 |D:1
+
+033  001      V     C        00:32:00:00 00:32:00:01 00:32:00:00 00:32:00:01  
+ |C:ResolveColorBlue |M:Marker 32 |D:1
+
+034  001      V     C        00:33:00:00 00:33:00:01 00:33:00:00 00:33:00:01  
+ |C:ResolveColorBlue |M:Marker 33 |D:1
+
+035  001      V     C        00:34:00:00 00:34:00:01 00:34:00:00 00:34:00:01  
+ |C:ResolveColorBlue |M:Marker 34 |D:1
+
+036  001      V     C        00:35:00:00 00:35:00:01 00:35:00:00 00:35:00:01  
+ |C:ResolveColorBlue |M:Marker 35 |D:1
+
+037  001      V     C        00:36:00:00 00:36:00:01 00:36:00:00 00:36:00:01  
+ |C:ResolveColorBlue |M:Marker 36 |D:1
+
+038  001      V     C        00:37:00:00 00:37:00:01 00:37:00:00 00:37:00:01  
+ |C:ResolveColorBlue |M:Marker 37 |D:1
+
+039  001      V     C        00:38:00:00 00:38:00:01 00:38:00:00 00:38:00:01  
+ |C:ResolveColorBlue |M:Marker 38 |D:1
+
+040  001      V     C        00:39:00:00 00:39:00:01 00:39:00:00 00:39:00:01  
+ |C:ResolveColorBlue |M:Marker 39 |D:1
+
+041  001      V     C        00:40:00:00 00:40:00:01 00:40:00:00 00:40:00:01  
+ |C:ResolveColorBlue |M:Marker 40 |D:1
+
