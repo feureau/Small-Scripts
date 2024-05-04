@@ -2,7 +2,7 @@ TITLE: 1. Assembly60p_binaural_markers
 FCM: NON-DROP FRAME
 
 001  001      V     C        00:00:00:00 00:00:00:01 00:00:00:00 00:00:00:01  
- |C:ResolveColorBlue |M:Marker 41 |D:1
+ |C:ResolveColorBlue |M:Marker 0 |D:1
 
 002  001      V     C        00:01:00:00 00:01:00:01 00:01:00:00 00:01:00:01  
  |C:ResolveColorBlue |M:Marker 1 |D:1
