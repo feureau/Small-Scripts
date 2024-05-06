@@ -2,11 +2,11 @@
 ::cd %your_dir%
 ::ECHO "cd %your_dir%"
 
-ECHO "call OW split to vert - 8k HDR - GPU.bat"
-call "OW split to vert - 8k HDR - GPU.bat"
+ECHO "call OW split Horz - HD HDR - GPU.bat"
+call "OW split Horz - HD HDR - GPU.bat"
 
-ECHO "Call OW split Horz - scale_cuda.bat"
-call "OW split Horz - scale_cuda.bat"
+ECHO "Call OW split to vert - HD HDR - GPU.bat"
+call "OW split to vert - HD HDR - GPU.bat"
 
 ECHO "Call move to processed"
 call "Move to Processed.bat"

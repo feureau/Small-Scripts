@@ -9,7 +9,7 @@ FOR %%A IN (*.mp4) DO (
     ::REM No need to use SHIFT anymore.
     ECHO "%%A"
 
-    ffmpeg -y -ss 00:05.39 -to 00:18.51 -accurate_seek  -y -hwaccel cuda -hwaccel_output_format cuda -i "%%A" -c:v hevc_nvenc -cq:v 16  -b_ref_mode 0 -c:a copy -map 0 -preset fast -tune hq -lookahead_level auto -vf "scale_cuda=-2:2160:interp_algo=lanczos" "%%A.split.4k.mov"
+    ffmpeg -y -ss 00:05.39 -to 00:18.51 -accurate_seek  -y -hwaccel cuda -hwaccel_output_format cuda -i "%%A" -c:v hevc_nvenc -cq:v 16  -b_ref_mode 0 -c:a copy -map 0 -preset fast -tune hq -lookahead_level auto -vf "scale_cuda=-2:1920:interp_algo=lanczos" "%%A.split.4k.mov"
 move "%%A.split.4k.mov" "%cd%\horz split"
 popd
 )
