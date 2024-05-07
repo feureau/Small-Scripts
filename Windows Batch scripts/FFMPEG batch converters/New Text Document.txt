@@ -1,6 +1,11 @@
+https://developers.google.com/media/vp9/hdr-encoding
+
 https://forums.developer.nvidia.com/t/problems-with-hwaccel-cuda-logo-overlay-and-drawtext/141716
 
   	ffmpeg -y  -init_hw_device cuda=cuda -filter_hw_device cuda -hwaccel cuda -hwaccel_output_format cuda -i "$f" -i /home/tst/logos/logo.png -flags -global_header -filter_complex "[0:v]hwdownload,format=p010le,overlay=120:80,drawtext=text='%{eif\:trunc(($duration-t)/3600)\:d}\:%{eif\:trunc(mod($duration-t,3600)/60)\:d\:2}\:%{eif\:mod(($duration-t),60)\:d\:2}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf:x=40:y=main_h-40:fontsize=40:fontcolor=white@0.7:borderw=2:bordercolor=black@0.3:box=0,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf:text='#$f':x=(main_w-text_w-30):y=20:fontsize=40:fontcolor=white@0.7:borderw=1:bordercolor=black@0.3:box=0,hwupload_cuda" -c:v hevc_nvenc -profile:v main10 -preset slow -crf 15 -format yuv420p10le -f mp4-y /home/tst/test1.mp4
 
 
 ffmpeg -y  -init_hw_device cuda=cuda -filter_hw_device cuda -hwaccel cuda -hwaccel_output_format cuda -i "$f" -i /home/tst/logos/logo.png -flags -global_header -filter_complex "[0:v]hwdownload,format=p010le,overlay=120:80,drawtext=text='%{eif\:trunc(($duration-t)/3600)\:d}\:%{eif\:trunc(mod($duration-t,3600)/60)\:d\:2}\:%{eif\:mod(($duration-t),60)\:d\:2}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf:x=40:y=main_h-40:fontsize=40:fontcolor=white@0.7:borderw=2:bordercolor=black@0.3:box=0,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf:text='#$f':x=(main_w-text_w-30):y=20:fontsize=40:fontcolor=white@0.7:borderw=1:bordercolor=black@0.3:box=0,hwupload_cuda" -c:v hevc_nvenc -profile:v main10 -preset slow -crf 15 -format yuv420p10le  -map 0:m:language:ger -c:a libfdk_aac -ar:a 48000 -channel_layout:a 5.1 -ab:a 640k -sn -f mp4-y /home/tst/movie.mp4
+
+
+-movflags use_metadata_tags -map_metadata 0 
