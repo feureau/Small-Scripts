@@ -22,3 +22,24 @@ ffmpeg -y -vsync 0 -hwaccel cuda -hwaccel_output_format cuda -i input.mp4 -c:a c
 https://forum.videohelp.com/threads/405871-color-space-bt709-to-bt2020-but-the-player-display-color-is-different
 
 -vf zscale=min=709:m=2020_ncl:tin=709:t=smpte2084:pin=709:p=2020,format=yuv420p10le -c:v something
+
+
+https://gist.github.com/garoto/54b46513fa893f48875a89bee0056d63
+
+ffmpeg  -i <inputfile>  \ 
+-filter:v hwupload_cuda,scale_npp=w=1920:h=1080:format=nv12:interp_algo=lanczos,hwdownload \
+-c:v hevc_nvenc -profile:v main10 -preset slow \
+-rc vbr_hq -c:a:0 copy <outputfile>
+
+
+https://superuser.com/questions/1525315/hevc-nvenc-option-information/1549957#1549957
+
+ ffmpeg -strict 2 -hwaccel auto -i "inputfile.mp4"  -c:v hevc_nvenc -rc vbr -cq 24 -qmin 24 -qmax 24 -profile:v main10 -pix_fmt p010le -b:v 0K -c:a aac -map 0 "outputfile.mp4"
+
+
+
+
+https://old.reddit.com/r/ffmpeg/comments/ldr64z/nvidia_gpu_filters_while_using_cpu_encoding/
+
+ffmpeg -init_hw_device cuda=cu:0 -filter_hw_device cu -i INPUT -vf "hwupload_cuda,scale_cuda,hwdownload,format=yuv420p" -c:v libx264 -y OUTPUT
+

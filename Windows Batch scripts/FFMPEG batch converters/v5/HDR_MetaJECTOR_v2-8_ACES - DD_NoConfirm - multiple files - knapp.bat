@@ -4,9 +4,9 @@ FOR %%A IN (%*) DO (
     REM Now your batch file handles %%A instead of %1
     REM No need to use SHIFT anymore.
     ECHO %%A
-    mkvmerge.exe -o %%A_hdr.mkv --no-chapters --colour-matrix 0:9 --colour-range 0:1 --colour-transfer-characteristics 0:16 --colour-primaries 0:9  --max-content-light 0:1000 --max-frame-light 0:300 --max-luminance 0:1000 --min-luminance 0:0.0001 --chromaticity-coordinates 0:0.7080,0.2920,0.1700,0.7970,0.1310,0.0460 --white-colour-coordinates 0:0.3127,0.3290 %%A
-    mkvinfo.exe %%A_hdr.mkv
+    mkvmerge.exe -o %%A_HDR_cube_KNAPP.mov --no-chapters --colour-matrix 0:9 --colour-range 0:1 --colour-transfer-characteristics 0:16 --colour-primaries 0:9  --max-content-light 0:1000 --max-frame-light 0:300 --max-luminance 0:1000 --min-luminance 0:0.01 --chromaticity-coordinates 0:0.68,0.32,0.265,0.690,0.15,0.06 --white-colour-coordinates 0:0.3127,0.3290 --attachment-mime-type application/x-cube --attach-file "C:\Users\Feureau\Desktop\HDR-Monitor_v2-3_WesleyKnapp.cube" %%A
 
+    mkvinfo.exe %%A_HDR_cube_KNAPP.mov
 )
 
 REM mkvmerge.exe -o %1_cube_ACES.mp4  --no-chapters --colour-matrix 0:9 --colour-range 0:1 --colour-transfer-characteristics 0:16 --colour-primaries 0:9 --max-content-light 0:1000 --max-frame-light 0:1000 --max-luminance 0:1000 --min-luminance 0:0.01 --chromaticity-coordinates 0:0.68,0.32,0.265,0.690,0.15,0.06 --white-colour-coordinates 0:0.3127,0.3290 --attachment-mime-type application/x-cube --attach-file C:\Users\Feureau\Videos\Wesley_Knapp_HDR_Tools\ACES_Rec2020-ST2084_to_Rec709.cube %1
