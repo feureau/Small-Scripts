@@ -10,7 +10,7 @@ FOR %%A IN (%*) DO (
 
     mkvmerge.exe -o %%A.Horz.HDR_8K.ACES.mov --no-chapters --colour-matrix 0:9 --colour-range 0:1 --colour-transfer-characteristics 0:16 --colour-primaries 0:9  --max-content-light 0:1000 --max-frame-light 0:300 --max-luminance 0:1000 --min-luminance 0:0.0001 --chromaticity-coordinates 0:0.7080,0.2920,0.1700,0.7970,0.1310,0.0460 --white-colour-coordinates 0:0.3127,0.3290 %%A.Horz.HDR_8K.mov
 
-    del %%A.Horz.HDR.mov 
+    del %%A.Horz.HDR_8K.mov
     mkvinfo.exe %%A.Horz.HDR_8K.ACES.mov
 
 )
