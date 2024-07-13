@@ -12,7 +12,8 @@ mkvmerge.exe -o %%A_HDR_Horz_8K_CUBE.mkv --colour-matrix 0:9 --colour-range 0:1 
     del %%A_temp_HDR_8K.mkv 
 
     mkvinfo.exe %%A_HDR_Horz_8K_CUBE.mkv
-
+    mkdir 8k
+    move %%A_HDR_Horz_8K_CUBE.mkv 8k\
 )
 
 REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
