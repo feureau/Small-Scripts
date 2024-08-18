@@ -5,14 +5,14 @@
 ECHO "call OW split Horz - HD SDR - GPU.bat"
 call "OW split Horz - HD SDR - GPU.bat"
 
-ECHO "Call OW split to vert - HD SDR - GPU.bat"
-call "OW split to vert - HD SDR - GPU.bat"
+::ECHO "Call OW split to vert - HD SDR - GPU.bat"
+::call "OW split to vert - HD SDR - GPU.bat"
 
 ECHO "Call move to processed"
 call "Move to Processed.bat"
 
-ECHO "call %cd%\vert split\folder_splitter.bat"
-call "%cd%\vert split\folder_splitter.bat"
+::ECHO "call %cd%\vert split\folder_splitter.bat"
+::call "%cd%\vert split\folder_splitter.bat"
 ::cd %your_dir%
 ::ECHO "cd %your_dir%"
 
