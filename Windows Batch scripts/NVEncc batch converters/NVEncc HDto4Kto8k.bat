@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --avhw --codec av1 --profile high --qvbr 0 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-nvvfx-denoise strength=1 --vpp-resize algo=nvvfx-superres,superres-mode=1,superres-strength=1.0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_temp_HDR_4K.mkv 
+NVEncC64 --avhw --codec av1 --profile high --qvbr 0 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=0,superres-strength=1.0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_temp_HDR_4K.mkv 
 
 NVEncC64 --avhw --codec av1 --profile high --qvbr 0 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=1,superres-strength=1.0 --output-res 4320x4320,preserve_aspect_ratio=increase -i %%A_temp_HDR_4K.mkv -o %%A_temp_HDR_8K.mkv 
 

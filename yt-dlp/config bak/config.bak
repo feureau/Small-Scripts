@@ -1,0 +1,5 @@
+-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best  
+
+bestvideo[vcodec^=avc]+bestaudio[ext=m4a]
+
+-f bestvideo[ext=mp4]+bestaudio[ext=m4a]

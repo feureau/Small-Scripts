@@ -1,0 +1,1 @@
+-f bestvideo[ext=mp4]+bestaudio[ext=m4a] --merge-output-format mkv --write-thumbnail --write-sub --write-auto-sub --convert-subtitles srt
