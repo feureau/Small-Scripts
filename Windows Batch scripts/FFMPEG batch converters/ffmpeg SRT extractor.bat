@@ -5,7 +5,7 @@ FOR %%A IN (%*) DO (
     ECHO %%A
 
 
-    ffmpeg -i %%A  -c:v copy -c:a ac3 -ac 6 -map 0:v:? -map 0:a:? -mapping_family 1 %%A.mov 
+    ffmpeg -i %%A -map 0:s:? %%A.srt 
 
 
 )

@@ -3,14 +3,13 @@ COLOR 0C
 
 FOR %%A IN (%*) DO (
     ECHO %%A
+    magick %%A -quality 70 %%A.jpg
 
-
-    ffmpeg -i %%A  -c:v copy -c:a ac3 -ac 6 -map 0:v:? -map 0:a:? -mapping_family 1 %%A.mov 
-
-
+    mkdir jpg
+    move %%A.jpg jpg\
 )
 
-::REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
+REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
 
 ::thumbnail,scale='if(gt(iw,ih),7680,trunc(oh*a/2)*2)':'if(gt(iw,ih),trunc(ow/a/2)*2,7680)'
 ::scale=w=7680:h=7680:force_original_aspect_ratio=1:flags=lanczos

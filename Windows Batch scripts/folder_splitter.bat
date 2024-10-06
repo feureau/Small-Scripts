@@ -11,7 +11,7 @@ If Exist "%DirN%" GoTo Check_DirN
 
 ECHO "Splitting folder: %DirN%"
 
-Set "limit=15"
+Set "limit=14"
 For %%A In (*.mov *.mp4 *.mkv) Do (
     If Not Exist "%DirN%" MD "%DirN%"
     If /I Not "%%~nxA"=="%~nx0" RoboCopy . "%DirN%" "%%A" /MOV 1>NUL
