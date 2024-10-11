@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-start /b /low /wait ffmpeg -ss 00:00.00 -to 00:18.51 -accurate_seek -i %%A -c:v prores_ks -profile:v 3 -vendor apl0 -pix_fmt yuv422p10le -c:a copy -c:s copy -map 0 -map_metadata 0 %%A_cut.mkv
+start /b /belownormal /wait ffmpeg -ss 00:00.00 -to 00:18.51 -accurate_seek -i %%A -c:v prores_ks -profile:v 3 -vendor apl0 -pix_fmt yuv422p10le -c:a copy -c:s copy -map 0 -map_metadata 0 %%A_cut.mkv
 
     mkdir cut
     move %%A_cut.mkv cut\
