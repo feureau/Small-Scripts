@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --codec hevc --tier high --profile main10 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --lookahead-level 3 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 --vpp-nvvfx-artifact-reduction mode=0 --vpp-resize algo=nvvfx-superres,superres-mode=1,superres-strength=1.0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_4KHDR_.mkv
+NVEncC64 --codec hevc --tier high --profile main10 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --lookahead-level 3 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_4KHDR_.mkv
 
 
     mkdir HDR
