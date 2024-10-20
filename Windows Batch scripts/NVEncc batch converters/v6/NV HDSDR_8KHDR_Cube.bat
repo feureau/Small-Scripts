@@ -4,9 +4,9 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile main444 --output-csp yuv444 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_temp_HDR_4K.mkv 
+NVEncC64 --avhw --codec hevc --tier high --profile main10 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 --vpp-nvvfx-artifact-reduction mode=0 --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_4KHDR_.mkv
 
-start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile main10 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i %%A_temp_HDR_4K.mkv -o %%A_HDR_8K_Horz.mkv 
+start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile high --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i %%A_4KHDR_.mkv -o %%A_HDR_8K_Horz.mkv 
 
 start /b /belownormal /wait mkvmerge.exe -o %%A_HDR_8K_Horz_CUBE.mkv --colour-matrix 0:9 --colour-range 0:1 --colour-transfer-characteristics 0:16 --colour-primaries 0:9 --max-content-light 0:1000 --max-frame-light 0:300 --max-luminance 0:1000 --min-luminance 0:0.01 --chromaticity-coordinates 0:0.68,0.32,0.265,0.690,0.15,0.06 --white-colour-coordinates 0:0.3127,0.3290 --attachment-mime-type application/x-cube --attach-file "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\Colorspace LUTS\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube" %%A_HDR_8K_Horz.mkv 
 
@@ -15,12 +15,13 @@ mkvinfo.exe %%A_HDR_8K_Horz_CUBE.mkv
     mkdir 8k
     move %%A_HDR_8K_Horz_CUBE.mkv 8k\
 
-    del %%A_temp_HDR_4K.mkv
+    del %%A_4KHDR_.mkv
     del %%A_HDR_8K_Horz.mkv
 )
 
-REM -lookahead_level auto -rc-lookahead 53 -b_ref_mode:v middle
+REM --output-csp yuv444 
 
+REM 
 REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
 
 ::thumbnail,scale='if(gt(iw,ih),7680,trunc(oh*a/2)*2)':'if(gt(iw,ih),trunc(ow/a/2)*2,7680)'

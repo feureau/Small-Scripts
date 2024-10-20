@@ -4,13 +4,16 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-start /b /belownormal /wait ffmpeg -ss 00:00.00 -to 00:18.51 -accurate_seek -y -init_hw_device cuda=gpu:0 -filter_hw_device gpu -hwaccel cuvid -hwaccel_output_format cuda -i %%A -c:v av1_nvenc -qp 12 -rc constqp -c:a copy -c:s copy -map 0 -map_metadata 0 -preset p7 -tune hq -profile:v main10 -spatial-aq 1 -temporal-aq 1 %%A_split.mkv
+NVEncC64 --avhw --codec hevc --tier high --profile main444 --output-csp yuv444 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 -i %%A -o %%A_NR.mkv 
 
-    mkdir split
-    move %%A_split.mkv split\
+
+    mkdir NR
+    move %%A_NR.mkv NR\
 )
 
-REM -y -init_hw_device cuda=gpu:0 -filter_hw_device gpu -hwaccel cuvid -hwaccel_output_format cuda
+REM --output-csp yuv444 
+
+REM 
 REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
 
 ::thumbnail,scale='if(gt(iw,ih),7680,trunc(oh*a/2)*2)':'if(gt(iw,ih),trunc(ow/a/2)*2,7680)'

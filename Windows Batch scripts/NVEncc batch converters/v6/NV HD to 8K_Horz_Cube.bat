@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile main444 --output-csp yuv444 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_temp_HDR_4K.mkv 
+start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile main444 --output-csp yuv444 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_temp_HDR_4K.mkv 
 
 start /b /belownormal /wait NVEncC64 --avhw --codec hevc --tier high --profile main10 --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i %%A_temp_HDR_4K.mkv -o %%A_HDR_8K_Horz.mkv 
 
