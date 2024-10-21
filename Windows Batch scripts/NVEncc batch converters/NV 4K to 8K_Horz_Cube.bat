@@ -13,7 +13,7 @@ mkvinfo.exe %%A_HDR_8K_Horz_CUBE.mkv
     mkdir 8k
     move %%A_HDR_8K_Horz_CUBE.mkv 8k\
 
-     del %%A_HDR_8K_Horz.mkv
+    del %%A_HDR_8K_Horz.mkv
 )
 
 REM -lookahead_level auto -rc-lookahead 53 -b_ref_mode:v middle
