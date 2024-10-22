@@ -4,11 +4,11 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --codec av1 --tier 1 --profile main --cqp 12 --preset p1 --output-depth 10 --multipass 2pass-full --lookahead 32 --lookahead-level 3 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 2160x2160,preserve_aspect_ratio=increase -i %%A -o %%A_4KHDR_.mkv
+NVEncC64 --codec av1 --tier high --profile main --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --lookahead-level 3 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 -i %%A -o %%A_HDR_.mkv 
 
 
     mkdir HDR
-    move %%A_4KHDR_.mkv HDR\
+    move %%A_HDR_.mkv  HDR\
 )
 
 REM --output-csp yuv444 
