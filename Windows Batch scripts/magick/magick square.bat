@@ -3,17 +3,12 @@ COLOR 0C
 
 FOR %%A IN (%*) DO (
     ECHO %%A
+    magick %%A -resize 1024x1024 -background alpha -gravity center -extent 1024x1024 -quality 70 %%A.png
 
-NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 8 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=0 --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 -i %%A -o %%A_HDRNR.mkv 
-
-
-    mkdir NR
-    move %%A_HDRNR.mkv NR\
+    mkdir png
+    move %%A.png png\
 )
 
-REM --output-csp yuv444 
-
-REM 
 REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
 
 ::thumbnail,scale='if(gt(iw,ih),7680,trunc(oh*a/2)*2)':'if(gt(iw,ih),trunc(ow/a/2)*2,7680)'
