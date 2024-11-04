@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p4 --output-depth 6 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 8 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-colorspace lut3d="C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCUniversal\LUTS_for_Software_DaVinci_Premiere_Avid_FinalCutPro\DaVinci-Resolve-with-Video-Range-Tag\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube" -i %%A -o %%A_SDR.mkv 
+NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p1 --output-depth 10 --multipass 2pass-full  --nonrefp --aq --aq-temporal --aq-strength 8 --lookahead 32  --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-colorspace lut3d="C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCUniversal\LUTS_for_Software_DaVinci_Premiere_Avid_FinalCutPro\DaVinci-Resolve-with-Video-Range-Tag\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube" -i %%A -o %%A_SDR.mkv 
 
 
 

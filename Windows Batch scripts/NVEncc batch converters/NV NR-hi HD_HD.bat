@@ -4,7 +4,7 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 8 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=1 -i %%A -o %%A_NR-hi.mkv 
+NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p1 --output-depth 10 --multipass 2pass-full  --nonrefp --aq --aq-temporal --aq-strength 8 --lookahead 32  --lookahead-level auto -rc-lookahead 53 -b_ref_mode:v middle --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=1 -i %%A -o %%A_NR-hi.mkv 
 
 
     mkdir NR
