@@ -6,7 +6,7 @@ FOR %%A IN (%*) DO (
 
 start /b /belownormal /wait ffmpeg -ss 00:00.00 -to 00:18.51 -accurate_seek -y -init_hw_device cuda=gpu:0 -filter_hw_device gpu -hwaccel cuvid -hwaccel_output_format cuda -i %%A -c:v av1_nvenc -qp 12 -rc constqp -c:a copy -c:s copy -map 0 -map_metadata 0 -preset p4 -tune hq -profile:v main10 -spatial-aq 1 -temporal-aq 1 %%A_split.mkv
 
-NVEncC64 --codec av1 --tier high --profile main --cqp 12 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --lookahead-level 3 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 -i %%A_split.mkv -o %%A_HDR_.mkv 
+NVEncC64 --avhw --codec av1 --tier 1 --profile main --cqp 16:20:25 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --nonrefp --aq --aq-temporal --aq-strength 8 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 -i %%A_split.mkv -o %%A_HDR_.mkv 
 
     del %%A_split.mkv
     mkdir HDR
