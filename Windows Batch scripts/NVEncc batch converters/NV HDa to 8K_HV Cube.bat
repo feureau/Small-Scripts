@@ -18,7 +18,7 @@ mkvinfo.exe %%A_HDR_8K_Horz_CUBE.mkv
 
 mkvinfo.exe %%A_HDR_8K_Vert_CUBE.mkv
 
-mkvmerge.exe -o 8k\%%c.mkv --split chapters:all 8k\%%~nxA_HDR_8K_Vert_CUBE.mkv
+mkvmerge.exe -o 8k\%%c.mkv --split chapters:all %%~nxA_HDR_8K_Vert_CUBE.mkv
 
     mkdir 8k
     move %%A_HDR_8K_Horz_CUBE.mkv 8k\

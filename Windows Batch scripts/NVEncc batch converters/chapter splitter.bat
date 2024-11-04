@@ -4,7 +4,8 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-mkvmerge.exe -o %%A_HDR_4K_Vert_crop_CUBE-%%c.mkv --split chapters:all %%A
+mkvmerge.exe -o Split\%%c.mkv --split chapters:all %%A
+
 )
 
 REM format=p010le,zscale=-2:7680:filter=lanczos:min=input:m=input:tin=input:t=input:pin=input:p=input,format=yuv420p10le,
