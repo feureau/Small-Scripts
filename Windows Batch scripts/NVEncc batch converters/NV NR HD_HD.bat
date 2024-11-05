@@ -4,11 +4,11 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --avhw --codec av1 --tier 1 --profile high --cqp 16:20:25 --preset p1 --output-depth 10 --multipass 2pass-full --weightp --nonrefp --aq --aq-temporal --aq-strength 0 --lookahead 32  --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=0 -i %%A -o %%A_NR.mkv 
+NVEncC64 --avhw --codec av1 --tier 1 --profile high --cqp 16:20:25 --preset p1 --output-depth 10 --multipass 2pass-full --weightp --nonrefp --aq --aq-temporal --aq-strength 0 --lookahead 32  --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=0 -i %%A -o %%A_NR-Lo.mkv 
 
 
     mkdir NR
-    move %%A_NR.mkv NR\
+    move %%A_NR-Lo.mkv NR\
 )
 
 REM --output-csp yuv444 
