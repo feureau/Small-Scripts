@@ -4,11 +4,11 @@ COLOR 0C
 FOR %%A IN (%*) DO (
     ECHO %%A
 
-NVEncC64 --avhw --codec av1 --tier 1 --profile high --cqp 16:20:25 --preset p1 --output-depth 10 --multipass 2pass-full --weightp --nonrefp --aq --aq-temporal --aq-strength 0 --lookahead 32  --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=1 --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 -i %%A -o %%A_HDRNR-hi.mkv 
+NVEncC64 --avhw --codec av1 --tier 1 --profile high --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --nonrefp --aq --aq-temporal --aq-strength 0 --lookahead 32 --gop-len 4 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy --vpp-nvvfx-artifact-reduction mode=0 --vpp-nvvfx-denoise strength=1 --vpp-ngx-truehdr maxluminance=1000 --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084 --vpp-fruc fps=60 -i %%A -o %%A_HDRNRhi60p.mkv 
 
 
     mkdir NR
-    move %%A_HDRNR-hi.mkv NR\
+    move %%A_HDRNRhi60p.mkv NR\
 )
 
 REM --output-csp yuv444 
