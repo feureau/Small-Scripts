@@ -5,7 +5,7 @@ FOR %%A IN (%*) DO (
     ECHO %%A
 
 
-NVEncC64 --avhw --trim 0:1131 --codec av1 --tier 1 --profile main --qvbr 1 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --gop-len 4 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy -i %%A -o %%A_cut.mkv 
+NVEncC64 --avhw --trim 0:1131 --codec av1 --tier 1 --profile main --cqp 23:30:35 --preset p4 --output-depth 10 --multipass 2pass-full --lookahead 32 --gop-len 4 --nonrefp --aq --aq-temporal --aq-strength 0 --transfer auto --audio-copy --chapter-copy --key-on-chapter --metadata copy -i %%A -o %%A_cut.mkv 
 
     mkdir cut
     move %%A_cut.mkv cut\
