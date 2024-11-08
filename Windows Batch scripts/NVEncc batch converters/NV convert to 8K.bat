@@ -32,6 +32,10 @@ if /I "%crop_type%"=="W" (
     set "crop_value=618"
 )
 
+:: Determine input file based on encoding selections.
+set "input_file=%%A_temp_HDR_4K.mkv"
+if /I "%encode_hdr_4k%"=="N" set "input_file=%%A"
+
 :: Process each file provided as an argument to the script.
 FOR %%A IN (%*) DO (
     ECHO Processing file: %%A
@@ -45,7 +49,7 @@ FOR %%A IN (%*) DO (
 
     :: Encode to HDR 8K horizontal AV1 if requested.
     IF /I "%encode_hdr_8k_horz%"=="y" (
-        NVEncC64 --avhw --codec av1 --tier 1 --profile high --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --aq --aq-temporal --aq-strength 0 --lookahead 32 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 4320x4320,preserve_aspect_ratio=increase -i "%%A_temp_HDR_4K.mkv" -o "%%A_HDR_8K_Horz.mkv"
+        NVEncC64 --avhw --codec av1 --tier 1 --profile high --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --aq --aq-temporal --aq-strength 0 --lookahead 32 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --vpp-resize algo=nvvfx-superres,superres-mode=0 --output-res 4320x4320,preserve_aspect_ratio=increase -i "%input_file%" -o "%%A_HDR_8K_Horz.mkv"
     ) ELSE (
         ECHO Skipping HDR 8K Horizontal AV1 encoding.
     )
@@ -59,7 +63,7 @@ FOR %%A IN (%*) DO (
     :: Encode to HDR 8K vertical HEVC using the selected crop value, depending on whether 4K was encoded.
     IF /I "%encode_hdr_8k_vert%"=="y" (
         IF /I "%encode_hdr_4k%"=="y" (
-            NVEncC64 --avhw --codec hevc --tier high --profile main10 --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --aq --aq-temporal --aq-strength 0 --lookahead 32 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --crop %crop_value%,0,%crop_value%,0 --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i "%%A_temp_HDR_4K.mkv" -o "%%A_HDR_8K_Vert.mkv"
+            NVEncC64 --avhw --codec hevc --tier high --profile main10 --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --aq --aq-temporal --aq-strength 0 --lookahead 32 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --crop %crop_value%,0,%crop_value%,0 --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i "%input_file%" -o "%%A_HDR_8K_Vert.mkv"
         ) ELSE (
             NVEncC64 --avhw --codec hevc --tier high --profile main10 --qvbr 1 --preset p1 --output-depth 10 --multipass 2pass-full --aq --aq-temporal --aq-strength 0 --lookahead 32 --lookahead-level auto --transfer auto --audio-copy --chapter-copy --key-on-chapter --sub-copy --metadata copy --crop %crop_value%,0,%crop_value%,0 --vpp-resize algo=ngx-vsr,vsr-quality=1 --output-res 4320x4320,preserve_aspect_ratio=increase -i "%%A" -o "%%A_HDR_8K_Vert.mkv"
         )
@@ -94,7 +98,7 @@ IF NOT EXIST "8k" MD "8k"
 DEL /Q "*temp*.mkv"
 
 :: Move all resulting .mkv files to the '8k' directory.
-MOVE /Y "*.mkv" "8k\
+MOVE /Y "*CUBE.mkv" "8k\
 
 :: Change console color to green.
 COLOR 0A
