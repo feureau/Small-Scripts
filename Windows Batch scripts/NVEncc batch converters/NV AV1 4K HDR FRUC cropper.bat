@@ -39,34 +39,44 @@ set DENOISE_OPTION=
 set HDR_OPTION=
 
 :: Prompt user for Resize to 4K (default: disabled)
-echo Enable Resize to 4K? [Y/N] (default is N)
+echo Enable Resize to 4K? [Y/N/1/0] (default is N)
 set /p resize_enable=""
 if /i "%resize_enable%"=="y" set "RESIZE_OPTION=%RESIZE_VAR%"
+if /i "%resize_enable%"=="1" set "RESIZE_OPTION=%RESIZE_VAR%"
 if /i "%resize_enable%"=="n" set "RESIZE_OPTION="
+if /i "%resize_enable%"=="0" set "RESIZE_OPTION="
 
 :: Prompt user for FRUC (fps=60) (default: disabled)
-echo Enable FRUC (fps=60)? [Y/N] (default is N)
+echo Enable FRUC (fps=60)? [Y/N/1/0] (default is N)
 set /p fruc_enable=""
 if /i "%fruc_enable%"=="y" set "FRUC_OPTION=%FRUC_VAR%"
+if /i "%fruc_enable%"=="1" set "FRUC_OPTION=%FRUC_VAR%"
 if /i "%fruc_enable%"=="n" set "FRUC_OPTION="
+if /i "%fruc_enable%"=="0" set "FRUC_OPTION="
 
 :: Prompt user for Artifact Reduction (default: disabled)
-echo Enable Artifact Reduction? [Y/N] (default is N)
+echo Enable Artifact Reduction? [Y/N/1/0] (default is N)
 set /p artifact_enable=""
 if /i "%artifact_enable%"=="y" set "ARTIFACT_REDUCTION_OPTION=%ARTIFACT_REDUCTION_VAR%"
+if /i "%artifact_enable%"=="1" set "ARTIFACT_REDUCTION_OPTION=%ARTIFACT_REDUCTION_VAR%"
 if /i "%artifact_enable%"=="n" set "ARTIFACT_REDUCTION_OPTION="
+if /i "%artifact_enable%"=="0" set "ARTIFACT_REDUCTION_OPTION="
 
 :: Prompt user for Denoise (default: disabled)
-echo Enable Denoise? [Y/N] (default is N)
+echo Enable Denoise? [Y/N/1/0] (default is N)
 set /p denoise_enable=""
 if /i "%denoise_enable%"=="y" set "DENOISE_OPTION=%DENOISE_VAR%"
+if /i "%denoise_enable%"=="1" set "DENOISE_OPTION=%DENOISE_VAR%"
 if /i "%denoise_enable%"=="n" set "DENOISE_OPTION="
+if /i "%denoise_enable%"=="0" set "DENOISE_OPTION="
 
 :: Prompt user for HDR conversion (default: disabled)
-echo Enable HDR Conversion? [Y/N] (default is N)
+echo Enable HDR Conversion? [Y/N/1/0] (default is N)
 set /p hdr_enable=""
 if /i "%hdr_enable%"=="y" set "HDR_OPTION=%HDR_VAR%"
+if /i "%hdr_enable%"=="1" set "HDR_OPTION=%HDR_VAR%"
 if /i "%hdr_enable%"=="n" set "HDR_OPTION="
+if /i "%hdr_enable%"=="0" set "HDR_OPTION="
 
 :: Ask the user for custom crop parameters with default values
 ECHO Enter the crop values for the video.
