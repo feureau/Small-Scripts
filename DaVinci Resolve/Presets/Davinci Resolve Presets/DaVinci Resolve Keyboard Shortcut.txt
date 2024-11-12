@@ -1,0 +1,501 @@
+# see EBNF grammar in UiKeyBindings.cpp
+
+# because this is OS X, our "Ctrl" string means Command, "Alt" is Option and
+# "Meta" is Control.
+
+#------------------------------------------------------------------------------
+# Resolve File Edit View Mark Playback Color Nodes Help
+#------------------------------------------------------------------------------
+
+# Resolve
+resolveAbout :=
+resolvePreferences := Ctrl+,
+resolveCustomizedActions := Ctrl+Alt+K
+resolveQuit := Ctrl+Q
+
+# File
+fileNewProject := 
+fileNewFolder := Ctrl+Shift+N
+fileNewTimeline := Ctrl+N
+fileSaveProject := Ctrl+S
+fileSaveProjectAs := Ctrl+Shift+S
+fileExportXml := Ctrl+Shift+O
+fileImportProject :=
+fileImportMedia := Ctrl+I
+fileImportXml := Ctrl+Shift+I
+fileImportBatchListFromEDL := 
+fileExportProject := Ctrl+E
+fileProjectManager := Shift+1
+fileProjectSettings := Shift+9
+
+# Edit
+editUndo := Ctrl+Z | `
+editRedo := Ctrl+Shift+Z
+editCut := Cut
+editCopy := Copy
+editRippleCut := Ctrl+Shift+X
+editPaste := Paste
+editPasteInsert := Ctrl+Shift+V
+editPasteAttributes := Alt+V
+editPasteValue := Alt+Shift+V
+editSelectAll := Ctrl+A
+editDeselectAll := Ctrl+Shift+A
+editSelectSubNext := Ctrl+Right
+editSelectSubPrevious := Ctrl+Left
+editSelectSubAbove := Ctrl+Up
+editSelectSubBelow := Ctrl+Down
+# "Del" = "Delete". this key does not exist on compact Mac keyboards,
+# so provide Shift+Backspace as an equivalent alternative. although both
+# keys will trigger the shortcut, the menu only shows the first one.
+# because Del lacks a menu representation, put it last.)
+editDelete := Shift+Backspace | Del
+editBackspace := Backspace
+editInsertOverwriteActionInsert := F9
+editInsertOverwriteActionOverwrite := F10
+editInsertOverwriteActionReplace := F11
+editInsertOverwriteActionPlaceOnTop := F12
+editInsertOverwriteActionRippleOverwrite := Shift+F10
+editInsertOverwriteActionFitToFill := Shift+F11
+editInsertOverwriteActionAppendAtEnd := Shift+F12
+editMulticamPrevAngle := Shift+Ctrl+Left
+editMulticamNextAngle := Shift+Ctrl+Right
+editMulticamPrevPage := Alt+Shift+Left
+editMulticamNextPage := Alt+Shift+Right
+editMulticamTgtAudioAndVideo := Alt+Shift+[
+editMulticamTgtVideo := Alt+Shift+]
+editMulticamTgtAudio := Alt+Shift+\
+editNudgeSwapEditForward := Ctrl+Shift+.
+editNudgeSwapEditReverse := Ctrl+Shift+,
+editMediaStereoModeToLeft := Alt+Shift+,
+editMediaStereoModeToRight := Alt+Shift+.
+editMediaStereoModeToBoth := Alt+Shift+/
+editMoveClipsUp := Alt+Up
+editMoveClipsDown := Alt+Down
+editSwitchToTimelineAfterEdit := Alt+Shift+Q
+
+# Trim
+editSelectItemAtPlayhead := Shift+V
+trimSelectAllItemsAtPlayhead := Alt+Shift+V
+editPointer := A
+editRangeSelection := R
+editTrim := T
+editSelectEditPoint := v
+trimSelectVideoEditPoint := Alt+E
+trimSelectAudioEditPoint := Shift+E
+editToggleEditPointType := u
+editToggleVideoAudioSelection := Alt+U
+editNudgeTrimStepNudgeForward := .
+editNudgeTrimStepNudgeReverse := ,
+editNudgeTrimStepTrimMultiFrameLeft := Shift+,
+editNudgeTrimStepTrimMultiFrameRight := Shift+.
+editSlipAudioOneFrameForward := Alt+.
+editSlipAudioOneFrameReverse := Alt+,
+editSlipAudioOneSubFrameForward := Alt+Right
+editSlipAudioOneSubFrameReverse := Alt+Left
+editSlipEyeOppositeEyeOneFrameForward := Alt+Ctrl+.
+editSlipEyeOppositeEyeOneFrameReverse := Alt+Ctrl+,
+editNudgeTrimStepTrimStart := Shift+[
+editNudgeTrimStepTrimEnd := Shift+]
+editNudgeTrimStepExtendEdit := E
+editToggleDynamicTrimMode := W
+editDynamicTrimStop := Ctrl+K
+trimRippleStartToPlayhead := Ctrl+Shift+[
+trimRippleEndToPlayhead := Ctrl+Shift+]
+trimToggleSlideMode := S
+editBlade := B
+trimFadeInToPlayhead := Alt+Shift+D
+trimFadeOutToPlayhead := Alt+Shift+G
+
+# Timeline
+editM2SplitClip := Ctrl+\
+editM2JoinClip := Alt+\
+editBladeRazor := Ctrl+B
+editSelectClipsSelectTrackBefore := Ctrl+Y
+editSelectClipsSelectAllBefore := Ctrl+Alt+Y
+editSelectClipsSelectTrackAfter := Y
+editSelectClipsSelectAllAfter := Alt+Y
+timelineSelectionFollowsTimeline :=
+editSnapping := N
+editScrubAudio := Shift+S
+editLinkedSelection := Shift+Ctrl+L
+#timelineLinkedSelectionInvert := Alt
+# Ctrl+Shift and Alt-Shift seem to have some OS conflicts
+editTrackDestinationSelectionTargetV := Alt+1
+editTrackDestinationSelectionTargetV2 := Alt+2
+editTrackDestinationSelectionTargetV3 := Alt+3
+editTrackDestinationSelectionTargetV4 := Alt+4
+editTrackDestinationSelectionTargetV5 := Alt+5
+editTrackDestinationSelectionTargetV6 := Alt+6
+editTrackDestinationSelectionTargetV7 := Alt+7
+editTrackDestinationSelectionTargetV8 := Alt+8
+editTrackDestinationSelectionTargetA := Alt+Ctrl+1
+editTrackDestinationSelectionTargetA2 := Alt+Ctrl+2
+editTrackDestinationSelectionTargetA3 := Alt+Ctrl+3
+editTrackDestinationSelectionTargetA4 := Alt+Ctrl+4
+editTrackDestinationSelectionTargetA5 := Alt+Ctrl+5
+editTrackDestinationSelectionTargetA6 := Alt+Ctrl+6
+editTrackDestinationSelectionTargetA7 := Alt+Ctrl+7
+editTrackDestinationSelectionTargetA8 := Alt+Ctrl+8
+editTrackDestinationSelectionTargetAudioAll := Alt+Ctrl+9
+editVideoMoveTrackDestinationUp := Ctrl+Shift+Up
+editVideoMoveTrackDestinationDown := Ctrl+Shift+Down
+editAudioMoveTrackDestinationUp := Ctrl+Alt+Up
+editAudioMoveTrackDestinationDown := Ctrl+Alt+Down
+editTrackLockToggleA1 := Alt+Shift+F1
+editTrackLockToggleA2 := Alt+Shift+F2
+editTrackLockToggleA3 := Alt+Shift+F3
+editTrackLockToggleA4 := Alt+Shift+F4
+editTrackLockToggleA5 := Alt+Shift+F5
+editTrackLockToggleA6 := Alt+Shift+F6
+editTrackLockToggleA7 := Alt+Shift+F7
+editTrackLockToggleA8 := Alt+Shift+F8
+editTrackLockToggleA := Alt+Shift+F9
+editAutoSelectToggleVideo1 := Alt+F1
+editAutoSelectToggleVideo2 := Alt+F2
+editAutoSelectToggleVideo3 := Alt+F3
+editAutoSelectToggleVideo4 := Alt+F4
+editAutoSelectToggleVideo5 := Alt+F5
+editAutoSelectToggleVideo6 := Alt+F6
+editAutoSelectToggleVideo7 := Alt+F7
+editAutoSelectToggleVideo8 := Alt+F8
+editAutoSelectToggleVideoAll := Alt+F9
+editAutoSelectToggleAudio1 := Alt+Ctrl+F1
+editAutoSelectToggleAudio2 := Alt+Ctrl+F2
+editAutoSelectToggleAudio3 := Alt+Ctrl+F3
+editAutoSelectToggleAudio4 := Alt+Ctrl+F4
+editAutoSelectToggleAudio5 := Alt+Ctrl+F5
+editAutoSelectToggleAudio6 := Alt+Ctrl+F6
+editAutoSelectToggleAudio7 := Alt+Ctrl+F7
+editAutoSelectToggleAudio8 := Alt+Ctrl+F8
+editAutoSelectToggleAudioAll := Alt+Ctrl+F9
+editEnableDisableToggleVideoTrack1 := Shift+Ctrl+1
+editEnableDisableToggleVideoTrack2 := Shift+Ctrl+2
+editEnableDisableToggleVideoTrack3 := Shift+Ctrl+3
+editEnableDisableToggleVideoTrack4 := Shift+Ctrl+4
+editEnableDisableToggleVideoTrack5 := Shift+Ctrl+5
+editEnableDisableToggleVideoTrack6 := Shift+Ctrl+6
+editEnableDisableToggleVideoTrack7 := Shift+Ctrl+7
+editEnableDisableToggleVideoTrack8 := Shift+Ctrl+8
+editEnableDisableToggleVideoTrackAll := Shift+Ctrl+9
+editAddTransition := Ctrl+T
+editAddVideoTransition := Alt+T
+editAddAudioTransition := Shift+T
+editMatchFrame := F
+timelineSourceViewerSwap := Ctrl+PgUp
+
+# Clip
+clipChangeClipSpeed := R
+clipRetimeControls := Ctrl+R
+clipChangeClipDuration := Ctrl+D
+clipFreezeFrame := Shift+R
+clipResetRetime := Alt+Ctrl+R
+editClipEnabled := D
+editLink := Ctrl+Alt+L
+clipShowKeyframeEditor := Shift+Ctrl+C
+clipShowCurveEditor := Shift+C
+clipAudioIncreaseAudioLevel1dB := Ctrl+Alt+=
+clipAudioDecreaseAudioLevel1dB := Ctrl+Alt+-
+clipAudioIncreaseAudioLevel3dB := Alt+Shift+=
+clipAudioDecreaseAudioLevel3dB := Alt+Shift+-
+editMulticamCutToAngle1 := 1
+editMulticamCutToAngle2 := 2
+editMulticamCutToAngle3 := 3
+editMulticamCutToAngle4 := 4
+editMulticamCutToAngle5 := 5
+editMulticamCutToAngle6 := 6
+editMulticamCutToAngle7 := 7
+editMulticamCutToAngle8 := 8
+editMulticamCutToAngle9 := 9
+editMulticamSwitchToAngle1 := Alt+1
+editMulticamSwitchToAngle2 := Alt+2
+editMulticamSwitchToAngle3 := Alt+3
+editMulticamSwitchToAngle4 := Alt+4
+editMulticamSwitchToAngle5 := Alt+5
+editMulticamSwitchToAngle6 := Alt+6
+editMulticamSwitchToAngle7 := Alt+7
+editMulticamSwitchToAngle8 := Alt+8
+editMulticamSwitchToAngle9 := Alt+9
+
+# View
+viewStillsStillGrab := Ctrl+Alt+G
+viewStillsStillPlay := Ctrl+Alt+F
+viewStillsStillNext := Ctrl+Alt+N
+viewStillsStillPrev := Ctrl+Alt+B
+viewStereoSwitchEyeCycle := Ctrl+.
+viewHighlightHighlight := Shift+H
+viewHighlightHighlightBW := Alt+Shift+H
+viewHighlightHighlightDiff := Shift+Ctrl+H
+viewBypassColorGrades := Shift+D
+viewReferenceWipeToggle := Ctrl+W
+viewReferenceWipeModeCycle := Alt+Shift+W
+viewReferenceWipeStyleCycle := Shift+W
+viewReferenceWipeInvert := Alt+W
+viewReferenceReposition := Alt+Shift+R
+viewTimelineWipeOneFrameReverse := Alt+Ctrl+Left
+viewTimelineWipeOneFrameForward := Alt+Ctrl+Right
+viewWindowOutlineCycle := Alt+H
+viewTimelineModeCycle := Ctrl+PgDown
+viewTimelineModeRecord :=
+viewTimelineModeSource :=
+viewZoomActualSize := Alt+Shift+Z
+viewZoomViewerToFit := Z
+viewZoomSubZoomToFit := Shift+Z
+viewZoomSubZoomIn := Ctrl+= | Ctrl++
+viewZoomSubZoomOut := Ctrl+-
+viewZoomDefaultZoom := Ctrl+0
+viewSplitScreenModeOnOffToggle := Alt+Ctrl+W
+clipFindClipInMediaPool := Alt+F
+viewViewerToggle := Q
+viewViewerSourceModeToggle := Shift+Q
+viewActiveWindowSelectionSourceViewer := Ctrl+3
+viewActiveWindowSelectionTimelineViewer := Ctrl+5
+viewActiveWindowSelectionTimeline := Ctrl+4
+viewActiveWindowSelectionMediaPoolFolders := Ctrl+1
+viewActiveWindowSelectionMediaPoolClips := Ctrl+2
+viewActiveWindowSelectionEffects := Ctrl+6
+viewActiveWindowSelectionEditIndex := Ctrl+7
+viewActiveWindowSelectionInspector := Ctrl+9
+viewTogglePrimariesLogMode := Alt+Z
+viewChannelsRGB := Ctrl+Shift+0
+#viewOpenCloseBins :=
+viewSafeAreaToggle := 
+viewShowViewerOverlay := Shift+`
+workspaceRemoteGrading := Ctrl+G
+workspacePrimaryWorkspaceMedia := Shift+2
+workspacePrimaryWorkspaceFirstCut := Shift+3
+workspacePrimaryWorkspaceEdit := Shift+4
+workspacePrimaryWorkspaceFusion := Shift+5
+workspacePrimaryWorkspaceColor := Shift+6
+workspacePrimaryWorkspaceAudio := Shift+7
+workspacePrimaryWorkspaceDeliver := Shift+8
+workspaceVideoScopesToggle := Ctrl+Shift+W
+workspaceViewerModeEnhancedViewer := Alt+F
+workspaceViewerModeFullViewer := Shift+F
+workspaceViewerModeCinemaViewer := Ctrl+F | P
+workspaceLightboxView := Shift+Ctrl+F
+gangSourceTimelinePlayheads := Alt+Q
+
+# Mark
+markIn := I
+markOut := O
+markVideoIn := Alt+Shift+I
+markVideoOut := Alt+Shift+O
+markAudioIn := Alt+Ctrl+I
+markAudioOut := Alt+Ctrl+O
+markConvertInOutToDurationMarker :=
+markConvertDurationMarkerToInOut :=
+markClip := X
+markSelected := Shift+A
+markResetIn := Alt+I
+markResetOut := Alt+O
+markResetInOut := Alt+X
+color.markResetIn := 
+color.markResetOut := 
+markVideoResetInOut := Alt+Shift+X
+markAudioResetInOut := Alt+Ctrl+X
+markKeyframeTimelineModeCycle :=
+markKeyframeMakeDynamic := Ctrl+[
+markKeyframeMakeStatic := Ctrl+]
+markKeyframeDelete := Alt+]
+markKeyframeDeleteAll := 
+markMoveSelectedKeyframesLeft :=
+markMoveSelectedKeyframesRight :=
+markMoveSelectedKeyframesUp :=
+markMoveSelectedKeyframesDown :=
+markMarkerAdd := M
+markMarkerModify := Shift+M
+markMarkerAddAndModify := Ctrl+M
+markMarkerSecondaryAdd := Ctrl+M
+markMarkerClear := Alt+M
+markFlagAdd := G
+markFlagClearAll :=
+markCreateSubClip := Alt+B
+markFavoriteKeywords1 := Alt+Shift+1
+markFavoriteKeywords2 := Alt+Shift+2
+markFavoriteKeywords3 := Alt+Shift+3
+markFavoriteKeywords4 := Alt+Shift+4
+markFavoriteKeywords5 := Alt+Shift+5
+markFavoriteKeywords6 := Alt+Shift+6
+markFavoriteKeywords7 := Alt+Shift+7
+markFavoriteKeywords8 := Alt+Shift+8
+markFavoriteKeywords9 := Alt+Shift+9
+markFavoriteKeywordsClear := Alt+Shift+0
+
+# Playback
+controlPlayForward := L
+controlPlayReverse := J
+controlStop := K
+controlFastForward := Shift+L
+controlFastReverse := Shift+J
+controlPlaySlow := Shift+K
+controlPlayToggle := Space
+controlLoop := Ctrl+/
+controlStepForward := Right
+controlStepReverse := Left
+controlLargeStepForward := Shift+Right
+controlLargeStepReverse := Shift+Left
+controlPlayAgain := Alt+L
+#controlAudioStepForward := 
+#controlAudioStepReverse := 
+controlClipPrev := Up
+controlClipNext := Down
+controlJumpLeft := Alt+Ctrl+Left
+controlJumpRight := Alt+Ctrl+Right
+controlMarkersPrev := Shift+Up
+controlMarkersNext := Shift+Down
+controlTimecode := = | Numpad+=
+controlTimecodeIncrement := + | Numpad++
+controlTimecodeDecrement := - | Numpad+-
+controlFirstFrame := ;
+controlLastFrame := '
+controlKeyframePrev := [
+controlKeyframeNext := ]
+controlGapPrev := Alt+Ctrl+;
+controlGapNext := Alt+Ctrl+'
+controlTimelineStart := Home
+controlTimelineEnd := End
+controlGotoIn := Shift+I
+controlGotoOut := Shift+O
+controlPlayAroundToPlayAroundCurrentSelection := /
+controlPlayAroundToPlayAroundCurrentClip := Shift+/
+controlPlayAroundToPlayInToOut := Alt+/
+controlPlayAroundToPlayAroundIn := Alt+Space
+controlPlayAroundToPlayAroundOut := Shift+Space
+controlPlayAroundToPlayToIn :=
+controlPlayAroundToPlayToOut := Alt+Ctrl+/
+
+controlScannerPerfStepForward := Ctrl+L
+controlScannerPerfStepReverse := Ctrl+J
+controlScannerFramingMoveReverse := Ctrl+Left
+controlScannerFramingMoveForward := Ctrl+Right
+
+sessionTrackForward := Ctrl+T
+sessionTrackReverse := Alt+T
+sessionTrackStop := Ctrl+Alt+T
+sessionTrackOneFrameForward := Alt+Right
+sessionTrackOneFrameReverse := Alt+Left
+controlRenderCacheCycle := Alt+R
+
+# Color
+sessionBaseMemory := Shift+Home
+sessionBaseMemoryAll := Ctrl+Shift+Home
+sessionBaseMemoryReset := Ctrl+Home
+sessionPreviewMemory := Alt+Shift+P
+sessionOriginalMemory := Alt+Shift+O
+sessionGradeFromOneClipPrior := Shift+=
+sessionGradeFromTwoClipsPrior := Shift+-
+sessionVersionAdd:= Ctrl+Y
+sessionVersionDefault:= Ctrl+U
+sessionVersionPrev := Ctrl+B
+sessionVersionNext := Ctrl+N
+sessionAutoColor := Alt+Shift+C
+sessionMemoriesLoadA :=
+sessionMemoriesLoadB :=
+sessionMemoriesLoadC :=
+sessionMemoriesLoadD :=
+sessionMemoriesLoadE :=
+sessionMemoriesLoadF :=
+sessionMemoriesLoadG :=
+sessionMemoriesLoadH :=
+sessionMemoriesSaveA := Alt+1
+sessionMemoriesSaveB := Alt+2
+sessionMemoriesSaveC := Alt+3
+sessionMemoriesSaveD := Alt+4
+sessionMemoriesSaveE := Alt+5
+sessionMemoriesSaveF := Alt+6
+sessionMemoriesSaveG := Alt+7
+sessionMemoriesSaveH := Alt+8
+sessionPrinterLightsEnable := Ctrl+Alt+`
+sessionPrinterLightsMasterPlus := Numpad++
+sessionPrinterLightsMasterMinus := Numpad+Enter
+sessionPrinterLightsRedPlus := Numpad+7
+sessionPrinterLightsRedMinus := Numpad+4
+sessionPrinterLightsGreenPlus := Numpad+8
+sessionPrinterLightsGreenMinus := Numpad+5
+sessionPrinterLightsBluePlus := Numpad+9
+sessionPrinterLightsBlueMinus := Numpad+6
+sessionPrinterLightsCyanPlus := Numpad+1
+sessionPrinterLightsCyanMinus := Numpad+-
+sessionPrinterLightsMagPlus := Numpad+2
+sessionPrinterLightsMagMinus := Numpad+0
+sessionPrinterLightsYelPlus := Numpad+3
+sessionPrinterLightsYelMinus := Numpad+.
+sessionPrinterLightsMasterQuarterPlus := Ctrl+Numpad++
+sessionPrinterLightsMasterQuarterMinus := Ctrl+Numpad+Enter
+sessionPrinterLightsRedQuarterPlus := Ctrl+Numpad+7
+sessionPrinterLightsRedQuarterMinus := Ctrl+Numpad+4
+sessionPrinterLightsGreenQuarterPlus := Ctrl+Numpad+8
+sessionPrinterLightsGreenQuarterMinus := Ctrl+Numpad+5
+sessionPrinterLightsBlueQuarterPlus := Ctrl+Numpad+9
+sessionPrinterLightsBlueQuarterMinus := Ctrl+Numpad+6
+sessionPrinterLightsCyanQuarterPlus := Ctrl+Numpad+1
+sessionPrinterLightsCyanQuarterMinus := Ctrl+Numpad+-
+sessionPrinterLightsMagQuarterPlus := Ctrl+Numpad+2
+sessionPrinterLightsMagQuarterMinus := Ctrl+Numpad+0
+sessionPrinterLightsYelQuarterPlus := Ctrl+Numpad+3
+sessionPrinterLightsYelQuarterMinus := Ctrl+Numpad+.
+sessionLiveGrade := Ctrl+R
+sessionLiveGradePause := Shift+Ctrl+R
+sessionGrabLiveGradeFrame := Ctrl+Alt+R
+
+# Nodes
+nodesPrevious := Alt+Shift+;
+nodesNext := Alt+Shift+'
+nodesAddSerial := Alt+S
+nodesAddBefore := Shift+S
+nodesAddParallel := Alt+P
+nodesAddLayer := Alt+L
+nodesAppend := Alt+K
+nodesAddOutside := Alt+O
+nodesAddSplitterCombiner := Alt+Y
+nodesAddCPW := Alt+C
+nodesAddLPW := Alt+Q
+nodesAddPPW := Alt+G
+nodesAddPCW := Alt+B
+nodesToggleCurrent := Ctrl+D
+nodesToggleAll := Alt+D
+nodesExtractCurrent := E
+#nodesDeleteCurrent := Del | Backspace
+
+# Fairlight
+fairlightCreateGroup := Ctrl+G
+fairlightToggleGroup1Status := Ctrl+Numpad+1
+fairlightToggleGroup2Status := Ctrl+Numpad+2
+fairlightToggleGroup3Status := Ctrl+Numpad+3
+fairlightToggleGroup4Status := Ctrl+Numpad+4
+fairlightToggleGroup5Status := Ctrl+Numpad+5
+fairlightToggleGroup6Status := Ctrl+Numpad+6
+fairlightToggleGroup7Status := Ctrl+Numpad+7
+fairlightToggleGroup8Status := Ctrl+Numpad+8
+fairlightToggleGroup9Status := Ctrl+Numpad+9
+fairlightToggleGroupAllStatus := Ctrl+Numpad+0
+fairlightToggleSuspendGroups := Ctrl+Numpad+*
+
+FairlightTimeline.trimExtendEditSelectionToNextEdit := Shift+Tab | Ctrl+Shift+'
+FairlightTimeline.trimExtendEditSelectionToNextTrack := Ctrl+Shift+;
+FairlightTimeline.trimExtendEditSelectionToPreviousEdit := Ctrl+Shift+K
+FairlightTimeline.trimExtendEditSelectionToPreviousTrack := Ctrl+Shift+P
+FairlightTimeline.trimMoveEditSelectionToNextEdit := Ctrl+' | Tab
+FairlightTimeline.trimMoveEditSelectionToNextFrame := Ctrl+Alt+.
+FairlightTimeline.trimMoveEditSelectionToNextTrack := Ctrl+;
+FairlightTimeline.trimMoveEditSelectionToPreviousEdit := Ctrl+L
+FairlightTimeline.trimMoveEditSelectionToPreviousFrame := Ctrl+Alt+,
+FairlightTimeline.trimMoveEditSelectionToPreviousTrack := Ctrl+P
+FairlightTimeline.controlFirstFrame :=
+FairlightTimeline.controlLastFrame:=
+FairlightTimeline.editAddTransition :=
+FairlightTimeline.trimTrimToSelection := Ctrl+Shift+T
+FairlightTimeline.trimCrossfadeSelection := Alt+Shift+F
+FairlightTimeline.viewTrackWaveformResetZoomAllTracks := Ctrl+Alt+R
+FairlightTimeline.viewTrackWaveformResetZoomSelectedTracks := Alt+Shift+R
+FairlightTimeline.editDuplicateSelection := Ctrl+Shift+D
+
+# Help
+helpManual :=
+
+# Context Menu
+# MediaPool
+MediaPool.Context_setPosterFrame := Ctrl+P
+MediaPool.Context_clearPosterFrame := Alt+P
+
+
