@@ -1,3 +1,3 @@
 @echo off
-python video_converter.py %*
+python "%~dp0video_converter.py" %*
 pause

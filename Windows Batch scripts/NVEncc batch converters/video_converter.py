@@ -59,6 +59,7 @@ def main():
     
     # Process each file provided as arguments
     for file_path in sys.argv[1:]:
+        file_path = os.path.abspath(file_path)  # Ensure the file path is absolute
         if not os.path.isfile(file_path):
             print(f"Skipping invalid file: {file_path}")
             continue
