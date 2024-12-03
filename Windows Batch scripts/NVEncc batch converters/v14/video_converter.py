@@ -18,34 +18,6 @@ def get_video_resolution(file_path):
         print(f"Error detecting resolution: {e}")
         return None, None
 
-def apply_hdr_settings(file_path):
-    hdr_file = os.path.splitext(file_path)[0] + "_HDR_CUBE.mkv"
-    lut_path = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\Colorspace LUTS\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
-    try:
-        cmd = [
-            "mkvmerge.exe", "-o", hdr_file,
-            "--colour-matrix", "0:9", "--colour-range", "0:1",
-            "--colour-transfer-characteristics", "0:16", "--colour-primaries", "0:9",
-            "--max-content-light", "0:1000", "--max-frame-light", "0:300",
-            "--max-luminance", "0:1000", "--min-luminance", "0:0.01",
-            "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.690,0.15,0.06",
-            "--white-colour-coordinates", "0:0.3127,0.3290",
-            "--attachment-mime-type", "application/x-cube",
-            "--attach-file", lut_path,
-            file_path
-        ]
-        print("Applying HDR settings with command:", " ".join(cmd))
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        print("mkvmerge output:", result.stdout)
-        print("mkvmerge error:", result.stderr)
-        if result.returncode != 0:
-            raise Exception(f"mkvmerge failed with return code {result.returncode}.")
-        print(f"HDR settings applied to {file_path}.")
-        return hdr_file  # Return the new file path with HDR applied
-    except Exception as e:
-        print(f"Error applying HDR settings: {e}")
-        return file_path  # If an error occurs, return the original file path
-
 def main():
     # Parse user options
     resolution = input("Enter resolution (4k, 8k, 1 for 4k, 2 for 8k) [Default: 8k]: ") or "8k"
@@ -125,8 +97,6 @@ def main():
             ]
             print("Executing 4K upscale command:", " ".join(cmd_4k))
             subprocess.run(cmd_4k, check=True)
-            # Apply HDR settings
-            apply_hdr_settings(intermediate_file)
             print(f"4K upscale completed for {file_path}.")
 
         # Horizontal conversion
@@ -145,16 +115,7 @@ def main():
                 cmd.extend(fruc_option.split())
             print("Executing command:", " ".join(cmd))
             subprocess.run(cmd, check=True)
-            # Apply HDR settings
-            file_delete = output_file
-            output_file = apply_hdr_settings(output_file)
             print(f"Horizontal conversion completed for {file_path}.")
-            # Delete output file after applying HDR settings
-            try:
-                os.remove(file_delete)
-                print(f"Deleted {file_delete} after HDR application.")
-            except Exception as e:
-                print(f"Error deleting {file_delete}: {e}")
 
         # Vertical conversion
         if vertical == "y":
@@ -173,29 +134,7 @@ def main():
                 cmd.extend(fruc_option.split())
             print("Executing command:", " ".join(cmd))
             subprocess.run(cmd, check=True)
-
-            # Apply HDR settings
-            output_file = apply_hdr_settings(output_file)
-
             print(f"Vertical conversion completed for {file_path}.")
-
-            # Split the output file by chapters using mkvmerge
-            try:
-                split_output_dir = os.path.join(output_dir, "Split")
-                os.makedirs(split_output_dir, exist_ok=True)  # Create the split output directory if it doesn't exist
-                split_command = f"mkvmerge.exe -o \"{split_output_dir}/%%c.mkv\" --split chapters:all \"{output_file}\""
-                print("Executing split command:", split_command)
-                subprocess.run(split_command, check=True, shell=True)
-                print(f"Splitting completed for {output_file}.")
-            except Exception as e:
-                print(f"Error splitting {output_file}: {e}")
-
-            # Delete output file after applying HDR settings
-            try:
-                os.remove(output_file)
-                print(f"Deleted {output_file} after HDR application.")
-            except Exception as e:
-                print(f"Error deleting {output_file}: {e}")
 
     print(f"Processing complete! All resulting videos have been moved to the '{resolution}' folder.")
 

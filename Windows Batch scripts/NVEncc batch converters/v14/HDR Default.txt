@@ -1,0 +1,3 @@
+maxluminance=1000,middlegray=18,saturation=200,contrast=200 
+
+removed for nvencc 7.76 because default setting is fixed
