@@ -98,10 +98,14 @@ for video_file in video_files:
     # Ask user if they want to copy audio or convert it to ac3
     audio_choice = get_user_input("Do you want to copy the audio or convert it to AC3?\n[1] Copy Audio (default)\n[2] Convert to AC3\nEnter choice (1 or 2) [1]: ", "1")
     if audio_choice == "1":
-        audio_codec = "--audio-copy"
+        audio_codec_options = ["--audio-copy"]
     else:
-        audio_codec = "--audio-codec ac3 --audio-bitrate 640 --audio-channel 6"
-
+        # Split audio options for proper parsing
+        audio_codec_options = [
+            "--audio-codec", "ac3",
+            "--audio-bitrate", "640",
+            "--audio-stream", ":5.1"
+        ]
 
     # Ask user for GOP length
     gop_len = get_user_input("Enter GOP length [6]: ", "6")
@@ -110,6 +114,7 @@ for video_file in video_files:
     print("\n--- Selected Encoding Options ---")
     print(f"Input File: {video_file}")
     print(f"Input Resolution: {input_width}x{input_height}")
+    print(f"Target Resolution: {target_width}x{target_height}")
     print(f"Decoding Mode: {decode_flag}")
     print(f"Crop Settings: Top={top}, Bottom={bottom}, Left={left}, Right={right}")
     print(f"QVBR Quality Setting: {qvbr}")
@@ -129,10 +134,10 @@ for video_file in video_files:
         "--crop", f"{left},{top},{right},{bottom}", "--qvbr", qvbr, "--preset", "p7",
         "--output-depth", "10", "--multipass", "2pass-full", "--nonrefp", "--aq", "--aq-temporal",
         "--aq-strength", "0", "--lookahead", "32", "--gop-len", gop_len, "--lookahead-level", "auto",
-        "--transfer", "auto", audio_codec, "--chapter-copy", "--key-on-chapter", "--metadata", "copy",
+        "--transfer", "auto", "--chapter-copy", "--key-on-chapter", "--metadata", "copy",
         FRUC_OPTION, RESIZE_OPTION, ARTIFACT_REDUCTION_OPTION, DENOISE_OPTION, HDR_OPTION,
         "-i", video_file, "-o", output_file
-    ]
+    ] + audio_codec_options  # Append audio options
     command = [arg for arg in command if arg]  # Remove empty arguments
 
     # Run encoding command with real-time output
@@ -154,15 +159,6 @@ for video_file in video_files:
         print(f"Output file {output_file} was not created.")
         continue
 
-    # Ensure HDR folder exists
-    if not os.path.exists("HDR"):
-        try:
-            os.makedirs("HDR")
-        except OSError as e:
-            print(f"Failed to create HDR folder: {e}")
-            continue
-
-    # Move output file to HDR folder
     # Ensure HDR folder exists
     hdr_folder = os.path.abspath("HDR")
     if not os.path.exists(hdr_folder):
@@ -187,7 +183,7 @@ for video_file in video_files:
         log_file.write("--- Selected Encoding Options ---\n")
         log_file.write(f"Input File: {video_file}\n")
         log_file.write(f"Input Resolution: {input_width}x{input_height}\n")
-        log_file.write(f"Decoding Mode: {decode_flag}\n")
+        log_file.write(f"Target Resolution: Height={target_height}, Width={target_width}\n")
         log_file.write(f"Crop Settings: Top={top}, Bottom={bottom}, Left={left}, Right={right}\n")
         log_file.write(f"QVBR Quality Setting: {qvbr}\n")
         log_file.write(f"FRUC 60p: {FRUC_OPTION}\n")
@@ -202,7 +198,6 @@ for video_file in video_files:
     print(f"Processed file: {os.path.basename(output_file)}")
 
 # Final message
-import os
 import platform
 
 def wait_for_any_key():
