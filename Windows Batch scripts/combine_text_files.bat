@@ -18,7 +18,7 @@ if exist "%output%" del "%output%"
 for %%f in (%*) do (
     echo Adding: "%%~f"
     type "%%~f" >> "%output%"
-    echo. >> "%output%"  :: Adds a blank line between files
+    echo. >> "%output%"  REM Adds a blank line between files
 )
 
 echo Files combined successfully into "%output%"
