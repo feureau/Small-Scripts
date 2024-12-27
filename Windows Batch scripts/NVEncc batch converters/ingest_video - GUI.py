@@ -188,7 +188,6 @@ def get_crop_parameters(video_file, input_width, input_height):
         w, h, x, y = input_width, input_height, 0, 0  # Default to full frame if none detected
 
     return w, h, x, y
-
 def add_files(file_listbox):
     """
     Open a file dialog to add video files to the listbox.
@@ -227,6 +226,7 @@ def move_down(file_listbox):
             file_listbox.delete(idx)
             file_listbox.insert(idx + 1, value)
             file_listbox.select_set(idx + 1)
+
 def launch_gui(file_list, crop_params, audio_streams):
     """
     Launch the GUI for configuring video processing options.
@@ -351,6 +351,33 @@ def launch_gui(file_list, crop_params, audio_streams):
     gop_len = tk.StringVar(value="6")
     tk.Label(options_frame, text="Enter GOP length:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w')
+    # Crop parameters section
+    crop_frame = tk.LabelFrame(root, text="Crop Parameters (Modify if needed)")
+    crop_frame.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
+
+    crop_w = tk.StringVar(value="0")
+    crop_h = tk.StringVar(value="0")
+    crop_x = tk.StringVar(value="0")
+    crop_y = tk.StringVar(value="0")
+
+    tk.Label(crop_frame, text="Width:").grid(row=0, column=0, sticky="w")
+    tk.Entry(crop_frame, textvariable=crop_w).grid(row=0, column=1, sticky="ew")
+
+    tk.Label(crop_frame, text="Height:").grid(row=1, column=0, sticky="w")
+    tk.Entry(crop_frame, textvariable=crop_h).grid(row=1, column=1, sticky="ew")
+
+    tk.Label(crop_frame, text="X Offset:").grid(row=2, column=0, sticky="w")
+    tk.Entry(crop_frame, textvariable=crop_x).grid(row=2, column=1, sticky="ew")
+
+    tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w")
+    tk.Entry(crop_frame, textvariable=crop_y).grid(row=3, column=1, sticky="ew")
+
+    # Populate detected crop parameters
+    detected_crop = crop_params[0] if crop_params else {}
+    crop_w.set(detected_crop.get("crop_w", 0))
+    crop_h.set(detected_crop.get("crop_h", 0))
+    crop_x.set(detected_crop.get("crop_x", 0))
+    crop_y.set(detected_crop.get("crop_y", 0))
 
     # Audio options section
     audio_frame = tk.LabelFrame(root, text="Audio Options")
@@ -374,6 +401,7 @@ def launch_gui(file_list, crop_params, audio_streams):
             messagebox.showerror("Error", "No video files selected.")
             return
 
+        # Collect updated crop parameters
         settings = {
             "files": selected_files,
             "decode_mode": decoding_mode.get(),
@@ -384,6 +412,12 @@ def launch_gui(file_list, crop_params, audio_streams):
             "artifact_enable": artifact_enable.get(),
             "qvbr": qvbr.get(),
             "gop_len": gop_len.get(),
+            "crop_params": {
+                "crop_w": int(crop_w.get()),
+                "crop_h": int(crop_h.get()),
+                "crop_x": int(crop_x.get()),
+                "crop_y": int(crop_y.get())
+            },
             "audio_tracks": [stream for i, stream in enumerate(audio_streams) if audio_vars[i].get()],
             "sleep_after_processing": sleep_enable.get()  # Include the sleep option
         }
@@ -412,6 +446,7 @@ def launch_gui(file_list, crop_params, audio_streams):
     tk.Button(root, text="Start Processing", command=start_processing).grid(row=5, column=0, pady=10, sticky="ew")
 
     root.mainloop()
+
 def process_video(file_path, settings):
     """
     Process a single video file using NVEncC with the provided settings.
@@ -422,6 +457,9 @@ def process_video(file_path, settings):
     os.makedirs(output_subdir, exist_ok=True)  # Ensure the output subfolder exists
     output_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_AV1.mkv")  # Updated suffix
 
+    # Extract input dimensions for cropping calculation
+    input_height, input_width = get_video_resolution(file_path)
+
     # Construct the command
     command = [
         "NVEncC64",
@@ -431,6 +469,18 @@ def process_video(file_path, settings):
         "--output-depth", "10",
         "--gop-len", settings['gop_len'],
         "--metadata", "copy",
+        "--tier", "1",
+        "--profile", "high",
+        "--multipass", "2pass-full",
+        "--aq",
+        "--aq-temporal",
+        "--aq-strength", "5",
+        "--lookahead", "32",
+        "--lookahead-level", "auto",
+        "--chapter-copy",
+        "--key-on-chapter",
+        "--sub-copy",
+        "--transfer", "auto",
         "-i", file_path,
         "-o", output_file
     ]
@@ -457,12 +507,20 @@ def process_video(file_path, settings):
 
     if settings.get("crop_params"):
         crop = settings["crop_params"]
-        command.extend(["--crop", f"{crop['crop_x']},{crop['crop_y']},{crop['crop_w']},{crop['crop_h']}"])
+        left = crop['crop_x']
+        top = crop['crop_y']
+        right = input_width - (left + crop['crop_w'])
+        bottom = input_height - (top + crop['crop_h'])
+        command.extend(["--crop", f"{left},{top},{right},{bottom}"])
 
     if settings['audio_tracks']:
         for track in settings['audio_tracks']:
-            command.extend(["--audio-stream", str(track['index'])])
-        command.append("--audio-copy")
+            if track['codec'] != 'ac3':
+                # Convert to AC3
+                command.extend(["--audio-stream", str(track['index']), "--audio-codec", "ac3"])
+            else:
+                # Copy AC3 audio
+                command.extend(["--audio-stream", str(track['index']), "--audio-copy"])
 
     print(f"Processing: {file_path}")
     try:
@@ -471,13 +529,13 @@ def process_video(file_path, settings):
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to process {file_path}")
         print(e)
-
 def process_batch(video_files, settings):
     """
     Process a batch of video files with the provided settings.
     """
     for file_path in video_files:
         process_video(file_path, settings)
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("No video file specified. Please drag and drop a video file onto the script.")
