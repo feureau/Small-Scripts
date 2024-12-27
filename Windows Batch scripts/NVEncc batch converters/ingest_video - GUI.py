@@ -247,6 +247,7 @@ def launch_gui(file_list, crop_params, audio_streams):
 
     # Declare HDR enable variable before `update_metadata_display`
     hdr_enable = tk.BooleanVar(value=False)  # Set HDR conversion disabled by default
+    sleep_enable = tk.BooleanVar(value=False)  # Add a variable for "Put Computer to Sleep"
 
     # Function to update metadata display
     def update_metadata_display(selected_file):
@@ -362,6 +363,9 @@ def launch_gui(file_list, crop_params, audio_streams):
                        variable=audio_var).pack(anchor='w')
         audio_vars.append(audio_var)
 
+    # Add "Put Computer to Sleep" checkbox
+    tk.Checkbutton(root, text="Put Computer to Sleep", variable=sleep_enable).grid(row=4, column=0, padx=10, pady=5, sticky="w")
+
     # Action buttons
     def start_processing():
         # Validate and collect settings
@@ -380,7 +384,8 @@ def launch_gui(file_list, crop_params, audio_streams):
             "artifact_enable": artifact_enable.get(),
             "qvbr": qvbr.get(),
             "gop_len": gop_len.get(),
-            "audio_tracks": [stream for i, stream in enumerate(audio_streams) if audio_vars[i].get()]
+            "audio_tracks": [stream for i, stream in enumerate(audio_streams) if audio_vars[i].get()],
+            "sleep_after_processing": sleep_enable.get()  # Include the sleep option
         }
 
         if not settings["audio_tracks"]:
@@ -392,7 +397,19 @@ def launch_gui(file_list, crop_params, audio_streams):
         print(settings)
         process_batch(settings["files"], settings)
 
-    tk.Button(root, text="Start Processing", command=start_processing).grid(row=4, column=0, pady=10, sticky="ew")
+        # Put the computer to sleep if the option is enabled
+        if settings.get("sleep_after_processing"):
+            print("Putting the computer to sleep...")
+            if platform.system() == "Windows":
+                os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+            elif platform.system() == "Linux":
+                os.system("systemctl suspend")
+            elif platform.system() == "Darwin":  # macOS
+                os.system("pmset sleepnow")
+            else:
+                print("Sleep command not supported on this platform.")
+
+    tk.Button(root, text="Start Processing", command=start_processing).grid(row=5, column=0, pady=10, sticky="ew")
 
     root.mainloop()
 def process_video(file_path, settings):
