@@ -457,6 +457,9 @@ def process_video(file_path, settings):
     os.makedirs(output_subdir, exist_ok=True)  # Ensure the output subfolder exists
     output_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_AV1.mkv")  # Updated suffix
 
+    # Log file for encoding process
+    log_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_encoding.log")
+
     # Extract input dimensions for cropping calculation
     input_height, input_width = get_video_resolution(file_path)
 
@@ -526,9 +529,17 @@ def process_video(file_path, settings):
     try:
         subprocess.run(command, check=True)
         print(f"Success: Processed {file_path} -> {output_file}")
+        status = "Success"
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to process {file_path}")
-        print(e)
+        status = f"Error: {e}"
+
+    # Write command and parameters to the log file
+    with open(log_file, "w") as log:
+        log.write("Command:\n" + " ".join(command) + "\n\n")
+        log.write(f"Processing file: {file_path}\n")
+        log.write(f"Output file: {output_file}\n")
+        log.write(f"Status: {status}\n")
 def process_batch(video_files, settings):
     """
     Process a batch of video files with the provided settings.
@@ -565,3 +576,6 @@ if __name__ == "__main__":
         stream for file in detected_crop_params for stream in run_ffprobe_for_audio_streams(file["file"])
     ]
     launch_gui([d["file"] for d in detected_crop_params], detected_crop_params, all_audio_streams)
+
+    print("All processing complete. Press any key to exit...")
+    input()  # Cross-platform wait for any key
