@@ -67,31 +67,31 @@ def apply_hdr_settings(file_path):
 
 def main():
     # Parse user options
-    resolution = input("Enter resolution (4k, 8k, 1 for 4k, 2 for 8k) [Default: 8k]: ") or "8k"
+    resolution = input("Enter resolution (4k, 8k, 1 for 4k, 2 for 8k) [Default: 4k]: ") or "4k"
     resolution = resolution.replace("1", "4k").replace("2", "8k").lower()
     if resolution not in ["4k", "8k"]:
-        resolution = "8k"
+        resolution = "4k"
     
     upscale_only = input("Do you want to upscale only? (y/n/1/0) [Default: y]: ") or "y"
     upscale_only = upscale_only.replace("1", "y").replace("0", "n").lower()
     if upscale_only not in ["y", "n"]:
         upscale_only = "y"
     
-    vertical_crop = input("Do you want to also create vertical crop? (y/n/1/0) [Default: y]: ") or "y"
+    vertical_crop = input("Do you want to also create vertical crop? (y/n/1/0) [Default: n]: ") or "n"
     vertical_crop = vertical_crop.replace("1", "y").replace("0", "n").lower()
     if vertical_crop not in ["y", "n"]:
-        vertical_crop = "y"
-    
+        vertical_crop = "n"
+
     qvbr_value = input("Enter qvbr value (default is 18): ") or "18"
     try:
         qvbr_value = int(qvbr_value)
     except ValueError:
         qvbr_value = 18
-    
+
     fruc_enable = input("Enable FRUC (fps=60)? (y/n/1/0) [Default: n]: ") or "n"
     fruc_enable = fruc_enable.replace("1", "y").replace("0", "n").lower()
     fruc_option = "--vpp-fruc fps=60" if fruc_enable == "y" else ""
-    
+
     # Resolution-specific settings
     crop_value_4k = "528,0,528,0"
     crop_value_8k = "1056,0,1056,0"
@@ -99,11 +99,11 @@ def main():
     resize_algorithm_8k = "algo=ngx-vsr,vsr-quality=1"
     output_res_4k = "2160x2160"
     output_res_8k = "4320x4320"
-    
+
     # Ensure output folder exists
     output_dir = resolution
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Process each file provided as arguments
     for file_path in sys.argv[1:]:
         file_path = os.path.abspath(file_path)  # Ensure the file path is absolute
@@ -128,7 +128,7 @@ def main():
             output_res = output_res_8k
             crop_value = crop_value_8k
             resize_algorithm = resize_algorithm_8k
-        
+
         intermediate_file = file_path
 
         # Horizontal (upscale only) conversion

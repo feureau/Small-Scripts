@@ -405,7 +405,7 @@ for video_file in video_files:
     output_file = os.path.abspath(f"{os.path.splitext(video_file)[0]}_HDR_{int(time.time())}.mkv")
     command = [
         "NVEncC64", decode_flag, "--codec", "av1", "--tier", "1", "--profile", "high",
-        "--qvbr", qvbr, "--preset", "p7",
+        "--qvbr", qvbr, "--preset", "p4",
         "--output-depth", "10", "--multipass", "2pass-full", "--nonrefp", "--aq", "--aq-temporal",
         "--aq-strength", "0", "--lookahead", "32", "--gop-len", gop_len, "--lookahead-level", "auto",
         "--transfer", "auto", "--chapter-copy", "--key-on-chapter", "--metadata", "copy"
