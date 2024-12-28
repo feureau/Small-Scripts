@@ -62,16 +62,16 @@ def run_ffprobe_for_audio_streams(video_file):
     - Includes index, codec_name, and language (if available).
     """
     cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "a", 
+        "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_entries", "stream=index,codec_name:stream_tags=language",
         "-of", "json", video_file
     ]
     try:
         output = subprocess.check_output(
-            cmd, 
-            stderr=subprocess.STDOUT, 
-            text=True, 
-            encoding='utf-8', 
+            cmd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
             errors='replace'
         )
     except subprocess.CalledProcessError:
@@ -115,10 +115,12 @@ def get_video_duration(video_file):
     duration = frame_count / fps if fps else None
     cap.release()
     return duration
-def get_crop_parameters(video_file, input_width, input_height):
+
+def get_crop_parameters(video_file, input_width, input_height, limit_value):
     """
     Detect optimal crop parameters for a video using ffmpeg.
     - Analyzes frames at intervals and detects cropping areas.
+    - The 'limit_value' is determined based on HDR vs. SDR.
     """
     print("Detecting optimal crop parameters throughout the video...")
     duration = get_video_duration(video_file)
@@ -126,8 +128,7 @@ def get_crop_parameters(video_file, input_width, input_height):
         print("Unable to determine video duration or video is too short.")
         return None, None, None, None
 
-    default_limit = "48"
-    limit_value = default_limit
+    # We no longer set 'default_limit' here directly; we use 'limit_value' passed in.
     default_round = "4"
     round_value = default_round
 
@@ -188,6 +189,7 @@ def get_crop_parameters(video_file, input_width, input_height):
         w, h, x, y = input_width, input_height, 0, 0  # Default to full frame if none detected
 
     return w, h, x, y
+
 def add_files(file_listbox):
     """
     Open a file dialog to add video files to the listbox.
@@ -227,11 +229,12 @@ def move_down(file_listbox):
             file_listbox.insert(idx + 1, value)
             file_listbox.select_set(idx + 1)
 
-def launch_gui(file_list, crop_params, audio_streams):
+def launch_gui(file_list, crop_params, audio_streams, default_qvbr):
     """
     Launch the GUI for configuring video processing options.
     - Displays the color-related metadata for selected videos.
     - Allows users to modify settings and start processing.
+    - 'default_qvbr' is determined by 4K or non-4K resolution.
     """
     # Initialize main window
     root = tk.Tk()
@@ -344,13 +347,15 @@ def launch_gui(file_list, crop_params, audio_streams):
     artifact_enable = tk.BooleanVar()
     tk.Checkbutton(options_frame, text="Enable Artifact Reduction", variable=artifact_enable).pack(anchor='w')
 
-    qvbr = tk.StringVar(value="20")
+    # Use the default_qvbr determined by resolution
+    qvbr = tk.StringVar(value=default_qvbr)
     tk.Label(options_frame, text="Enter target QVBR:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=qvbr).pack(anchor='w')
 
     gop_len = tk.StringVar(value="6")
     tk.Label(options_frame, text="Enter GOP length:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w')
+
     # Crop parameters section
     crop_frame = tk.LabelFrame(root, text="Crop Parameters (Modify if needed)")
     crop_frame.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
@@ -372,7 +377,7 @@ def launch_gui(file_list, crop_params, audio_streams):
     tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w")
     tk.Entry(crop_frame, textvariable=crop_y).grid(row=3, column=1, sticky="ew")
 
-    # Populate detected crop parameters
+    # Populate detected crop parameters for the FIRST file
     detected_crop = crop_params[0] if crop_params else {}
     crop_w.set(detected_crop.get("crop_w", 0))
     crop_h.set(detected_crop.get("crop_h", 0))
@@ -508,6 +513,7 @@ def process_video(file_path, settings):
     if settings['artifact_enable']:
         command.append("--vpp-nvvfx-artifact-reduction")
 
+    # Apply crop if provided
     if settings.get("crop_params"):
         crop = settings["crop_params"]
         left = crop['crop_x']
@@ -540,6 +546,7 @@ def process_video(file_path, settings):
         log.write(f"Processing file: {file_path}\n")
         log.write(f"Output file: {output_file}\n")
         log.write(f"Status: {status}\n")
+
 def process_batch(video_files, settings):
     """
     Process a batch of video files with the provided settings.
@@ -554,28 +561,58 @@ if __name__ == "__main__":
         sys.exit()
 
     video_files = sys.argv[1:]
+    
+    # --- STEP A: Detect color-related metadata on the first file ---
+    first_file = video_files[0]
+    color_range, color_primaries, color_transfer, color_space, mastering_display_metadata = get_video_color_info(first_file)
+    
+    # Decide default_limit based on HDR or SDR
+    # For simplicity, any mention of "2020" or "2084" sets it to '64'
+    if color_primaries and '2020' in color_primaries.lower():
+        default_limit = '64'
+    elif color_transfer and '2084' in color_transfer.lower():
+        default_limit = '64'
+    else:
+        default_limit = '24'
+
+    # --- STEP B: Detect video size (first file) for default QVBR ---
+    first_input_height, first_input_width = get_video_resolution(first_file)
+    if first_input_height is None or first_input_width is None:
+        print(f"Error: Could not retrieve resolution for {first_file}. Exiting.")
+        sys.exit()
+
+    # If resolution is 4K or larger, default QVBR=30, otherwise 20
+    if (first_input_height >= 2160) and (first_input_width >= 3840):
+        default_qvbr = "30"
+    else:
+        default_qvbr = "20"
+
+    # --- STEP C: Run cropdetect only on first file, using the chosen limit value ---
+    crop_w, crop_h, crop_x, crop_y = get_crop_parameters(
+        first_file,
+        first_input_width,
+        first_input_height,
+        limit_value=default_limit
+    )
+
+    # Prepare a list of dicts for each file, but all share the same crop
     detected_crop_params = []
-
-    for video_file in video_files:
-        input_height, input_width = get_video_resolution(video_file)
-        if input_height is None or input_width is None:
-            print(f"Error: Could not retrieve resolution for {video_file}. Skipping.")
-            continue
-
-        crop_w, crop_h, crop_x, crop_y = get_crop_parameters(video_file, input_width, input_height)
+    for vf in video_files:
         detected_crop_params.append({
-            "file": video_file,
+            "file": vf,
             "crop_w": crop_w,
             "crop_h": crop_h,
             "crop_x": crop_x,
             "crop_y": crop_y
         })
 
-    print("\nCrop detection complete. Launching GUI for additional settings...\n")
-    all_audio_streams = [
-        stream for file in detected_crop_params for stream in run_ffprobe_for_audio_streams(file["file"])
-    ]
-    launch_gui([d["file"] for d in detected_crop_params], detected_crop_params, all_audio_streams)
+    print("\nCrop detection complete (only done for the first file). Launching GUI for additional settings...\n")
+
+    # --- STEP D: Run ffprobe for audio streams only on the first file
+    all_audio_streams = run_ffprobe_for_audio_streams(first_file)
+
+    # --- STEP E: Launch the GUI with a single set of audio/crop defaults ---
+    launch_gui([d["file"] for d in detected_crop_params], detected_crop_params, all_audio_streams, default_qvbr)
 
     print("All processing complete. Press any key to exit...")
     input()  # Cross-platform wait for any key
