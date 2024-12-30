@@ -262,12 +262,13 @@ def move_down(file_listbox):
 def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr):
     """
     Build & launch the Tkinter GUI for user adjustments.
+    Always default to Hardware decoding for the user.
 
-    If HDR is selected => default decode mode = Hardware.
-    If HDR is not selected => default decode mode = Software.
-
-    Then we provide radio buttons for the user, but we also auto-update
-    the decode mode radio if the user toggles "HDR Conversion".
+    Audio logic:
+      - "Copy Audio" => single --audio-copy with comma-separated track indexes
+      - "Convert to AC3 (5.1)" => multiple --audio-codec <trackIndex>?ac3 flags
+                                   plus a single --audio-stream :5.1 flag
+      Also, if user selects "Resize to 4K", automatically set qvbr=30.
     """
     root = tk.Tk()
     root.title("Video Processing Settings")
@@ -278,37 +279,26 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     root.columnconfigure(0, weight=1)
     root.rowconfigure(0, weight=1)
 
-    # We'll track HDR conversion with a bool var
-    hdr_enable = tk.BooleanVar()
-    hdr_enable.set(default_hdr)
-
-    # We'll track decoding mode with a string var: "Hardware" or "Software"
-    decoding_mode = tk.StringVar()
-
-    # Initial auto-set
-    if default_hdr:
-        decoding_mode.set("Hardware")
-    else:
-        decoding_mode.set("Software")
-
+    decoding_mode = tk.StringVar(value="Hardware")
+    hdr_enable = tk.BooleanVar(value=default_hdr)
     sleep_enable = tk.BooleanVar(value=False)
+
+    # "copy" or "ac3"
+    audio_mode = tk.StringVar(value="copy")
+
+    resize_enable = tk.BooleanVar()
+    fruc_enable = tk.BooleanVar()
+    denoise_enable = tk.BooleanVar()
+    artifact_enable = tk.BooleanVar()
+
+    qvbr = tk.StringVar(value=default_qvbr)
+    gop_len = tk.StringVar(value="6")
+
     metadata_text = None
 
-    def update_decode_mode_based_on_hdr():
-        """
-        If HDR is enabled => set decode_mode to "Hardware"
-        If HDR is disabled => set decode_mode to "Software"
-        """
-        if hdr_enable.get():
-            decoding_mode.set("Hardware")
-        else:
-            decoding_mode.set("Software")
-
-    def on_hdr_toggle():
-        update_decode_mode_based_on_hdr()
-
-    def on_decode_mode_select():
-        pass  # user override
+    def on_resize_toggle():
+        if resize_enable.get():
+            qvbr.set("30")
 
     def update_metadata_display(selected_file):
         nonlocal metadata_text
@@ -377,7 +367,6 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     options_frame = tk.LabelFrame(root, text="Video Options")
     options_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
 
-    # Decoding Mode Frame (Radio Buttons)
     decode_mode_frame = tk.LabelFrame(options_frame, text="Decoding Mode")
     decode_mode_frame.pack(fill="x", padx=5, pady=5)
 
@@ -385,43 +374,26 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
         decode_mode_frame,
         text="Hardware Decoding",
         variable=decoding_mode,
-        value="Hardware",
-        command=on_decode_mode_select
+        value="Hardware"
     ).pack(anchor="w")
 
     tk.Radiobutton(
         decode_mode_frame,
         text="Software Decoding",
         variable=decoding_mode,
-        value="Software",
-        command=on_decode_mode_select
+        value="Software"
     ).pack(anchor="w")
 
-    # HDR Check
-    tk.Checkbutton(
-        options_frame,
-        text="Enable HDR Conversion",
-        variable=hdr_enable,
-        command=on_hdr_toggle
-    ).pack(anchor='w')
+    tk.Checkbutton(options_frame, text="Enable HDR Conversion", variable=hdr_enable).pack(anchor='w')
 
-    resize_enable = tk.BooleanVar()
-    tk.Checkbutton(options_frame, text="Resize to 4K", variable=resize_enable).pack(anchor='w')
-
-    fruc_enable = tk.BooleanVar()
+    tk.Checkbutton(options_frame, text="Resize to 4K", variable=resize_enable, command=on_resize_toggle).pack(anchor='w')
     tk.Checkbutton(options_frame, text="Enable FRUC (fps=60)", variable=fruc_enable).pack(anchor='w')
-
-    denoise_enable = tk.BooleanVar()
     tk.Checkbutton(options_frame, text="Enable Denoising", variable=denoise_enable).pack(anchor='w')
-
-    artifact_enable = tk.BooleanVar()
     tk.Checkbutton(options_frame, text="Enable Artifact Reduction", variable=artifact_enable).pack(anchor='w')
 
-    qvbr = tk.StringVar(value=default_qvbr)
     tk.Label(options_frame, text="Enter target QVBR:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=qvbr).pack(anchor='w')
 
-    gop_len = tk.StringVar(value="6")
     tk.Label(options_frame, text="Enter GOP length:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w')
 
@@ -452,18 +424,25 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     crop_x.set(detected_crop.get("crop_x", 0))
     crop_y.set(detected_crop.get("crop_y", 0))
 
-    # Audio UI
-    audio_frame = tk.LabelFrame(root, text="Audio Options")
-    audio_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
+    # Audio Options => "copy" vs. "ac3"
+    audio_options_frame = tk.LabelFrame(root, text="Audio Options")
+    audio_options_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
+
+    tk.Radiobutton(audio_options_frame, text="Copy Audio", variable=audio_mode, value="copy").pack(anchor="w")
+    tk.Radiobutton(audio_options_frame, text="Convert to AC3 (5.1)", variable=audio_mode, value="ac3").pack(anchor="w")
+
+    # Audio Tracks
+    audio_tracks_frame = tk.LabelFrame(root, text="Audio Tracks")
+    audio_tracks_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
 
     audio_vars = []
     for stream in audio_streams:
-        audio_var = tk.BooleanVar(value=(stream['language'] == 'eng'))
+        audio_var = tk.BooleanVar(value=False)
         label_txt = f"Track {stream['index']}: {stream['codec']} ({stream['language'] or 'N/A'})"
-        tk.Checkbutton(audio_frame, text=label_txt, variable=audio_var).pack(anchor='w')
+        tk.Checkbutton(audio_tracks_frame, text=label_txt, variable=audio_var).pack(anchor='w')
         audio_vars.append(audio_var)
 
-    tk.Checkbutton(root, text="Put Computer to Sleep", variable=sleep_enable).grid(row=4, column=0, padx=10, pady=5, sticky="w")
+    tk.Checkbutton(root, text="Put Computer to Sleep", variable=sleep_enable).grid(row=5, column=0, padx=10, pady=5, sticky="w")
 
     def start_processing():
         selected_files = list(file_listbox.get(0, 'end'))
@@ -475,14 +454,15 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
         for i, s in enumerate(audio_streams):
             if audio_vars[i].get():
                 selected_tracks.append(s)
+
         if not selected_tracks:
             messagebox.showerror("Error", "At least one audio track must be selected.")
             return
 
         settings = {
             "files": selected_files,
-            "decode_mode": decoding_mode.get(),   # "Hardware" or "Software"
-            "hdr_enable": hdr_enable.get(),       # bool
+            "decode_mode": decoding_mode.get(),
+            "hdr_enable": hdr_enable.get(),
             "resize_enable": resize_enable.get(),
             "fruc_enable": fruc_enable.get(),
             "denoise_enable": denoise_enable.get(),
@@ -495,7 +475,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
                 "crop_x": int(crop_x.get()),
                 "crop_y": int(crop_y.get())
             },
-            "audio_tracks": selected_tracks,
+            "audio_tracks": selected_tracks,  # e.g. [{'index':5,'codec':'pcm_f32le'}]
+            "audio_mode": audio_mode.get(),   # "copy" or "ac3"
             "sleep_after_processing": sleep_enable.get()
         }
 
@@ -515,7 +496,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
             else:
                 print("Sleep command not supported on this platform.")
 
-    tk.Button(root, text="Start Processing", command=start_processing).grid(row=5, column=0, pady=10, sticky="ew")
+    tk.Button(root, text="Start Processing", command=start_processing).grid(row=6, column=0, pady=10, sticky="ew")
     root.mainloop()
 
 
@@ -524,13 +505,17 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
 # ---------------------------------------------------------------------
 def process_video(file_path, settings):
     """
-    Encode a single video file with NVEncC according to 'settings'.
-
-    If convert-to-HDR is not selected:
-      - add: --dhdr10-info copy, --dolby-vision-profile copy, --dolby-vision-rpu copy
-    If convert-to-HDR is selected:
-      - add: --vpp-ngx-truehdr
-      - also add: --colormatrix bt2020nc --colorprim bt2020 --transfer smpte2084
+    Audio mode:
+      If "ac3":
+        For each track:
+          --audio-codec <trackIndex>?ac3
+        Then:
+          --audio-stream :5.1
+        Plus:
+          --audio-bitrate 640
+      If "copy":
+        --audio-copy track1,track2,...
+    Also, if "resize" => qvbr=30.
     """
     input_dir = os.path.dirname(file_path)
     file_name = os.path.basename(file_path)
@@ -545,7 +530,11 @@ def process_video(file_path, settings):
         print(f"Error: Could not retrieve resolution for {file_path}. Skipping.")
         return
 
-    hdr_convert = settings["hdr_enable"]  # bool
+    # If "Resize to 4K" => ensure QVBR=30
+    if settings["resize_enable"]:
+        settings["qvbr"] = "30"
+
+    hdr_convert = settings["hdr_enable"]
 
     command = [
         "NVEncC64",
@@ -570,24 +559,32 @@ def process_video(file_path, settings):
         "-o", output_file
     ]
 
-    # decode mode
+    # Decode mode
     if settings["decode_mode"] == "Hardware":
         command.append("--avhw")
     else:
         command.append("--avsw")
 
+    # Always set color tags
+    command.extend(["--colormatrix", "bt2020nc"])
+    command.extend(["--colorprim", "bt2020"])
+    command.extend(["--transfer", "smpte2084"])
+
+    # HDR logic
     if hdr_convert:
-        # Convert to HDR
         command.append("--vpp-ngx-truehdr")
-        # Add color tags for HDR
-        command.extend(["--colormatrix", "bt2020nc"])
-        command.extend(["--colorprim", "bt2020"])
-        command.extend(["--transfer", "smpte2084"])
     else:
-        # Not converting to HDR => copy dynamic metadata
         command.extend(["--dhdr10-info", "copy"])
         command.extend(["--dolby-vision-profile", "copy"])
         command.extend(["--dolby-vision-rpu", "copy"])
+
+    # Crop
+    crop = settings["crop_params"]
+    left = crop["crop_x"]
+    top = crop["crop_y"]
+    right = input_width - (left + crop["crop_w"])
+    bottom = input_height - (top + crop["crop_h"])
+    command.extend(["--crop", f"{left},{top},{right},{bottom}"])
 
     # Additional features
     if settings["resize_enable"]:
@@ -599,19 +596,29 @@ def process_video(file_path, settings):
     if settings["artifact_enable"]:
         command.append("--vpp-nvvfx-artifact-reduction")
 
-    # Crop
-    crop = settings["crop_params"]
-    left = crop["crop_x"]
-    top = crop["crop_y"]
-    right = input_width - (left + crop["crop_w"])
-    bottom = input_height - (top + crop["crop_h"])
-    command.extend(["--crop", f"{left},{top},{right},{bottom}"])
+    # Audio logic
+    audio_mode = settings["audio_mode"]  # "copy" or "ac3"
+    tracks = settings["audio_tracks"]
 
-    # Audio track selection, e.g. "--audio-codec 2?ac3"
-    for track in settings["audio_tracks"]:
-        track_idx = track["index"]
-        audio_param = f"{track_idx}?ac3"
-        command.extend(["--audio-codec", audio_param])
+    if audio_mode == "ac3":
+        # For each track => --audio-codec <trackIndex>?ac3
+        for t in tracks:
+            track_idx = t["index"]
+            # E.g. "--audio-codec 2?ac3"
+            command.extend(["--audio-codec", f"{track_idx}?ac3"])
+
+        # Then one: --audio-stream :5.1
+        command.extend(["--audio-stream", ":5.1"])
+
+        # Add --audio-bitrate 640
+        command.extend(["--audio-bitrate", "640"])
+
+    else:
+        # copy
+        # single --audio-copy 1,2,3
+        track_nums = [str(t["index"]) for t in tracks]
+        track_str = ",".join(track_nums)
+        command.extend(["--audio-copy", track_str])
 
     print(f"\nProcessing: {file_path}")
     print("NVEncC command:\n" + " ".join(command))
@@ -623,6 +630,7 @@ def process_video(file_path, settings):
         print(f"Error: Failed to process {file_path}")
         status = f"Error: {e}"
 
+    # Logging
     with open(log_file, "w", encoding='utf-8') as log:
         log.write("Command:\n" + " ".join(command) + "\n\n")
         log.write(f"Processing file: {file_path}\n")
@@ -652,7 +660,6 @@ if __name__ == "__main__":
     cp_first = (color_data_first["color_primaries"] or "").lower()
     cs_first = (color_data_first["color_space"] or "").lower()
 
-    # If the content is in BT.2020, guess user might not want to do "HDR conversion" by default
     if cp_first == "bt2020" or cs_first == "bt2020nc":
         default_hdr = False
         limit_value = "64"
@@ -674,7 +681,6 @@ if __name__ == "__main__":
     # Crop detection on the first file
     crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, first_w, first_h, limit_value=limit_value)
 
-    # Build a default crop dict for each file
     detected_crop_params = []
     for vf in video_files:
         detected_crop_params.append({
@@ -689,7 +695,6 @@ if __name__ == "__main__":
 
     all_audio_streams = run_ffprobe_for_audio_streams(first_file)
 
-    # Launch the GUI
     launch_gui(
         [d["file"] for d in detected_crop_params],
         detected_crop_params,
