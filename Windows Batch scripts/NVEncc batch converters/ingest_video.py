@@ -207,8 +207,11 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
                     idx = line.index('crop=')
                     crop_str = line[idx+5:].strip()
                     crop_values.append(crop_str)
-                    w, h, x, y = [int(v) for v in crop_str.split(':')]
-                    print(f"Detected crop at {int(start_time)}s: width={w}, height={h}, x={x}, y={y}")
+                    try:
+                        w, h, x, y = [int(v) for v in crop_str.split(':')]
+                        print(f"Detected crop at {int(start_time)}s: width={w}, height={h}, x={x}, y={y}")
+                    except ValueError:
+                        print(f"Invalid crop parameters detected: {crop_str}")
         except Exception as e:
             print(f"Error while running cropdetect at {int(start_time)}s: {e}")
             continue
@@ -216,8 +219,12 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
     if crop_values:
         crop_counter = Counter(crop_values)
         most_common_crop = crop_counter.most_common(1)[0][0]
-        w, h, x, y = [int(v) for v in most_common_crop.split(':')]
-        print(f"\nDetected optimal crop parameters: width={w}, height={h}, x={x}, y={y}")
+        try:
+            w, h, x, y = [int(v) for v in most_common_crop.split(':')]
+            print(f"\nDetected optimal crop parameters: width={w}, height={h}, x={x}, y={y}")
+        except ValueError:
+            print(f"Invalid most common crop parameters: {most_common_crop}. Using full frame.")
+            w, h, x, y = input_width, input_height, 0, 0
     else:
         print("No crop parameters found. Using full frame.")
         w, h, x, y = input_width, input_height, 0, 0
@@ -259,7 +266,7 @@ def move_down(file_listbox):
             file_listbox.select_set(idx + 1)
 
 
-def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr):
+def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height):
     """
     Build & launch the Tkinter GUI for user adjustments.
     Always default to Hardware decoding for the user.
@@ -273,7 +280,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     root = tk.Tk()
     root.title("Video Processing Settings")
 
-    root.geometry("1024x768")
+    root.geometry("1024x800")
     root.minsize(800, 600)
 
     root.columnconfigure(0, weight=1)
@@ -294,11 +301,63 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     qvbr = tk.StringVar(value=default_qvbr)
     gop_len = tk.StringVar(value="6")
 
+    # No Crop Checkbox Variable
+    no_crop_var = tk.BooleanVar(value=False)
+
+    # Store original crop parameters to restore when "No Crop" is unchecked
+    original_crop_w = crop_params[0]['crop_w'] if crop_params else 0
+    original_crop_h = crop_params[0]['crop_h'] if crop_params else 0
+    original_crop_x = crop_params[0]['crop_x'] if crop_params else 0
+    original_crop_y = crop_params[0]['crop_y'] if crop_params else 0
+
+    # Audio Select All Variables
+    select_all_var = tk.BooleanVar(value=False)
+    previous_audio_selections = []
+
     metadata_text = None
 
     def on_resize_toggle():
         if resize_enable.get():
             qvbr.set("30")
+        else:
+            qvbr.set(str(default_qvbr))  # Reset to default based on resolution
+
+    def on_no_crop_toggle():
+        if no_crop_var.get():
+            # "No Crop" is checked: reset crop parameters to input size
+            crop_w.set(str(input_width))
+            crop_h.set(str(input_height))
+            crop_x.set("0")
+            crop_y.set("0")
+            # Disable crop entries
+            width_entry.config(state='disabled')
+            height_entry.config(state='disabled')
+            x_entry.config(state='disabled')
+            y_entry.config(state='disabled')
+        else:
+            # "No Crop" is unchecked: restore original crop parameters
+            crop_w.set(str(original_crop_w))
+            crop_h.set(str(original_crop_h))
+            crop_x.set(str(original_crop_x))
+            crop_y.set(str(original_crop_y))
+            # Enable crop entries
+            width_entry.config(state='normal')
+            height_entry.config(state='normal')
+            x_entry.config(state='normal')
+            y_entry.config(state='normal')
+
+    def on_select_all_toggle():
+        nonlocal previous_audio_selections
+        if select_all_var.get():
+            # Save current selections
+            previous_audio_selections = [var.get() for var in audio_vars]
+            # Select all audio tracks
+            for var in audio_vars:
+                var.set(True)
+        else:
+            # Restore previous selections
+            for var, prev in zip(audio_vars, previous_audio_selections):
+                var.set(prev)
 
     def update_metadata_display(selected_file):
         nonlocal metadata_text
@@ -392,7 +451,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     tk.Checkbutton(options_frame, text="Enable Artifact Reduction", variable=artifact_enable).pack(anchor='w')
 
     tk.Label(options_frame, text="Enter target QVBR:").pack(anchor='w')
-    tk.Entry(options_frame, textvariable=qvbr).pack(anchor='w')
+    qvbr_entry = tk.Entry(options_frame, textvariable=qvbr)
+    qvbr_entry.pack(anchor='w')
 
     tk.Label(options_frame, text="Enter GOP length:").pack(anchor='w')
     tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w')
@@ -401,28 +461,38 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     crop_frame = tk.LabelFrame(root, text="Crop Parameters (Modify if needed)")
     crop_frame.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
 
-    crop_w = tk.StringVar(value="0")
-    crop_h = tk.StringVar(value="0")
-    crop_x = tk.StringVar(value="0")
-    crop_y = tk.StringVar(value="0")
+    crop_w = tk.StringVar(value=str(crop_params[0]['crop_w']) if crop_params else "0")
+    crop_h = tk.StringVar(value=str(crop_params[0]['crop_h']) if crop_params else "0")
+    crop_x = tk.StringVar(value=str(crop_params[0]['crop_x']) if crop_params else "0")
+    crop_y = tk.StringVar(value=str(crop_params[0]['crop_y']) if crop_params else "0")
 
     tk.Label(crop_frame, text="Width:").grid(row=0, column=0, sticky="w")
-    tk.Entry(crop_frame, textvariable=crop_w).grid(row=0, column=1, sticky="ew")
+    width_entry = tk.Entry(crop_frame, textvariable=crop_w)
+    width_entry.grid(row=0, column=1, sticky="ew")
 
     tk.Label(crop_frame, text="Height:").grid(row=1, column=0, sticky="w")
-    tk.Entry(crop_frame, textvariable=crop_h).grid(row=1, column=1, sticky="ew")
+    height_entry = tk.Entry(crop_frame, textvariable=crop_h)
+    height_entry.grid(row=1, column=1, sticky="ew")
 
     tk.Label(crop_frame, text="X Offset:").grid(row=2, column=0, sticky="w")
-    tk.Entry(crop_frame, textvariable=crop_x).grid(row=2, column=1, sticky="ew")
+    x_entry = tk.Entry(crop_frame, textvariable=crop_x)
+    x_entry.grid(row=2, column=1, sticky="ew")
 
     tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w")
-    tk.Entry(crop_frame, textvariable=crop_y).grid(row=3, column=1, sticky="ew")
+    y_entry = tk.Entry(crop_frame, textvariable=crop_y)
+    y_entry.grid(row=3, column=1, sticky="ew")
 
-    detected_crop = crop_params[0] if crop_params else {}
-    crop_w.set(detected_crop.get("crop_w", 0))
-    crop_h.set(detected_crop.get("crop_h", 0))
-    crop_x.set(detected_crop.get("crop_x", 0))
-    crop_y.set(detected_crop.get("crop_y", 0))
+    # "No Crop" Checkbox
+    no_crop_checkbox = tk.Checkbutton(
+        crop_frame,
+        text="No Crop",
+        variable=no_crop_var,
+        command=on_no_crop_toggle
+    )
+    no_crop_checkbox.grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w")
+
+    # Ensure all entries expand properly
+    crop_frame.columnconfigure(1, weight=1)
 
     # Audio Options => "copy" vs. "ac3"
     audio_options_frame = tk.LabelFrame(root, text="Audio Options")
@@ -435,10 +505,20 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr)
     audio_tracks_frame = tk.LabelFrame(root, text="Audio Tracks")
     audio_tracks_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
 
+    # "Select All" Checkbox
+    select_all_checkbox = tk.Checkbutton(
+        audio_tracks_frame,
+        text="Select All",
+        variable=select_all_var,
+        command=on_select_all_toggle
+    )
+    select_all_checkbox.pack(anchor='w')
+
     audio_vars = []
     for stream in audio_streams:
         audio_var = tk.BooleanVar(value=False)
-        label_txt = f"Track {stream['index']}: {stream['codec']} ({stream['language'] or 'N/A'})"
+        language = stream['language'] if stream['language'] else 'N/A'
+        label_txt = f"Track {stream['index']}: {stream['codec']} ({language})"
         tk.Checkbutton(audio_tracks_frame, text=label_txt, variable=audio_var).pack(anchor='w')
         audio_vars.append(audio_var)
 
@@ -533,6 +613,12 @@ def process_video(file_path, settings):
     # If "Resize to 4K" => ensure QVBR=30
     if settings["resize_enable"]:
         settings["qvbr"] = "30"
+    else:
+        # Set QVBR based on resolution
+        if input_width >= 1920 and input_height >= 1080:
+            settings["qvbr"] = "20"
+        else:
+            settings["qvbr"] = "20"  # Default to 20 for non-HD as well, adjust if needed
 
     hdr_convert = settings["hdr_enable"]
 
@@ -582,8 +668,22 @@ def process_video(file_path, settings):
     crop = settings["crop_params"]
     left = crop["crop_x"]
     top = crop["crop_y"]
-    right = input_width - (left + crop["crop_w"])
-    bottom = input_height - (top + crop["crop_h"])
+    crop_w = crop["crop_w"]
+    crop_h = crop["crop_h"]
+
+    # Ensure crop_w and crop_h do not exceed input dimensions
+    if left + crop_w > input_width:
+        crop_w = input_width - left
+    if top + crop_h > input_height:
+        crop_h = input_height - top
+
+    right = input_width - (left + crop_w)
+    bottom = input_height - (top + crop_h)
+
+    # Prevent negative crop values
+    right = max(right, 0)
+    bottom = max(bottom, 0)
+
     command.extend(["--crop", f"{left},{top},{right},{bottom}"])
 
     # Additional features
@@ -620,8 +720,10 @@ def process_video(file_path, settings):
         track_str = ",".join(track_nums)
         command.extend(["--audio-copy", track_str])
 
+    # Print the command with quotes around arguments that contain spaces
+    quoted_command = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in command)
     print(f"\nProcessing: {file_path}")
-    print("NVEncC command:\n" + " ".join(command))
+    print("NVEncC command:\n" + quoted_command)
     try:
         subprocess.run(command, check=True)
         print(f"Success: Processed {file_path} -> {output_file}")
@@ -632,7 +734,7 @@ def process_video(file_path, settings):
 
     # Logging
     with open(log_file, "w", encoding='utf-8') as log:
-        log.write("Command:\n" + " ".join(command) + "\n\n")
+        log.write("Command:\n" + quoted_command + "\n\n")
         log.write(f"Processing file: {file_path}\n")
         log.write(f"Output file: {output_file}\n")
         log.write(f"Status: {status}\n")
@@ -675,8 +777,10 @@ if __name__ == "__main__":
 
     if (first_h >= 2160) and (first_w >= 3840):
         default_qvbr = "30"
-    else:
+    elif (first_h == 1080 and first_w == 1920):
         default_qvbr = "20"
+    else:
+        default_qvbr = "20"  # Default to 20 for other resolutions, adjust if needed
 
     # Crop detection on the first file
     crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, first_w, first_h, limit_value=limit_value)
@@ -695,12 +799,15 @@ if __name__ == "__main__":
 
     all_audio_streams = run_ffprobe_for_audio_streams(first_file)
 
+    # Pass input_width and input_height to the GUI
     launch_gui(
         [d["file"] for d in detected_crop_params],
         detected_crop_params,
         all_audio_streams,
         default_qvbr,
-        default_hdr
+        default_hdr,
+        input_width=first_w,
+        input_height=first_h
     )
 
     print("All processing complete. Press any key to exit...")
