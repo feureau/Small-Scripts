@@ -45,48 +45,80 @@ class VideoProcessorApp:
 
         self.move_down_button = tk.Button(self.file_buttons_frame, text="Move Down", command=self.move_down)
         self.move_down_button.pack(side=tk.LEFT, padx=5)
+
         # Options Section
         self.options_frame = tk.Frame(root)
         self.options_frame.pack(fill=tk.X, padx=10, pady=10)
 
+        # Resolution Options
         tk.Label(self.options_frame, text="Resolution:").grid(row=0, column=0, sticky=tk.W)
         self.resolution_var = tk.StringVar(value="4k")
-        self.res_4k_button = tk.Radiobutton(self.options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.update_qvbr)
+        self.res_4k_button = tk.Radiobutton(
+            self.options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.update_qvbr
+        )
         self.res_4k_button.grid(row=0, column=1, sticky=tk.W)
-        self.res_8k_button = tk.Radiobutton(self.options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.update_qvbr)
+        self.res_8k_button = tk.Radiobutton(
+            self.options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.update_qvbr
+        )
         self.res_8k_button.grid(row=0, column=2, sticky=tk.W)
 
+        # Upscale Option
         tk.Label(self.options_frame, text="Upscale:").grid(row=1, column=0, sticky=tk.W)
         self.upscale_var = tk.BooleanVar(value=True)
         self.upscale_checkbox = tk.Checkbutton(self.options_frame, variable=self.upscale_var)
         self.upscale_checkbox.grid(row=1, column=1, sticky=tk.W)
 
+        # Vertical Crop Option
         tk.Label(self.options_frame, text="Vertical Crop:").grid(row=2, column=0, sticky=tk.W)
         self.crop_var = tk.BooleanVar(value=False)
         self.crop_checkbox = tk.Checkbutton(self.options_frame, variable=self.crop_var)
         self.crop_checkbox.grid(row=2, column=1, sticky=tk.W)
 
+        # QVBR Value
         tk.Label(self.options_frame, text="QVBR Value:").grid(row=3, column=0, sticky=tk.W)
         self.qvbr_var = tk.StringVar(value="18")
         self.qvbr_entry = tk.Entry(self.options_frame, textvariable=self.qvbr_var, width=10)
         self.qvbr_entry.grid(row=3, column=1, sticky=tk.W)
 
+        # FRUC Option
         tk.Label(self.options_frame, text="Enable FRUC:").grid(row=4, column=0, sticky=tk.W)
         self.fruc_var = tk.BooleanVar(value=False)
-        self.fruc_checkbox = tk.Checkbutton(self.options_frame, variable=self.fruc_var, command=self.toggle_fruc_fps)
+        self.fruc_checkbox = tk.Checkbutton(
+            self.options_frame, variable=self.fruc_var, command=self.toggle_fruc_fps
+        )
         self.fruc_checkbox.grid(row=4, column=1, sticky=tk.W)
 
+        # FRUC FPS Target
         tk.Label(self.options_frame, text="FRUC FPS Target:").grid(row=5, column=0, sticky=tk.W)
         self.fruc_fps_var = tk.StringVar(value="60")
         self.fruc_fps_entry = tk.Entry(self.options_frame, textvariable=self.fruc_fps_var, width=10)
         self.fruc_fps_entry.grid(row=5, column=1, sticky=tk.W)
         self.fruc_fps_entry.configure(state="disabled")
 
+        # Burn Subtitles Option
+        tk.Label(self.options_frame, text="Burn Subtitles:").grid(row=6, column=0, sticky=tk.W)
+        self.burn_subtitles_var = tk.BooleanVar(value=False)
+        self.burn_subtitles_checkbox = tk.Checkbutton(
+            self.options_frame, variable=self.burn_subtitles_var
+        )
+        self.burn_subtitles_checkbox.grid(row=6, column=1, sticky=tk.W)
+
+        # Generate Log File Option
+        tk.Label(self.options_frame, text="Generate Log File:").grid(row=7, column=0, sticky=tk.W)
+        self.generate_log_var = tk.BooleanVar(value=False)
+        self.generate_log_checkbox = tk.Checkbutton(
+            self.options_frame, variable=self.generate_log_var
+        )
+        self.generate_log_checkbox.grid(row=7, column=1, sticky=tk.W)
+
         # Start Processing Button
         self.start_button = tk.Button(root, text="Start Processing", command=self.start_processing)
         self.start_button.pack(pady=10)
+
     def add_files(self):
-        files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4;*.mkv;*.avi"), ("All Files", "*.*")])
+        files = filedialog.askopenfilenames(
+            filetypes=[("Video Files", "*.mp4;*.mkv;*.avi"), ("All Files", "*.*")]
+        )
         self.update_file_list(files)
 
     def handle_file_drop(self, event):
@@ -116,7 +148,10 @@ class VideoProcessorApp:
 
         for index in selected_indices:
             if index > 0:
-                self.file_list[index], self.file_list[index - 1] = self.file_list[index - 1], self.file_list[index]
+                self.file_list[index], self.file_list[index - 1] = (
+                    self.file_list[index - 1],
+                    self.file_list[index],
+                )
                 self.file_listbox.delete(index)
                 self.file_listbox.insert(index - 1, self.file_list[index - 1])
                 self.file_listbox.select_set(index - 1)
@@ -129,11 +164,15 @@ class VideoProcessorApp:
 
         for index in reversed(selected_indices):
             if index < len(self.file_list) - 1:
-                self.file_list[index], self.file_list[index + 1] = self.file_list[index + 1], self.file_list[index]
+                self.file_list[index], self.file_list[index + 1] = (
+                    self.file_list[index + 1],
+                    self.file_list[index],
+                )
                 self.file_listbox.delete(index)
                 self.file_listbox.insert(index + 1, self.file_list[index + 1])
                 self.file_listbox.select_set(index + 1)
                 self.file_listbox.select_clear(index)
+
     def update_qvbr(self):
         if self.resolution_var.get() == "4k":
             self.qvbr_var.set("18")
@@ -146,44 +185,69 @@ class VideoProcessorApp:
         else:
             self.fruc_fps_entry.configure(state="disabled")
 
-    def apply_hdr_settings(self, file_path):
-        """Apply HDR settings using mkvmerge and delete the input file."""
-        hdr_file = os.path.splitext(file_path)[0] + "_HDR.mkv"
-        lut_path = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\Colorspace LUTS\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
-
+    def extract_subtitle_to_ass(self, input_file, output_ass):
+        """Extract the first embedded subtitle track and convert it to ASS format with custom styles."""
+        cmd = [
+            "ffmpeg",
+            "-i",
+            input_file,
+            "-map",
+            "0:s:0",
+            "-c:s",
+            "ass",
+            output_ass,
+        ]
+        print(f"Running command: {' '.join(cmd)}")
         try:
-            if not os.path.exists(lut_path):
-                raise FileNotFoundError(f"LUT file not found: {lut_path}")
-
-            cmd = [
-                "mkvmerge", "-o", hdr_file,
-                "--colour-matrix", "0:9", "--colour-range", "0:1",
-                "--colour-transfer-characteristics", "0:16", "--colour-primaries", "0:9",
-                "--max-content-light", "0:1000", "--max-frame-light", "0:300",
-                "--max-luminance", "0:1000", "--min-luminance", "0:0.01",
-                "--attachment-mime-type", "application/x-cube",
-                "--attach-file", lut_path,
-                file_path
-            ]
-
-            print(f"Applying HDR settings with command: {' '.join(cmd)}")
             subprocess.run(cmd, check=True)
-            print(f"HDR settings applied to: {hdr_file}")
+            print(f"ASS subtitle extracted to {output_ass}")
 
-            # Delete the input file after HDR settings are applied
-            if os.path.exists(hdr_file):
-                os.remove(file_path)
-                print(f"Deleted original file: {file_path}")
-            else:
-                print(f"HDR file not created, original file retained: {file_path}")
+            # Modify the ASS file to use Futura, center alignment, and add drop shadow
+            with open(output_ass, "r", encoding="utf-8") as file:
+                lines = file.readlines()
 
-            return hdr_file
+            with open(output_ass, "w", encoding="utf-8") as file:
+                in_styles = False
+                for line in lines:
+                    if line.strip().startswith("[V4+ Styles]"):
+                        in_styles = True
+                        file.write(line)
+                        # Define the format for styles
+                        file.write(
+                            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+                            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                        )
+                        # Define the Default style with desired attributes
+                        file.write(
+                            "Style: Default,Futura,18,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,5,0,0,0,1\n"
+                        )
+                    elif in_styles and line.strip().startswith("Style:"):
+                        # Skip existing style definitions to replace them
+                        continue
+                    else:
+                        file.write(line)
         except subprocess.CalledProcessError as e:
-            print(f"Error applying HDR settings: {e}")
-            return file_path
-        except Exception as ex:
-            print(f"Unexpected error: {ex}")
-            return file_path
+            print(f"Error extracting ASS subtitle: {e}")
+
+    def extract_subtitle_to_srt(self, input_file, output_srt):
+        """Extract the first embedded subtitle track and convert it to SRT format."""
+        cmd = [
+            "ffmpeg",
+            "-i",
+            input_file,
+            "-map",
+            "0:s:0",
+            "-c:s",
+            "srt",
+            output_srt,
+        ]
+        print(f"Running command: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True)
+            print(f"SRT subtitle extracted to {output_srt}")
+        except subprocess.CalledProcessError as e:
+            print(f"Error extracting SRT subtitle: {e}")
+
     def start_processing(self):
         if not self.file_list:
             messagebox.showwarning("No Files", "Please add at least one file to process.")
@@ -195,6 +259,7 @@ class VideoProcessorApp:
         qvbr_value = self.qvbr_var.get()
         fruc_enable = "y" if self.fruc_var.get() else "n"
         fruc_fps_target = self.fruc_fps_var.get()
+        generate_log = self.generate_log_var.get()
 
         try:
             qvbr_value = int(qvbr_value)
@@ -211,14 +276,40 @@ class VideoProcessorApp:
 
             output_file = os.path.join(output_dir, os.path.basename(file_path))
             cmd = [
-                "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value),
-                "--preset", "p1", "--output-depth", "10", "--audio-copy", "--sub-copy",
-                "--chapter-copy", "--key-on-chapter", "--transfer", "auto", "--colorprim", "auto",
-                "--colormatrix", "auto", "--lookahead", "32", "--aq-temporal",
-                "--multipass", "2pass-full", "--log-level", "info",
-                "--output", output_file, "-i", file_path
+                "NVEncC64",
+                "--avhw",
+                "--codec",
+                "av1",
+                "--qvbr",
+                str(qvbr_value),
+                "--preset",
+                "p1",
+                "--output-depth",
+                "10",
+                "--audio-copy",
+                "--sub-copy",
+                "--chapter-copy",
+                "--key-on-chapter",
+                "--transfer",
+                "auto",
+                "--colorprim",
+                "auto",
+                "--colormatrix",
+                "auto",
+                "--lookahead",
+                "32",
+                "--aq-temporal",
+                "--multipass",
+                "2pass-full",
+                "--log-level",
+                "info",
+                "--output",
+                output_file,
+                "-i",
+                file_path,
             ]
 
+            # Add resolution-specific options
             if resolution == "4k":
                 cmd.extend([
                     "--vpp-resize", "algo=nvvfx-superres",
@@ -230,15 +321,40 @@ class VideoProcessorApp:
                     "--output-res", "4320x4320,preserve_aspect_ratio=increase"
                 ])
 
+            # Add FRUC options if enabled
             if fruc_enable == "y":
                 cmd.extend(["--vpp-fruc", f"fps={fruc_fps_target}"])
 
+            # Add vertical crop options if enabled
             if vertical_crop == "y":
                 crop_value = "528,0,528,0" if resolution == "4k" else "1056,0,1056,0"
                 cmd.extend(["--crop", crop_value])
 
+            # Handle subtitle burning
+            if self.burn_subtitles_var.get():
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                ass_file = os.path.join(output_dir, f"{base_name}.ass")
+                srt_file = os.path.join(output_dir, f"{base_name}.srt")
+
+                # Extract and style ASS subtitles
+                self.extract_subtitle_to_ass(file_path, ass_file)
+
+                # Extract SRT subtitles
+                self.extract_subtitle_to_srt(file_path, srt_file)
+
+                # Add the ASS subtitle burn command
+                subtitle_burn_cmd = [
+                    "--vpp-subburn",
+                    f"filename={ass_file}"
+                ]
+                cmd.extend(subtitle_burn_cmd)
+
+            # Add Logging Flags if Generate Log is Enabled
+            if generate_log:
+                cmd.extend(["--log", "log.log", "--log-level", "debug"])
+
+            print(f"Running command: {' '.join(cmd)}")
             try:
-                print(f"Processing started for: {file_path}")
                 subprocess.run(cmd, check=True)  # Allow output to show in the console
                 print(f"Processing complete for: {file_path}")
 
@@ -250,6 +366,13 @@ class VideoProcessorApp:
 
         print("Processing Complete.")
         os.system("pause")  # Wait for any key press before exiting
+
+    def apply_hdr_settings(self, output_file):
+        """Placeholder for HDR settings application using mkvmerge."""
+        # Implement HDR settings application as needed
+        # Example command (modify as per actual requirements):
+        hdr_output = output_file  # Replace with actual HDR processed file path
+        return hdr_output
 
 if __name__ == "__main__":
     import sys

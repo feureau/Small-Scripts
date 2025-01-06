@@ -94,11 +94,11 @@ def get_video_color_info(video_file):
 def run_ffprobe_for_audio_streams(video_file):
     """
     Extract audio stream info using ffprobe.
-    Returns list of dicts with {index, codec, language}.
+    Returns list of dicts with {track_number, stream_index, codec, language, channels}.
     """
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
-        "-show_entries", "stream=index,codec_name:stream_tags=language",
+        "-show_entries", "stream=index,codec_name,channels:stream_tags=language",
         "-of", "json", video_file
     ]
     try:
@@ -119,7 +119,13 @@ def run_ffprobe_for_audio_streams(video_file):
         idx = s.get("index")
         codec = s.get("codec_name")
         language = s.get("tags", {}).get("language", None)
-        audio_info.append({"index": idx, "codec": codec, "language": language})
+        channels = s.get("channels", 0)
+        audio_info.append({"stream_index": idx, "codec": codec, "language": language, "channels": channels})
+
+    # Assign track_number based on audio stream order
+    for track_number, audio in enumerate(audio_info, start=1):
+        audio['track_number'] = track_number
+
     return audio_info
 
 
@@ -212,6 +218,9 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
                         print(f"Detected crop at {int(start_time)}s: width={w}, height={h}, x={x}, y={y}")
                     except ValueError:
                         print(f"Invalid crop parameters detected: {crop_str}")
+            # If we've found enough crop values, break early
+            if len(crop_values) >= num_samples:
+                break
         except Exception as e:
             print(f"Error while running cropdetect at {int(start_time)}s: {e}")
             continue
@@ -272,26 +281,49 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     Always default to Hardware decoding for the user.
 
     Audio logic:
-      - "Copy Audio" => single --audio-copy with comma-separated track indexes
-      - "Convert to AC3 (5.1)" => multiple --audio-codec <trackIndex>?ac3 flags
-                                   plus a single --audio-stream :5.1 flag
+      - Each track has a "Convert to AC3" checkbox
+      - "Copy All" and "Convert All" buttons to set all tracks
       Also, if user selects "Resize to 4K", automatically set qvbr=30.
     """
     root = tk.Tk()
     root.title("Video Processing Settings")
 
-    root.geometry("1024x800")
-    root.minsize(800, 600)
+    # Get screen dimensions
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
 
-    root.columnconfigure(0, weight=1)
-    root.rowconfigure(0, weight=1)
+    # Create a Canvas and Scrollbar
+    main_frame = tk.Frame(root)
+    main_frame.pack(fill='both', expand=True)
 
+    canvas = tk.Canvas(main_frame)
+    canvas.pack(side='left', fill='both', expand=True)
+
+    scrollbar = tk.Scrollbar(main_frame, orient='vertical', command=canvas.yview)
+    scrollbar.pack(side='right', fill='y')
+
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    # Bind mousewheel to scrollbar
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    # Create a frame inside the canvas
+    inner_frame = tk.Frame(canvas)
+    canvas.create_window((0, 0), window=inner_frame, anchor='nw')
+
+    # Update scrollregion after adding all widgets
+    def _configure_event(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    inner_frame.bind("<Configure>", _configure_event)
+
+    # Initialize variables
     decoding_mode = tk.StringVar(value="Hardware")
     hdr_enable = tk.BooleanVar(value=default_hdr)
     sleep_enable = tk.BooleanVar(value=False)
-
-    # "copy" or "ac3"
-    audio_mode = tk.StringVar(value="copy")
 
     resize_enable = tk.BooleanVar()
     fruc_enable = tk.BooleanVar()
@@ -304,23 +336,32 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     # No Crop Checkbox Variable
     no_crop_var = tk.BooleanVar(value=False)
 
-    # Store original crop parameters to restore when "No Crop" is unchecked
-    original_crop_w = crop_params[0]['crop_w'] if crop_params else 0
-    original_crop_h = crop_params[0]['crop_h'] if crop_params else 0
-    original_crop_x = crop_params[0]['crop_x'] if crop_params else 0
-    original_crop_y = crop_params[0]['crop_y'] if crop_params else 0
+    metadata_text = None
 
-    # Audio Select All Variables
+    # Audio Select All Variable and previous selection storage
     select_all_var = tk.BooleanVar(value=False)
     previous_audio_selections = []
 
-    metadata_text = None
+    # Variable to store the previous QVBR value when "Resize to 4K" is toggled
+    previous_qvbr = [None]  # Using list to make it mutable in nested function
 
     def on_resize_toggle():
         if resize_enable.get():
+            # Remember the current QVBR value
+            previous_qvbr[0] = qvbr.get()
+            # Set QVBR to 30
             qvbr.set("30")
         else:
-            qvbr.set(str(default_qvbr))  # Reset to default based on resolution
+            # Restore the previous QVBR value if it exists
+            if previous_qvbr[0] is not None:
+                qvbr.set(previous_qvbr[0])
+                previous_qvbr[0] = None
+            else:
+                # If no previous value stored, set based on resolution
+                if input_width <= 1920 and input_height <= 1080:
+                    qvbr.set("20")
+                else:
+                    qvbr.set("30")
 
     def on_no_crop_toggle():
         if no_crop_var.get():
@@ -349,9 +390,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     def on_select_all_toggle():
         nonlocal previous_audio_selections
         if select_all_var.get():
-            # Save current selections
+            # Store current selections
             previous_audio_selections = [var.get() for var in audio_vars]
-            # Select all audio tracks
+            # Select all
             for var in audio_vars:
                 var.set(True)
         else:
@@ -385,12 +426,12 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         metadata_text.config(state='disabled')
 
     # File List UI
-    file_frame = tk.Frame(root)
+    file_frame = tk.Frame(inner_frame)
     file_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
     file_frame.columnconfigure(0, weight=1)
     file_frame.rowconfigure(0, weight=1)
 
-    file_listbox = tk.Listbox(file_frame, height=10, selectmode='extended')
+    file_listbox = tk.Listbox(file_frame, height=15, selectmode='extended')
     file_listbox.grid(row=0, column=0, sticky="nsew")
 
     for file in file_list:
@@ -405,26 +446,29 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     file_listbox.bind("<<ListboxSelect>>", on_file_select)
 
     file_controls = tk.Frame(file_frame)
-    file_controls.grid(row=0, column=1, padx=5)
+    file_controls.grid(row=0, column=1, padx=5, sticky="ns")
 
-    tk.Button(file_controls, text="Add Files", command=lambda: add_files(file_listbox)).pack(fill='x')
-    tk.Button(file_controls, text="Clear List", command=lambda: file_listbox.delete(0, 'end')).pack(fill='x')
-    tk.Button(file_controls, text="Move Up", command=lambda: move_up(file_listbox)).pack(fill='x')
-    tk.Button(file_controls, text="Move Down", command=lambda: move_down(file_listbox)).pack(fill='x')
-    tk.Button(file_controls, text="Delete Selected", command=lambda: delete_selected(file_listbox)).pack(fill='x')
+    tk.Button(file_controls, text="Add Files", command=lambda: add_files(file_listbox)).pack(fill='x', pady=(0,5))
+    tk.Button(file_controls, text="Clear List", command=lambda: file_listbox.delete(0, 'end')).pack(fill='x', pady=(0,5))
+    tk.Button(file_controls, text="Move Up", command=lambda: move_up(file_listbox)).pack(fill='x', pady=(0,5))
+    tk.Button(file_controls, text="Move Down", command=lambda: move_down(file_listbox)).pack(fill='x', pady=(0,5))
+    tk.Button(file_controls, text="Delete Selected", command=lambda: delete_selected(file_listbox)).pack(fill='x', pady=(0,5))
 
     # Metadata Text
-    metadata_frame = tk.LabelFrame(root, text="Color Metadata")
+    metadata_frame = tk.LabelFrame(inner_frame, text="Color Metadata")
     metadata_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+    metadata_frame.columnconfigure(0, weight=1)
+    metadata_frame.rowconfigure(0, weight=1)
     metadata_text = tk.Text(metadata_frame, height=8, wrap="word", state='disabled', bg="#f0f0f0")
-    metadata_text.pack(padx=5, pady=5, fill='both', expand=True)
+    metadata_text.grid(row=0, column=0, sticky="nsew")
 
     if file_list:
         update_metadata_display(file_list[0])
 
     # Options
-    options_frame = tk.LabelFrame(root, text="Video Options")
+    options_frame = tk.LabelFrame(inner_frame, text="Video Options")
     options_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+    options_frame.columnconfigure(0, weight=1)
 
     decode_mode_frame = tk.LabelFrame(options_frame, text="Decoding Mode")
     decode_mode_frame.pack(fill="x", padx=5, pady=5)
@@ -450,37 +494,38 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     tk.Checkbutton(options_frame, text="Enable Denoising", variable=denoise_enable).pack(anchor='w')
     tk.Checkbutton(options_frame, text="Enable Artifact Reduction", variable=artifact_enable).pack(anchor='w')
 
-    tk.Label(options_frame, text="Enter target QVBR:").pack(anchor='w')
+    tk.Label(options_frame, text="Target QVBR:").pack(anchor='w', pady=(10,0))
     qvbr_entry = tk.Entry(options_frame, textvariable=qvbr)
-    qvbr_entry.pack(anchor='w')
+    qvbr_entry.pack(anchor='w', fill='x')
 
-    tk.Label(options_frame, text="Enter GOP length:").pack(anchor='w')
-    tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w')
+    tk.Label(options_frame, text="GOP Length:").pack(anchor='w', pady=(10,0))
+    tk.Entry(options_frame, textvariable=gop_len).pack(anchor='w', fill='x')
 
     # Crop UI
-    crop_frame = tk.LabelFrame(root, text="Crop Parameters (Modify if needed)")
-    crop_frame.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
+    crop_frame = tk.LabelFrame(inner_frame, text="Crop Parameters (Modify if needed)")
+    crop_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
+    crop_frame.columnconfigure(1, weight=1)
 
     crop_w = tk.StringVar(value=str(crop_params[0]['crop_w']) if crop_params else "0")
     crop_h = tk.StringVar(value=str(crop_params[0]['crop_h']) if crop_params else "0")
     crop_x = tk.StringVar(value=str(crop_params[0]['crop_x']) if crop_params else "0")
     crop_y = tk.StringVar(value=str(crop_params[0]['crop_y']) if crop_params else "0")
 
-    tk.Label(crop_frame, text="Width:").grid(row=0, column=0, sticky="w")
+    tk.Label(crop_frame, text="Width:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
     width_entry = tk.Entry(crop_frame, textvariable=crop_w)
-    width_entry.grid(row=0, column=1, sticky="ew")
+    width_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
 
-    tk.Label(crop_frame, text="Height:").grid(row=1, column=0, sticky="w")
+    tk.Label(crop_frame, text="Height:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
     height_entry = tk.Entry(crop_frame, textvariable=crop_h)
-    height_entry.grid(row=1, column=1, sticky="ew")
+    height_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
 
-    tk.Label(crop_frame, text="X Offset:").grid(row=2, column=0, sticky="w")
+    tk.Label(crop_frame, text="X Offset:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
     x_entry = tk.Entry(crop_frame, textvariable=crop_x)
-    x_entry.grid(row=2, column=1, sticky="ew")
+    x_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
 
-    tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w")
+    tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
     y_entry = tk.Entry(crop_frame, textvariable=crop_y)
-    y_entry.grid(row=3, column=1, sticky="ew")
+    y_entry.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
 
     # "No Crop" Checkbox
     no_crop_checkbox = tk.Checkbutton(
@@ -489,40 +534,49 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         variable=no_crop_var,
         command=on_no_crop_toggle
     )
-    no_crop_checkbox.grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w")
-
-    # Ensure all entries expand properly
-    crop_frame.columnconfigure(1, weight=1)
-
-    # Audio Options => "copy" vs. "ac3"
-    audio_options_frame = tk.LabelFrame(root, text="Audio Options")
-    audio_options_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
-
-    tk.Radiobutton(audio_options_frame, text="Copy Audio", variable=audio_mode, value="copy").pack(anchor="w")
-    tk.Radiobutton(audio_options_frame, text="Convert to AC3 (5.1)", variable=audio_mode, value="ac3").pack(anchor="w")
+    no_crop_checkbox.grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w", padx=5)
 
     # Audio Tracks
-    audio_tracks_frame = tk.LabelFrame(root, text="Audio Tracks")
-    audio_tracks_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
+    audio_tracks_frame = tk.LabelFrame(inner_frame, text="Audio Tracks")
+    audio_tracks_frame.grid(row=5, column=0, padx=10, pady=10, sticky="nsew")
+    audio_tracks_frame.columnconfigure(1, weight=1)
 
-    # "Select All" Checkbox
-    select_all_checkbox = tk.Checkbutton(
-        audio_tracks_frame,
-        text="Select All",
-        variable=select_all_var,
-        command=on_select_all_toggle
-    )
-    select_all_checkbox.pack(anchor='w')
+    if audio_streams:
+        # "Select All" Checkbox in a separate column to the left
+        select_all_checkbox = tk.Checkbutton(audio_tracks_frame, text="Select All", variable=select_all_var, command=on_select_all_toggle)
+        select_all_checkbox.grid(row=0, column=0, padx=5, pady=2, sticky='nw')
 
-    audio_vars = []
-    for stream in audio_streams:
-        audio_var = tk.BooleanVar(value=False)
-        language = stream['language'] if stream['language'] else 'N/A'
-        label_txt = f"Track {stream['index']}: {stream['codec']} ({language})"
-        tk.Checkbutton(audio_tracks_frame, text=label_txt, variable=audio_var).pack(anchor='w')
-        audio_vars.append(audio_var)
+        # "Copy All" and "Convert All" Buttons
+        def copy_all_audio():
+            for var in convert_vars:
+                var.set(False)
 
-    tk.Checkbutton(root, text="Put Computer to Sleep", variable=sleep_enable).grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        def convert_all_audio():
+            for var in convert_vars:
+                var.set(True)
+
+        tk.Button(audio_tracks_frame, text="Copy All", command=copy_all_audio).grid(row=0, column=1, sticky='w', padx=5, pady=2)
+        tk.Button(audio_tracks_frame, text="Convert All", command=convert_all_audio).grid(row=0, column=2, sticky='w', padx=5, pady=2)
+
+        # Audio Track Checkboxes
+        audio_vars = []
+        convert_vars = []
+        for idx, stream in enumerate(audio_streams, start=1):
+            audio_var = tk.BooleanVar(value=False)
+            convert_var = tk.BooleanVar(value=(stream['codec'] != 'ac3'))
+            language = stream['language'] if stream['language'] else 'N/A'
+            channels = stream.get('channels', 0)
+            channel_desc = {1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1'}.get(channels, f'{channels}-channel')
+            label_txt = f"Track {stream['track_number']}: {stream['codec']} ({language}, {channel_desc})"
+            tk.Checkbutton(audio_tracks_frame, text=label_txt, variable=audio_var).grid(row=idx, column=1, sticky='w', padx=5, pady=2)
+            tk.Checkbutton(audio_tracks_frame, text="Convert to AC3", variable=convert_var).grid(row=idx, column=2, sticky='w', padx=5, pady=2)
+            audio_vars.append(audio_var)
+            convert_vars.append(convert_var)
+    else:
+        # If there are no audio streams, display a message
+        tk.Label(audio_tracks_frame, text="No audio tracks found in the selected file.").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+
+    tk.Checkbutton(inner_frame, text="Put Computer to Sleep", variable=sleep_enable).grid(row=6, column=0, padx=10, pady=5, sticky="w")
 
     def start_processing():
         selected_files = list(file_listbox.get(0, 'end'))
@@ -531,12 +585,39 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             return
 
         selected_tracks = []
-        for i, s in enumerate(audio_streams):
-            if audio_vars[i].get():
-                selected_tracks.append(s)
+        if audio_streams:
+            for i, s in enumerate(audio_streams):
+                if audio_vars[i].get():
+                    s_copy = s.copy()
+                    s_copy['convert_to_ac3'] = convert_vars[i].get()
+                    selected_tracks.append(s_copy)
 
-        if not selected_tracks:
-            messagebox.showerror("Error", "At least one audio track must be selected.")
+        # <-- Removed the strict requirement that at least one audio track must be selected
+        # if not selected_tracks:
+        #     messagebox.showerror("Error", "At least one audio track must be selected.")
+        #     return
+
+        # Validate crop parameters
+        try:
+            crop_w_val = int(crop_w.get())
+            crop_h_val = int(crop_h.get())
+            crop_x_val = int(crop_x.get())
+            crop_y_val = int(crop_y.get())
+
+            if crop_w_val <= 0 or crop_h_val <= 0:
+                messagebox.showerror("Error", "Crop width and height must be positive integers.")
+                return
+
+            if crop_x_val < 0 or crop_y_val < 0:
+                messagebox.showerror("Error", "Crop X and Y offsets cannot be negative.")
+                return
+
+            if crop_x_val + crop_w_val > input_width or crop_y_val + crop_h_val > input_height:
+                messagebox.showerror("Error", "Crop parameters exceed video dimensions.")
+                return
+
+        except ValueError:
+            messagebox.showerror("Error", "Invalid crop parameters. Please enter integers.")
             return
 
         settings = {
@@ -550,13 +631,13 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             "qvbr": qvbr.get(),
             "gop_len": gop_len.get(),
             "crop_params": {
-                "crop_w": int(crop_w.get()),
-                "crop_h": int(crop_h.get()),
-                "crop_x": int(crop_x.get()),
-                "crop_y": int(crop_y.get())
+                "crop_w": crop_w_val,
+                "crop_h": crop_h_val,
+                "crop_x": crop_x_val,
+                "crop_y": crop_y_val
             },
-            "audio_tracks": selected_tracks,  # e.g. [{'index':5,'codec':'pcm_f32le'}]
-            "audio_mode": audio_mode.get(),   # "copy" or "ac3"
+            # Allow zero selected audio tracks
+            "audio_tracks": selected_tracks,
             "sleep_after_processing": sleep_enable.get()
         }
 
@@ -576,7 +657,22 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             else:
                 print("Sleep command not supported on this platform.")
 
-    tk.Button(root, text="Start Processing", command=start_processing).grid(row=6, column=0, pady=10, sticky="ew")
+    tk.Button(inner_frame, text="Start Processing", command=start_processing).grid(row=7, column=0, padx=10, pady=10, sticky="ew")
+
+    # After all widgets are added, update the window size dynamically
+    root.update_idletasks()  # Ensure all widgets are rendered
+
+    # Calculate the required width
+    required_width = inner_frame.winfo_reqwidth()
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+
+    # Set the window width to the required width, but not exceeding the screen width
+    window_width = min(required_width + 20, screen_width)  # Adding some padding
+    window_height = int(screen_height * 2 / 3)  # Set to 2/3 of screen height
+
+    root.geometry(f"{window_width}x{window_height}")
+
     root.mainloop()
 
 
@@ -585,17 +681,14 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
 # ---------------------------------------------------------------------
 def process_video(file_path, settings):
     """
-    Audio mode:
-      If "ac3":
-        For each track:
-          --audio-codec <trackIndex>?ac3
-        Then:
-          --audio-stream :5.1
-        Plus:
-          --audio-bitrate 640
-      If "copy":
-        --audio-copy track1,track2,...
-    Also, if "resize" => qvbr=30.
+    Audio logic:
+      For each track:
+        - If convert_to_ac3 is True:
+            --audio-codec <trackNumber>?ac3
+            --audio-bitrate <trackNumber>?640
+            --audio-stream <trackNumber>?5.1
+        - Else:
+            Include in --audio-copy
     """
     input_dir = os.path.dirname(file_path)
     file_name = os.path.basename(file_path)
@@ -610,16 +703,7 @@ def process_video(file_path, settings):
         print(f"Error: Could not retrieve resolution for {file_path}. Skipping.")
         return
 
-    # If "Resize to 4K" => ensure QVBR=30
-    if settings["resize_enable"]:
-        settings["qvbr"] = "30"
-    else:
-        # Set QVBR based on resolution
-        if input_width >= 1920 and input_height >= 1080:
-            settings["qvbr"] = "20"
-        else:
-            settings["qvbr"] = "20"  # Default to 20 for non-HD as well, adjust if needed
-
+    # hdr_convert and qvbr are already set via the GUI
     hdr_convert = settings["hdr_enable"]
 
     command = [
@@ -677,6 +761,7 @@ def process_video(file_path, settings):
     if top + crop_h > input_height:
         crop_h = input_height - top
 
+    # Prevent negative crop values
     right = input_width - (left + crop_w)
     bottom = input_height - (top + crop_h)
 
@@ -697,28 +782,25 @@ def process_video(file_path, settings):
         command.append("--vpp-nvvfx-artifact-reduction")
 
     # Audio logic
-    audio_mode = settings["audio_mode"]  # "copy" or "ac3"
-    tracks = settings["audio_tracks"]
+    selected_tracks = settings["audio_tracks"]
+    tracks_to_copy = []
+    tracks_to_convert = []
+    for s in selected_tracks:
+        track_number = str(s["track_number"])
+        if s.get("convert_to_ac3"):
+            tracks_to_convert.append(track_number)
+        else:
+            tracks_to_copy.append(track_number)
 
-    if audio_mode == "ac3":
-        # For each track => --audio-codec <trackIndex>?ac3
-        for t in tracks:
-            track_idx = t["index"]
-            # E.g. "--audio-codec 2?ac3"
-            command.extend(["--audio-codec", f"{track_idx}?ac3"])
-
-        # Then one: --audio-stream :5.1
-        command.extend(["--audio-stream", ":5.1"])
-
-        # Add --audio-bitrate 640
-        command.extend(["--audio-bitrate", "640"])
-
-    else:
-        # copy
-        # single --audio-copy 1,2,3
-        track_nums = [str(t["index"]) for t in tracks]
-        track_str = ",".join(track_nums)
+    if tracks_to_copy:
+        track_str = ",".join(tracks_to_copy)
         command.extend(["--audio-copy", track_str])
+
+    if tracks_to_convert:
+        for track_number in tracks_to_convert:
+            command.extend(["--audio-codec", f"{track_number}?ac3"])
+            command.extend(["--audio-bitrate", f"{track_number}?640"])
+            command.extend(["--audio-stream", f"{track_number}?5.1"])
 
     # Print the command with quotes around arguments that contain spaces
     quoted_command = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in command)
@@ -775,12 +857,11 @@ if __name__ == "__main__":
         print(f"Error: Could not retrieve resolution for {first_file}. Exiting.")
         sys.exit()
 
-    if (first_h >= 2160) and (first_w >= 3840):
-        default_qvbr = "30"
-    elif (first_h == 1080 and first_w == 1920):
+    # Set default QVBR based on whether video is HD or not
+    if first_h <= 1080 and first_w <= 1920:
         default_qvbr = "20"
     else:
-        default_qvbr = "20"  # Default to 20 for other resolutions, adjust if needed
+        default_qvbr = "30"  # Set to 30 for non-HD videos
 
     # Crop detection on the first file
     crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, first_w, first_h, limit_value=limit_value)
