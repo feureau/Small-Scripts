@@ -99,9 +99,19 @@ class VideoProcessorApp:
         tk.Label(self.options_frame, text="Burn Subtitles:").grid(row=6, column=0, sticky=tk.W)
         self.burn_subtitles_var = tk.BooleanVar(value=False)
         self.burn_subtitles_checkbox = tk.Checkbutton(
-            self.options_frame, variable=self.burn_subtitles_var
+            self.options_frame, variable=self.burn_subtitles_var, command=self.toggle_burn_subtitles
         )
         self.burn_subtitles_checkbox.grid(row=6, column=1, sticky=tk.W)
+
+        # MarginV Entry (Initially Hidden)
+        self.marginv_var = tk.StringVar()
+        self.marginv_entry = tk.Entry(self.options_frame, textvariable=self.marginv_var, width=10)
+        self.marginv_label = tk.Label(self.options_frame, text="MarginV:")
+        # Initially hide the MarginV label and entry
+        self.marginv_label.grid(row=6, column=2, sticky=tk.W, padx=(10,0))
+        self.marginv_entry.grid(row=6, column=3, sticky=tk.W)
+        self.marginv_label.grid_remove()
+        self.marginv_entry.grid_remove()
 
         # Generate Log File Option
         tk.Label(self.options_frame, text="Generate Log File:").grid(row=7, column=0, sticky=tk.W)
@@ -178,6 +188,8 @@ class VideoProcessorApp:
             self.qvbr_var.set("18")
         else:
             self.qvbr_var.set("28")
+        # After updating QVBR, also update MarginV if Burn Subtitles is enabled
+        self.update_marginv()
 
     def toggle_fruc_fps(self):
         if self.fruc_var.get():
@@ -185,7 +197,29 @@ class VideoProcessorApp:
         else:
             self.fruc_fps_entry.configure(state="disabled")
 
-    def extract_subtitle_to_ass(self, input_file, output_ass):
+    def toggle_burn_subtitles(self):
+        if self.burn_subtitles_var.get():
+            # Show the MarginV label and entry
+            self.marginv_label.grid()
+            self.marginv_entry.grid()
+            # Set MarginV based on current resolution
+            self.update_marginv()
+        else:
+            # Hide the MarginV label and entry
+            self.marginv_label.grid_remove()
+            self.marginv_entry.grid_remove()
+
+    def update_marginv(self):
+        if self.burn_subtitles_var.get():
+            if self.resolution_var.get() == "4k":
+                margin_v = 50
+            elif self.resolution_var.get() == "8k":
+                margin_v = 100
+            else:
+                margin_v = 50  # Default to 50 if resolution is not set
+            self.marginv_var.set(str(margin_v))
+
+    def extract_subtitle_to_ass(self, input_file, output_ass, margin_v):
         """Extract the first embedded subtitle track and convert it to ASS format with custom styles."""
         cmd = [
             "ffmpeg",
@@ -202,7 +236,7 @@ class VideoProcessorApp:
             subprocess.run(cmd, check=True)
             print(f"ASS subtitle extracted to {output_ass}")
 
-            # Modify the ASS file to use Futura, center alignment, and add drop shadow
+            # Modify the ASS file to use Futura, bottom-center alignment, and add standard drop shadow
             with open(output_ass, "r", encoding="utf-8") as file:
                 lines = file.readlines()
 
@@ -214,12 +248,13 @@ class VideoProcessorApp:
                         file.write(line)
                         # Define the format for styles
                         file.write(
-                            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
-                            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+                            "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+                            "MarginL, MarginR, MarginV, Encoding\n"
                         )
                         # Define the Default style with desired attributes
                         file.write(
-                            "Style: Default,Futura,18,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,5,0,0,0,1\n"
+                            f"Style: Default,Futura,18,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,1,1,2,10,10,{margin_v},1\n"
                         )
                     elif in_styles and line.strip().startswith("Style:"):
                         # Skip existing style definitions to replace them
@@ -332,12 +367,18 @@ class VideoProcessorApp:
 
             # Handle subtitle burning
             if self.burn_subtitles_var.get():
+                # Define the .ass and .srt file paths in the output directory
                 base_name = os.path.splitext(os.path.basename(file_path))[0]
                 ass_file = os.path.join(output_dir, f"{base_name}.ass")
                 srt_file = os.path.join(output_dir, f"{base_name}.srt")
 
-                # Extract and style ASS subtitles
-                self.extract_subtitle_to_ass(file_path, ass_file)
+                # Extract and style ASS subtitles with appropriate MarginV
+                try:
+                    margin_v = int(self.marginv_var.get())
+                except ValueError:
+                    margin_v = 50 if resolution == "4k" else 100  # Fallback values
+
+                self.extract_subtitle_to_ass(file_path, ass_file, margin_v)
 
                 # Extract SRT subtitles
                 self.extract_subtitle_to_srt(file_path, srt_file)
