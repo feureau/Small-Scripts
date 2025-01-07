@@ -10,10 +10,23 @@ class VideoProcessorApp:
         self.root = root
         self.root.title("Video Processing Tool")
 
-        # Data structures
+        # Single list for BOTH embedded & external subtitles:
+        # [
+        #   {
+        #       "type": "embedded" or "external",
+        #       "file_path": str (video file path, for embedded),
+        #       "track_id": str (embedded track index), or None for external,
+        #       "path": str (external SRT path), or None for embedded,
+        #       "description": str,
+        #       "selected": tk.BooleanVar,
+        #       "widget": tk.Checkbutton
+        #   },
+        #   ...
+        # ]
+        self.all_subs = []
+
+        # Data structure for the video files
         self.file_list = []
-        self.subtitle_tracks = {}  # { file_path: [ {track_id, lang, title, selected}, ... ] }
-        self.external_srt = []     # [ {path: str, selected: tk.BooleanVar}, ... ]
 
         # Enable Drag-and-Drop
         self.root.drop_target_register(DND_FILES)
@@ -31,9 +44,6 @@ class VideoProcessorApp:
         self.file_scrollbar = tk.Scrollbar(self.file_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
         self.file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.file_listbox.config(yscrollcommand=self.file_scrollbar.set)
-
-        # Initialize file list from command-line arguments
-        self.update_file_list(initial_files)
 
         self.file_buttons_frame = tk.Frame(root)
         self.file_buttons_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -115,7 +125,7 @@ class VideoProcessorApp:
         self.marginv_var = tk.StringVar()
         self.marginv_label = tk.Label(self.options_frame, text="MarginV:")
         self.marginv_entry = tk.Entry(self.options_frame, textvariable=self.marginv_var, width=10)
-        self.marginv_label.grid(row=6, column=2, sticky=tk.W, padx=(10,0))
+        self.marginv_label.grid(row=6, column=2, sticky=tk.W, padx=(10, 0))
         self.marginv_entry.grid(row=6, column=3, sticky=tk.W)
         self.marginv_label.grid_remove()
         self.marginv_entry.grid_remove()
@@ -138,19 +148,39 @@ class VideoProcessorApp:
         self.align_bottom_rb.pack(anchor="w")
 
         # ===============================
-        # EMBEDDED SUBTITLE TRACKS FRAME
+        # SUBTITLE TRACKS FRAME
         # ===============================
-        self.subtitle_tracks_frame = tk.LabelFrame(root, text="Embedded Subtitle Tracks", padx=10, pady=10)
+        self.subtitle_tracks_frame = tk.LabelFrame(root, text="Subtitle Tracks", padx=10, pady=10)
         self.subtitle_tracks_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        # ===============================
-        # EXTERNAL SRT FILES FRAME + BUTTON
-        # ===============================
-        self.external_srt_frame = tk.LabelFrame(root, text="External SRT Files", padx=10, pady=10)
-        self.external_srt_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.subtitle_tracks_buttons_frame = tk.Frame(self.subtitle_tracks_frame)
+        self.subtitle_tracks_buttons_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        self.add_external_srt_button = tk.Button(root, text="Add External SRT", command=self.add_external_srt)
-        self.add_external_srt_button.pack()
+        # Place the "Load Embedded SRT" button to the LEFT of the "Add External SRT" button
+        self.load_embedded_srt_button = tk.Button(
+            self.subtitle_tracks_buttons_frame,
+            text="Load Embedded SRT",
+            command=self.load_embedded_srt
+        )
+        self.load_embedded_srt_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.add_external_srt_button = tk.Button(
+            self.subtitle_tracks_buttons_frame,
+            text="Add External SRT",
+            command=self.add_external_srt
+        )
+        self.add_external_srt_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.remove_srt_button = tk.Button(
+            self.subtitle_tracks_buttons_frame,
+            text="Remove Selected SRT",
+            command=self.remove_selected_srt
+        )
+        self.remove_srt_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # This frame will hold the checkboxes for both embedded and external subtitles
+        self.subtitle_tracks_list_frame = tk.Frame(self.subtitle_tracks_frame)
+        self.subtitle_tracks_list_frame.pack(fill=tk.X)
 
         # ===============================
         # BOTTOM FRAME: START PROCESSING + GENERATE LOG FILE
@@ -158,11 +188,11 @@ class VideoProcessorApp:
         self.bottom_frame = tk.Frame(root)
         self.bottom_frame.pack(pady=10, padx=10, fill=tk.X)
 
-        # Start Processing Button (Left)
+        # Start Processing Button
         self.start_button = tk.Button(self.bottom_frame, text="Start Processing", command=self.start_processing)
         self.start_button.pack(side=tk.LEFT, padx=5)
 
-        # Generate Log File Option (Right of Start Processing)
+        # Generate Log File Option
         self.generate_log_var = tk.BooleanVar(value=False)
         self.generate_log_checkbox = tk.Checkbutton(
             self.bottom_frame,
@@ -171,82 +201,31 @@ class VideoProcessorApp:
         )
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
+        # ===============================
+        # ADD INITIAL FILES AND DETECT SUBTITLES AFTER FRAME CREATION
+        # ===============================
+        self.update_file_list(initial_files)
+        for f in initial_files:
+            self.detect_subtitle_tracks(f)
+
     # ===================================
     # FILE & SUBTITLE TRACKS DETECTION
     # ===================================
     def add_files(self):
+        """Add video files and automatically load any embedded subs."""
         files = filedialog.askopenfilenames(
             filetypes=[("Video Files", "*.mp4;*.mkv;*.avi"), ("All Files", "*.*")]
         )
         self.update_file_list(files)
+        # Automatically detect & load embedded subs
         for f in files:
             self.detect_subtitle_tracks(f)
 
-    def detect_subtitle_tracks(self, file_path):
-        if file_path in self.subtitle_tracks:
-            return
-
-        self.subtitle_tracks[file_path] = []
-        cmd = [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "s",
-            "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
-            "-of", "default=noprint_wrappers=1",
-            file_path
-        ]
-        print(f"Detecting subtitles with: {' '.join(cmd)}")
-        try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Error detecting subtitle tracks for {file_path}: {e}")
-            return
-
-        lines = output.splitlines()
-        track_info = {}
-        all_tracks = []
-
-        for line in lines:
-            line = line.strip()
-            if line.startswith("index="):
-                track_index = line.split("=")[1]
-                track_info = {"track_id": track_index, "lang": "und", "title": ""}
-            elif line.startswith("TAG:language="):
-                track_info["lang"] = line.split("=")[1]
-            elif line.startswith("TAG:title="):
-                track_info["title"] = line.split("=")[1]
-            elif line.startswith("[STREAM]"):
-                if track_info:
-                    all_tracks.append(track_info)
-                track_info = {}
-            elif line.startswith("[/STREAM]"):
-                if track_info:
-                    all_tracks.append(track_info)
-                track_info = {}
-        if track_info:
-            all_tracks.append(track_info)
-
-        # Show in the subtitle_tracks_frame
-        file_label = tk.Label(self.subtitle_tracks_frame, text=os.path.basename(file_path))
-        file_label.pack(anchor="w")
-
-        for track in all_tracks:
-            cvar = tk.BooleanVar(value=False)
-            desc = f"Track #{track['track_id']} - {track['lang']}"
-            if track["title"]:
-                desc += f" ({track['title']})"
-            cb = tk.Checkbutton(self.subtitle_tracks_frame, text=desc, variable=cvar)
-            cb.pack(anchor="w", padx=20)
-            self.subtitle_tracks[file_path].append({
-                "track_id": track["track_id"],
-                "lang": track["lang"],
-                "title": track["title"],
-                "selected": cvar
-            })
-
     def handle_file_drop(self, event):
+        """Handle drag-and-drop for video files."""
         files = self.root.tk.splitlist(event.data)
         self.update_file_list(files)
+        # Automatically detect & load embedded subs
         for f in files:
             self.detect_subtitle_tracks(f)
 
@@ -256,28 +235,195 @@ class VideoProcessorApp:
                 self.file_list.append(file)
                 self.file_listbox.insert(tk.END, file)
 
+    def detect_subtitle_tracks(self, file_path):
+        """
+        Auto-detect embedded subtitles in the specified video file using ffprobe,
+        then add them as 'embedded' subtitle entries in self.all_subs.
+        """
+        # ffprobe to detect subtitle streams
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "s",  # 's' means subtitle streams
+            "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
+            "-of", "default=noprint_wrappers=1",
+            file_path
+        ]
+        print("Detecting subtitles with:", " ".join(cmd))
+
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error detecting subtitle tracks for {file_path}: {e}")
+            return
+
+        # Parse the ffprobe output
+        lines = output.splitlines()
+        track_info = {}
+        all_tracks = []
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith("index="):
+                if track_info:  # if we had an un-pushed track_info, store it
+                    all_tracks.append(track_info)
+                idx_val = line.split("=")[1]
+                track_info = {"track_id": idx_val, "lang": "und", "title": ""}
+            elif line.startswith("TAG:language="):
+                track_info["lang"] = line.split("=")[1]
+            elif line.startswith("TAG:title="):
+                track_info["title"] = line.split("=")[1]
+            elif line.startswith("[/STREAM]"):
+                # close off the last track
+                if track_info:
+                    all_tracks.append(track_info)
+                track_info = {}
+
+        # If there's any leftover track_info
+        if track_info:
+            all_tracks.append(track_info)
+
+        if not all_tracks:
+            print(f"No embedded subtitle tracks found in {file_path}.")
+            return
+
+        # For each detected track, create a checkbox in the "Subtitle Tracks" panel
+        for idx, track in enumerate(all_tracks):
+            # Example description: "Embedded: #3 - eng (Some Title)"
+            desc = f"Embedded: #{track['track_id']} - {track['lang']}"
+            if track["title"]:
+                desc += f" ({track['title']})"
+            # Initialize the BooleanVar to True to automatically select the subtitle
+            cvar = tk.BooleanVar(value=True)
+            cb = tk.Checkbutton(self.subtitle_tracks_list_frame, text=desc, variable=cvar)
+            cb.pack(anchor="w", padx=20)
+
+            # Add an entry for each embedded track
+            self.all_subs.append({
+                "type": "embedded",
+                "file_path": file_path,
+                "track_id": track["track_id"],
+                "path": None,
+                "description": desc,
+                "selected": cvar,
+                "widget": cb
+            })
+
+        # ---------------------------------------------
+        # Automatically check "Burn Subtitles" if embedded subs found
+        # ---------------------------------------------
+        if all_tracks:
+            self.burn_subtitles_var.set(True)
+
+    # ===============================
+    # MANAGING SUBTITLE LIST & FILE LIST
+    # ===============================
     def remove_selected(self):
+        """
+        Removes the selected video files from file_list. Also removes
+        any associated embedded subtitles (with type='embedded') and external subtitles.
+        """
         selected_indices = list(self.file_listbox.curselection())
         for index in reversed(selected_indices):
             file_to_remove = self.file_list[index]
-            if file_to_remove in self.subtitle_tracks:
-                del self.subtitle_tracks[file_to_remove]
+            # Remove associated subtitles
+            to_remove = [s for s in self.all_subs
+                        if (s["type"] == "embedded" and s.get("file_path") == file_to_remove) or
+                           (s["type"] == "external" and s.get("path") == file_to_remove)]
+            for sub in to_remove:
+                sub["widget"].destroy()
+                self.all_subs.remove(sub)
+
             del self.file_list[index]
             self.file_listbox.delete(index)
 
+        # After removal, check if any subtitles remain. If not, uncheck "Burn Subtitles"
+        if not self.all_subs:
+            self.burn_subtitles_var.set(False)
+
     def clear_all(self):
+        """Clears everything: video files, external subtitles, embedded subtitles."""
         self.file_list.clear()
         self.file_listbox.delete(0, tk.END)
-        self.subtitle_tracks.clear()
-        for widget in self.subtitle_tracks_frame.pack_slaves():
-            widget.destroy()
 
-        # Clear external SRT
-        self.external_srt.clear()
-        for widget in self.external_srt_frame.pack_slaves():
-            widget.destroy()
+        # Clear all subtitles
+        for sub in self.all_subs:
+            sub["widget"].destroy()
+        self.all_subs.clear()
 
+        # Uncheck "Burn Subtitles"
+        self.burn_subtitles_var.set(False)
+
+    def remove_selected_srt(self):
+        """
+        Removes the selected external SRT from self.all_subs.
+        If it's an embedded track, just deselect it (cannot truly remove).
+        """
+        to_remove = []
+        for sub in self.all_subs:
+            if sub["selected"].get():
+                if sub["type"] == "external":
+                    # Remove external for real
+                    sub["widget"].destroy()
+                    to_remove.append(sub)
+                else:
+                    # Embedded => just deselect
+                    sub["selected"].set(False)
+
+        for r in to_remove:
+            self.all_subs.remove(r)
+
+        # After removal, check if any subtitles remain. If not, uncheck "Burn Subtitles"
+        if not self.all_subs:
+            self.burn_subtitles_var.set(False)
+
+    # ===============================
+    # LOAD EMBEDDED SRT LOGIC
+    # ===============================
+    def load_embedded_srt(self):
+        """
+        Manually trigger detection of embedded subtitles for all loaded files.
+        (But we already auto-detect upon add_files or drag-and-drop.)
+        """
+        for file_path in self.file_list:
+            self.detect_subtitle_tracks(file_path)
+
+    # ===============================
+    # EXTERNAL SRT LOGIC
+    # ===============================
+    def add_external_srt(self):
+        """Load external SRT files into the same list (type='external')."""
+        srt_files = filedialog.askopenfilenames(
+            filetypes=[("Subtitle Files", "*.srt"), ("All Files", "*.*")]
+        )
+        for s in srt_files:
+            if not any(x["type"] == "external" and x["path"] == s for x in self.all_subs):
+                desc = f"External: {os.path.basename(s)}"
+                cvar = tk.BooleanVar(value=True)
+                cb = tk.Checkbutton(self.subtitle_tracks_list_frame, text=desc, variable=cvar)
+                cb.pack(anchor="w", padx=20)
+
+                self.all_subs.append({
+                    "type": "external",
+                    "file_path": None,   # Not relevant for external
+                    "track_id": None,    # Not relevant for external
+                    "path": s,
+                    "description": desc,
+                    "selected": cvar,
+                    "widget": cb
+                })
+
+        # -----------------------------------------------------
+        # Automatically check "Burn Subtitles" if any external subs added
+        # -----------------------------------------------------
+        if srt_files:
+            self.burn_subtitles_var.set(True)
+
+    # ===============================
+    # MOVE UP / MOVE DOWN
+    # ===============================
     def move_up(self):
+        """Moves the selected file(s) in the file list up."""
         selected_indices = list(self.file_listbox.curselection())
         if not selected_indices or selected_indices[0] == 0:
             return
@@ -293,6 +439,7 @@ class VideoProcessorApp:
                 self.file_listbox.select_clear(index)
 
     def move_down(self):
+        """Moves the selected file(s) in the file list down."""
         selected_indices = list(self.file_listbox.curselection())
         if not selected_indices or selected_indices[-1] == len(self.file_list) - 1:
             return
@@ -308,23 +455,10 @@ class VideoProcessorApp:
                 self.file_listbox.select_clear(index)
 
     # ===============================
-    # EXTERNAL SRT LOGIC
-    # ===============================
-    def add_external_srt(self):
-        srt_files = filedialog.askopenfilenames(
-            filetypes=[("Subtitle Files", "*.srt"), ("All Files", "*.*")]
-        )
-        for s in srt_files:
-            if not any(e["path"] == s for e in self.external_srt):
-                cvar = tk.BooleanVar(value=True)
-                cb = tk.Checkbutton(self.external_srt_frame, text=os.path.basename(s), variable=cvar)
-                cb.pack(anchor="w")
-                self.external_srt.append({"path": s, "selected": cvar})
-
-    # ===============================
-    # SUBTITLE BURNING & ALIGNMENT
+    # BURN SUBTITLES CHECKBOX & MARGIN
     # ===============================
     def toggle_burn_subtitles(self):
+        """Handles showing/hiding the MarginV fields when 'Burn Subtitles' is toggled."""
         if self.burn_subtitles_var.get():
             self.marginv_label.grid()
             self.marginv_entry.grid()
@@ -334,6 +468,7 @@ class VideoProcessorApp:
             self.marginv_entry.grid_remove()
 
     def update_qvbr(self):
+        """Adjusts the QVBR value based on resolution (4k=18, 8k=28)."""
         if self.resolution_var.get() == "4k":
             self.qvbr_var.set("18")
         else:
@@ -341,11 +476,13 @@ class VideoProcessorApp:
         self.update_marginv()
 
     def update_marginv(self):
+        """Sets default MarginV if burn_subtitles is on."""
         if self.burn_subtitles_var.get():
             margin_v = 50 if self.resolution_var.get() == "4k" else 100
             self.marginv_var.set(str(margin_v))
 
     def toggle_fruc_fps(self):
+        """Enables/disables FRUC FPS Target entry."""
         if self.fruc_var.get():
             self.fruc_fps_entry.configure(state="normal")
         else:
@@ -354,14 +491,45 @@ class VideoProcessorApp:
     # ===============================
     # EXTRACT & FIX STYLE
     # ===============================
-    def fix_ass_style(self, ass_file, margin_v):
-        """Update alignment based on self.alignment_var (top=8, middle=5, bottom=2)."""
+    def fix_ass_style(self, ass_file, margin_v, resolution):
+        """
+        Update alignment based on self.alignment_var:
+          top=8, middle=5, bottom=2
+        Sets MarginL and MarginR.
+        Sets MarginV based on alignment:
+          - Top: fixed value (e.g., 50)
+          - Middle: centers vertically without vertical margin
+          - Bottom: fixed value (e.g., 50)
+        Reverts font back to "Futura".
+        """
         alignment_map = {
             "top": 8,
             "middle": 5,
             "bottom": 2,
         }
         alignment_code = alignment_map.get(self.alignment_var.get(), 2)
+
+        # Determine width based on resolution:
+        #   - 4k => 2160 wide
+        #   - 8k => 4320 wide
+        if resolution == "4k":
+            screen_width = 2160
+        else:  # 8k
+            screen_width = 4320
+
+        # Set MarginL and MarginR to 15 percent of screen width.
+        margin_l = margin_r = int(screen_width * 0.01875)
+
+        # Set MarginV based on alignment
+        if alignment_code == 5:
+            # Middle alignment: center vertically without vertical margin
+            margin_v = 0
+        else:
+            # Top and Bottom alignment: use fixed vertical margins
+            margin_v = 50 if resolution == "4k" else 100
+
+        print(f"Alignment Code: {alignment_code}")
+        print(f"Margins - Left: {margin_l}, Right: {margin_r}, Vertical: {margin_v}")
 
         try:
             with open(ass_file, "r", encoding="utf-8") as f:
@@ -373,6 +541,7 @@ class VideoProcessorApp:
                     if line.strip().startswith("[V4+ Styles]"):
                         in_styles = True
                         f.write(line)
+                        # Overwrite the Style: line with our own
                         f.write(
                             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
                             "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
@@ -380,35 +549,44 @@ class VideoProcessorApp:
                         )
                         style_line = (
                             f"Style: Default,Futura,18,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
-                            f"-1,0,0,0,100,100,0,0,1,1,1,{alignment_code},10,10,{margin_v},1\n"
+                            f"-1,0,0,0,100,100,0,0,1,1,1,{alignment_code},{margin_l},{margin_r},{margin_v},1\n"
                         )
                         f.write(style_line)
                     elif in_styles and line.strip().startswith("Style:"):
-                        continue  # Skip existing style lines
+                        # Skip original style lines
+                        continue
                     else:
                         f.write(line)
         except Exception as e:
             print(f"Error fixing style in {ass_file}: {e}")
 
     def extract_embedded_subtitle_to_ass(self, input_file, output_ass, margin_v, sub_track_id):
+        """
+        Extract embedded subtitle track to ASS format with correct encoding and styling.
+        """
         cmd = [
             "ffmpeg",
+            "-sub_charenc", "UTF-8",  # Correctly placed before -i
             "-i", input_file,
-            "-map", f"0:s:{sub_track_id}",
+            "-map", f"0:{sub_track_id}",
             "-c:s", "ass",
             output_ass,
         ]
-        print(f"Running command: {' '.join(cmd)}")
+        print(f"Extracting embedded subtitle track {sub_track_id} => {output_ass}")
         try:
             subprocess.run(cmd, check=True)
-            print(f"ASS subtitle extracted to {output_ass}")
-            self.fix_ass_style(output_ass, margin_v)
+            self.fix_ass_style(output_ass, margin_v, self.resolution_var.get())
+            print(f"Embedded track {sub_track_id} extracted as ASS => {output_ass}")
         except subprocess.CalledProcessError as e:
             print(f"Error extracting embedded subtitle track {sub_track_id}: {e}")
 
     def extract_external_srt_to_ass(self, srt_file, output_ass, margin_v):
+        """
+        Convert external SRT file to ASS format with correct encoding and styling.
+        """
         cmd = [
             "ffmpeg",
+            "-sub_charenc", "UTF-8",  # Correctly placed before -i
             "-i", srt_file,
             "-c:s", "ass",
             output_ass,
@@ -417,7 +595,7 @@ class VideoProcessorApp:
         try:
             subprocess.run(cmd, check=True)
             print(f"SRT converted => {output_ass}")
-            self.fix_ass_style(output_ass, margin_v)
+            self.fix_ass_style(output_ass, margin_v, self.resolution_var.get())
         except subprocess.CalledProcessError as e:
             print(f"Error converting external SRT {srt_file}: {e}")
 
@@ -426,15 +604,15 @@ class VideoProcessorApp:
     # ===============================
     def extract_subtitle_to_srt(self, input_file, output_srt, sub_track_id=None):
         """
-        If sub_track_id is not None, we assume an embedded track.
-        Otherwise, for an external SRT, we can just copy it.
+        If sub_track_id is not None, extract embedded track to SRT.
+        Otherwise, copy external SRT.
         """
         if sub_track_id is not None:
-            # Embedded track => extract using ffmpeg
             cmd = [
                 "ffmpeg",
+                "-sub_charenc", "UTF-8",  # Correctly placed before -i
                 "-i", input_file,
-                "-map", f"0:s:{sub_track_id}",
+                "-map", f"0:{sub_track_id}",
                 "-c:s", "srt",
                 output_srt,
             ]
@@ -445,7 +623,7 @@ class VideoProcessorApp:
             except subprocess.CalledProcessError as e:
                 print(f"Error extracting SRT from track {sub_track_id}: {e}")
         else:
-            # External SRT => copy the file
+            # External SRT => just copy
             print(f"Copying external SRT => {output_srt}")
             try:
                 shutil.copyfile(input_file, output_srt)
@@ -457,6 +635,7 @@ class VideoProcessorApp:
     # MAIN PROCESSING
     # ===============================
     def start_processing(self):
+        """Encode all files, burning in selected subtitles if 'Burn Subtitles' is checked."""
         if not self.file_list:
             messagebox.showwarning("No Files", "Please add at least one file to process.")
             return
@@ -475,8 +654,10 @@ class VideoProcessorApp:
             messagebox.showerror("Invalid Input", "QVBR and FRUC FPS Target must be integers.")
             return
 
-        self.root.destroy()  # close GUI
+        # Close the GUI
+        self.root.destroy()
 
+        # Figure out margin_v
         burn_subs = self.burn_subtitles_var.get()
         try:
             margin_v = int(self.marginv_var.get()) if burn_subs else 0
@@ -485,32 +666,34 @@ class VideoProcessorApp:
 
         for file_path in self.file_list:
             if not burn_subs:
+                # No subtitle burning => single pass encode
                 self.encode_single_pass(file_path, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log)
             else:
-                embedded_tracks_selected = []
-                if file_path in self.subtitle_tracks:
-                    for track_info in self.subtitle_tracks[file_path]:
-                        if track_info["selected"].get():
-                            embedded_tracks_selected.append(track_info["track_id"])
+                # Gather all external subs selected
+                external_selected = [s for s in self.all_subs
+                                     if s["type"] == "external" and s["selected"].get()]
+                # Gather all embedded subs selected for this file
+                embedded_selected = [s for s in self.all_subs
+                                     if s["type"] == "embedded" and s["file_path"] == file_path and s["selected"].get()]
 
-                external_srt_selected = []
-                for ext_srt in self.external_srt:
-                    if ext_srt["selected"].get():
-                        external_srt_selected.append(ext_srt["path"])
-
-                if not embedded_tracks_selected and not external_srt_selected:
+                # If no subtitles selected for this file, just do normal encode
+                if not external_selected and not embedded_selected:
                     self.encode_single_pass(file_path, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log)
                     continue
 
-                for sub_id in embedded_tracks_selected:
-                    self.encode_with_embedded_sub(
-                        file_path, sub_id, margin_v, resolution, vertical_crop, qvbr_value,
+                # Encode with each external SRT
+                for ext_sub in external_selected:
+                    self.encode_with_external_srt(
+                        file_path, ext_sub["path"], margin_v,
+                        resolution, vertical_crop, qvbr_value,
                         fruc_enable, fruc_fps_target, generate_log
                     )
 
-                for srt_file in external_srt_selected:
-                    self.encode_with_external_srt(
-                        file_path, srt_file, margin_v, resolution, vertical_crop, qvbr_value,
+                # Encode with each embedded SRT track
+                for emb_sub in embedded_selected:
+                    self.encode_with_embedded_sub(
+                        file_path, emb_sub["track_id"], margin_v,
+                        resolution, vertical_crop, qvbr_value,
                         fruc_enable, fruc_fps_target, generate_log
                     )
 
@@ -521,42 +704,45 @@ class VideoProcessorApp:
     # ENCODERS
     # -----------
     def encode_single_pass(self, file_path, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
-        """Encode without burning any subtitles."""
+        """Encode the video without burning any subtitles."""
         output_dir = os.path.join(os.path.dirname(file_path), resolution)
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, os.path.basename(file_path))
 
-        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log)
-        print(f"Running command: {' '.join(cmd)}")
+        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop,
+                                       qvbr_value, fruc_enable, fruc_fps_target, generate_log)
+        print("Running command:", " ".join(cmd))
         try:
             subprocess.run(cmd, check=True)
             print(f"Done: {file_path}")
             hdr_output = self.apply_hdr_settings(output_file)
             print(f"HDR => {hdr_output}")
-
         except subprocess.CalledProcessError as e:
             print(f"Error: {file_path}: {e}")
 
-    def encode_with_embedded_sub(self, file_path, sub_track_id, margin_v, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
-        """Burn a single embedded subtitle track into the output and generate corresponding .srt."""
+    def encode_with_embedded_sub(self, file_path, sub_track_id, margin_v, resolution,
+                                 vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
+        """
+        Burn a single embedded subtitle track into the output and generate corresponding .srt.
+        """
         base_name, ext = os.path.splitext(os.path.basename(file_path))
         output_dir = os.path.join(os.path.dirname(file_path), resolution)
         os.makedirs(output_dir, exist_ok=True)
 
         output_file = os.path.join(output_dir, f"{base_name}_track{sub_track_id}{ext}")
-
-        # 1) Produce .ass
+        # 1) Extract the embedded track => .ass
         ass_path = os.path.join(output_dir, f"{base_name}_track{sub_track_id}.ass")
         self.extract_embedded_subtitle_to_ass(file_path, ass_path, margin_v, sub_track_id)
 
-        # 2) Produce .srt
+        # 2) Extract => .srt
         srt_path = os.path.join(output_dir, f"{base_name}_track{sub_track_id}.srt")
         self.extract_subtitle_to_srt(file_path, srt_path, sub_track_id=sub_track_id)
 
-        # 3) Build NVEnc command
-        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log)
+        # 3) NVEnc
+        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop,
+                                       qvbr_value, fruc_enable, fruc_fps_target, generate_log)
         cmd.extend(["--vpp-subburn", f"filename={ass_path}"])
-        print(f"Running with subs: {' '.join(cmd)}")
+        print("Running with embedded subtitles:", " ".join(cmd))
         try:
             subprocess.run(cmd, check=True)
             print(f"Done: {file_path} track {sub_track_id}")
@@ -565,8 +751,11 @@ class VideoProcessorApp:
         except subprocess.CalledProcessError as e:
             print(f"Error: {file_path} track {sub_track_id}: {e}")
 
-    def encode_with_external_srt(self, file_path, srt_file, margin_v, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
-        """Burn an external SRT into the output and generate corresponding .srt."""
+    def encode_with_external_srt(self, file_path, srt_file, margin_v, resolution,
+                                 vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
+        """
+        Burn an external SRT into the output and also produce a .srt copy next to it.
+        """
         base_name, ext = os.path.splitext(os.path.basename(file_path))
         output_dir = os.path.join(os.path.dirname(file_path), resolution)
         os.makedirs(output_dir, exist_ok=True)
@@ -578,14 +767,15 @@ class VideoProcessorApp:
         ass_path = os.path.join(output_dir, f"{base_name}_ext_{srt_base}.ass")
         self.extract_external_srt_to_ass(srt_file, ass_path, margin_v)
 
-        # 2) Also produce a .srt
+        # 2) Also produce a .srt copy
         srt_path = os.path.join(output_dir, f"{base_name}_ext_{srt_base}.srt")
         self.extract_subtitle_to_srt(srt_file, srt_path, sub_track_id=None)
 
         # 3) NVEnc
-        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log)
+        cmd = self.build_nvenc_command(file_path, output_file, resolution, vertical_crop,
+                                       qvbr_value, fruc_enable, fruc_fps_target, generate_log)
         cmd.extend(["--vpp-subburn", f"filename={ass_path}"])
-        print(f"Running with external SRT: {' '.join(cmd)}")
+        print("Running with external SRT:", " ".join(cmd))
         try:
             subprocess.run(cmd, check=True)
             print(f"Done: {file_path} with {srt_file}")
@@ -594,8 +784,14 @@ class VideoProcessorApp:
         except subprocess.CalledProcessError as e:
             print(f"Error burning external SRT {srt_file} for {file_path}: {e}")
 
-    def build_nvenc_command(self, file_path, output_file, resolution, vertical_crop, qvbr_value, fruc_enable, fruc_fps_target, generate_log):
-        """Build the NVEncC64 command with provided parameters."""
+    # ===============================
+    # NVEnc COMMAND
+    # ===============================
+    def build_nvenc_command(self, file_path, output_file, resolution, vertical_crop,
+                            qvbr_value, fruc_enable, fruc_fps_target, generate_log):
+        """
+        Builds the NVEncC64 command line with the given parameters.
+        """
         cmd = [
             "NVEncC64",
             "--avhw",
@@ -632,7 +828,11 @@ class VideoProcessorApp:
             cmd.extend(["--vpp-fruc", f"fps={fruc_fps_target}"])
 
         if vertical_crop == "y":
-            crop_value = "528,0,528,0" if resolution == "4k" else "1056,0,1056,0"
+            # Crop logic
+            if resolution == "4k":
+                crop_value = "528,0,528,0"
+            else:
+                crop_value = "1056,0,1056,0"
             cmd.extend(["--crop", crop_value])
 
         if generate_log:
@@ -640,20 +840,24 @@ class VideoProcessorApp:
 
         return cmd
 
+    # ===============================
+    # HDR SETTINGS
+    # ===============================
     def apply_hdr_settings(self, output_file):
         """
-        After each encode, run mkvmerge to attach the cube file and set color flags.
-
-        Example command:
-          mkvmerge.exe -o output_HDR_CUBE.mkv --colour-matrix 0:9 --colour-range 0:1 ...
-                       --attach-file "C:\\path\\to\\your.cube" output_file.mkv
+        After each encode, run mkvmerge to attach the LUT file and set color flags.
+        If mkvmerge fails, return the original file.
         """
-        # (1) Build the mkvmerge command with the new output filename
         base, ext = os.path.splitext(output_file)
         merged_output = base + "_HDR_CUBE" + ext
 
-        # Update the path to your .cube file
+        # Adjust path to your .cube file if needed
         cube_file = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\Colorspace LUTS\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
+
+        # Check if the cube file exists
+        if not os.path.exists(cube_file):
+            print(f"LUT file not found: {cube_file}. Skipping HDR attachment.")
+            return output_file
 
         cmd = [
             "mkvmerge.exe",
@@ -677,7 +881,7 @@ class VideoProcessorApp:
         try:
             subprocess.run(cmd, check=True)
             print(f"mkvmerge complete => {merged_output}")
-            # Delete the original output file without LUT
+            # Remove original
             try:
                 os.remove(output_file)
                 print(f"Deleted original file without LUT: {output_file}")
@@ -686,9 +890,9 @@ class VideoProcessorApp:
             return merged_output
         except subprocess.CalledProcessError as e:
             print(f"Error running mkvmerge: {e}")
-            # Return original output if mkvmerge fails
             return output_file
 
+# ------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
     initial_files = sys.argv[1:] if len(sys.argv) > 1 else []
