@@ -904,5 +904,5 @@ if __name__ == "__main__":
         input_height=first_h
     )
 
-    print("All processing complete. Press any key to exit...")
-    input()
+    print("Processing Complete.")
+    os.system("pause")
