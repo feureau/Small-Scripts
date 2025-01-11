@@ -458,7 +458,7 @@ class VideoProcessorApp:
     def update_marginv(self):
         """Set default MarginV if burn_subtitles is on."""
         if self.burn_subtitles_var.get():
-            margin_v = 50 if self.resolution_var.get() == "4k" else 100
+            margin_v = 50 # if self.resolution_var.get() == "4k" else 100
             self.marginv_var.set(str(margin_v))
 
     def toggle_fruc_fps(self):
@@ -502,7 +502,7 @@ class VideoProcessorApp:
         if alignment_code == 5:
             margin_v = 0
         else:
-            margin_v = 50 if resolution == "4k" else 100
+            margin_v = 50 # if resolution == "4k" else 100
 
         print(f"Alignment Code: {alignment_code}")
         print(f"Margins - Left: {margin_l}, Right: {margin_r}, Vertical: {margin_v}")
@@ -524,7 +524,7 @@ class VideoProcessorApp:
                             "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
                         )
                         style_line = (
-                            f"Style: Default,Futura,18,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+                            f"Style: Default,Futura,16,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
                             f"-1,0,0,0,100,100,0,0,1,1,1,{alignment_code},{margin_l},{margin_r},{margin_v},1\n"
                         )
                         f.write(style_line)
