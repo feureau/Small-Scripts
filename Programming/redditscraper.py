@@ -13,17 +13,28 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
+def convert_to_old_reddit(url):
+    """
+    If the URL contains 'www.reddit.com', replace it with 'old.reddit.com'.
+    Otherwise, return it as is.
+    """
+    if "www.reddit.com" in url.lower():
+        return url.lower().replace("www.reddit.com", "old.reddit.com")
+    return url
+
 def is_valid_reddit_url(url):
     """
     Validates if the URL is a proper Reddit post URL.
-    Adjust the regex if you want to handle www.reddit.com, etc.
+    Accepts both old.reddit.com and www.reddit.com.
+    Adjust the regex to suit your needs.
     """
-    regex = r'^https?://(www\.)?old\.reddit\.com/r/\w+/comments/\w+/?'
+    regex = r'^https?://(www\.)?(old\.)?reddit\.com/r/\w+/comments/\w+/?'
     return re.match(regex, url) is not None
 
 def read_urls_from_url_file(file_path):
     """
     Reads a single .url file and returns the Reddit URL if valid, or None.
+    Automatically converts www.reddit.com to old.reddit.com if found.
     """
     if not os.path.isfile(file_path):
         print(f"File does not exist: {file_path}")
@@ -36,6 +47,9 @@ def read_urls_from_url_file(file_path):
     try:
         config.read(file_path, encoding='utf-8')
         url = config.get('InternetShortcut', 'URL')
+        # Convert to old.reddit.com if needed
+        url = convert_to_old_reddit(url)
+        
         if is_valid_reddit_url(url):
             print(f"URL extracted from {file_path}: {url}")
             return url
@@ -158,7 +172,7 @@ def scrape_reddit_posts(urls, output_directory, log_filename):
                     upvotes_span = comment_element.find_element(By.CSS_SELECTOR, "span.score.unvoted")
                     comment_upvotes = upvotes_span.text.strip()
 
-                    comment_tree.append((comment_text, comment_upvotes, 0))  # Assuming depth 0
+                    comment_tree.append((comment_text, comment_upvotes, 0))  # depth = 0 for simplicity
                     print(f"- {comment_text} (Upvotes: {comment_upvotes})")
                     logging.info(f"Comment: {comment_text} (Upvotes: {comment_upvotes})")
                 except NoSuchElementException as nse:
@@ -250,16 +264,20 @@ def main():
             else:
                 # Could be a direct Reddit URL in text form or an invalid file
                 # Attempt to treat the file path as a direct URL
-                if is_valid_reddit_url(arg):
-                    print(f"Detected direct Reddit URL in file path: {arg}")
-                    discovered_urls.append(arg)
+                # First, convert if needed, then check validity
+                potential_url = convert_to_old_reddit(arg)
+                if is_valid_reddit_url(potential_url):
+                    print(f"Detected direct Reddit URL in file path: {potential_url}")
+                    discovered_urls.append(potential_url)
                 else:
                     print(f"Skipped unknown file: {arg}")
         else:
             # Not a file or directory, maybe it's a direct URL?
-            if is_valid_reddit_url(arg):
-                print(f"Detected direct Reddit URL: {arg}")
-                discovered_urls.append(arg)
+            # Convert domain if necessary, then check validity
+            potential_url = convert_to_old_reddit(arg)
+            if is_valid_reddit_url(potential_url):
+                print(f"Detected direct Reddit URL: {potential_url}")
+                discovered_urls.append(potential_url)
             else:
                 print(f"Skipped invalid input: {arg}")
 

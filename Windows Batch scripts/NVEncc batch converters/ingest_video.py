@@ -745,9 +745,9 @@ def process_video(file_path, settings):
     chosen_res = settings["resolution_choice"]
     resolution_map = {
         "No Resize": (None, None),
-        "HD 1080p":  (1920, 1080),
-        "4K 2160p":  (3840, 2160),
-        "8K 4320p":  (7680, 4320)
+        "HD 1080p":  (1080, 1080),
+        "4K 2160p":  (2160, 2160),
+        "8K 4320p":  (4320, 4320)
     }
     if chosen_res in resolution_map:
         target_width, target_height = resolution_map[chosen_res]
@@ -887,11 +887,11 @@ if __name__ == "__main__":
 
     # Decide default QVBR
     if first_h >= 4320 or first_w >= 7680:
-        default_qvbr = "40"
+        default_qvbr = "44"
     elif first_h >= 2160 or first_w >= 3840:
-        default_qvbr = "30"
+        default_qvbr = "33"
     else:
-        default_qvbr = "20"
+        default_qvbr = "22"
 
     # Launch GUI
     launch_gui(
