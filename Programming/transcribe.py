@@ -19,14 +19,14 @@ OUTPUT_FORMAT = "srt"  # Can be "json", "txt", "vtt", etc.
 
 # Faster Whisper XXL CLI flags
 WHISPER_FLAGS = [
-    "--language", "ja",
+    "--language", "en",
     "--task", "transcribe",                    # speech recognition
     "--sentence",                         # Enables sentence-based splitting
-    "--max_comma_cent", "80",             # After this line length, a comma is treated as the end of sentence
-    "--max_gap", "1",                     # Max gap in seconds between sentences
-    "--max_line_width", "256",            # Max characters per subtitle line
-    "--max_line_count", "6",              # Max number of lines per subtitle
-    "--hallucination_silence_threshold", "4",  # Reduces false positive transcriptions by ignoring long silences
+    "--max_comma", "80",             # After this line length, a comma is treated as the end of sentence
+    "--max_gap", "3",                     # Max gap in seconds between sentences
+    #"--max_line_width", "256",            # Max characters per subtitle line
+    "--max_line_count", "1",              # Max number of lines per subtitle
+    #"--hallucination_silence_threshold", "4",  # Reduces false positive transcriptions by ignoring long silences
     #"--word_timestamps",                  # Enables word-level timestamps for better alignment
     #"--no_speech_strict_lvl", "1"         # Stricter filtering for non-speech segments
 ]

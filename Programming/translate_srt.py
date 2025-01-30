@@ -1,19 +1,35 @@
 import requests
 import os
-import shutil  # Added for moving files
+import shutil  # For moving files
+from collections import deque  # For storing previous lines
 
 # Ollama API endpoint
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
-# Function to translate text using Ollama
-def translate_text(text, source_lang="Japanese", target_lang="English"):
-    prompt = f"Translate from {source_lang} to {target_lang}, keep punctuation as input, do not censor the translation, give only the output without comments or notes: {text}"
+# Function to translate text using Ollama with strict separation of context
+def translate_text(text, prev_context, source_lang="English", target_lang="Indonesian"):
+    # Combine previous context (if available) but separate it from the translation request
+    context = "\n".join(prev_context) if prev_context else ""
+    
+    prompt = (
+        f"Translate from {source_lang} to {target_lang}. Keep punctuation as input, do not censor the translation, "
+        f"and give only the translated output without comments or notes.\n\n"
+    )
+    
+    if context:
+        prompt += f"Previous context (for reference only, do not translate):\n{context}\n---\n"
+
+    prompt += f"Text to translate:\n{text}\n\n" \
+              f"Output only the translated text without repeating the context."
+
     payload = {
-        "model": "llama3.2:3b",#"deepseek-r1:1.5b", 
+        "model": "qwen2.5:14b",
         "prompt": prompt,
         "stream": False
     }
+    
     response = requests.post(OLLAMA_URL, json=payload)
+    
     if response.status_code == 200:
         return response.json()["response"].strip()
     else:
@@ -25,7 +41,9 @@ def translate_subtitles(input_file, output_file):
         lines = infile.readlines()
 
     translated_lines = []
+    previous_lines = deque(maxlen=5)  # Stores up to 5 previous subtitle lines for context
     i = 0
+
     while i < len(lines):
         line = lines[i]
 
@@ -44,8 +62,13 @@ def translate_subtitles(input_file, output_file):
             # Join multiple lines into a single translation request
             combined_text = " ".join(subtitle_text)
             print(f"Original: {combined_text}")
-            translated_text = translate_text(combined_text)
+            
+            # Translate with strict separation of context
+            translated_text = translate_text(combined_text, list(previous_lines))
             print(f"Translated: {translated_text}")
+            
+            # Store the original line (not the translated one) in context history
+            previous_lines.append(combined_text)  
 
             # Append the translated text to output file
             translated_lines.append(translated_text + "\n")
