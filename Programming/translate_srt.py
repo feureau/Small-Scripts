@@ -6,21 +6,21 @@ from collections import deque  # For storing previous lines
 # Ollama API endpoint
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
-# Function to translate text using Ollama with strict separation of context
+# Function to translate text using Ollama without notes or explanations
 def translate_text(text, prev_context, source_lang="English", target_lang="Indonesian"):
     # Combine previous context (if available) but separate it from the translation request
     context = "\n".join(prev_context) if prev_context else ""
     
     prompt = (
         f"Translate from {source_lang} to {target_lang}. Keep punctuation as input, do not censor the translation, "
-        f"and give only the translated output without comments or notes.\n\n"
+        f"and give only the translated output. Do not provide explanations, notes, or alternatives.\n\n"
     )
     
     if context:
         prompt += f"Previous context (for reference only, do not translate):\n{context}\n---\n"
 
     prompt += f"Text to translate:\n{text}\n\n" \
-              f"Output only the translated text without repeating the context."
+              f"Output only the translated text. Do not provide explanations, notes, or alternatives."
 
     payload = {
         "model": "qwen2.5:14b",
@@ -63,7 +63,7 @@ def translate_subtitles(input_file, output_file):
             combined_text = " ".join(subtitle_text)
             print(f"Original: {combined_text}")
             
-            # Translate with strict separation of context
+            # Translate with strict separation of context, without explanations
             translated_text = translate_text(combined_text, list(previous_lines))
             print(f"Translated: {translated_text}")
             
