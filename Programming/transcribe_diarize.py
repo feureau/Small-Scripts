@@ -98,14 +98,20 @@ def transcribe_audio(filepath: str) -> list:
     
     # Faster Whisper XXL CLI flags
     whisper_flags = [
-        "--language", "en",                        # {af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,es,et,eu,fa,fi,fo,fr,gl,gu,ha,haw,he,hi,hr,ht,hu,hy,id,is,it,ja,jw,ka,kk,km,kn,ko,la,lb,ln,lo,lt,lv,mg,mi,mk,ml,mn,mr,ms,mt,my,ne,nl,nn,no,oc,pa,pl,ps,pt,ro,ru,sa,sd,si,sk,sl,sn,so,sq,sr,su,sv,sw,ta,te,tg,th,tk,tl,tr,tt,uk,ur,uz,vi,yi,yo,yue,zh,Afrikaans,Albanian,Amharic,Arabic,Armenian,Assamese,Azerbaijani,Bashkir,Basque,Belarusian,Bengali,Bosnian,Breton,Bulgarian,Burmese,Cantonese,Castilian,Catalan,Chinese,Croatian,Czech,Danish,Dutch,English,Estonian,Faroese,Finnish,Flemish,French,Galician,Georgian,German,Greek,Gujarati,Haitian,Haitian Creole,Hausa,Hawaiian,Hebrew,Hindi,Hungarian,Icelandic,Indonesian,Italian,Japanese,Javanese,Kannada,Kazakh,Khmer,Korean,Lao,Latin,Latvian,Letzeburgesch,Lingala,Lithuanian,Luxembourgish,Macedonian,Malagasy,Malay,Malayalam,Maltese,Mandarin,Maori,Marathi,Moldavian,Moldovan,Mongolian,Myanmar,Nepali,Norwegian,Nynorsk,Occitan,Panjabi,Pashto,Persian,Polish,Portuguese,Punjabi,Pushto,Romanian,Russian,Sanskrit,Serbian,Shona,Sindhi,Sinhala,Sinhalese,Slovak,Slovenian,Somali,Spanish,Sundanese,Swahili,Swedish,Tagalog,Tajik,Tamil,Tatar,Telugu,Thai,Tibetan,Turkish,Turkmen,Ukrainian,Urdu,Uzbek,Valencian,Vietnamese,Welsh,Yiddish,Yoruba},
+        "--language", "en",
         "--task", "transcribe",                    # speech recognition
-        "--sentence",                              # Enables sentence-based splitting
-        "--max_comma", "80",                       # After this line length, a comma is treated as the end of sentence
-        "--max_gap", "3",                          # Max gap in seconds between sentences
-        #"--max_line_width", "256",                # Max characters per subtitle line
-        "--max_line_count", "1",                   # Max number of lines per subtitle
-        #"--hallucination_silence_threshold", "4",  # Reduces false positive transcriptions by ignoring long silences
+        "--sentence",                         # Enables sentence-based splitting
+        "--max_comma", "128",             # After this line length, a comma is treated as the end of sentence
+        "--max_gap", "0.1",                     # Max gap in seconds between sentences
+        #"--max_line_width", "256",            # Max characters per subtitle line
+        "--max_line_count", "1",              # Max number of lines per subtitle
+        "--ff_rnndn_xiph",
+        "--ff_speechnorm",
+        "--hallucination_silence_threshold", "1",  # Reduces false positive transcriptions by ignoring long silences
+        "--condition_on_previous_text", "False",
+        "--reprompt", "0",
+        "--word_timestamps",                  # Enables word-level timestamps for better alignment
+        "--no_speech_strict_lvl", "1"         # Stricter filtering for non-speech segments
         "--output_format", output_format,
         "--output_dir", file_directory
     ]

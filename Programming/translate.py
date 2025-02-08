@@ -1,103 +1,127 @@
+import requests
 import os
-import argparse
-import textwrap
-from pathlib import Path
-import ollama
+import shutil
+from collections import deque
+import sys
+import time
+import langcodes
 
-def split_text(text, chunk_size=1000):
-    """Split text into chunks while trying to preserve paragraphs"""
-    paragraphs = text.split('\n\n')
-    chunks = []
-    current_chunk = []
-    current_length = 0
+# ==========================
+# CONFIGURABLE PARAMETERS
+# ==========================
+SOURCE_LANG = "English"
+TARGET_LANG = "Indonesian"
+MODEL_NAME = "qwen2.5:14b"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+CONTEXT_LINES = 3
+MAX_RETRIES = 3
+# ==========================
 
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-            
-        para_length = len(para)
-        if current_length + para_length > chunk_size and current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
-            current_chunk = []
-            current_length = 0
+try:
+    TARGET_LANG_CODE = langcodes.find(TARGET_LANG).language
+except LookupError:
+    print(f"Warning: Could not determine language code for '{TARGET_LANG}', using 'id' as fallback.")
+    TARGET_LANG_CODE = "id"  # Fallback to Indonesian
 
-        current_chunk.append(para)
-        current_length += para_length
+def translate_text(text, prev_context):
+    """Sends text to Ollama for translation with context"""
+    context = "\n".join(prev_context) if prev_context else ""
 
-    if current_chunk:
-        chunks.append('\n\n'.join(current_chunk))
-
-    return chunks
-
-def translate_chunk(chunk, target_lang):
-    """Translate a text chunk using Ollama"""
-    response = ollama.generate(
-        model='qwen2.5:14b',
-        prompt=f"Translate the following text to {target_lang}. Maintain the original formatting, including markdown if present. Only respond with the translation.\n\n{chunk}"
+    prompt = (
+        f"Translate the following text from {SOURCE_LANG} to {TARGET_LANG}. "
+        f"Maintain the original formatting and paragraph structure. "
+        f"Preserve proper nouns (names, places, titles) and punctuation. "
+        f"Ensure natural {TARGET_LANG} grammar and flow. "
+        f"Respond only with the translation.\n\n"
     )
-    return response['response'].strip()
 
-def process_file(file_path, target_lang):
-    """Process a single file through translation"""
-    print(f"Processing {file_path}...")
+    if context:
+        prompt += f"Previous Context (for reference):\n{context}\n\n"
+
+    prompt += f"Text to translate:\n{text}"
+
+    payload = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "stream": False
+    }
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.post(OLLAMA_URL, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            return data["response"].strip()
+        except Exception as e:
+            print(f"API error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+            time.sleep(2)
+
+    return text  # Fallback
+
+def translate_text_file(input_file, output_file):
+    """Processes a text file paragraph by paragraph"""
+    try:
+        with open(input_file, "r", encoding="utf-8-sig") as infile:
+            lines = [line.rstrip('\n') for line in infile.readlines()]
+    except Exception as e:
+        print(f"Error reading {input_file}: {e}")
+        return
+
+    translated_content = []
+    previous_paragraphs = deque(maxlen=CONTEXT_LINES)
+    current_paragraph = []
+
+    for line in lines:
+        if line.strip():
+            current_paragraph.append(line.strip())
+        else:
+            if current_paragraph:
+                combined_text = " ".join(current_paragraph)
+                translated = translate_text(combined_text, list(previous_paragraphs))
+                translated_content.append(translated + "\n\n")
+                previous_paragraphs.append(combined_text)
+                current_paragraph = []
     
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read()
+    if current_paragraph:
+        combined_text = " ".join(current_paragraph)
+        translated = translate_text(combined_text, list(previous_paragraphs))
+        translated_content.append(translated + "\n\n")
 
-    chunks = split_text(text)
-    translated = []
-    
-    for i, chunk in enumerate(chunks, 1):
-        print(f"  Translating chunk {i}/{len(chunks)}")
-        translated_chunk = translate_chunk(chunk, target_lang)
-        translated.append(translated_chunk)
-    
-    output_dir = Path(file_path).parent / 'translations'
-    output_dir.mkdir(exist_ok=True)
-    
-    base_name = Path(file_path).stem
-    output_path = output_dir / f"{base_name}_translated_{target_lang}.txt"
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n\n'.join(translated))
-    
-    print(f"Saved translation to {output_path}\n")
+    try:
+        with open(output_file, "w", encoding="utf-8") as outfile:
+            outfile.write("".join(translated_content).rstrip() + "\n")
+    except Exception as e:
+        print(f"Error writing {output_file}: {e}")
 
-def process_path(path, target_lang):
-    """Process either a file or directory"""
-    path = Path(path)
-    if path.is_file() and path.suffix == '.txt':
-        process_file(path, target_lang)
-    elif path.is_dir():
-        for root, _, files in os.walk(path):
-            for file in files:
-                if file.endswith('.txt'):
-                    process_file(Path(root) / file, target_lang)
-    else:
-        print(f"Skipping non-text file: {path}")
+def process_folder(input_folder, output_folder):
+    """Processes all text files in the directory"""
+    os.makedirs(output_folder, exist_ok=True)
+    original_folder = os.path.join(input_folder, "Original Texts")
+    os.makedirs(original_folder, exist_ok=True)
 
-def main():
-    parser = argparse.ArgumentParser(description='Text File Translator')
-    parser.add_argument('paths', nargs='*', help='Files or directories to process')
-    parser.add_argument('-t', '--target', help='Target language code (e.g., es, fr, de)')
-    
-    args = parser.parse_args()
-    paths = args.paths
-    target_lang = args.target
+    txt_files = [f for f in os.listdir(input_folder) if f.endswith(".txt")]
 
-    if not target_lang:
-        target_lang = input("Enter target language code (e.g., es, fr, de): ").strip()
+    if not txt_files:
+        print("No text files found")
+        return
 
-    if not paths:
-        path_input = input("Enter file or directory path: ").strip('"')
-        paths = [path_input]
+    for filename in txt_files:
+        name, ext = os.path.splitext(filename)
+        output_filename = f"{name}.{TARGET_LANG_CODE}{ext}"
+        input_path = os.path.join(input_folder, filename)
+        output_path = os.path.join(output_folder, output_filename)
 
-    for path in paths:
-        if not Path(path).exists():
-            print(f"Path not found: {path}")
-            continue
-        process_path(path, target_lang)
+        print(f"Processing: {filename}")
+        translate_text_file(input_path, output_path)
 
-if __name__ == '__main__':
-    main()
+        try:
+            shutil.move(input_path, os.path.join(original_folder, filename))
+            print(f"Archived original: {filename}")
+        except Exception as e:
+            print(f"Failed to move {filename}: {e}")
+
+if __name__ == "__main__":
+    input_dir = os.getcwd()
+    output_dir = os.path.join(input_dir, "Translated Texts")
+    process_folder(input_dir, output_dir)
+    input("Press Enter to exit...")

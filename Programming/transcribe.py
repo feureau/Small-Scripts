@@ -22,12 +22,16 @@ WHISPER_FLAGS = [
     "--language", "en",
     "--task", "transcribe",                    # speech recognition
     "--sentence",                         # Enables sentence-based splitting
-    "--max_comma", "80",             # After this line length, a comma is treated as the end of sentence
-    "--max_gap", "3",                     # Max gap in seconds between sentences
+    "--max_comma", "128",             # After this line length, a comma is treated as the end of sentence
+    "--max_gap", "0.1",                     # Max gap in seconds between sentences
     #"--max_line_width", "256",            # Max characters per subtitle line
     "--max_line_count", "1",              # Max number of lines per subtitle
-    #"--hallucination_silence_threshold", "4",  # Reduces false positive transcriptions by ignoring long silences
-    #"--word_timestamps",                  # Enables word-level timestamps for better alignment
+    "--ff_rnndn_xiph",
+    "--ff_speechnorm",
+    "--hallucination_silence_threshold", "1",  # Reduces false positive transcriptions by ignoring long silences
+    "--condition_on_previous_text", "False",
+    #"--reprompt", "0",
+    "--word_timestamps", "True",                 # Enables word-level timestamps for better alignment
     #"--no_speech_strict_lvl", "1"         # Stricter filtering for non-speech segments
 ]
 
