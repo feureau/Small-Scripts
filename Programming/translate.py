@@ -81,7 +81,7 @@ def translate_text_file(input_file, output_file):
                 translated_content.append(translated + "\n\n")
                 previous_paragraphs.append(combined_text)
                 current_paragraph = []
-    
+
     if current_paragraph:
         combined_text = " ".join(current_paragraph)
         translated = translate_text(combined_text, list(previous_paragraphs))
@@ -107,7 +107,7 @@ def process_folder(input_folder, output_folder):
 
     for filename in txt_files:
         name, ext = os.path.splitext(filename)
-        output_filename = f"{name}.{TARGET_LANG_CODE}{ext}"
+        output_filename = f"{name}.{TARGET_LANG_CODE}{ext}" # Modified line to include TARGET_LANG_CODE
         input_path = os.path.join(input_folder, filename)
         output_path = os.path.join(output_folder, output_filename)
 
