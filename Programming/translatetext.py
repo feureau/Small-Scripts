@@ -119,7 +119,7 @@ OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/ch
 # --- End Configuration ---
 
 
-def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt):
+def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False): # Changed default to False (non-streaming default)
     """Translates text using Google Gemini API or Ollama, with rate limiting for Gemini."""
     global last_request_time
 
@@ -145,29 +145,36 @@ def translate_text(text, target_language, engine, model_name, google_api_key, pr
 
             prompt_content = processing_prompt.format(target_language=target_language, text=text)
 
-            print(f"--- Calling Google Gemini API with model '{model_name}' for processing... Streaming output below: ---")
-            response = model.generate_content(prompt_content, stream=True) # Important: stream=True
+            if stream_output: # Conditional streaming based on stream_output parameter
+                print(f"--- Calling Google Gemini API with model '{model_name}' for processing... Streaming output below: ---")
+                response = model.generate_content(prompt_content, stream=True) # Important: stream=True
 
-            processed_text_chunks = []
-            for chunk in response: # Iterate through response chunks (parts)
-                if chunk.text: # Check if the chunk has text content
-                    content_chunk = chunk.text
-                    print(content_chunk, end="", flush=True)
-                    processed_text_chunks.append(content_chunk)
+                processed_text_chunks = []
+                for chunk in response: # Iterate through response chunks (parts)
+                    if chunk.text: # Check if the chunk has text content
+                        content_chunk = chunk.text
+                        print(content_chunk, end="", flush=True)
+                        processed_text_chunks.append(content_chunk)
 
-            print("\n--- Google Gemini API call completed and output streamed. ---")
-            processed_text = "".join(processed_text_chunks).strip()
-            return processed_text
+                print("\n--- Google Gemini API call completed and output streamed. ---")
+                processed_text = "".join(processed_text_chunks).strip()
+                return processed_text
+            else: # Non-streaming mode
+                print(f"--- Calling Google Gemini API with model '{model_name}' for processing... (Non-streaming) ---")
+                response = model.generate_content(prompt_content, stream=False) # stream=False for non-streaming
+                print("\n--- Google Gemini API call completed. ---")
+                processed_text = response.text
+                return processed_text
 
 
         except ResourceExhausted as e:
-            if e.status_code == 429:
-                print(f"Error: Google Gemini API Quota Exhausted (HTTP 429).", file=sys.stderr)
-                print(f"Quota Exhaustion details: {e}", file=sys.stderr)
-                return None
-            else:
-                print(f"Error calling Google Gemini API (ResourceExhausted, not quota related): {e}", file=sys.stderr)
-                return None
+            print(f"Error: Google Gemini API Quota Exhausted.", file=sys.stderr)
+            print(f"  Detailed Quota Exhaustion Information:")
+            if hasattr(e, 'status_code'):
+                print(f"    HTTP Status Code: {e.status_code}")
+            if hasattr(e, 'message'):
+                print(f"    Error Message: {e.message}")
+            return None # Simplified error handling - return None directly
 
         except Exception as e:
             print(f"Error calling Google Gemini API: {e}", file=sys.stderr)
@@ -180,7 +187,7 @@ def translate_text(text, target_language, engine, model_name, google_api_key, pr
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt_content}],
-                "stream": True
+                "stream": True # Ollama is always streaming, keep it True
             }
             headers = {'Content-Type': 'application/json'}
 
@@ -249,12 +256,13 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split(re.compile('([0-9]+)'), s)]
 
-def process_files(args):
+def process_files(args, stream_output): # Added stream_output parameter
     """Processes files for translation or cleanup based on arguments.
        Now processes files regardless of extension."""
     global last_request_time
     last_request_time = None
     quota_exhausted = False
+    exit_code = 0 # Initialize exit code to success
 
     if not args.files:
         print("Error: No files specified.", file=sys.stderr)
@@ -318,7 +326,8 @@ def process_files(args):
         "Prompt": args.prompt_key,
         "Output Directory": output_dir,
         "Output File Suffix": args.suffix,
-        "Files": args.files
+        "Files": args.files,
+        "Stream Output": stream_output # Added stream output setting
     }
     if args.prompt_key == "translate" or args.prompt_key == "translate_only": # Add target language for translation prompts
         processing_settings["Target Language"] = target_language
@@ -336,7 +345,8 @@ def process_files(args):
                 args.engine,
                 model_name,
                 GOOGLE_API_KEY,
-                processing_prompt
+                processing_prompt,
+                stream_output # Pass stream_output to translate_text
             )
 
             if processed_text:
@@ -365,26 +375,29 @@ def process_files(args):
             elif processed_text is None and args.engine == "google":
                 print(f"Processing failed for '{file_path}' due to Google Gemini Quota Exhaustion. Script will terminate.", file=sys.stderr)
                 quota_exhausted = True
-                break
+                exit_code = 1 # Set exit code to 1 for quota exhaustion
+                break # Add break here to stop processing further files
+
             else:
                 print(f"Processing failed for '{file_path}'. See error messages above.", file=sys.stderr)
 
         except FileNotFoundError:
             print(f"Error: File not found: {file_path}", file=sys.stderr)
         except Exception as e:
-            print(f"Error processing {file_path}: {e}", file=sys.stderr)
+            print(f"Error processing {file_path}: Exception Type: {type(e)}, Message: {e}", file=sys.stderr) # Simplified error print
         finally:
             print(f"--- Finished processing file: '{file_path}' ---")
 
     if quota_exhausted:
         print("\n--- Script terminated early due to Google Gemini Quota Exhaustion. ---", file=sys.stderr)
-        return 1
+        return exit_code # Return non-zero exit code for quota exhaustion
 
     print("\n--- Processing Settings Used ---")
     for key, value in processing_settings.items():
         print(f"{key}: {value}")
     print("--- End Processing Settings ---")
-    return 0
+    return exit_code # Return 0 for successful processing (or 1 if error occurred but not quota exhaustion, though currently only quota exhaustion sets exit_code to 1)
+
 
 
 def main():
@@ -397,6 +410,8 @@ def main():
     parser.add_argument("-p", "--prompt", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=PROMPTS.keys(), help=f"Prompt to use. Keywords: {', '.join(PROMPTS.keys())}")
     parser.add_argument("-o", "--output", default=None, help="Output directory (overrides '{OUTPUT_SUBFOLDER}').")
     parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_SUFFIX, help=f"Suffix for processed file names.")
+    parser.add_argument("--no-stream", dest="stream_output_cli", action='store_false', default=False, help="Disable streaming output for Google Gemini (CLI only).") # CLI option to disable stream, default False (non-streaming CLI default)
+    parser.set_defaults(stream_output_cli=False) # Default stream is False for CLI
 
     args = parser.parse_args()
 
@@ -406,16 +421,21 @@ def main():
 
     resolved_files.sort(key=natural_sort_key)
 
-    use_gui(resolved_files, args)
+    gui_exit_code = use_gui(resolved_files, args)
+    if gui_exit_code is not None: # GUI mode was used
+        sys.exit(gui_exit_code) # Exit with code from GUI processing
+    else: # CLI mode (GUI was bypassed or not used)
+        sys.exit(process_files(args, args.stream_output_cli)) # Exit with code from CLI processing
 
 
 def use_gui(command_line_files, args):
     """Launches a tkinter GUI for script options, optionally pre-filled with files.
-       Language input now defaults to and expects two-letter language codes (e.g., en, fr)."""
+       Returns exit code from processing, or None if GUI is closed without processing."""
 
 
     window = tk.Tk()
     window.title("Text Processing Script GUI")
+    exit_code_from_gui = None # Initialize exit code for GUI
 
     files_list_var = tk.Variable(value=command_line_files if command_line_files else [])
     language_var = tk.StringVar(value=args.language if args.language else DEFAULT_TARGET_LANGUAGE) # Default is now DEFAULT_TARGET_LANGUAGE which is "en"
@@ -442,6 +462,8 @@ def use_gui(command_line_files, args):
 
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
+    stream_output_var = tk.BooleanVar(value=False) # Default to non-streaming in GUI
+
 
     files_frame = ttk.Frame(window, padding="10 10 10 10")
     files_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -581,8 +603,17 @@ def use_gui(command_line_files, args):
     suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, state='readonly', width=20)
     suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
-    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map)) # Pass prompt_value_map
-    process_button.grid(row=8, column=0, columnspan=3, pady=20)
+    stream_frame = ttk.Frame(window, padding="10 10 10 10")
+    stream_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google Gemini)", variable=stream_output_var) # Checkbox for stream output
+    stream_check.grid(row=0, column=0, sticky=tk.W)
+
+    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get())) # Pass stream_output_var.get()
+    process_button.grid(row=9, column=0, columnspan=3, pady=20)
+
+    # window.protocol("WM_DELETE_WINDOW", window.destroy) # Standard close operation
+    window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0) ) # Close and exit 0 if GUI closed
+
 
     window.update_idletasks()
     file_listbox_height_pixels = file_buttons_frame.winfo_height()
@@ -594,9 +625,10 @@ def use_gui(command_line_files, args):
     file_listbox.config(height=file_listbox_height_lines)
 
     window.mainloop()
+    return exit_code_from_gui # Return exit code from GUI, will be None if GUI closed without processing
 
 
-def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map): # Accept prompt_value_map as argument
+def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output): # Accept stream_output
     """Processes files based on GUI input and closes GUI."""
     files_input = files_list_var.get()
     if not files_input:
@@ -613,9 +645,11 @@ def process_from_gui(window, files_list_var, language_var, engine_var, model_var
     gui_args.prompt_key = prompt_value_map[prompt_var.get()]
     gui_args.output = output_dir_var.get() if output_dir_var.get() else None
     gui_args.suffix = suffix_var.get()
+    gui_args.stream_output_gui = stream_output # Pass stream_output from GUI
 
     window.destroy()
-    sys.exit(process_files(gui_args))
+    gui_exit_code = process_files(gui_args, stream_output) # Get exit code from processing
+    sys.exit(gui_exit_code) # Exit with code from file processing
 
 
 if __name__ == "__main__":
