@@ -17,7 +17,7 @@ import tkinter.messagebox
 
 # --- Configuration ---
 DEFAULT_TARGET_LANGUAGE = "en" # Changed to "en" for two-letter code default
-DEFAULT_GEMINI_MODELS = ["gemini-2.0-flash-exp", "gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05"]
+DEFAULT_GEMINI_MODELS = ["gemini-2.0-pro-exp-02-05","gemini-2.0-flash-thinking-exp-01-21","gemini-2.0-flash-exp", "gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05"]
 DEFAULT_OLLAMA_MODELS = ["mistral-small:24b", "phi4", "qwen2.5:14b"]
 DEFAULT_ENGINE = "google"
 DEFAULT_SUFFIX = "_processed"
@@ -25,7 +25,9 @@ OUTPUT_SUBFOLDER = "processed_output"
 ORIGINAL_FILES_SUBFOLDER = "original_files"
 
 # --- Prompts ---
-DEFAULT_TRANSLATION_PROMPT = """Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone. This text is from OCR and is **VERY MESSY**. It contains significant errors, typos, gibberish, and formatting problems, including leftover page numbers (like Roman numerals 'IV' or Arabic numerals '123').  You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted translation **using Markdown formatting for structural elements**.
+DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
+
+Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone. This text is from OCR and is **VERY MESSY**. It contains significant errors, typos, gibberish, and formatting problems, including leftover page numbers (like Roman numerals 'IV' or Arabic numerals '123').  You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted translation **using Markdown formatting for structural elements**.
 
 **Specifically, your cleaning, correction, and formatting MUST include:**
 
@@ -37,7 +39,33 @@ DEFAULT_TRANSLATION_PROMPT = """Translate the following text to natural and idio
     * Ensure paragraphs are separated by blank lines (standard Markdown).
 * **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
 
-**IMPORTANT:** Provide **ONLY** the final, cleaned, corrected, and translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include the original French text. Do **NOT** include any page numbers. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the clean, translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
+**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED.  DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
+
+* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
+* **CHINESE CHARACTERS:**  You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
+* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
+* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
+    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
+    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)".  In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
+
+**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pinyin with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final, cleaned, corrected, and translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include the original French text. Do **NOT** include any page numbers. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the clean, translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
+
+
+TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
+
+Translate the following text to natural and idiomatic {target_language}. For Chinese names and general Chinese terms use Hànyǔ Pīnyīn for the term in the translation. Include Chinese character names and general Chinese terms in Chinese in the translation. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone.  Produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one.  Format structural elements using Markdown where appropriate and ensure paragraphs are separated by blank lines.
+
+**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED. DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
+
+* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
+* **CHINESE CHARACTERS:** You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
+* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
+* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
+    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
+    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)". In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
+
+**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pinyin with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final, translated text in {target_language}, **formatted in Markdown**. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
+
 
 CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR).  The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**.
 
@@ -61,17 +89,12 @@ CLEANUP_PROMPT = """Please clean up the following text which is the result of Op
 **Text to clean:** {text}"""
 
 
-TRANSLATE_ONLY_PROMPT = """Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone.  Produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one.  Format structural elements using Markdown where appropriate and ensure paragraphs are separated by blank lines.
-
-**IMPORTANT:** Provide **ONLY** the final, translated text in {target_language}, **formatted in Markdown**. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
-
-
 PROMPTS = {
-    "translate": DEFAULT_TRANSLATION_PROMPT, # Still using "translate" key for default cleanup+translate prompt
+    "translate": DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT, # Using V7_COND_FORMAT for translate
     "cleanup": CLEANUP_PROMPT,
-    "translate_only": TRANSLATE_ONLY_PROMPT, # New "translate_only" prompt
+    "translate_only": TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT, # Using V7_COND_FORMAT for translate_only
 }
-DEFAULT_PROMPT_KEY = "translate"
+DEFAULT_PROMPT_KEY = "translate_only" # Changed default prompt to translate_only
 
 PROMPT_SUFFIX_MAP = {
     "translate": "_translated", # Suffix for cleanup+translate remains "_translated" for backward compatibility
@@ -92,7 +115,7 @@ REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 last_request_time = None
 
 # Ollama API Configuration
-OLLAMA_API_URL = "http://localhost:11434/api/chat"
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat") # Allow Ollama URL to be set via env var
 # --- End Configuration ---
 
 
@@ -122,18 +145,20 @@ def translate_text(text, target_language, engine, model_name, google_api_key, pr
 
             prompt_content = processing_prompt.format(target_language=target_language, text=text)
 
-            print(f"--- Calling Google Gemini API with model '{model_name}' for processing... ---")
-            response: GenerateContentResponse = model.generate_content(prompt_content)
-            response.resolve()
-            print(f"--- Google Gemini API call completed. ---")
+            print(f"--- Calling Google Gemini API with model '{model_name}' for processing... Streaming output below: ---")
+            response = model.generate_content(prompt_content, stream=True) # Important: stream=True
 
-            if response.text:
-                processed_text = response.text.strip()
-                return processed_text
-            else:
-                print("Warning: No processed text in Google Gemini API response.", file=sys.stderr)
-                print(f"Gemini API response details: {response.raw_response}", file=sys.stderr)
-                return None
+            processed_text_chunks = []
+            for chunk in response: # Iterate through response chunks (parts)
+                if chunk.text: # Check if the chunk has text content
+                    content_chunk = chunk.text
+                    print(content_chunk, end="", flush=True)
+                    processed_text_chunks.append(content_chunk)
+
+            print("\n--- Google Gemini API call completed and output streamed. ---")
+            processed_text = "".join(processed_text_chunks).strip()
+            return processed_text
+
 
         except ResourceExhausted as e:
             if e.status_code == 429:
@@ -235,11 +260,17 @@ def process_files(args):
         print("Error: No files specified.", file=sys.stderr)
         return 1
 
-    all_files = args.files
+    all_files = [] # Initialize as empty list to handle glob correctly
+    for file_pattern in args.files: # Iterate through file patterns from args
+        resolved_files_for_pattern = glob.glob(file_pattern) # Expand each pattern
+        if not resolved_files_for_pattern: # Check if any files found for this pattern
+            print(f"Warning: No files found matching pattern: '{file_pattern}'", file=sys.stderr)
+        all_files.extend(resolved_files_for_pattern) # Add found files to the list
 
-    if not all_files:
-        print(f"Error: No files found matching the pattern(s).", file=sys.stderr)
+    if not all_files: # Check if the final list of files is empty after processing all patterns
+        print(f"Error: No files found matching any specified pattern(s).", file=sys.stderr)
         return 1
+
 
     if args.language and (args.prompt_key == "translate" or args.prompt_key == "translate_only"): # Language is relevant for translation prompts
         target_language_code = args.language.lower()
@@ -407,7 +438,7 @@ def use_gui(command_line_files, args):
 
 
     prompt_var = tk.StringVar(value=initial_prompt_display_value) # Set initial value to display name
-
+    prompt_var.set("Translate Only") # Set "translate_only" as default in GUI
 
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
@@ -472,14 +503,15 @@ def use_gui(command_line_files, args):
                 if index < len(current_files) - 1:
                     file_listbox.select_set(index + 1)
 
-    clear_all_button = tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10)
+    clear_all_button = tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10) # Separate button creation
+    clear_all_button.grid(row=6, column=0, sticky=tk.W, pady=2) # Separate grid placement
     tk.Button(file_buttons_frame, text="Add File", command=add_files_to_list, width=10).grid(row=0, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Remove File", command=remove_selected_files, width=10).grid(row=1, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Select All", command=select_all_files, width=10).grid(row=2, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Deselect All", command=deselect_all_files, width=10).grid(row=3, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Move Up", command=move_file_up, width=10).grid(row=4, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Move Down", command=move_file_down, width=10).grid(row=5, column=0, sticky=tk.W, pady=2)
-    clear_all_button.grid(row=6, column=0, sticky=tk.W, pady=2)
+
 
     lang_frame = ttk.Frame(window, padding="10 10 10 10")
     lang_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
