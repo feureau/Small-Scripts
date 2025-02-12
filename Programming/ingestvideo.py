@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from collections import Counter
 from multiprocessing import Pool
+import glob  # Import the glob module
 
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
@@ -843,12 +844,17 @@ def process_batch(video_files, settings):
 # Main Script Logic (Batch + GUI)
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("No video file specified. Please drag and drop a video file onto the script.")
+    video_files = []
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            files_from_glob = glob.glob(arg)  # Expand wildcard patterns
+            video_files.extend(files_from_glob) # Add expanded files to the list
+
+    if not video_files: # Check if any files were found after expansion
+        print("No video file specified or no files found matching the input patterns.")
         input("Press any key to exit...")
         sys.exit()
 
-    video_files = sys.argv[1:]
     first_file = video_files[0]
 
     color_data_first = get_video_color_info(first_file)
