@@ -118,6 +118,18 @@ last_request_time = None
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat") # Allow Ollama URL to be set via env var
 # --- End Configuration ---
 
+def insert_custom_prompt(original_prompt, custom_prompt):
+    """Inserts the custom prompt after the first line of the original prompt."""
+    lines = original_prompt.splitlines(keepends=True)
+    if len(lines) > 1:
+        lines.insert(1, custom_prompt.strip() + "\n\n") # Insert after the first line, add two newlines for separation
+    elif lines: # if only one line or empty, append after the first line if exists, else just prepend.
+        lines.append("\n\n" + custom_prompt.strip() + "\n")
+    else:
+        lines.insert(0, custom_prompt.strip() + "\n\n") # if prompt was empty, prepend.
+
+    return "".join(lines)
+
 
 def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False): # Changed default to False (non-streaming default)
     """Translates text using Google Gemini API or Ollama, with rate limiting for Gemini."""
@@ -256,7 +268,7 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split(re.compile('([0-9]+)'), s)]
 
-def process_files(args, stream_output): # Added stream_output parameter
+def process_files(args, stream_output, custom_prompt_text=""): # Added stream_output parameter and custom_prompt_text
     """Processes files for translation or cleanup based on arguments.
        Now processes files regardless of extension."""
     global last_request_time
@@ -316,9 +328,16 @@ def process_files(args, stream_output): # Added stream_output parameter
     else:
         model_name = None
 
-    processing_prompt = PROMPTS.get(args.prompt_key)
-    if not processing_prompt:
-        processing_prompt = PROMPTS[DEFAULT_PROMPT_KEY]
+    processing_prompt_base = PROMPTS.get(args.prompt_key)
+    if not processing_prompt_base:
+        processing_prompt_base = PROMPTS[DEFAULT_PROMPT_KEY]
+
+    # Insert custom prompt if provided
+    if custom_prompt_text:
+        processing_prompt = insert_custom_prompt(processing_prompt_base, custom_prompt_text)
+    else:
+        processing_prompt = processing_prompt_base
+
 
     processing_settings = {
         "Engine": args.engine,
@@ -327,7 +346,8 @@ def process_files(args, stream_output): # Added stream_output parameter
         "Output Directory": output_dir,
         "Output File Suffix": args.suffix,
         "Files": args.files,
-        "Stream Output": stream_output # Added stream output setting
+        "Stream Output": stream_output, # Added stream output setting
+        "Custom Prompt": custom_prompt_text if custom_prompt_text else "None" # Include custom prompt in settings
     }
     if args.prompt_key == "translate" or args.prompt_key == "translate_only": # Add target language for translation prompts
         processing_settings["Target Language"] = target_language
@@ -425,8 +445,7 @@ def main():
     if gui_exit_code is not None: # GUI mode was used
         sys.exit(gui_exit_code) # Exit with code from GUI processing
     else: # CLI mode (GUI was bypassed or not used)
-        sys.exit(process_files(args, args.stream_output_cli)) # Exit with code from CLI processing
-
+        sys.exit(process_files(args, args.stream_output_cli)) # Exit with code from CLI processing # In CLI mode, custom prompt is not supported yet.
 
 def use_gui(command_line_files, args):
     """Launches a tkinter GUI for script options, optionally pre-filled with files.
@@ -463,6 +482,7 @@ def use_gui(command_line_files, args):
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
     stream_output_var = tk.BooleanVar(value=False) # Default to non-streaming in GUI
+    custom_prompt_var = tk.StringVar(value="") # Variable to store custom prompt text
 
 
     files_frame = ttk.Frame(window, padding="10 10 10 10")
@@ -588,9 +608,16 @@ def use_gui(command_line_files, args):
     update_suffix_from_prompt() # Initial suffix update - called AFTER prompt_value_map is ready
     prompt_var.trace_add('write', update_suffix_from_prompt)
 
+    custom_prompt_frame = ttk.Frame(window, padding="10 10 10 10")
+    custom_prompt_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    tk.Label(custom_prompt_frame, text="Custom Prompt (optional):").grid(row=0, column=0, sticky=tk.NW)
+    custom_prompt_text = tk.Text(custom_prompt_frame, height=3, width=50)
+    custom_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E))
+    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip()) # Initialize custom_prompt_var with empty text
+
 
     output_frame = ttk.Frame(window, padding="10 10 10 10")
-    output_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    output_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(output_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
     output_entry = ttk.Entry(output_frame, textvariable=output_dir_var, width=50)
     output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
@@ -598,18 +625,18 @@ def use_gui(command_line_files, args):
     tk.Label(output_frame, text="(optional)").grid(row=0, column=3, sticky=tk.W)
 
     suffix_frame = ttk.Frame(window, padding="10 10 10 10")
-    suffix_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    suffix_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(suffix_frame, text="Suffix:").grid(row=0, column=0, sticky=tk.W)
     suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, state='readonly', width=20)
     suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
     stream_frame = ttk.Frame(window, padding="10 10 10 10")
-    stream_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    stream_frame.grid(row=9, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google Gemini)", variable=stream_output_var) # Checkbox for stream output
     stream_check.grid(row=0, column=0, sticky=tk.W)
 
-    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get())) # Pass stream_output_var.get()
-    process_button.grid(row=9, column=0, columnspan=3, pady=20)
+    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END))) # Pass stream_output_var.get() and custom prompt text
+    process_button.grid(row=10, column=0, columnspan=3, pady=20)
 
     # window.protocol("WM_DELETE_WINDOW", window.destroy) # Standard close operation
     window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0) ) # Close and exit 0 if GUI closed
@@ -628,7 +655,7 @@ def use_gui(command_line_files, args):
     return exit_code_from_gui # Return exit code from GUI, will be None if GUI closed without processing
 
 
-def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output): # Accept stream_output
+def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output, custom_prompt_text): # Accept stream_output and custom_prompt_text
     """Processes files based on GUI input and closes GUI."""
     files_input = files_list_var.get()
     if not files_input:
@@ -646,9 +673,10 @@ def process_from_gui(window, files_list_var, language_var, engine_var, model_var
     gui_args.output = output_dir_var.get() if output_dir_var.get() else None
     gui_args.suffix = suffix_var.get()
     gui_args.stream_output_gui = stream_output # Pass stream_output from GUI
+    gui_args.custom_prompt_text = custom_prompt_text.strip() # Get custom prompt text from GUI and strip whitespace
 
     window.destroy()
-    gui_exit_code = process_files(gui_args, stream_output) # Get exit code from processing
+    gui_exit_code = process_files(gui_args, stream_output, gui_args.custom_prompt_text) # Pass custom prompt to process_files
     sys.exit(gui_exit_code) # Exit with code from file processing
 
 
