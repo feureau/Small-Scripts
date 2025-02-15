@@ -1,9 +1,11 @@
 import os
 import subprocess
 import argparse
+import glob
 from typing import List
 
 DEFAULT_LUT_PATH = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCU\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
+DEFAULT_OUTPUT_SUBDIR = "HDR_Processed"
 
 def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: bool) -> bool:
     """Process a single file with HDR metadata and optional LUT embedding"""
@@ -18,12 +20,9 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         suffix = "_HDR_CUBE" if embed_lut else "_HDR"
         output_filename = f"{base_name}{suffix}.mkv"
         
-        # Create output directory if specified
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, output_filename)
-        else:
-            output_path = os.path.join(os.path.dirname(input_file), output_filename)
+        # Create output directory and prepare output path
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_filename)
 
         # Build base command
         mkvmerge_command = [
@@ -81,21 +80,25 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         return False
 
 def find_video_files(paths: List[str]) -> List[str]:
-    """Find all video files in specified paths (files or directories)"""
+    """Find all video files in specified paths (supports wildcards)"""
     video_extensions = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.ts', '.m2ts'}
     video_files = []
 
-    for path in paths:
-        if os.path.isfile(path):
-            if os.path.splitext(path)[1].lower() in video_extensions:
-                video_files.append(path)
-        elif os.path.isdir(path):
-            for root, _, files in os.walk(path):
-                for file in files:
-                    if os.path.splitext(file)[1].lower() in video_extensions:
-                        video_files.append(os.path.join(root, file))
-        else:
-            print(f"Warning: Path not found - {path}")
+    for pattern in paths:
+        # Expand wildcards and resolve paths
+        expanded_paths = glob.glob(pattern, recursive=True)
+        
+        for path in expanded_paths:
+            if os.path.isfile(path):
+                if os.path.splitext(path)[1].lower() in video_extensions:
+                    video_files.append(path)
+            elif os.path.isdir(path):
+                for root, _, files in os.walk(path):
+                    for file in files:
+                        if os.path.splitext(file)[1].lower() in video_extensions:
+                            video_files.append(os.path.join(root, file))
+            else:
+                print(f"Warning: Path not found - {path}")
 
     return video_files
 
@@ -118,11 +121,11 @@ def main():
         "--no-lut",
         action="store_false",
         dest="embed_lut",
-        help="Disable LUT embedding"
+        help="Add HDR metadata without LUT embedding (default: embed LUT if available)"
     )
     parser.add_argument(
         "-o", "--output-dir",
-        help="Custom output directory (default: same as input file)"
+        help=f"Custom output directory\n(default: '{DEFAULT_OUTPUT_SUBDIR}' for multiple files,\ncurrent directory for single file)"
     )
     parser.add_argument(
         "--mkvmerge-path",
@@ -145,9 +148,16 @@ def main():
         print("No video files found in specified paths")
         return
 
+    # Set output directory
+    if not args.output_dir:
+        if len(video_files) > 1:
+            args.output_dir = os.path.join(os.getcwd(), DEFAULT_OUTPUT_SUBDIR)
+        else:
+            args.output_dir = os.getcwd()
+
     print(f"Found {len(video_files)} video file(s) to process")
-    if args.embed_lut:
-        print(f"Using LUT file: {args.lut}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Processing mode: {'HDR with LUT' if args.embed_lut else 'HDR only'}")
 
     # Process files
     success_count = 0
