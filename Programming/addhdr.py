@@ -1,123 +1,164 @@
 import os
 import subprocess
-import shutil
 import argparse
+from typing import List
 
-def add_hdr_metadata(input_file, embed_cube_lut=True):
-    """Adds HDR metadata to an MKV file using mkvmerge and optionally embeds a .cube LUT.
-       Output MKV file is placed in the same directory as the input file.
-    """
+DEFAULT_LUT_PATH = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCU\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
 
-    lut_path = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\Colorspace LUTS\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube" # Raw string for Windows paths
-
-    output_filename_base = os.path.splitext(os.path.basename(input_file))[0]
-    if embed_cube_lut:
-        output_filename = f"{output_filename_base}_HDR_CUBE.mkv"
-    else:
-        output_filename = f"{output_filename_base}_HDR.mkv"
-
-    output_path = os.path.join(os.path.dirname(input_file), output_filename) # Output in the same directory as input
-
-    mkvmerge_command = [
-        "mkvmerge.exe",
-        "-o", output_filename,  # Output filename only, will be created in current directory
-        "--colour-matrix", "0:9",
-        "--colour-range", "0:1",
-        "--colour-transfer-characteristics", "0:16",
-        "--colour-primaries", "0:9",
-        "--max-content-light", "0:1000",
-        "--max-frame-light", "0:300",
-        "--max-luminance", "0:1000",
-        "--min-luminance", "0:0.01",
-        "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.690,0.15,0.06",
-        "--white-colour-coordinates", "0:0.3127,0.3290",
-        os.path.basename(input_file)  # Use basename here
-    ]
-
-    print(f"Processing: {input_file}")
-    print(f"Output file: {output_path}")
-
+def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: bool) -> bool:
+    """Process a single file with HDR metadata and optional LUT embedding"""
     try:
-        print("Running mkvmerge for HDR metadata...")
-        result = subprocess.run(mkvmerge_command, capture_output=True, text=True, check=True, cwd=os.path.dirname(input_file))  # Run in input file's directory
-        print(result.stdout)
-        if result.stderr:
-            print(f"mkvmerge STDERR:\n{result.stderr}")
+        # Validate input file
+        if not os.path.isfile(input_file):
+            print(f"Error: Input file not found: {input_file}")
+            return False
 
-        if embed_cube_lut:
+        # Prepare output filename
+        base_name = os.path.splitext(os.path.basename(input_file))[0]
+        suffix = "_HDR_CUBE" if embed_lut else "_HDR"
+        output_filename = f"{base_name}{suffix}.mkv"
+        
+        # Create output directory if specified
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, output_filename)
+        else:
+            output_path = os.path.join(os.path.dirname(input_file), output_filename)
+
+        # Build base command
+        mkvmerge_command = [
+            "mkvmerge",
+            "-o", output_path,
+            "--colour-matrix", "0:9",
+            "--colour-range", "0:1",
+            "--colour-transfer-characteristics", "0:16",
+            "--colour-primaries", "0:9",
+            "--max-content-light", "0:1000",
+            "--max-frame-light", "0:300",
+            "--max-luminance", "0:1000",
+            "--min-luminance", "0:0.01",
+            "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.690,0.15,0.06",
+            "--white-colour-coordinates", "0:0.3127,0.3290",
+            input_file
+        ]
+
+        # Add LUT attachment if enabled and available
+        if embed_lut:
             if not os.path.exists(lut_path):
-                print(f"Warning: LUT file not found at: {lut_path}. Skipping LUT embedding.")
+                print(f"Warning: LUT file not found at {lut_path}. Disabling LUT embedding.")
             else:
-                print("Running mkvmerge to embed CUBE LUT...")
-                lut_mkvmerge_command = [
-                    "mkvmerge.exe",
-                    "-o", output_filename,  # Output filename only, in current directory
+                mkvmerge_command[3:3] = [  # Insert before output path
                     "--attachment-mime-type", "application/x-cube",
-                    "--attach-file", lut_path,
-                    output_filename,  # Input is the already created HDR MKV file in the same directory
-                    "--no-video", "--no-audio", "--no-subtitles", "--no-chapters", "--no-attachments"
+                    "--attach-file", lut_path
                 ]
-                result_lut = subprocess.run(lut_mkvmerge_command, capture_output=True, text=True, check=True, cwd=os.path.dirname(input_file))  # Run in input file's directory
-                print(result_lut.stdout)
-                if result_lut.stderr:
-                    print(f"mkvmerge LUT STDERR:\n{result_lut.stderr}")
 
-        print("Running mkvinfo...")
-        mkvinfo_command = ["mkvinfo.exe", output_filename]
-        result_info = subprocess.run(mkvinfo_command, capture_output=True, text=True, cwd=os.path.dirname(input_file))  # Run in input file's directory # Don't check=True for info, just warn
-        print(result_info.stdout)
-        if result_info.stderr:
-            print(f"mkvinfo STDERR:\n{result_info.stderr}")
+        # Run mkvmerge
+        print(f"Processing: {input_file}")
+        result = subprocess.run(
+            mkvmerge_command,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Print results
+        if result.stdout:
+            print(f"Output:\n{result.stdout}")
+        if result.stderr:
+            print(f"Errors:\n{result.stderr}")
 
-        # No need to create folder or move, output is already in the same directory
+        print(f"Successfully created: {output_path}")
+        return True
 
     except subprocess.CalledProcessError as e:
-        print(f"Error processing {input_file}: mkvmerge failed with return code {e.returncode}")
-        if e.stderr:
-            print(f"STDERR:\n{e.stderr}")
-        if e.stdout:
-            print(f"STDOUT:\n{e.stdout}")
-        print("-" * 30)  # Separator for errors
-        return False  # Indicate failure
-
+        print(f"Error processing {input_file}:")
+        print(f"Command failed: {' '.join(e.cmd)}")
+        print(f"Exit code: {e.returncode}")
+        print(f"Error output:\n{e.stderr}")
+        return False
     except Exception as e:
-        print(f"An unexpected error occurred while processing {input_file}: {e}")
-        print("-" * 30)  # Separator for errors
-        return False  # Indicate failure
+        print(f"Unexpected error processing {input_file}: {str(e)}")
+        return False
 
-    return True  # Indicate success
+def find_video_files(paths: List[str]) -> List[str]:
+    """Find all video files in specified paths (files or directories)"""
+    video_extensions = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.ts', '.m2ts'}
+    video_files = []
 
+    for path in paths:
+        if os.path.isfile(path):
+            if os.path.splitext(path)[1].lower() in video_extensions:
+                video_files.append(path)
+        elif os.path.isdir(path):
+            for root, _, files in os.walk(path):
+                for file in files:
+                    if os.path.splitext(file)[1].lower() in video_extensions:
+                        video_files.append(os.path.join(root, file))
+        else:
+            print(f"Warning: Path not found - {path}")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Add HDR metadata to video files and optionally embed a .cube LUT.")
-    parser.add_argument("-nocube", action="store_true", help="Disable embedding the .cube LUT.")
+    return video_files
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Add HDR metadata to video files with optional LUT embedding",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument(
+        "inputs",
+        nargs="+",
+        help="Input files/directories (supports wildcards)"
+    )
+    parser.add_argument(
+        "--lut",
+        default=DEFAULT_LUT_PATH,
+        help=f"Custom LUT file path (default: {DEFAULT_LUT_PATH})"
+    )
+    parser.add_argument(
+        "--no-lut",
+        action="store_false",
+        dest="embed_lut",
+        help="Disable LUT embedding"
+    )
+    parser.add_argument(
+        "-o", "--output-dir",
+        help="Custom output directory (default: same as input file)"
+    )
+    parser.add_argument(
+        "--mkvmerge-path",
+        default="mkvmerge",
+        help="Path to mkvmerge executable (default: system PATH)"
+    )
+
     args = parser.parse_args()
 
-    video_extensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.ts', '.m2ts']  # Add more if needed
-    processed_count = 0
-    error_count = 0
+    # Verify mkvmerge exists
+    try:
+        subprocess.run([args.mkvmerge_path, "--version"], capture_output=True, check=True)
+    except Exception as e:
+        print(f"Error: mkvmerge not found at '{args.mkvmerge_path}'. Please install MKVToolNix or specify correct path with --mkvmerge-path")
+        return
 
-    print("Starting HDR metadata processing...")
-    if args.nocube:
-        print("Cube LUT embedding is disabled.")
-    else:
-        print("Cube LUT embedding is enabled (default).")
+    # Find all video files
+    video_files = find_video_files(args.inputs)
+    if not video_files:
+        print("No video files found in specified paths")
+        return
 
-    for root, _, files in os.walk('.'):  # Start from current directory
-        for file in files:
-            if any(file.lower().endswith(ext) for ext in video_extensions):
-                input_file_path = os.path.join(root, file)
-                if add_hdr_metadata(input_file_path, embed_cube_lut=not args.nocube):
-                    processed_count += 1
-                else:
-                    error_count += 1
+    print(f"Found {len(video_files)} video file(s) to process")
+    if args.embed_lut:
+        print(f"Using LUT file: {args.lut}")
+
+    # Process files
+    success_count = 0
+    for file in video_files:
+        if process_file(file, args.output_dir, args.lut, args.embed_lut):
+            success_count += 1
 
     print("\nProcessing complete!")
-    print(f"Processed files: {processed_count}")
-    if error_count > 0:
-        print(f"Files with errors: {error_count}")
-        print("Please review the error messages above.")
-    else:
-        print("All files processed successfully.")
+    print(f"Successfully processed: {success_count}/{len(video_files)}")
+    if success_count < len(video_files):
+        print("Some files failed to process. Check error messages above.")
 
-    print("Output files are in the same folders as the original files.")  # Updated message
+if __name__ == "__main__":
+    main()
