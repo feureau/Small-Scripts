@@ -194,7 +194,7 @@ class VideoProcessorApp:
         self.crop_checkbox.grid(row=2, column=1, sticky=tk.W)
 
         tk.Label(self.options_frame, text="QVBR Value:").grid(row=3, column=0, sticky=tk.W)
-        self.qvbr_var = tk.StringVar(value="18")
+        self.qvbr_var = tk.StringVar(value="12")
         self.qvbr_entry = tk.Entry(self.options_frame, textvariable=self.qvbr_var, width=10)
         self.qvbr_entry.grid(row=3, column=1, sticky=tk.W)
 
@@ -1090,8 +1090,17 @@ class VideoProcessorApp:
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
+    import glob
     from tkinterdnd2 import TkinterDnD
-    initial_files = sys.argv[1:] if len(sys.argv) > 1 else []
+
+    # Expand wildcards in arguments (works on Windows/Linux)
+    expanded_files = []
+    for arg in sys.argv[1:]:
+        if '*' in arg or '?' in arg:
+            expanded_files.extend(glob.glob(arg, recursive=False))
+        else:
+            expanded_files.append(arg)
+
     root = TkinterDnD.Tk()
-    app = VideoProcessorApp(root, initial_files)
+    app = VideoProcessorApp(root, expanded_files)
     root.mainloop()
