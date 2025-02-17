@@ -194,7 +194,7 @@ class VideoProcessorApp:
         self.crop_checkbox.grid(row=2, column=1, sticky=tk.W)
 
         tk.Label(self.options_frame, text="QVBR Value:").grid(row=3, column=0, sticky=tk.W)
-        self.qvbr_var = tk.StringVar(value="12")
+        self.qvbr_var = tk.StringVar(value="6")
         self.qvbr_entry = tk.Entry(self.options_frame, textvariable=self.qvbr_var, width=10)
         self.qvbr_entry.grid(row=3, column=1, sticky=tk.W)
 
