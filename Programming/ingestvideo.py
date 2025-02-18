@@ -686,7 +686,7 @@ def process_video(file_path, settings):
         "--chapter-copy",
         "--key-on-chapter",
         "--sub-copy",
-        "--tier", "1",
+        # "--tier", "1",
         "--profile", "high",
         "--multipass", "2pass-full",
         "--aq",
