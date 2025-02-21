@@ -30,7 +30,7 @@ from pyannote.audio import Pipeline
 
 # ------------------- CONFIGURATION ------------------- #
 HUGGINGFACE_TOKEN = "hf_token"  # Replace with your actual HuggingFace token
-WHISPER_MODEL_SIZE = "large-v3-turbo"  # "large-v3" for better quality
+WHISPER_MODEL_SIZE = "large-v2" #"large-v3-turbo"  # "large-v3" for better quality
 BEAM_SIZE = 5
 PYANNOTE_MODEL_ID = "pyannote/speaker-diarization"  # Corrected model ID
 SUPPORTED_EXTENSIONS = {
