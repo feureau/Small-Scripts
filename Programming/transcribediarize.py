@@ -2,17 +2,7 @@
 """
 transcribe_diarize_xxl.py - GPU-optimized version using Faster Whisper XXL and Pyannote.audio
 ---------------------------------------------------------------------------------------------
-A Python script to transcribe (Faster Whisper XXL) and diarize (Pyannote.audio)
-audio/video files. It automatically:
- - Transcribes with Faster Whisper XXL
- - Extracts audio from container files (e.g., .mkv) to a temp .wav if needed
- - Diarizes with pyannote/speaker-diarization
- - Combines the results into an SRT with speaker labels
-
-Features:
- - Command-line usage or drag-and-drop on Windows
- - If no args are given, prompts for file/folder
- - Outputs an SRT file in the same folder as the source
+Modified to read HuggingFace token from HF_TOKEN environment variable
 """
 
 import sys
@@ -29,24 +19,32 @@ import json
 from pyannote.audio import Pipeline
 
 # ------------------- CONFIGURATION ------------------- #
-HUGGINGFACE_TOKEN = "hf_token"  # Replace with your actual HuggingFace token
-WHISPER_MODEL_SIZE = "large-v2" #"large-v3-turbo"  # "large-v3" for better quality
+# Get token from environment variable
+HUGGINGFACE_TOKEN = os.environ.get("HF_TOKEN")
+if not HUGGINGFACE_TOKEN:
+    raise RuntimeError(
+        "HF_TOKEN environment variable not found.\n"
+        "1. Create a HuggingFace token at https://huggingface.co/settings/tokens\n"
+        "2. Accept model agreements:\n"
+        "   - https://huggingface.co/pyannote/speaker-diarization\n"
+        "   - https://huggingface.co/pyannote/segmentation\n"
+        "3. Set the token in Windows with:\n"
+        "   setx HF_TOKEN your_token_here"
+    )
+
+WHISPER_MODEL_SIZE = "large-v2"
 BEAM_SIZE = 5
-PYANNOTE_MODEL_ID = "pyannote/speaker-diarization"  # Corrected model ID
+PYANNOTE_MODEL_ID = "pyannote/speaker-diarization@2.1"  # Specific versioned model
 SUPPORTED_EXTENSIONS = {
     ".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma",
     ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v"
 }
 
-# Faster Whisper XXL CLI command name
-WHISPER_XXL_CLI = "faster-whisper-xxl"  # Replace with actual CLI command name if different
-
 # ------------------ GPU ENFORCEMENT ------------------ #
-# Verify CUDA availability
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA GPU not available - required for this script")
 
-DEVICE = torch.device("cuda")  # Use torch.device instance
+DEVICE = torch.device("cuda")
 torch.cuda.empty_cache()
 
 # ----------------------------------------------------- #
