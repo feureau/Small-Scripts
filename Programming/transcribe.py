@@ -28,10 +28,10 @@ WHISPER_FLAGS = [
     "--max_line_count", "1",              # Max number of lines per subtitle
     "--ff_rnndn_xiph",
     "--ff_speechnorm",
-    "--hallucination_silence_threshold", "1",  # Reduces false positive transcriptions by ignoring long silences
-    "--condition_on_previous_text", "False",
+    #"--hallucination_silence_threshold", "1",  # Reduces false positive transcriptions by ignoring long silences
+    #"--condition_on_previous_text", "False",
     #"--reprompt", "0",
-    "--word_timestamps", "True",                 # Enables word-level timestamps for better alignment
+    #"--word_timestamps", "True",                 # Enables word-level timestamps for better alignment
     #"--no_speech_strict_lvl", "1"         # Stricter filtering for non-speech segments
 ]
 
