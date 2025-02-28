@@ -864,7 +864,7 @@ if __name__ == "__main__":
     # HDR check
     if cp_first == "bt2020" or cs_first == "bt2020nc":
         default_hdr = False
-        limit_value = "64"
+        limit_value = "128"
     else:
         default_hdr = True
         limit_value = "24"
