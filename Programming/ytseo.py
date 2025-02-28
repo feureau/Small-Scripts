@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
 import tkinter.messagebox
+import pycountry # For language codes
 
 
 ################################################################################
@@ -22,8 +23,8 @@ import tkinter.messagebox
 # 1. Google API Key Environment Variable Name
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
 
-# 2. User Prompt Template - **REVERTED TO FULL PROMPT**
-USER_PROMPT_TEMPLATE = """_You are a YouTube SEO expert. Your task is to generate SEO-optimized content for a YouTube video based on a provided input, which may be a topic or a subtitle (.srt) file. The final output must include the following elements: Title, Description, Hashtags, and Tags. If the input is an SRT file, use it to create a separate chapter timestamp section—do not scatter SRT timestamps within the narrative description. Follow these instructions precisely:_
+# 2. User Prompt Template - **REVISED TO INCLUDE FULL LANGUAGE NAME**
+USER_PROMPT_TEMPLATE = """_You are a YouTube SEO expert. Your task is to generate SEO-optimized content in **{target_language_name}** for a YouTube video based on a provided input, which may be a topic or a subtitle (.srt) file. The final output must include the following elements in **{target_language_name}**: Title, Description, Hashtags, and Tags. If the input is an SRT file, use it to create a separate chapter timestamp section—do not scatter SRT timestamps within the narrative description. Follow these instructions precisely:_
 
 **1. Content Extraction and Analysis:**
 *   **For Subtitle Files (.srt):**
@@ -31,48 +32,51 @@ USER_PROMPT_TEMPLATE = """_You are a YouTube SEO expert. Your task is to generat
     *   Do not integrate these timestamps directly into the narrative description. Instead, analyze the SRT to identify key moments that serve as chapter markers.
     *   Identify the central themes, key phrases, and recurring keywords that accurately reflect the subject matter.
 *   **For Topics:**
-    *   Research to pinpoint the primary subject, emerging trends, and popular search queries.
-    *   Choose keywords that are highly relevant and truly reflective of the input.
+    *   Research to pinpoint the primary subject, emerging trends, and popular search queries in **{target_language_name}**.
+    *   Choose keywords that are highly relevant and truly reflective of the input in **{target_language_name}**.
 
 **2. Title Creation:**
-*   Generate a concise, engaging title that accurately reflects the video's content as derived from the input.
-    *   The title must be between 60 and 70 characters and incorporate high-value keywords.
+*   Generate a concise, engaging title in **{target_language_name}** that accurately reflects the video's content as derived from the input.
+    *   The title must be between 60 and 70 characters and incorporate high-value keywords in **{target_language_name}**.
     *   Avoid adding extraneous humor or creative embellishments that are not present in the input; the title should remain faithful to the source material.
 
 **3. Description Writing:**
-*   Write a continuous, flowing narrative description that is **about 4000 characters long**.
+*   Write a continuous, flowing narrative description in **{target_language_name}** that is **about 4000 characters long**.
     *   This narrative must be a single uninterrupted block of text with no bullet points, numbered lists, or any list formatting.
-    *   The narrative may draw upon relevant material, insights, or commentary in addition to the SRT content, so long as it accurately reflects the video's subject matter and tone.
-    *   Do not intersperse the original SRT timestamps within this narrative. Instead, use the narrative to provide an in-depth, detailed summary of the video’s content—including key themes, context, and analysis—and conclude with a strong call-to-action encouraging viewers to like, comment, subscribe, or explore related content.
+    *   The narrative may draw upon relevant material, insights, or commentary in addition to the SRT content, so long as it accurately reflects the video's subject matter and tone in **{target_language_name}**.
+    *   Do not intersperse the original SRT timestamps within this narrative. Instead, use the narrative to provide an in-depth, detailed summary of the video’s content—including key themes, context, and analysis—and conclude with a strong call-to-action encouraging viewers to like, comment, subscribe, or explore related content in **{target_language_name}**.
     *   **Chapter Timestamps Section:**
         *   After the 4000-character narrative, append a separate section titled **"📌 Timestamps:"**.
-        *   In this section, list the key chapter timestamps extracted from the SRT file (e.g., “00:00 - [Chapter Title]”).
+        *   In this section, list the key chapter timestamps extracted from the SRT file (e.g., “00:00 - [Chapter Title]”) in **{target_language_name}**.  **(Note: Timestamps themselves remain in original format)**
         *   Format each timestamp on its own line so that it serves as a clear chapter marker, and ensure that this section is clearly separate from the main narrative.
         *   This chapter timestamp section is supplementary and does not count towards the 4000-character narrative.
 
 **4. Hashtag Generation:**
-*   Generate 10–15 relevant and trending hashtags that directly correspond to the themes and topics in the input.
-    *   Ensure the hashtags include a mix of broad and niche terms to maximize reach.
+*   Generate 10–15 relevant and trending hashtags in **{target_language_name}** that directly correspond to the themes and topics in the input.
+    *   Ensure the hashtags include a mix of broad and niche terms to maximize reach in **{target_language_name}** contexts.
     *   Present the hashtags in a clearly defined section after the description (outside of the 4000-character narrative).
 
 **5. Tag List Creation:**
-*   Produce an SEO-optimized, comma-separated list of tags that incorporates variations of the primary keywords, related phrases, and common search queries.
-    *   **Important:** In addition to the primary keywords and phrases, include common misspellings of those terms to capture a broader search audience.
+*   Produce an SEO-optimized, comma-separated list of tags in **{target_language_name}** that incorporates variations of the primary keywords, related phrases, and common search queries in **{target_language_name}**.
+    *   **Important:** In addition to the primary keywords and phrases, include common misspellings of those terms in **{target_language_name}** to capture a broader search audience.
     *   The entire tag list must not exceed 500 characters in total.
 
 **6. Output Format:**
-*   Present your final output with clearly labeled sections as follows:
+*   Present your final output with clearly labeled sections as follows in **{target_language_name}**:
     *   **Title:**
     *   **Description:**
-        *   First, the 4000-character continuous narrative; then, on a new line, the separate **"📌 Timestamps:"** section listing chapter markers.
+        *   First, the 4000-character continuous narrative in **{target_language_name}**; then, on a new line, the separate **"📌 Timestamps:"** section listing chapter markers in **{target_language_name}**.
     *   **Hashtags:**
     *   **Tags:**
 *   Each section must be formatted exactly as instructed.
 
-_Every element of your output must strictly adhere to these instructions. The final result must faithfully reflect the input by preserving its key elements and themes while generating a description of about 4000 characters (using drawn relevant material as needed) and a separate chapter timestamp section. The tags must include common misspellings to help capture additional search traffic. This output should be fully optimized for YouTube SEO, ensuring maximum visibility and engagement.”""" + "\n\n" + "Full SRT file content:\n{srt_content}"
+_Every element of your output must strictly adhere to these instructions. The final result must faithfully reflect the input by preserving its key elements and themes while generating a description of about 4000 characters (using drawn relevant material as needed) and a separate chapter timestamp section. The tags must include common misspellings to help capture additional search traffic. This output should be fully optimized for YouTube SEO in **{target_language_name}**, ensuring maximum visibility and engagement.”""" + "\n\n" + "Full SRT file content:\n{srt_content}"
 
-# 4. Output file extension for SEO results
-OUTPUT_FILE_EXTENSION = ".txt"
+# 3. Default target language - NEW
+DEFAULT_TARGET_LANGUAGE = "en" # Default target language
+
+# 4. Output file extension for SEO results - NOT USED ANYMORE
+# OUTPUT_FILE_EXTENSION = ".txt"
 RAW_OUTPUT_FILE_EXTENSION = "_raw_response.txt" # Extension for raw API response files
 
 # 5. Default Google Gemini Models - Customizable list
@@ -86,14 +90,14 @@ REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
 # 7. Output Subfolder Name
-OUTPUT_SUBFOLDER_NAME = "seo_outputs"
-RAW_OUTPUT_SUBFOLDER_NAME = "raw_api_responses" # Subfolder for raw API responses
+# OUTPUT_SUBFOLDER_NAME = "seo_outputs" # NOT USED ANYMORE
+RAW_OUTPUT_SUBFOLDER_NAME = "ytSEO" # Subfolder for raw API responses - RENAMED to ytSEO
 
 
 # --- Prompts and Suffixes ---
 PROMPTS = {"seo_prompt": USER_PROMPT_TEMPLATE} # Simplified prompts for SEO script
 DEFAULT_PROMPT_KEY = "seo_prompt"
-PROMPT_SUFFIX_MAP = {"seo_prompt": "_seo"}
+PROMPT_SUFFIX_MAP = {} # Empty map as suffixes are not needed if SEO output is not saved to file
 
 
 ################################################################################
@@ -105,7 +109,20 @@ PROMPT_SUFFIX_MAP = {"seo_prompt": "_seo"}
 last_request_time = None
 
 
-# --- Helper Functions (No changes from previous response) ---
+# --- Helper Functions (Modified construct_prompt) ---
+
+def get_language_name_from_code(language_code):
+    """Gets the full language name from a two-digit language code using pycountry."""
+    try:
+        lang = pycountry.languages.get(alpha_2=language_code)
+        if lang:
+            return lang.name
+        else:
+            return None
+    except KeyError:
+        return None
+
+
 def read_srt_file(srt_filepath):
     """Reads an SRT file and extracts dialogue text and timestamps."""
     dialogue_text = []
@@ -152,10 +169,15 @@ def read_raw_srt_content(srt_filepath):
         return None
 
 
-def construct_prompt(srt_content, timestamps, user_prompt_template):
-    """Constructs the full prompt for the LLM API."""
+def construct_prompt(srt_content, timestamps, user_prompt_template, language_code=DEFAULT_TARGET_LANGUAGE): # Added language_code
+    """Constructs the full prompt for the LLM API, incorporating target language NAME."""
     srt_text_for_prompt = srt_content if srt_content else "No subtitle content found."
     full_prompt = user_prompt_template.replace("{srt_content}", srt_text_for_prompt)
+    language_name = get_language_name_from_code(language_code) # Get full language name
+    if language_name:
+        full_prompt = full_prompt.replace("{target_language_name}", language_name) # Replace with language name
+    else: # Fallback to code if name not found (shouldn't happen with valid codes)
+        full_prompt = full_prompt.replace("{target_language_name}", language_code) # Fallback to language code
     return full_prompt
 
 def call_generative_ai_api(prompt, api_key, model_name=DEFAULT_GEMINI_MODEL, stream_output=False):
@@ -298,13 +320,13 @@ def save_raw_api_response(api_response_text, srt_filepath, output_folder):
         print(f"Error details: {e}")
 
 
-def process_srt_and_get_seo(srt_filepath, api_key, user_prompt_template, model_name=DEFAULT_GEMINI_MODEL, stream_output=False):
-    """Processes a single SRT file and returns the formatted SEO output."""
+def process_srt_and_get_seo(srt_filepath, api_key, user_prompt_template, model_name=DEFAULT_GEMINI_MODEL, stream_output=False, language_code=DEFAULT_TARGET_LANGUAGE): # Added language_code to function signature
+    """Processes a single SRT file and returns the formatted SEO output, now with language name in prompt."""
     raw_srt_content = read_raw_srt_content(srt_filepath)
     if raw_srt_content is None:
         return None
 
-    prompt = construct_prompt(raw_srt_content, None, user_prompt_template)
+    prompt = construct_prompt(raw_srt_content, None, user_prompt_template, language_code=language_code) # Pass language_code to construct_prompt
     api_response_text = call_generative_ai_api(prompt, api_key, model_name=model_name, stream_output=stream_output)
 
     save_raw_api_response(api_response_text, srt_filepath, RAW_OUTPUT_SUBFOLDER_NAME) # Save raw response here
@@ -328,9 +350,10 @@ def use_gui(command_line_files=None, args=None):
     engine_var = tk.StringVar(value=args.engine if args and args.engine else DEFAULT_ENGINE)
     model_var = tk.StringVar(value=args.model if args and args.model else DEFAULT_GEMINI_MODEL)
     prompt_var = tk.StringVar(value=args.prompt_key if args and args.prompt_key else DEFAULT_PROMPT_KEY)
-    output_dir_var = tk.StringVar(value=args.output if args and args.output else OUTPUT_SUBFOLDER_NAME)
-    suffix_var = tk.StringVar(value=args.suffix if args and args.suffix else PROMPT_SUFFIX_MAP.get(DEFAULT_PROMPT_KEY, OUTPUT_FILE_EXTENSION[:-4]))
+    output_dir_var = tk.StringVar(value=args.output if args and args.output else RAW_OUTPUT_SUBFOLDER_NAME) # Changed default to RAW_OUTPUT_SUBFOLDER_NAME
+    suffix_var = tk.StringVar(value=args.suffix if args and args.suffix else PROMPT_SUFFIX_MAP.get(DEFAULT_PROMPT_KEY, "")) # Suffix not really used, set default to empty string
     stream_output_var = tk.BooleanVar(value=args.stream if args and args.stream else False)
+    language_var = tk.StringVar(value=args.language if args and args.language else DEFAULT_TARGET_LANGUAGE) # NEW: Language var
 
     # --- GUI Layout (including Model and all options) ---
     files_frame = ttk.Frame(window, padding="10 10 10 10"); files_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -340,31 +363,37 @@ def use_gui(command_line_files=None, args=None):
     tk.Button(file_buttons_frame, text="Add Files", command=lambda: add_files_to_list(files_list_var, file_listbox, window)).grid(row=0, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Clear All", command=lambda: files_list_var.set([]), width=10).grid(row=1, column=0, sticky=tk.W, pady=2)
 
+    lang_frame = ttk.Frame(window, padding="10 10 10 10") # NEW: Language Frame
+    lang_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    tk.Label(lang_frame, text="Language Code:").grid(row=0, column=0, sticky=tk.W) # NEW: Language Label
+    lang_entry = ttk.Entry(lang_frame, textvariable=language_var, width=30) # NEW: Language Entry
+    lang_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    tk.Label(lang_frame, text="(e.g., en, fr, id)").grid(row=0, column=2, sticky=tk.W) # NEW: Language Hint
 
-    engine_frame = ttk.Frame(window, padding="10 10 10 10"); engine_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    engine_frame = ttk.Frame(window, padding="10 10 10 10"); engine_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
     tk.Label(engine_frame, text="Engine:").grid(row=0, column=0, sticky=tk.W)
     engine_options = ['google', 'ollama'] # Add 'ollama' if you intend to support it in GUI
     engine_combo = ttk.Combobox(engine_frame, textvariable=engine_var, values=engine_options, state="readonly"); engine_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
-    model_frame = ttk.Frame(window, padding="10 10 10 10"); model_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    model_frame = ttk.Frame(window, padding="10 10 10 10"); model_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
     tk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky=tk.W)
     model_combo = ttk.Combobox(model_frame, textvariable=model_var, values=DEFAULT_GEMINI_MODELS, state="readonly"); model_combo.grid(row=0, column=1, sticky=(tk.W, tk.E)) # Populate with Gemini models initially
 
-    prompt_frame = ttk.Frame(window, padding="10 10 10 10"); prompt_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    prompt_frame = ttk.Frame(window, padding="10 10 10 10"); prompt_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
     tk.Label(prompt_frame, text="Prompt:").grid(row=0, column=0, sticky=tk.W)
     prompt_options = list(PROMPTS.keys())
     prompt_combo = ttk.Combobox(prompt_frame, textvariable=prompt_var, values=prompt_options, state="readonly"); prompt_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
-    output_frame = ttk.Frame(window, padding="10 10 10 10"); output_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    tk.Label(output_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
+    output_frame = ttk.Frame(window, padding="10 10 10 10"); output_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
+    tk.Label(output_frame, text="Output Dir (Raw Responses):").grid(row=0, column=0, sticky=tk.W) # Updated label
     output_entry = ttk.Entry(output_frame, textvariable=output_dir_var, width=50); output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
     tk.Button(output_frame, text="Browse Dir", command=lambda: output_dir_var.set(filedialog.askdirectory())).grid(row=0, column=2, sticky=tk.W)
 
-    suffix_frame = ttk.Frame(window, padding="10 10 10 10"); suffix_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    tk.Label(suffix_frame, text="Suffix:").grid(row=0, column=0, sticky=tk.W)
-    suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, width=20); suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    suffix_frame = ttk.Frame(window, padding="10 10 10 10"); suffix_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
+    tk.Label(suffix_frame, text="Suffix (Not Used):").grid(row=0, column=0, sticky=tk.W) # Indicate suffix is not used
+    suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, width=20, state='disabled'); suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E)) # Disabled suffix entry
 
-    stream_frame = ttk.Frame(window, padding="10 10 10 10"); stream_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    stream_frame = ttk.Frame(window, padding="10 10 10 10"); stream_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
     stream_check = ttk.Checkbutton(stream_frame, text="Stream Output", variable=stream_output_var); stream_check.grid(row=0, column=0, sticky=tk.W)
 
 
@@ -374,13 +403,14 @@ def use_gui(command_line_files=None, args=None):
         settings['model'] = model_var.get()
         settings['prompt_key'] = prompt_var.get()
         settings['output_dir'] = output_dir_var.get()
-        settings['suffix'] = suffix_var.get()
+        settings['suffix'] = suffix_var.get() # Still get suffix value, even if not used
         settings['stream_output'] = stream_output_var.get()
+        settings['language_code'] = language_var.get() # NEW: Get language code from GUI
         window.destroy()
         window.quit()
         return settings
 
-    process_button = ttk.Button(window, text="Process", command=process_from_gui); process_button.grid(row=8, column=0, columnspan=3, pady=20)
+    process_button = ttk.Button(window, text="Process", command=process_from_gui); process_button.grid(row=9, column=0, columnspan=3, pady=20) # Shifted down
 
     window.mainloop()
     return settings
@@ -403,11 +433,12 @@ def main():
     parser = argparse.ArgumentParser(description="YouTube SEO Script")
     parser.add_argument("files", nargs="*", help="Path(s) to SRT file(s)")
     parser.add_argument("-p", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=list(PROMPTS.keys()), help=f"Prompt to use. Default: '{DEFAULT_PROMPT_KEY}'.")
-    parser.add_argument("-o", "--output", dest="output", default=OUTPUT_SUBFOLDER_NAME, help=f"Output directory. Default: '{OUTPUT_SUBFOLDER_NAME}'.")
-    parser.add_argument("-s", "--suffix", dest="suffix", default=OUTPUT_FILE_EXTENSION[:-4], help=f"Suffix for output files. Default: '{OUTPUT_FILE_EXTENSION[:-4]}'.")
+    parser.add_argument("-o", "--output", dest="output", default=RAW_OUTPUT_SUBFOLDER_NAME, help=f"Output directory for raw responses. Default: '{RAW_OUTPUT_SUBFOLDER_NAME}'.") # Updated description
+    parser.add_argument("-s", "--suffix", dest="suffix", default="", help="Suffix for output files (not used in this version). Default: '' (empty string).") # Updated description
     parser.add_argument("--stream", action='store_true', default=False, help="Enable streaming output.")
     parser.add_argument("-e", "--engine", dest="engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help=f"AI engine to use: google or ollama.") # Engine command line argument
     parser.add_argument("-m", "--model", "--model", dest="model", default=DEFAULT_GEMINI_MODEL, help=f"Model to use (engine specific). Default Google Gemini model: '{DEFAULT_GEMINI_MODEL}'.") # Model arg
+    parser.add_argument("-l", "--language", dest="language", default=DEFAULT_TARGET_LANGUAGE, help=f"Target language code (e.g., en, fr, id). Default: '{DEFAULT_TARGET_LANGUAGE}'.") # NEW: Language argument
 
     args = parser.parse_args()
 
@@ -426,50 +457,37 @@ def main():
     srt_file_patterns = gui_settings.get('files', [])
     prompt_key = gui_settings.get('prompt_key', args.prompt_key) # GUI setting or CLI arg
     output_folder_base = gui_settings.get('output_dir', args.output) # GUI setting or CLI arg
-    suffix = gui_settings.get('suffix', args.suffix) # GUI setting or CLI arg
+    suffix = gui_settings.get('suffix', args.suffix) # GUI setting or CLI arg - not used
     stream_output = gui_settings.get('stream_output', args.stream) # GUI setting or CLI arg
     engine = gui_settings.get('engine', args.engine) # Get engine from GUI or CLI
     model_name = gui_settings.get('model', args.model) # Get model from GUI or CLI
+    language_code = gui_settings.get('language_code', args.language) # NEW: Get language code from GUI or CLI
 
-    raw_output_folder_path = os.path.join(os.getcwd(), RAW_OUTPUT_SUBFOLDER_NAME) # Define raw output folder path
+    raw_output_folder_path = os.path.join(os.getcwd(), RAW_OUTPUT_SUBFOLDER_NAME) # Define raw output folder path - now ytSEO
     os.makedirs(raw_output_folder_path, exist_ok=True) # Create raw output folder if it doesn't exist
 
 
-    output_folder_path = os.path.join(os.getcwd(), output_folder_base)
-    os.makedirs(output_folder_path, exist_ok=True)
+    # output_folder_path = os.path.join(os.getcwd(), output_folder_base) # No SEO output folder anymore
+    # os.makedirs(output_folder_path, exist_ok=True) # No SEO output folder anymore
 
     processed_files = 0
     for pattern in srt_file_patterns:
         for srt_filepath in glob.glob(pattern):
-            print(f"Processing SRT file: {srt_filepath}")
-            seo_output = process_srt_and_get_seo(srt_filepath, api_key, PROMPTS.get(prompt_key, USER_PROMPT_TEMPLATE), model_name=model_name, stream_output=stream_output) # Use model_name from settings
+            language_name = get_language_name_from_code(language_code) or language_code # Get name or fallback to code
+            print(f"Processing SRT file: {srt_filepath}, Language: {language_name} ({language_code})") # NEW: Print language name
+            seo_output = process_srt_and_get_seo(srt_filepath, api_key, PROMPTS.get(prompt_key, USER_PROMPT_TEMPLATE), model_name=model_name, stream_output=stream_output, language_code=language_code) # Pass language_code
             if seo_output:
-                # --- File saving functionality for SEO output is still REMOVED ---
-                # output_filename_base = os.path.splitext(os.path.basename(srt_filepath))[0]
-                # output_filename = output_filename_base + OUTPUT_FILE_EXTENSION
-                # output_filepath = os.path.join(output_folder_path, output_filename)
-                # print("--- DEBUG: Value of seo_output just before writing to file ---")
-                # print(seo_output)
-                # print("--- DEBUG: End of seo_output value ---")
-                # try: # --- Rewritten File Saving with Error Handling ---
-                #     with open(output_filepath, 'w', encoding='utf-8') as outfile:
-                #         outfile.write(seo_output)
-                #     print(f"SEO output saved to: {output_filepath}")
-                #     processed_files += 1
-                # except Exception as e:
-                #     print(f"**ERROR: Could not write to file: {output_filepath}**") # More explicit error message
-                #     print(f"Error details: {e}") # Print specific exception details
-
-                print("--- DEBUG: SEO Output (Not Saved to File) ---") # Indicate that SEO output is not being saved
-                print(seo_output) # Still print the SEO output to console for inspection
-                print("--- DEBUG: End of SEO Output ---")
+                # --- DEBUG: SEO Output (Printed to Console - NOT Saved to File) --- # REMOVED
+                # print("--- DEBUG: SEO Output (Printed to Console - NOT Saved to File) ---") # Indicate that SEO output is not being saved
+                # print(seo_output) # Still print the SEO output to console for inspection
+                # print("--- DEBUG: End of SEO Output ---") # REMOVED
                 processed_files += 1 # Still count as processed (even if not saved)
             else:
                 print(f"Failed to process SRT file: {srt_filepath}")
             print("-" * 50)
 
     if processed_files > 0:
-        print("SRT processing complete (SEO files NOT saved, Raw API responses SAVED).") # Indicate files are not saved in summary message
+        print(f"SRT processing complete. Raw API responses saved to '{RAW_OUTPUT_SUBFOLDER_NAME}' folder. SEO output printed to console but NOT saved to files.") # Updated summary message
     else:
         print("No SRT files processed.")
 
