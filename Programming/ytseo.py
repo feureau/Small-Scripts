@@ -77,7 +77,8 @@ DEFAULT_TARGET_LANGUAGE = "en" # Default target language
 
 # 4. Output file extension for SEO results - NOT USED ANYMORE
 # OUTPUT_FILE_EXTENSION = ".txt"
-RAW_OUTPUT_FILE_EXTENSION = "_raw_response.txt" # Extension for raw API response files
+RAW_OUTPUT_FILE_EXTENSION = "_raw_response.txt" # Default extension for raw API response files
+DEFAULT_RAW_OUTPUT_SUFFIX = "_raw_response" # Default suffix for raw API response files - NEW
 
 # 5. Default Google Gemini Models - Customizable list
 DEFAULT_GEMINI_MODELS = ["gemini-2.0-pro-exp-02-05","gemini-2.0-flash-thinking-exp-01-21","gemini-2.0-flash-exp", "gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05"]
@@ -298,8 +299,8 @@ def format_output(seo_data, timestamps):
 """
     return formatted_output
 
-def save_raw_api_response(api_response_text, srt_filepath, output_folder):
-    """Saves the raw API response to a text file."""
+def save_raw_api_response(api_response_text, srt_filepath, output_folder, output_suffix=DEFAULT_RAW_OUTPUT_SUFFIX): # Added output_suffix
+    """Saves the raw API response to a text file with customizable suffix."""
     if not api_response_text:
         print("Debug: save_raw_api_response - No API response text to save.")
         return
@@ -308,7 +309,7 @@ def save_raw_api_response(api_response_text, srt_filepath, output_folder):
     os.makedirs(raw_output_folder_path, exist_ok=True)
 
     output_filename_base = os.path.splitext(os.path.basename(srt_filepath))[0]
-    output_filename = output_filename_base + RAW_OUTPUT_FILE_EXTENSION
+    output_filename = output_filename_base + output_suffix + RAW_OUTPUT_FILE_EXTENSION # Use output_suffix
     output_filepath = os.path.join(raw_output_folder_path, output_filename)
 
     try:
@@ -320,8 +321,8 @@ def save_raw_api_response(api_response_text, srt_filepath, output_folder):
         print(f"Error details: {e}")
 
 
-def process_srt_and_get_seo(srt_filepath, api_key, user_prompt_template, model_name=DEFAULT_GEMINI_MODEL, stream_output=False, language_code=DEFAULT_TARGET_LANGUAGE): # Added language_code to function signature
-    """Processes a single SRT file and returns the formatted SEO output, now with language name in prompt."""
+def process_srt_and_get_seo(srt_filepath, api_key, user_prompt_template, model_name=DEFAULT_GEMINI_MODEL, stream_output=False, language_code=DEFAULT_TARGET_LANGUAGE, output_suffix=DEFAULT_RAW_OUTPUT_SUFFIX): # Added output_suffix
+    """Processes a single SRT file and returns the formatted SEO output, now with language name in prompt and output suffix."""
     raw_srt_content = read_raw_srt_content(srt_filepath)
     if raw_srt_content is None:
         return None
@@ -329,7 +330,7 @@ def process_srt_and_get_seo(srt_filepath, api_key, user_prompt_template, model_n
     prompt = construct_prompt(raw_srt_content, None, user_prompt_template, language_code=language_code) # Pass language_code to construct_prompt
     api_response_text = call_generative_ai_api(prompt, api_key, model_name=model_name, stream_output=stream_output)
 
-    save_raw_api_response(api_response_text, srt_filepath, RAW_OUTPUT_SUBFOLDER_NAME) # Save raw response here
+    save_raw_api_response(api_response_text, srt_filepath, RAW_OUTPUT_SUBFOLDER_NAME, output_suffix=output_suffix) # Save raw response here, pass output_suffix
 
     seo_data = parse_api_response(api_response_text)
     if seo_data:
@@ -351,7 +352,7 @@ def use_gui(command_line_files=None, args=None):
     model_var = tk.StringVar(value=args.model if args and args.model else DEFAULT_GEMINI_MODEL)
     prompt_var = tk.StringVar(value=args.prompt_key if args and args.prompt_key else DEFAULT_PROMPT_KEY)
     output_dir_var = tk.StringVar(value=args.output if args and args.output else RAW_OUTPUT_SUBFOLDER_NAME) # Changed default to RAW_OUTPUT_SUBFOLDER_NAME
-    suffix_var = tk.StringVar(value=args.suffix if args and args.suffix else PROMPT_SUFFIX_MAP.get(DEFAULT_PROMPT_KEY, "")) # Suffix not really used, set default to empty string
+    suffix_var = tk.StringVar(value=args.suffix if args and args.suffix else DEFAULT_RAW_OUTPUT_SUFFIX) # Suffix now populated with default suffix
     stream_output_var = tk.BooleanVar(value=args.stream if args and args.stream else False)
     language_var = tk.StringVar(value=args.language if args and args.language else DEFAULT_TARGET_LANGUAGE) # NEW: Language var
 
@@ -390,8 +391,8 @@ def use_gui(command_line_files=None, args=None):
     tk.Button(output_frame, text="Browse Dir", command=lambda: output_dir_var.set(filedialog.askdirectory())).grid(row=0, column=2, sticky=tk.W)
 
     suffix_frame = ttk.Frame(window, padding="10 10 10 10"); suffix_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
-    tk.Label(suffix_frame, text="Suffix (Not Used):").grid(row=0, column=0, sticky=tk.W) # Indicate suffix is not used
-    suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, width=20, state='disabled'); suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E)) # Disabled suffix entry
+    tk.Label(suffix_frame, text="Raw Response Suffix:").grid(row=0, column=0, sticky=tk.W) # Updated label for suffix
+    suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, width=20, state='enabled'); suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E)) # Enabled suffix entry
 
     stream_frame = ttk.Frame(window, padding="10 10 10 10"); stream_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S)) # Shifted down
     stream_check = ttk.Checkbutton(stream_frame, text="Stream Output", variable=stream_output_var); stream_check.grid(row=0, column=0, sticky=tk.W)
@@ -403,7 +404,7 @@ def use_gui(command_line_files=None, args=None):
         settings['model'] = model_var.get()
         settings['prompt_key'] = prompt_var.get()
         settings['output_dir'] = output_dir_var.get()
-        settings['suffix'] = suffix_var.get() # Still get suffix value, even if not used
+        settings['suffix'] = suffix_var.get() # Get suffix from GUI
         settings['stream_output'] = stream_output_var.get()
         settings['language_code'] = language_var.get() # NEW: Get language code from GUI
         window.destroy()
@@ -434,7 +435,7 @@ def main():
     parser.add_argument("files", nargs="*", help="Path(s) to SRT file(s)")
     parser.add_argument("-p", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=list(PROMPTS.keys()), help=f"Prompt to use. Default: '{DEFAULT_PROMPT_KEY}'.")
     parser.add_argument("-o", "--output", dest="output", default=RAW_OUTPUT_SUBFOLDER_NAME, help=f"Output directory for raw responses. Default: '{RAW_OUTPUT_SUBFOLDER_NAME}'.") # Updated description
-    parser.add_argument("-s", "--suffix", dest="suffix", default="", help="Suffix for output files (not used in this version). Default: '' (empty string).") # Updated description
+    parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help=f"Suffix for raw output files. Default: '{DEFAULT_RAW_OUTPUT_SUFFIX}'.") # Updated description, default to DEFAULT_RAW_OUTPUT_SUFFIX
     parser.add_argument("--stream", action='store_true', default=False, help="Enable streaming output.")
     parser.add_argument("-e", "--engine", dest="engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help=f"AI engine to use: google or ollama.") # Engine command line argument
     parser.add_argument("-m", "--model", "--model", dest="model", default=DEFAULT_GEMINI_MODEL, help=f"Model to use (engine specific). Default Google Gemini model: '{DEFAULT_GEMINI_MODEL}'.") # Model arg
@@ -457,7 +458,7 @@ def main():
     srt_file_patterns = gui_settings.get('files', [])
     prompt_key = gui_settings.get('prompt_key', args.prompt_key) # GUI setting or CLI arg
     output_folder_base = gui_settings.get('output_dir', args.output) # GUI setting or CLI arg
-    suffix = gui_settings.get('suffix', args.suffix) # GUI setting or CLI arg - not used
+    suffix = gui_settings.get('suffix', args.suffix) # Get suffix from GUI setting or CLI arg
     stream_output = gui_settings.get('stream_output', args.stream) # GUI setting or CLI arg
     engine = gui_settings.get('engine', args.engine) # Get engine from GUI or CLI
     model_name = gui_settings.get('model', args.model) # Get model from GUI or CLI
@@ -475,12 +476,8 @@ def main():
         for srt_filepath in glob.glob(pattern):
             language_name = get_language_name_from_code(language_code) or language_code # Get name or fallback to code
             print(f"Processing SRT file: {srt_filepath}, Language: {language_name} ({language_code})") # NEW: Print language name
-            seo_output = process_srt_and_get_seo(srt_filepath, api_key, PROMPTS.get(prompt_key, USER_PROMPT_TEMPLATE), model_name=model_name, stream_output=stream_output, language_code=language_code) # Pass language_code
+            seo_output = process_srt_and_get_seo(srt_filepath, api_key, PROMPTS.get(prompt_key, USER_PROMPT_TEMPLATE), model_name=model_name, stream_output=stream_output, language_code=language_code, output_suffix=suffix) # Pass suffix to process_srt_and_get_seo
             if seo_output:
-                # --- DEBUG: SEO Output (Printed to Console - NOT Saved to File) --- # REMOVED
-                # print("--- DEBUG: SEO Output (Printed to Console - NOT Saved to File) ---") # Indicate that SEO output is not being saved
-                # print(seo_output) # Still print the SEO output to console for inspection
-                # print("--- DEBUG: End of SEO Output ---") # REMOVED
                 processed_files += 1 # Still count as processed (even if not saved)
             else:
                 print(f"Failed to process SRT file: {srt_filepath}")
