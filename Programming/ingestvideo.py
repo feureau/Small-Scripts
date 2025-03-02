@@ -581,7 +581,7 @@ def process_video(file_path, settings):
         "--sub-copy",
         "--bframes","4",
         "--tf-level","4",
-        "--split-enc","auto_forced",
+        "--split-enc","forced_4",
         # "--tier", "1",
         "--profile", "high",
         "--multipass", "2pass-full",
