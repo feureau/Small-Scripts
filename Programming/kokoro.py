@@ -4,6 +4,7 @@ import glob
 import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from datetime import datetime
 
 KOKORO_PATH = r"F:\AI\kokoro-tts\kokoro.bat"
 
@@ -82,12 +83,14 @@ class KokoroGUI:
         self.lang_dropdown.bind("<<ComboboxSelected>>", self.update_lang_code)
 
         ttk.Label(voice_frame, text="Speed:").grid(row=0, column=4, padx=5, sticky="w")
-        self.speed_var = tk.DoubleVar(value=1.0)
-        ttk.Spinbox(voice_frame, from_=0.5, to=2.0, increment=0.1, textvariable=self.speed_var, width=5).grid(row=0, column=5, padx=5)
+        self.speed_var = tk.DoubleVar(value=0.8)
+        ttk.Spinbox(voice_frame, from_=0.5, to=2.0, increment=0.1, 
+                   textvariable=self.speed_var, width=5).grid(row=0, column=5, padx=5)
 
         ttk.Label(voice_frame, text="Format:").grid(row=0, column=6, padx=5, sticky="w")
         self.format_var = tk.StringVar(value="wav")
-        ttk.Combobox(voice_frame, textvariable=self.format_var, values=["wav", "mp3"], width=5, state="readonly").grid(row=0, column=7, padx=5)
+        ttk.Combobox(voice_frame, textvariable=self.format_var, values=["wav", "mp3"], 
+                    width=5, state="readonly").grid(row=0, column=7, padx=5)
 
         split_frame = ttk.Frame(main_frame)
         split_frame.pack(fill=tk.X, pady=5)
@@ -163,29 +166,76 @@ class KokoroGUI:
             messagebox.showerror("Error", "No files selected for processing")
             return
 
-        # Build base options
-        cmd_options = [
-            "--voice", self.voice_var.get(),
-            "--lang", self.actual_lang_code,
-            "--speed", str(self.speed_var.get()),
-            "--format", self.format_var.get()
-        ]
-        
-        if split_dir := self.split_var.get():
-            cmd_options += ["--split-output", split_dir]
+        processing_params = {
+            "voice": self.voice_var.get(),
+            "language": self.actual_lang_code,
+            "speed": str(self.speed_var.get()),
+            "format": self.format_var.get(),
+            "split_dir": self.split_var.get() or "None",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
 
         self.root.destroy()
 
         for file_path in self.file_list:
-            output_file = os.path.splitext(file_path)[0] + f".{self.format_var.get()}"
-            file_cmd = [KOKORO_PATH, file_path, output_file] + cmd_options
+            output_file = os.path.splitext(file_path)[0] + f".{processing_params['format']}"
+            log_file = output_file + ".log"
             
-            print(f"\nProcessing: {os.path.basename(file_path)}")
-            try:
-                subprocess.run(file_cmd, check=True)
-                print(f"Successfully created: {output_file}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error processing {file_path}: {e}")
+            cmd = [
+                KOKORO_PATH,
+                file_path,
+                output_file,
+                "--voice", processing_params["voice"],
+                "--lang", processing_params["language"],
+                "--speed", processing_params["speed"],
+                "--format", processing_params["format"]
+            ]
+            
+            if processing_params["split_dir"] != "None":
+                cmd += ["--split-output", processing_params["split_dir"]]
+
+            with open(log_file, "w", encoding="utf-8") as log:
+                log.write(f"Kokoro TTS Processing Log\n{'='*30}\n")
+                log.write(f"Timestamp: {processing_params['timestamp']}\n")
+                log.write(f"Input File: {file_path}\n")
+                log.write(f"Output File: {output_file}\n")
+                log.write(f"Voice: {processing_params['voice']}\n")
+                log.write(f"Language: {processing_params['language']}\n")
+                log.write(f"Speed: {processing_params['speed']}\n")
+                log.write(f"Format: {processing_params['format']}\n")
+                log.write(f"Split Directory: {processing_params['split_dir']}\n")
+                log.write("\nProcessing Details:\n")
+
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace'
+                    )
+
+                    while True:
+                        output = process.stdout.readline()
+                        if output == '' and process.poll() is not None:
+                            break
+                        if output:
+                            print(output.strip())
+                            log.write(output)
+
+                    exit_code = process.poll()
+                    if exit_code == 0:
+                        log.write("\nSUCCESSFUL PROCESSING\n")
+                        print(f"\nSuccessfully created: {output_file}")
+                        print(f"Log file created: {log_file}")
+                    else:
+                        log.write(f"\nPROCESSING FAILED (Code: {exit_code})\n")
+                        print(f"\nError processing {file_path} (Code: {exit_code})")
+
+                except Exception as e:
+                    log.write(f"\nUNEXPECTED ERROR: {str(e)}\n")
+                    print(f"\nUnexpected error: {e}")
 
 if __name__ == "__main__":
     initial_files = []
