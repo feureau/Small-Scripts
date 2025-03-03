@@ -9,10 +9,14 @@ import codecs
 import unicodedata
 from ftfy import fix_text  # Import ftfy's fix_text function
 
+# Implement environment variable for UTF-8 encoding for subprocesses
+env = os.environ.copy()
+env["PYTHONIOENCODING"] = "utf-8"
+
 def get_video_bit_depth(file_path):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=bits_per_raw_sample", "-of", "json", file_path]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env) # Added env=env
         data = json.loads(result.stdout)
         bit_depth = data.get("streams", [{}])[0].get("bits_per_raw_sample", None)
         if bit_depth is None:
@@ -25,7 +29,7 @@ def get_video_bit_depth(file_path):
 def is_hdr(file_path):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_transfer,color_primaries", "-of", "json", file_path]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env) # Added env=env
         data = json.loads(result.stdout)
         if "streams" in data and len(data["streams"]) > 0:
             stream = data["streams"][0]
@@ -43,7 +47,7 @@ def is_hdr(file_path):
 def get_input_width(file_path):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width", "-of", "csv=p=0", file_path]
     try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True, env=env) # Added env=env to check_output
         try:
             return int(output.strip().replace(',', ''))
         except ValueError:
@@ -56,7 +60,7 @@ def get_input_width(file_path):
 def get_input_height(file_path):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", file_path]
     try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True, env=env) # Added env=env to check_output
         try:
             return int(output.strip().replace(',', ''))
         except ValueError:
@@ -79,7 +83,7 @@ def cleanup_ass_content(ass_file):
             content = f.readlines()
         cleaned_lines = []
         for line in content:
-            cleaned_line = line.replace(r'\N', ' ') # Replace \N with space - or you could use '' for removal, but space is usually better
+            cleaned_line = line.replace(r'\N', ' ', 1) # Replace \N with space - or you could use '' for removal, but space is usually better
             cleaned_lines.append(cleaned_line)
 
         with open(ass_file, 'w', encoding='utf-8', newline='\n') as f: # Explicit newline for better cross-platform ASS
@@ -346,7 +350,7 @@ class VideoProcessorApp:
         cmd = ["ffprobe", "-v", "error", "-select_streams", "s", "-show_entries", "stream=index:stream_tags=language:stream_tags=title", "-of", "default=noprint_wrappers=1", file_path]
         print("Detecting subtitles with:", " ".join(cmd))
         try:
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True, env=env) # Added env=env to check_output
         except subprocess.CalledProcessError as e:
             print(f"Error detecting subtitle tracks for {file_path}: {e}")
             return
@@ -591,7 +595,7 @@ class VideoProcessorApp:
         cmd = ["ffmpeg", "-sub_charenc", "UTF-8", "-i", input_file, "-map", f"0:{sub_track_id}", "-c:s", "ass", output_ass]
         print(f"Extracting embedded subtitle track {sub_track_id} => {output_ass}")
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env) # Added env=env
             self.fix_ass_style(output_ass, final_width, final_height)
             cleanup_ass_content(output_ass) # NEW: Clean up ASS content after extraction
             print(f"Embedded track {sub_track_id} extracted as ASS => {output_ass}")
@@ -603,7 +607,7 @@ class VideoProcessorApp:
         cmd = ["ffmpeg", "-sub_charenc", "UTF-8", "-i", srt_file, "-c:s", "ass", output_ass]
         print(f"Converting external SRT => ASS: {' '.join(cmd)}")
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env) # Added env=env
             self.fix_ass_style(output_ass, final_width, final_height)
             cleanup_ass_content(output_ass) # NEW: Clean up ASS content after conversion
         except subprocess.CalledProcessError as e:
@@ -614,7 +618,7 @@ class VideoProcessorApp:
             cmd = ["ffmpeg", "-sub_charenc", "UTF-8", "-i", input_file, "-map", f"0:{sub_track_id}", "-c:s", "srt", output_srt]
             print(f"Extracting embedded track => SRT: {' '.join(cmd)}")
             try:
-                subprocess.run(cmd, check=True)
+                subprocess.run(cmd, check=True, env=env) # Added env=env
                 print(f"Extracted to {output_srt}")
             except subprocess.CalledProcessError as e:
                 print(f"[ERROR] Error extracting SRT from track {sub_track_id}: {e}") # More informative error log
@@ -746,7 +750,7 @@ class VideoProcessorApp:
         cmd = self.construct_nvencc_command(file_path, output_file, qvbr_value, eight_bit, fruc_enable, fruc_fps_target, generate_log, convert_to_hdr, ass_burn, resize_algo, target_res, do_resize)
         print("Running command:", " ".join(cmd))
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env) # Added env=env
             print(f"Done: {file_path}")
             return (output_file, final_width, final_height)
         except subprocess.CalledProcessError as e:
@@ -861,7 +865,7 @@ class VideoProcessorApp:
                "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.69,0.15,0.06", "--white-colour-coordinates", "0:0.3127,0.3290",
                "--attachment-mime-type", "application/x-cube", "--attach-file", cube_file, output_file]
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env) # Added env=env
             print(f"mkvmerge complete => {merged_output}")
             try:
                 os.remove(output_file)
