@@ -104,6 +104,7 @@ class VideoProcessorApp:
         self.current_subtitle_checkbuttons = []
         self.file_options = {}
         self.resolution_var = tk.StringVar(value="4k")
+        self.upscale_algo_var = tk.StringVar(value="nvvfx-superres")  # Default upscale algorithm
         self.eight_bit_var = tk.BooleanVar(value=False)
         self.hdr_var = tk.BooleanVar(value=False)
         self.crop_var = tk.BooleanVar(value=False)
@@ -146,13 +147,23 @@ class VideoProcessorApp:
         self.options_frame = tk.Frame(root)
         self.options_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        tk.Label(self.options_frame, text="Resolution:").grid(row=0, column=0, sticky=tk.W)
-        self.res_original_button = tk.Radiobutton(self.options_frame, text="Original", variable=self.resolution_var, value="original", command=self.apply_gui_options_to_selected_files)
+        # Resolution Options Frame
+        self.resolution_options_frame = tk.LabelFrame(self.options_frame, text="Resolution and Upscale Algorithm", padx=10, pady=5)
+        self.resolution_options_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=5)
+
+        tk.Label(self.resolution_options_frame, text="Resolution:").grid(row=0, column=0, sticky=tk.W)
+        self.res_original_button = tk.Radiobutton(self.resolution_options_frame, text="Original", variable=self.resolution_var, value="original", command=self.apply_gui_options_to_selected_files)
         self.res_original_button.grid(row=0, column=1, sticky=tk.W)
-        self.res_4k_button = tk.Radiobutton(self.options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.apply_gui_options_to_selected_files)
+        self.res_4k_button = tk.Radiobutton(self.resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.apply_gui_options_to_selected_files)
         self.res_4k_button.grid(row=0, column=2, sticky=tk.W)
-        self.res_8k_button = tk.Radiobutton(self.options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.apply_gui_options_to_selected_files)
+        self.res_8k_button = tk.Radiobutton(self.resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.apply_gui_options_to_selected_files)
         self.res_8k_button.grid(row=0, column=3, sticky=tk.W)
+
+        tk.Label(self.resolution_options_frame, text="Upscale Algorithm:").grid(row=1, column=0, sticky=tk.W, padx=(20, 0))
+        self.upscale_nvvfx_button = tk.Radiobutton(self.resolution_options_frame, text="nvvfx-superres", variable=self.upscale_algo_var, value="nvvfx-superres", command=self.apply_gui_options_to_selected_files)
+        self.upscale_nvvfx_button.grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
+        self.upscale_ngxvsr_button = tk.Radiobutton(self.resolution_options_frame, text="ngx-vsr (Quality 4)", variable=self.upscale_algo_var, value="ngx-vsr", command=self.apply_gui_options_to_selected_files)
+        self.upscale_ngxvsr_button.grid(row=1, column=2, sticky=tk.W)
 
         tk.Label(self.options_frame, text="Convert to 8 bit:").grid(row=1, column=0, sticky=tk.W)
         self.eight_bit_checkbox = tk.Checkbutton(self.options_frame, variable=self.eight_bit_var, command=self.apply_gui_options_to_selected_files)
@@ -233,6 +244,7 @@ class VideoProcessorApp:
             return
         options_state = {
             "resolution": self.resolution_var.get(),
+            "upscale_algo": self.upscale_algo_var.get(), # Added upscale_algo
             "eight_bit": self.eight_bit_var.get(),
             "hdr": self.hdr_var.get(),
             "crop": self.crop_var.get(),
@@ -289,6 +301,7 @@ class VideoProcessorApp:
                 self.detect_subtitle_tracks(file)
                 self.file_options[file] = {
                     "resolution": self.resolution_var.get(),
+                    "upscale_algo": self.upscale_algo_var.get(), # Added upscale_algo
                     "eight_bit": self.eight_bit_var.get(),
                     "hdr": self.hdr_var.get(),
                     "crop": self.crop_var.get(),
@@ -437,6 +450,7 @@ class VideoProcessorApp:
             if selected_file in self.file_options:
                 file_options = self.file_options[selected_file]
                 self.resolution_var.set(file_options.get("resolution", "4k"))
+                self.upscale_algo_var.set(file_options.get("upscale_algo", "nvvfx-superres")) # Load upscale_algo
                 self.eight_bit_var.set(file_options.get("eight_bit", False))
                 self.hdr_var.set(file_options.get("hdr", False))
                 self.crop_var.set(file_options.get("crop", False))
@@ -725,6 +739,7 @@ class VideoProcessorApp:
     def build_nvenc_command_and_run(self, file_path, output_file, ass_burn=None):
         file_options = self.file_options.get(file_path, {})
         resolution = file_options.get("resolution", self.resolution_var.get())
+        upscale_algo = file_options.get("upscale_algo", self.upscale_algo_var.get()) # Get upscale_algo
         qvbr_value = file_options.get("qvbr", self.qvbr_var.get())
         eight_bit = file_options.get("eight_bit", self.eight_bit_var.get())
         fruc_enable = file_options.get("fruc", self.fruc_var.get())
@@ -744,7 +759,7 @@ class VideoProcessorApp:
 
         final_width, final_height = self.compute_final_resolution(file_path)
         do_resize = resolution in ["4k", "8k"]
-        resize_algo = "nvvfx-superres"
+        resize_algo = upscale_algo # Use selected upscale_algo
         target_res = f"{final_width}x{final_height}"
 
         cmd = self.construct_nvencc_command(file_path, output_file, qvbr_value, eight_bit, fruc_enable, fruc_fps_target, generate_log, convert_to_hdr, ass_burn, resize_algo, target_res, do_resize)
@@ -769,7 +784,10 @@ class VideoProcessorApp:
             cmd.extend(["--vpp-colorspace", f"lut3d={self.lut_file},lut3d_interp=trilinear"])
             print(f"Applying LUT: {self.lut_file}")
         if do_resize:
-            cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
+            if resize_algo == "ngx-vsr": # Handle ngx-vsr and its quality parameter
+                cmd.extend(["--vpp-resize", f"algo={resize_algo},vsr-quality=4", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
+            else:
+                cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
 
         crop_str = self.compute_crop_value(file_path)
         if crop_str != "0,0,0,0":
