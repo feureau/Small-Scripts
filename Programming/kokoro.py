@@ -5,11 +5,9 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
-import configparser
 import ftfy  # Import the ftfy module
 import codecs  # Import the codecs module for encoding/decoding
 
-CONFIG_FILE = "config.ini"
 DEFAULT_KOKORO_PATH = r"F:\AI\kokoro-tts\kokoro.bat"
 
 class KokoroGUI:
@@ -39,24 +37,12 @@ class KokoroGUI:
         self.file_list = []
         self.actual_lang_code = "en-gb"
 
-        # Configuration handling
-        self.config = configparser.ConfigParser()
-        self.kokoro_path = self.load_kokoro_path()
+        # Use a default kokoro.bat path without a config file.
+        self.kokoro_path = DEFAULT_KOKORO_PATH
 
         self.create_widgets()
         if initial_files:
             self.add_files(initial_files)
-
-    def load_kokoro_path(self):
-        if not os.path.exists(CONFIG_FILE):
-            self.create_default_config()
-        self.config.read(CONFIG_FILE)
-        return self.config.get("Paths", "kokoro_path", fallback=DEFAULT_KOKORO_PATH)
-
-    def create_default_config(self):
-        self.config["Paths"] = {"kokoro_path": DEFAULT_KOKORO_PATH}
-        with open(CONFIG_FILE, "w") as configfile:
-            self.config.write(configfile)
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root)
@@ -69,7 +55,7 @@ class KokoroGUI:
         self.path_var = tk.StringVar(value=self.kokoro_path)
         path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=50)
         path_entry.grid(row=0, column=1, padx=5, sticky="ew")
-        path_frame.columnconfigure(1, weight=1) # Make entry expand
+        path_frame.columnconfigure(1, weight=1)
 
         def browse_kokoro_path():
             filepath = filedialog.askopenfilename(
@@ -78,7 +64,7 @@ class KokoroGUI:
             )
             if filepath:
                 self.path_var.set(filepath)
-                self.save_kokoro_path()
+                self.kokoro_path = filepath
 
         ttk.Button(path_frame, text="Browse", command=browse_kokoro_path).grid(row=0, column=2, padx=5)
 
@@ -90,8 +76,8 @@ class KokoroGUI:
         self.listbox.configure(yscrollcommand=scrollbar.set)
         self.listbox.grid(row=0, column=0, sticky="nsew", padx=(0,5))
         scrollbar.grid(row=0, column=1, sticky="ns")
-        file_frame.columnconfigure(0, weight=1) # Make listbox expand
-        file_frame.rowconfigure(0, weight=1)   # Make listbox expand
+        file_frame.columnconfigure(0, weight=1)
+        file_frame.rowconfigure(0, weight=1)
 
         btn_frame = ttk.Frame(file_frame)
         btn_frame.grid(row=0, column=2, sticky="nsew", padx=5)
@@ -104,26 +90,25 @@ class KokoroGUI:
         voice_frame = ttk.LabelFrame(main_frame, text="TTS Settings")
         voice_frame.pack(fill=tk.X, pady=5)
         ttk.Label(voice_frame, text="Voice:").grid(row=0, column=0, padx=5, sticky="w")
-        self.voice_var = tk.StringVar(value=self.voices[21])
+        self.voice_var = tk.StringVar(value=self.voices[3])
         self.voice_dropdown = ttk.Combobox(voice_frame, textvariable=self.voice_var,
-                                         values=self.voices, width=25, state="readonly")
+                                           values=self.voices, width=25, state="readonly")
         self.voice_dropdown.grid(row=0, column=1, padx=5, sticky="w")
         ttk.Label(voice_frame, text="Language:").grid(row=0, column=2, padx=5, sticky="w")
         self.lang_var = tk.StringVar(value="English (British)")
         self.lang_dropdown = ttk.Combobox(voice_frame, textvariable=self.lang_var,
-                                        values=[name for code, name in self.languages],
-                                        width=15, state="readonly")
+                                          values=[name for code, name in self.languages],
+                                          width=15, state="readonly")
         self.lang_dropdown.grid(row=0, column=3, padx=5)
         self.lang_dropdown.bind("<<ComboboxSelected>>", self.update_lang_code)
         ttk.Label(voice_frame, text="Speed:").grid(row=0, column=4, padx=5, sticky="w")
         self.speed_var = tk.DoubleVar(value=0.8)
         ttk.Spinbox(voice_frame, from_=0.5, to=2.0, increment=0.1,
-                   textvariable=self.speed_var, width=5).grid(row=0, column=5, padx=5)
+                    textvariable=self.speed_var, width=5).grid(row=0, column=5, padx=5)
         ttk.Label(voice_frame, text="Format:").grid(row=0, column=6, padx=5, sticky="w")
         self.format_var = tk.StringVar(value="wav")
         ttk.Combobox(voice_frame, textvariable=self.format_var, values=["wav", "mp3"],
-                    width=5, state="readonly").grid(row=0, column=7, padx=5)
-
+                     width=5, state="readonly").grid(row=0, column=7, padx=5)
 
         split_frame = ttk.Frame(main_frame)
         split_frame.pack(fill=tk.X, pady=5)
@@ -133,12 +118,6 @@ class KokoroGUI:
         ttk.Button(split_frame, text="Browse", command=self.browse_split_dir).pack(side=tk.LEFT)
 
         ttk.Button(main_frame, text="Start Processing", command=self.process_files).pack(pady=10)
-
-    def save_kokoro_path(self):
-        self.kokoro_path = self.path_var.get()
-        self.config["Paths"]["kokoro_path"] = self.kokoro_path
-        with open(CONFIG_FILE, "w") as configfile:
-            self.config.write(configfile)
 
     def add_files(self, files):
         new_files = []
@@ -199,43 +178,44 @@ class KokoroGUI:
         self.actual_lang_code = "en-gb"
 
     def sanitize_input_text(self, input_file):
-        """Sanitizes the input file content using ftfy and saves it as a new file."""
+        """Sanitizes the input file content using ftfy and saves it as a new file in the 'log' folder."""
         try:
-            with open(input_file, 'r', encoding='utf-8') as f: # Try UTF-8 first
+            with open(input_file, 'r', encoding='utf-8') as f:
                 content = f.read()
         except UnicodeDecodeError:
             try:
-                with open(input_file, 'r', encoding='cp1252') as f: # Try cp1252 if UTF-8 fails
+                with open(input_file, 'r', encoding='cp1252') as f:
                     content = f.read()
             except UnicodeDecodeError:
                 try:
-                    with open(input_file, 'r', encoding='latin-1') as f: # Try latin-1 as fallback
+                    with open(input_file, 'r', encoding='latin-1') as f:
                         content = f.read()
-                except Exception as e: # If all fail, raise error and return None
+                except Exception as e:
                     messagebox.showerror("Encoding Error", f"Could not decode file: {input_file}\nError: {e}")
-                    return None, None
+                    return None
 
         try:
-            fixed_text = ftfy.fix_text(content) # Sanitize with ftfy
+            fixed_text = ftfy.fix_text(content)
         except Exception as e:
             messagebox.showerror("ftfy Error", f"Error sanitizing text with ftfy for file: {input_file}\nError: {e}")
-            return None, None
+            return None
 
-        # Create a new filename for sanitized version
-        base, ext = os.path.splitext(input_file)
-        sanitized_file = base + "_sanitized" + ext
+        filename = os.path.basename(input_file)
+        name, ext = os.path.splitext(filename)
+        log_dir = os.path.join(os.getcwd(), "log")
+        os.makedirs(log_dir, exist_ok=True)
+        sanitized_file = os.path.join(log_dir, name + "_sanitized" + ext)
         try:
             with open(sanitized_file, 'w', encoding='utf-8') as f:
                 f.write(fixed_text)
-            return sanitized_file # Return new sanitized file path
+            return sanitized_file
         except Exception as e:
             messagebox.showerror("File Save Error", f"Could not save sanitized file: {sanitized_file}\nError: {e}")
             return None
 
-
     def process_files(self):
-        import threading  # Import threading here - already present
-        import time       # ADD THIS LINE - Import time here!
+        import threading
+        import time
 
         if not self.file_list:
             messagebox.showerror("Error", "No files selected for processing")
@@ -253,22 +233,27 @@ class KokoroGUI:
             "split_dir": self.split_var.get() or "None",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        self.root.destroy() # Consider moving this after a success message or removing it
+        self.root.destroy()  # Close GUI window
+
+        wav_dir = os.path.join(os.getcwd(), "wav")
+        log_dir = os.path.join(os.getcwd(), "log")
+        os.makedirs(wav_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
 
         for original_file_path in self.file_list:
-            input_file_path = original_file_path # Default to original path
+            input_file_path_sanitized = self.sanitize_input_text(original_file_path)
+            if not input_file_path_sanitized:
+                continue
+            input_file_path = input_file_path_sanitized
 
-            input_file_path_sanitized = self.sanitize_input_text(original_file_path) # Sanitize input using ftfy
-            if not input_file_path_sanitized: # If sanitization failed for this file, skip to next
-                continue # sanitize_input_text already showed an error message
-            input_file_path = input_file_path_sanitized # Use the new sanitized file for processing
+            base_filename = os.path.splitext(os.path.basename(input_file_path))[0]
+            output_filename = base_filename + f".{processing_params['format']}"
+            output_file = os.path.join(wav_dir, output_filename)
+            log_file = os.path.join(log_dir, output_filename + ".log")
 
-
-            output_file = os.path.splitext(input_file_path)[0] + f".{processing_params['format']}" # Output based on *input_file_path*
-            log_file = output_file + ".log"
             cmd = [
-                self.kokoro_path,  # Use self.kokoro_path here
-                input_file_path,    # Use input_file_path (original or sanitized)
+                self.kokoro_path,
+                input_file_path,
                 output_file,
                 "--voice", processing_params["voice"],
                 "--lang", processing_params["language"],
@@ -278,15 +263,14 @@ class KokoroGUI:
             if processing_params["split_dir"] != "None":
                 cmd += ["--split-output", processing_params["split_dir"]]
 
-            # Explicitly set environment for subprocess to use UTF-8
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
 
             with open(log_file, "w", encoding="utf-8") as log:
-                log.write(f"Kokoro TTS Processing Log\n{'='*30}\n")
+                log.write(f"Kokoro TTS Processing Log\n{'=' * 30}\n")
                 log.write(f"Timestamp: {processing_params['timestamp']}\n")
-                log.write(f"Input File (Original): {original_file_path}\n") # Log original path
-                log.write(f"Input File (Sanitized with ftfy): {input_file_path}\n") # Log sanitized path
+                log.write(f"Input File (Original): {original_file_path}\n")
+                log.write(f"Input File (Sanitized): {input_file_path}\n")
                 log.write(f"Output File: {output_file}\n")
                 log.write(f"Voice: {processing_params['voice']}\n")
                 log.write(f"Language: {processing_params['language']}\n")
@@ -295,27 +279,26 @@ class KokoroGUI:
                 log.write(f"Split Directory: {processing_params['split_dir']}\n")
                 log.write("\nProcessing Details:\n")
 
-                # ASCII Spinning Wheel in GUI - Define it here, inside process_files for scope
                 def spinning_wheel_gui(message, log):
                     spin_chars = ["-", "\\", "|", "/"]
                     stop_event = threading.Event()
+
                     def spin_thread_func():
-                        import time # Import time here - although it's imported outside as well now.
                         while not stop_event.is_set():
                             for spin in spin_chars:
                                 if stop_event.is_set():
                                     break
-                                sys.stdout.write(f"\r{message} {spin}") # This stdout is for *console* output
+                                sys.stdout.write(f"\r{message} {spin}")
                                 sys.stdout.flush()
                                 time.sleep(0.1)
                         sys.stdout.write(f"\r{message} Done!   \n")
                         sys.stdout.flush()
+
                     spin_thread = threading.Thread(target=spin_thread_func)
                     spin_thread.start()
                     return stop_event, spin_thread
 
-
-                stop_spin_event, spin_thread = spinning_wheel_gui("Processing...", log) # Start ASCII spin in console
+                stop_spin_event, spin_thread = spinning_wheel_gui("Processing...", log)
 
                 try:
                     process = subprocess.Popen(
@@ -323,21 +306,21 @@ class KokoroGUI:
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
-                        encoding='utf-8', # Explicitly set encoding for subprocess output
+                        encoding='utf-8',
                         errors='replace',
                         cwd=os.path.dirname(self.kokoro_path),
-                        env=env # Pass the environment with PYTHONIOENCODING
+                        env=env
                     )
                     while True:
                         output = process.stdout.readline()
                         if output == '' and process.poll() is not None:
                             break
                         if output:
-                            print(output.strip()) # Print to *GUI console* - might still have encoding issues here
+                            print(output.strip())
                             log.write(output)
                     exit_code = process.poll()
-                    stop_spin_event.set() # Stop spinning wheel
-                    spin_thread.join() # Wait for spin thread to finish
+                    stop_spin_event.set()
+                    spin_thread.join()
 
                     if exit_code == 0:
                         log.write("\nSUCCESSFUL PROCESSING\n")
@@ -345,9 +328,9 @@ class KokoroGUI:
                         print(f"Log file created: {log_file}")
                     else:
                         log.write(f"\nPROCESSING FAILED (Code: {exit_code})\n")
-                        print(f"\nError processing {original_file_path} (Code: {exit_code})") # Use original_file_path in error message
+                        print(f"\nError processing {original_file_path} (Code: {exit_code})")
                 except Exception as e:
-                    stop_spin_event.set() # Ensure spinning wheel stops on error
+                    stop_spin_event.set()
                     spin_thread.join()
                     log.write(f"\nUNEXPECTED ERROR: {str(e)}\n")
                     print(f"\nUnexpected error: {e}")
