@@ -162,7 +162,7 @@ class VideoProcessorApp:
         tk.Label(self.resolution_options_frame, text="Upscale Algorithm:").grid(row=1, column=0, sticky=tk.W, padx=(20, 0))
         self.upscale_nvvfx_button = tk.Radiobutton(self.resolution_options_frame, text="nvvfx-superres", variable=self.upscale_algo_var, value="nvvfx-superres", command=self.apply_gui_options_to_selected_files)
         self.upscale_nvvfx_button.grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
-        self.upscale_ngxvsr_button = tk.Radiobutton(self.resolution_options_frame, text="ngx-vsr (Quality 4)", variable=self.upscale_algo_var, value="ngx-vsr", command=self.apply_gui_options_to_selected_files)
+        self.upscale_ngxvsr_button = tk.Radiobutton(self.resolution_options_frame, text="ngx-vsr", variable=self.upscale_algo_var, value="ngx-vsr", command=self.apply_gui_options_to_selected_files)
         self.upscale_ngxvsr_button.grid(row=1, column=2, sticky=tk.W)
 
         tk.Label(self.options_frame, text="Convert to 8 bit:").grid(row=1, column=0, sticky=tk.W)
@@ -785,7 +785,7 @@ class VideoProcessorApp:
             print(f"Applying LUT: {self.lut_file}")
         if do_resize:
             if resize_algo == "ngx-vsr": # Handle ngx-vsr and its quality parameter
-                cmd.extend(["--vpp-resize", f"algo={resize_algo},vsr-quality=4", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
+                cmd.extend(["--vpp-resize", f"algo={resize_algo},vsr-quality=1", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
             else:
                 cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", f"{target_res},preserve_aspect_ratio=increase"])
 

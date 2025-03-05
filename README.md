@@ -36,229 +36,392 @@ Your Pages site will use the layout and styles from the Jekyll theme you have se
 
 Having trouble with Pages? Check out our [documentation](https://help.github.com/categories/github-pages-basics/) or [contact support](https://github.com/contact) and we’ll help you sort it out.
 
-# rembg_gui
-
-**rembg_gui** is a Python-based GUI batch processing tool for [rembg](https://github.com/danielgatis/rembg), which removes image backgrounds using deep learning. It features automatic virtual environment activation, dynamic dependency installation, and a user-friendly interface that allows you to switch between GPU and CPU processing modes.
+Below is the full documentation for both scripts. You can include these documents (or similar documentation) with your scripts to help others understand how to configure, use, and troubleshoot them.
 
 ---
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation and Setup](#installation-and-setup)
-  - [Folder Structure](#folder-structure)
-  - [Creating and Configuring the Virtual Environment](#creating-and-configuring-the-virtual-environment)
-  - [Installing CUDA (for GPU processing)](#installing-cuda-for-gpu-processing)
-- [Usage](#usage)
-  - [Running the Script](#running-the-script)
-  - [Using the GUI](#using-the-gui)
-- [Processing Modes](#processing-modes)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
-
----
+# rembg Wrapper Script (rembgwrapper.bat)
 
 ## Overview
 
-**rembg_gui** provides an easy-to-use graphical user interface built with Tkinter that allows you to:
+The **rembgwrapper.bat** script is designed to wrap calls to the `rembg` tool from a virtual environment. It automatically activates the Python virtual environment, loops over image files (based on a file mask or list), calls `rembg` with the specified model option, and then deactivates the virtual environment.
 
-- **Batch Process Images:** Easily add, remove, and reorder image files for processing.
-- **Select Processing Model:** Choose from various pre-trained rembg models (e.g., `u2net`, `u2netp`, `isnet-general-use`, etc.).
-- **Switch Between GPU and CPU:** Select the desired processing mode via mutually exclusive options.
-- **Automatic Dependency Management:** The script automatically checks for and installs required Python packages.
-- **Automatic Virtual Environment Activation:** The script re‑launches itself using a dedicated virtual environment for consistency.
-- **Graceful Exit:** The tool attempts to force termination when processing is complete so that no lingering threads remain.
-
----
+It is intended to be hard‐coded with paths for your working directory and virtual environment, so you only need to modify the customizable variables at the top of the script.
 
 ## Features
 
-- **GUI Interface:** Manage image files with options to add, remove, reorder, select, and deselect.
-- **Model Selection:** Choose the appropriate rembg model for your use case.
-- **Processing Mode Switch:** Use Radiobuttons to select GPU processing (default) or CPU processing.
-- **Auto Dependency Installation:** Checks and installs `numpy==1.24.2`, `onnxruntime-gpu==1.15.1`, and `rembg[gpu,cli]` automatically.
-- **Automatic venv Activation:** Re‑launches using a dedicated virtual environment.
-- **CUDA Integration:** Supports GPU acceleration if your system meets the CUDA requirements.
-- **Fallback to CPU:** If GPU initialization fails or if CPU-only processing is forced, the script automatically falls back to CPU mode.
-- **Forced Exit:** Attempts to terminate any lingering threads after processing completes.
+- **Hardcoded Paths:**  
+  Customize the virtual environment location and working directory in the script’s header.
+  
+- **File Mask Processing:**  
+  Accepts a file mask (e.g. `*.jpg` or a single file) as the first command-line argument and applies the processing command to each file.
+  
+- **Model Option:**  
+  The model option is provided via command-line parameters (after the file mask) and passed to `rembg`.
+  
+- **Virtual Environment Management:**  
+  Automatically activates and then deactivates the virtual environment.
 
----
+## Customizable Variables
 
-## Requirements
+At the top of the script, you will find variables that you can modify:
 
-- **Operating System:** Windows (other OS support may require adjustments)
-- **Python Version:** Python 3.10 or higher (tested with Python 3.11)
-- **Virtual Environment:** The script assumes a dedicated venv is set up in the project folder.
-- **Dependencies:**
-  - `numpy==1.24.2`
-  - `onnxruntime-gpu==1.15.1`
-  - `rembg[gpu,cli]`
-- **For GPU Processing:**
-  - **CUDA Toolkit 11.8:** Must be installed.
-  - **cuDNN:** Matching version for CUDA 11.8.
-  - **Environment Variable:** `CUDA_PATH` should point to your CUDA installation root (e.g. `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8`).
+- `VENV_PATH`:  
+  The absolute path to your virtual environment (e.g. `F:\AI\rembg\venv`).
 
----
-
-## Installation and Setup
-
-### Folder Structure
-
-Your project folder should be organized as follows:
-
-```
-F:\AI\rembg\
-  ├── rembg_gui.py
-  └── venv\         # Your dedicated virtual environment
-```
-
-### Creating and Configuring the Virtual Environment
-
-1. **Navigate to your project folder:**
-
-   ```batch
-   cd /d F:\AI\rembg
-   ```
-
-2. **Create the Virtual Environment:**
-
-   ```batch
-   python -m venv venv
-   ```
-
-3. **Activate the Virtual Environment:**
-
-   - **Command Prompt:**
-
-     ```batch
-     venv\Scripts\activate
-     ```
-
-   - **PowerShell:**
-
-     ```powershell
-     .\venv\Scripts\Activate.ps1
-     ```
-
-4. **Install Required Packages:**
-
-   The script will automatically check and install:
-   
-   ```batch
-   pip install numpy==1.24.2 onnxruntime-gpu==1.15.1 "rembg[gpu,cli]"
-   ```
-
-   However, you can also run the above command manually to ensure dependencies are met.
-
-### Installing CUDA (for GPU processing)
-
-For GPU acceleration, ensure you have:
-
-1. **CUDA Toolkit 11.8:**  
-   Download from [NVIDIA CUDA Toolkit 11.8 Archive](https://developer.nvidia.com/cuda-11-8-0-download-archive).
-
-2. **cuDNN for CUDA 11.8:**  
-   Download the matching version from [NVIDIA cuDNN](https://developer.nvidia.com/cudnn).
-
-3. **Environment Variable:**  
-   Set `CUDA_PATH` to your CUDA 11.8 installation directory, e.g.:
-
-   ```batch
-   setx CUDA_PATH "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8"
-   ```
-
-   Also, ensure that the CUDA bin folder (e.g., `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin`) is added to your system PATH.
-
----
+- `WORK_DIR`:  
+  The working directory where your source files and rembg script are located (e.g. `F:\AI\rembg`).
 
 ## Usage
 
-### Running the Script
+1. **Place the Script:**  
+   Save the batch file as `rembgwrapper.bat` in your project folder (for example, `F:\AI\rembg`).
 
-Once your virtual environment is set up and dependencies are installed, you can run the script without manually activating the venv:
+2. **Call the Script:**  
+   Open a command prompt in the working folder and run:
+   ```
+   rembgwrapper.bat *.jpg --model birefnet-massive
+   ```
+   This command will process every `.jpg` file in the directory using the `birefnet-massive` model.
 
-```batch
-F:\AI\rembg\rembg_gui.py image1.jpg image2.png
+3. **Processing Workflow:**
+   - **Activation:**  
+     The script changes to the working directory and calls the virtual environment’s `activate` script.
+   - **Loop:**  
+     It loops over each file matching the file mask, calls `rembg i` with the specified model, input, and output file names.
+   - **Deactivation:**  
+     Once processing is complete, the script calls `deactivate` to exit the virtual environment.
+
+## Script Structure
+
+```bat
+@echo off
+REM ============================
+REM rembgwrapper.bat - Batch file wrapper for rembg command
+REM Processes image files using rembg inside a virtual environment.
+REM Usage example:
+REM   rembgwrapper.bat *.jpg --model birefnet-massive
+REM ============================
+
+REM --- Configuration ---
+set "VENV_PATH=F:\AI\rembg\venv"
+set "WORK_DIR=F:\AI\rembg"
+
+REM --- Change to working directory ---
+cd /d "%WORK_DIR%"
+
+REM --- Activate the virtual environment ---
+call "%VENV_PATH%\Scripts\activate"
+
+REM --- Parse arguments ---
+REM The first argument is the file mask (or single file).
+set "FILEMASK=%1"
+shift
+
+REM Build options variable from the remaining arguments.
+set "OPTS="
+:buildOptions
+if "%~1"=="" goto optionsDone
+   set "OPTS=%OPTS% %1"
+   shift
+goto buildOptions
+:optionsDone
+
+echo FILEMASK: %FILEMASK%
+echo OPTS: %OPTS%
+echo.
+
+REM --- Enable delayed expansion ---
+setlocal enabledelayedexpansion
+
+REM --- Loop over each matching file ---
+for %%F in (%FILEMASK%) do (
+    set "INPUT=%%F"
+    set "OUTPUT=%%~nF_T.png"
+    echo Processing file: !INPUT!
+    echo Running: rembg i !OPTS! "!INPUT!" "!OUTPUT!"
+    rembg i !OPTS! "!INPUT!" "!OUTPUT!"
+)
+
+endlocal
+
+REM --- Deactivate the virtual environment ---
+call deactivate
 ```
-
-The script will automatically re-launch itself using the venv interpreter.
-
-### Using the GUI
-
-- **File List:**  
-  The main window displays the list of image files passed as command-line arguments. You can add more images using the **Add** button.
-
-- **File Management:**  
-  Options to **Remove**, **Move Up**, **Move Down**, **Remove All**, **Select All**, and **Deselect All** help you manage the list order.
-
-- **Model Selection:**  
-  Use the dropdown menu to select one of the available rembg models.
-
-- **Processing Mode:**  
-  Two Radiobuttons let you choose:
-  - **GPU Processing** (default)
-  - **CPU Processing**
-
-  The selected mode determines whether the script attempts to use GPU acceleration or forces CPU-only processing.
-
-- **Processing:**  
-  Click the **Processing** button to start. The script will process the images and save the output to an `output` folder (created in the current directory).
-
-- **Termination:**  
-  After processing completes, the script is designed to automatically terminate.
-
----
-
-## Processing Modes
-
-- **GPU Processing:**  
-  The script attempts to create an onnxruntime session with GPU providers (including TensorRT, CUDA, and CPU).  
-  **Note:** If CUDA or cuDNN is not correctly installed, the session creation will fail, and the script will fall back to CPU processing.
-
-- **CPU Processing:**  
-  When selected, the script forces CPU-only processing by temporarily removing the `CUDA_PATH` variable to avoid attempting to load GPU libraries.
-
----
 
 ## Troubleshooting
 
-- **CUDA Errors:**  
-  If you see errors related to `CUDA_PATH` or DLL loading failures, ensure:
-  - CUDA Toolkit 11.8 and the matching cuDNN are installed.
-  - `CUDA_PATH` is correctly set to your CUDA 11.8 installation.
-  - The CUDA bin directory is in your system PATH.
+- **Unexpected Arguments:**  
+  If you see errors about extra arguments, ensure that your options are placed after the file mask on the command line.
 
-- **Dependency Issues:**  
-  The script automatically checks for and installs required packages. If automatic installation fails, manually install the required packages using pip.
+- **Virtual Environment Issues:**  
+  Verify that the `VENV_PATH` is correct and that the virtual environment is set up with `rembg` installed.
+
+- **Executable Not Found:**  
+  Confirm that `rembg.exe` is available and in the expected location within your virtual environment’s Scripts folder.
+
+---
+
+# rembg Python GUI Script (rembatcher.py)
+
+## Overview
+
+The **rembatcher.py** script provides a graphical user interface (GUI) to select image files and one or more rembg models. It is intended to be run from a working folder containing your source images, and it outputs processed files into a subdirectory (customizable) within the working folder. When you press the **Process** button, the GUI closes immediately and processing begins with progress updates printed to the console.
+
+## Features
+
+- **GUI for File & Model Selection:**  
+  A vertically arranged interface displays a list of files (populated from command-line arguments) and a list of rembg models as checkboxes.
+
+- **Customizable Models List:**  
+  The list of models is hardcoded (sorted alphabetically) at the top. You can add or remove models as needed.
+
+- **Dynamic Window Sizing:**  
+  The GUI window dynamically sizes itself to fit all widgets, including all model checkboxes (no scrollbar).
+
+- **Output Directory:**  
+  Processed images are output to a subdirectory (e.g., named `transp` by default) in the working folder.
+
+- **Dynamic Console Updates:**  
+  All processing commands and progress are printed to the console as each file is processed.
+
+## Customizable Variables
+
+At the very top of the script, you can modify:
+
+- **REMBG_CMD:**  
+  The full path to the `rembg` executable.  
+  Example:  
+  ```python
+  REMBG_CMD = r"F:\AI\rembg\venv\Scripts\rembg.exe"
+  ```
+
+- **MODELS:**  
+  A list of rembg models. This list is sorted automatically.  
+  You can add or remove models as required.
+
+- **OUTPUT_DIR_NAME:**  
+  The name of the subdirectory where processed files are saved.  
+  Example:  
+  ```python
+  OUTPUT_DIR_NAME = "transp"
+  ```
+
+## Usage
+
+1. **Place the Script:**  
+   Save the script as `rembatcher.py` in a central folder (for example, `F:\AI\rembg`).
+
+2. **Run the Script:**  
+   From a working folder (where your image files reside), run the script with:
+   ```
+   python F:\AI\rembg\rembatcher.py *.jpg
+   ```
+   The script uses the current working folder (from where it is run) as the location for input files and will create (or use) a subdirectory (e.g., `transp`) for the output files.
+
+3. **Using the GUI:**  
+   - **File List:**  
+     The file list is pre-populated from the command-line arguments. You can also add or remove files using the buttons.
+   - **Model Selection:**  
+     All available models are displayed as checkboxes. Use the "Select All Models" or "Deselect All Models" buttons to toggle selection.
+   - **Process:**  
+     Clicking the **Process** button immediately closes the GUI and starts processing files, with progress messages printed to the console.
+
+## Script Structure
+
+```python
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import sys
+import os
+import subprocess
+
+# -------------------------------
+# Configuration - Customize these:
+# -------------------------------
+# Hardcoded location for the rembg executable.
+REMBG_CMD = r"F:\AI\rembg\venv\Scripts\rembg.exe"
+
+# List of rembg models (sorted alphabetically)
+MODELS = [
+    'birefnet-general',
+    'birefnet-general-lite',
+    'birefnet-portrait',
+    'birefnet-dis',
+    'birefnet-hrsod',
+    'birefnet-cod',
+    'birefnet-massive',
+    'isnet-anime',
+    'isnet-general-use',
+    'sam',
+    'silueta',
+    'u2net_cloth_seg',
+    'u2net_custom',
+    'u2net_human_seg',
+    'u2net',
+    'u2netp',
+    'bria-rmbg'
+]
+MODELS.sort()
+
+# Name of the output subdirectory (within the working folder)
+OUTPUT_DIR_NAME = "transp"
+
+# -------------------------------
+# End Configuration
+# -------------------------------
+
+def run_gui():
+    # The working folder is the directory from which the script is called.
+    working_dir = os.getcwd()
+    selections = {"files": [], "models": []}
+    
+    root = tk.Tk()
+    root.title("Rembatcher")
+    
+    # Main frame with vertical layout
+    main_frame = ttk.Frame(root, padding=10)
+    main_frame.pack(fill="both", expand=True)
+    
+    # ----- File Frame (top) -----
+    file_frame = ttk.LabelFrame(main_frame, text="Files in " + working_dir)
+    file_frame.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    file_listbox = tk.Listbox(file_frame, selectmode=tk.MULTIPLE, width=60, height=10)
+    file_listbox.pack(side="top", fill="both", expand=True, padx=5, pady=5)
+    
+    file_scrollbar = ttk.Scrollbar(file_frame, orient="vertical", command=file_listbox.yview)
+    file_scrollbar.pack(side="right", fill="y")
+    file_listbox.config(yscrollcommand=file_scrollbar.set)
+    
+    # Populate file listbox from command-line arguments
+    for f in sys.argv[1:]:
+        file_listbox.insert(tk.END, f)
+    
+    # File management buttons
+    file_button_frame = ttk.Frame(file_frame)
+    file_button_frame.pack(fill="x", padx=5, pady=5)
+    
+    def add_files():
+        files = filedialog.askopenfilenames(title="Select Files", initialdir=working_dir)
+        for f in files:
+            file_listbox.insert(tk.END, os.path.basename(f))
+    
+    def remove_selected_files():
+        for index in reversed(file_listbox.curselection()):
+            file_listbox.delete(index)
+    
+    def select_all_files():
+        file_listbox.select_set(0, tk.END)
+    
+    def deselect_all_files():
+        file_listbox.select_clear(0, tk.END)
+    
+    def clear_files():
+        file_listbox.delete(0, tk.END)
+    
+    ttk.Button(file_button_frame, text="Add", command=add_files).pack(side="left", padx=2)
+    ttk.Button(file_button_frame, text="Remove", command=remove_selected_files).pack(side="left", padx=2)
+    ttk.Button(file_button_frame, text="Select All", command=select_all_files).pack(side="left", padx=2)
+    ttk.Button(file_button_frame, text="Deselect All", command=deselect_all_files).pack(side="left", padx=2)
+    ttk.Button(file_button_frame, text="Clear All", command=clear_files).pack(side="left", padx=2)
+    
+    # ----- Model Frame (middle) -----
+    model_frame = ttk.LabelFrame(main_frame, text="Models")
+    model_frame.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    # Instead of a canvas, use a frame directly for the checkbuttons.
+    model_check_frame = ttk.Frame(model_frame)
+    model_check_frame.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    model_vars = {}
+    for m in MODELS:
+        var = tk.BooleanVar(value=False)
+        chk = ttk.Checkbutton(model_check_frame, text=m, variable=var)
+        chk.pack(anchor="w")
+        model_vars[m] = var
+    
+    # Model selection buttons (below the checkbuttons)
+    model_button_frame = ttk.Frame(model_frame)
+    model_button_frame.pack(fill="x", padx=5, pady=5)
+    
+    def select_all_models():
+        for var in model_vars.values():
+            var.set(True)
+    
+    def deselect_all_models():
+        for var in model_vars.values():
+            var.set(False)
+    
+    ttk.Button(model_button_frame, text="Select All Models", command=select_all_models).pack(side="left", padx=5)
+    ttk.Button(model_button_frame, text="Deselect All Models", command=deselect_all_models).pack(side="left", padx=5)
+    
+    # ----- Process Button (bottom) -----
+    def on_process():
+        selections["files"] = file_listbox.get(0, tk.END)
+        selections["models"] = [model for model, var in model_vars.items() if var.get()]
+        # Immediately close the GUI.
+        root.destroy()
+    
+    process_button = ttk.Button(root, text="Process", command=on_process)
+    process_button.pack(pady=10)
+    
+    # Dynamically size the window based on its contents.
+    root.update_idletasks()
+    req_width = root.winfo_reqwidth()
+    req_height = root.winfo_reqheight()
+    root.geometry(f"{req_width}x{req_height}")
+    
+    root.mainloop()
+    return selections, working_dir
+
+def main():
+    selections, working_dir = run_gui()
+    if not selections["files"]:
+        print("No files selected for processing.")
+        return
+    if not selections["models"]:
+        print("No models selected. Exiting.")
+        return
+    
+    # Create output subdirectory in the working folder.
+    output_dir = os.path.join(working_dir, OUTPUT_DIR_NAME)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Process each file with each selected model.
+    for f in selections["files"]:
+        input_file = os.path.join(working_dir, f)
+        base, _ = os.path.splitext(os.path.basename(f))
+        for model in selections["models"]:
+            output_file = os.path.join(output_dir, f"{base}_{model}_T.png")
+            cmd = [REMBG_CMD, "i", "--model", model, input_file, output_file]
+            print(f"\nProcessing {f} with model {model}...", flush=True)
+            print("Running command:", " ".join(cmd), flush=True)
+            try:
+                subprocess.run(cmd, check=True)
+                print(f"Finished processing {f} with model {model}.", flush=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Error processing {f} with model {model}:\n{e}", flush=True)
+            except FileNotFoundError as e:
+                print(f"Executable not found: {e}", flush=True)
+                return
+    
+    print("\nAll processing complete. Processed files are in:", output_dir)
+
+if __name__ == '__main__':
+    main()
+```
+
+## Troubleshooting & Notes
+
+- **GUI Not Fitting:**  
+  The script uses `winfo_reqwidth()` and `winfo_reqheight()` to dynamically size the window. If you add many files or models, consider adjusting the design (e.g., adding scrollbars) for very large lists.
+
+- **Processing Errors:**  
+  Console messages provide feedback for each file/model combination. Check the console for error messages if a particular file fails to process.
 
 - **Virtual Environment:**  
-  The script auto‑activates the venv located at `F:\AI\rembg\venv`. Ensure the venv exists and contains the correct packages.
-
-- **Script Not Exiting:**  
-  If the script does not exit automatically after processing, it uses a timer and forced exit (using `os._exit(0)`). If you still need to press Ctrl‑C, check for any lingering processes or threads that might be preventing termination.
-
----
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes. When contributing, please follow the standard guidelines for Python code and include tests if applicable.
-
----
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgments
-
-- [rembg](https://github.com/danielgatis/rembg) – The background removal tool this script is based on.
-- [onnxruntime](https://github.com/microsoft/onnxruntime) – For GPU and CPU acceleration.
-- Thanks to all contributors who have helped improve the rembg ecosystem.
+  Ensure the path in **REMBG_CMD** points to the correct executable (and that `rembg` is installed in that environment).
 
 ---
 
