@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import os
-os.environ["PYTHONIOENCODING"] = "utf-8" # Setting PYTHONIOENCODING to utf-8 at the start
+
 import sys
+import os
 import glob
 import argparse
 import time
@@ -11,405 +11,493 @@ import pycountry
 import shutil
 import re
 import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog
-import tkinter.messagebox
-from collections import deque  # For storing previous lines - for SRT context # Keep import, might be used in other parts
+from tkinter import ttk, filedialog, messagebox
+from collections import deque  # For storing previous lines - for SRT context
+
 # --- Configuration ---
-DEFAULT_TARGET_LANGUAGE = "en" # Changed to "en" for two-letter code default
-DEFAULT_GEMINI_MODELS_BASE = [] # Now empty - we rely on API listing
-DEFAULT_GEMINI_MODELS = [] # Initialize as empty, will be populated dynamically
-DEFAULT_OLLAMA_MODELS = ["mistral-small:24b", "phi4", "qwen2.5:14b"]
+DEFAULT_TARGET_LANGUAGE = "en"  # Two-letter code default
+# We rely solely on dynamic model loading – start with empty lists.
+DEFAULT_GEMINI_MODELS = []
+DEFAULT_OLLAMA_MODELS = []
 DEFAULT_ENGINE = "google"
-DEFAULT_SUFFIX = "_cleaned" # Changed default suffix to "_cleaned" for cleanup only
+DEFAULT_SUFFIX = "_processed"
 OUTPUT_SUBFOLDER = "processed_output"
 ORIGINAL_FILES_SUBFOLDER = "original_files"
-CONTEXT_LINES = 5               # Number of previous lines for SRT context # Keep import, might be used elsewhere
-MAX_RETRIES = 3                 # Max retries for API calls - for SRT # Keep, might be used elsewhere
+CONTEXT_LINES = 5   # Number of previous lines for SRT context
+MAX_RETRIES = 3     # Max retries for API calls
+
 # --- Prompts ---
-CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR). The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**. Format the text properly with a structure that is fit for book publishing.
-**Your task is to perform aggressive cleaning and correction to produce a perfectly clean, readable, and well-formatted plain text.**
-**Specifically, your cleaning and correction MUST include:**
-* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.** This is the most important step. Ensure the text is perfectly readable and grammatically correct with proper terminal punctuation marks. Make sure all sentences ended with the proper terminal punctuation marks, even if it's a title  or ending with a linebreak.
-* **REMOVE ALL pagination numbers.**  This includes both Arabic numerals (e.g., 1, 2, 3...) and Roman numerals (e.g., I, II, III, IV, V...). Do not include any page numbers in the cleaned output.
-* **AGGRESSIVELY REMOVE** unnecessary line breaks WITHIN paragraphs** to create flowing paragraphs.**  Text within a paragraph should be on a single line unless it's a deliberate line break for formatting within that paragraph (which is unlikely in OCR cleanup).
-* **JOIN hyphenated words that are split across lines.** For example, if "state- \n ment" appears, it should be corrected to "statement".
-* **COLLAPSE multiple spaces and tabs into single spaces.** Remove leading and trailing whitespace from lines. Ensure consistent spacing throughout the text.
-* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the output.  **Preserve these paragraph breaks.**
-* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**  Ensure a clean and professional output.
-* **you can ignore this about chapter title if there are none but if there's a CHAPTER TITLE that is in roman numeral, then these must be converted into arabic numbering with proper terminal punctuation marks at the end, for example Chapter IV becomes Chapter 4. Also, the title of the chapter must be terminated with proper terminal punctuation marks, for example Down the Rabbit Hole becomes Down the Rabbit Hole. Note the period at the end.**
-**IMPORTANT:** Provide **ONLY** the final, cleaned and corrected text, in **plain text format**.  Do **NOT** include the original OCR text. Do **NOT** include any page numbers.  Do **NOT** include any introductory phrases, notes, quotation marks, or anything else. Just the clean, corrected plain text, perfectly readable and free of errors.
-**Text to clean:** {text}"""
+DEFAULT_TRANSLATION_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
+
+Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed. This text is from OCR and is **VERY MESSY**. You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted Markdown output.
+
+**Specifically:**
+* Correct all OCR errors, typos, and gibberish.
+* Remove all page numbers.
+* Ensure proper paragraphing and line breaks.
+* Format structural elements using Markdown (e.g. `#`, `##`, `###`).
+* Remove extraneous whitespace and artifacts.
+
+**Constraint:** Provide ONLY the final cleaned, corrected, and translated text in {target_language} formatted in Markdown.
+Text: {text}"""
+
+DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
+
+Translate the following text to natural and idiomatic {target_language} ensuring that for Chinese names and terms you include the original Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a natural, fluent Markdown-formatted translation.
+Text: {text}"""
+
+TRANSLATE_ONLY_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
+
+Translate the following text to natural and idiomatic {target_language}. Produce a translation that sounds fluent and natural to a native speaker, formatted in Markdown.
+Text: {text}"""
+
+TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
+
+Translate the following text to natural and idiomatic {target_language}. For Chinese names and terms, include Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a Markdown-formatted translation.
+Text: {text}"""
+
+CLEANUP_PROMPT = """Please clean up the following OCR text which contains errors, typos, and formatting issues. Remove pagination numbers and unnecessary line breaks, and format the text using Markdown.
+Provide ONLY the final cleaned and corrected text in Markdown.
+Text to clean: {text}"""
+
+SRT_WHOLE_FILE_PROMPT = """TRANSLATE THE ENTIRE FOLLOWING SRT SUBTITLE FILE to {target_language}.
+**IMPORTANT: PRESERVE THE EXACT SRT FORMAT WITHOUT ADDING CODE FENCES.**
+1. Keep all subtitle numbers exactly as they are.
+2. Keep all timestamps intact.
+3. Translate only the subtitle text between the timestamps.
+4. Do not add any markdown code fences (e.g., no ```).
+Output the translation as plain text.
+Text: {text}"""
+
 PROMPTS = {
-    "cleanup": CLEANUP_PROMPT, # Only keep the cleanup prompt
+    "translate": DEFAULT_TRANSLATION_PROMPT_REFINED_V7,
+    "translate_pinyin": DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT,
+    "cleanup": CLEANUP_PROMPT,
+    "translate_only": TRANSLATE_ONLY_PROMPT_REFINED_V7,
+    "translate_only_pinyin": TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT,
+    "srt_translate_whole_file": SRT_WHOLE_FILE_PROMPT
 }
-DEFAULT_PROMPT_KEY = "cleanup" # Default prompt is now always cleanup
+DEFAULT_PROMPT_KEY = "translate_only"
+
 PROMPT_SUFFIX_MAP = {
-    "cleanup": "_cleaned", # Only keep the cleanup suffix
+    "translate": "_translated",
+    "translate_pinyin": "_translated_pinyin",
+    "cleanup": "_cleaned",
+    "translate_only": "_only_translated",
+    "translate_only_pinyin": "_only_translated_pinyin",
+    "srt_translate_whole_file": "_translated_whole_file"
 }
-# Google Gemini API Key
+
+# Google GenAI API Key
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY_HERE"
     print("Warning: GOOGLE_API_KEY environment variable not set...")
-# Rate Limiting for Google Gemini
+
+# Rate Limiting for Google GenAI
 REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 last_request_time = None
+
 # Ollama API Configuration
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat") # Allow Ollama URL to be set via env var
-# --- End Configuration ---
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+
+def get_ollama_tags_url():
+    if "/api/chat" in OLLAMA_API_URL:
+        return OLLAMA_API_URL.replace("/api/chat", "/api/tags")
+    else:
+        return OLLAMA_API_URL.rstrip("/") + "/api/tags"
+
+# --- Dynamic Model Listing Functions ---
+def get_google_models(api_key):
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        models_iterable = client.models.list()  # List available models using the new SDK
+        models = [model.name for model in models_iterable]
+        return models
+    except Exception as e:
+        print(f"Error retrieving Google models: {e}", file=sys.stderr)
+        return []
+
+def get_ollama_models():
+    try:
+        url = get_ollama_tags_url()
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        # Expecting a JSON object with a "models" key containing model objects.
+        models = [model["name"] for model in data.get("models", [])]
+        return models
+    except Exception as e:
+        print(f"Error retrieving Ollama models: {e}", file=sys.stderr)
+        return []
+# --- End Dynamic Model Listing ---
+
 def insert_custom_prompt(original_prompt, custom_prompt):
     """Inserts the custom prompt after the first line of the original prompt."""
     lines = original_prompt.splitlines(keepends=True)
     if len(lines) > 1:
-        lines.insert(1, custom_prompt.strip() + "\n\n") # Insert after the first line, add two newlines for separation
-    elif lines: # if only one line or empty, append after the first line if exists, else just prepend.
+        lines.insert(1, custom_prompt.strip() + "\n\n")
+    elif lines:
         lines.append("\n\n" + custom_prompt.strip() + "\n")
     else:
-        lines.insert(0, custom_prompt.strip() + "\n\n") # if prompt was empty, prepend.
+        lines.insert(0, custom_prompt.strip() + "\n\n")
     return "".join(lines)
+
 def translate_srt_whole_file(input_file, output_file, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False):
-    """Translates SRT file by sending the entire file content in one call."""
-    # SRT translation is removed in this cleanup-only version
-    pass # Functionality removed for cleanup-only script
-def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False, prev_context=None): # Changed default to False (non-streaming default)
-    """Translates text using Google Gemini API or Ollama, with rate limiting for Gemini."""
+    """Translates an SRT file by sending its entire content in one call."""
+    try:
+        with open(input_file, "r", encoding="utf-8-sig") as infile:
+            srt_content = infile.read()
+        translated_content = translate_text(
+            text=srt_content,
+            target_language=target_language,
+            engine=engine,
+            model_name=model_name,
+            google_api_key=google_api_key,
+            processing_prompt=processing_prompt,
+            stream_output=stream_output
+        )
+        if translated_content:
+            try:
+                with open(output_file, "w", encoding="utf-8") as outfile:
+                    outfile.write(translated_content)
+                return True
+            except Exception as e:
+                print(f"Error writing translated SRT: {e}", file=sys.stderr)
+                return False
+        else:
+            return False
+    except Exception as e:
+        print(f"Error reading SRT file: {e}", file=sys.stderr)
+        return False
+
+def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False, prev_context=None):
+    """Translates text using Google GenAI or Ollama, with rate limiting for Google."""
     global last_request_time
     if engine == "google":
         from google import genai
-        from google.api_core.exceptions import ResourceExhausted, NotFound, GoogleAPIError # Ensure GoogleAPIError is imported
-        from google.genai import types # Import types
-
-        client = genai.Client(api_key=google_api_key) # Initialize client here using new SDK
-
+        client = genai.Client(api_key=google_api_key)
         try:
-            # --- Rate Limiting for Google Gemini ---
             current_time = time.time()
             if last_request_time is not None:
                 time_since_last_request = current_time - last_request_time
                 if time_since_last_request < REQUEST_INTERVAL_SECONDS:
                     sleep_duration = REQUEST_INTERVAL_SECONDS - time_since_last_request
-                    print(f"Rate limit active (Google Gemini). Sleeping for {sleep_duration:.2f} seconds...")
+                    print(f"Rate limit active (Google GenAI). Sleeping for {sleep_duration:.2f} seconds...")
                     time.sleep(sleep_duration)
             last_request_time = time.time()
-            # --- End Rate Limiting ---
-            prompt_content = processing_prompt.format(text=text) # target_language removed
-            generate_content_config = types.GenerateContentConfig() # Create config object
-
-            api_params = { # Prepare API call parameters
-                "model": model_name if model_name else None, # Include model only if specified
-                "contents": prompt_content,
-                "config": generate_content_config
-            }
-            if model_name is None: # Remove 'model' key if model_name is None to use API default
-                del api_params["model"]
-
-            if stream_output: # Conditional streaming based on stream_output parameter
-                print(f"--- Calling Google Gemini API with model '{api_params.get('model', 'default')}' for processing... Streaming output below: ---") # Use 'default' if model is not in params
-                response_stream = client.models.generate_content_stream( # Use _stream method
-                    **api_params # Pass parameters as kwargs
-                )
+            prompt_content = processing_prompt.format(target_language=target_language, text=text)
+            if stream_output:
+                print(f"--- Calling Google GenAI API with model '{model_name}' for processing (streaming) ---")
+                response = client.models.generate_content_stream(model=model_name, contents=prompt_content)
                 processed_text_chunks = []
-                for chunk in response_stream: # Iterate through response chunks (parts)
-                    if chunk.text: # Check if the chunk has text content
-                        content_chunk = chunk.text
-                        print(content_chunk, end="", flush=True)
-                        processed_text_chunks.append(content_chunk)
-                print("\n--- Google Gemini API call completed and output streamed. ---")
-                processed_text = "".join(processed_text_chunks).strip()
-                return processed_text
-            else: # Non-streaming mode
-                print(f"--- Calling Google Gemini API with model '{api_params.get('model', 'default')}' for processing... (Non-streaming) ---") # Use 'default' if model is not in params
-                response = client.models.generate_content( # Use client.models.generate_content
-                    **api_params # Pass parameters as kwargs
-                )
-                print("\n--- Google Gemini API call completed. ---")
-                processed_text = response.text
-                return processed_text
-        except ResourceExhausted as e:
-            print(f"Error: Google Gemini API Quota Exhausted.", file=sys.stderr)
-            print(f"  Detailed Quota Exhaustion Information:")
-            if hasattr(e, 'status_code'):
-                print(f"    HTTP Status Code: {e.status_code}")
-            if hasattr(e, 'message'):
-                print(f"    Error Message: {e.message}')") # Corrected f-string formatting
-            return None # Simplified error handling - return None directly
-        except NotFound as e: # Catch NotFound error for invalid model name
-            print(f"Warning: Gemini model '{model_name}' not found or unavailable. It will be excluded from the model list.", file=sys.stderr) # Still warn if *user-specified* model not found
-            print(f"  Detailed Model Not Found Information:")
-            if hasattr(e, 'status_code'):
-                print(f"    HTTP Status Code: {e.status_code}")
-            if hasattr(e, 'message'):
-                print(f"    Error Message: {e.message}")
-            return None # Return None to indicate processing failed for this model, but not a fatal error
-        except GoogleAPIError as e: # Catch general API errors
-            print(f"Error calling Google Gemini API: {e}", file=sys.stderr)
-            if hasattr(e, 'status_code'):
-                print(f"    HTTP Status Code: {e.status_code}")
-            if hasattr(e, 'message'):
-                print(f"    Error Message: {e.message}")
-            return None
+                for chunk in response:
+                    if chunk.text:
+                        print(chunk.text, end="", flush=True)
+                        processed_text_chunks.append(chunk.text)
+                print("\n--- Google GenAI API streaming completed. ---")
+                return "".join(processed_text_chunks).strip()
+            else:
+                print(f"--- Calling Google GenAI API with model '{model_name}' for processing (non-streaming) ---")
+                response = client.models.generate_content(model=model_name, contents=prompt_content)
+                print("\n--- Google GenAI API call completed. ---")
+                return response.text
         except Exception as e:
-            print(f"Error calling Google Gemini API: {e}", file=sys.stderr)
-            return None
+            if "quota" in str(e).lower():
+                print(f"Error: Google GenAI API Quota Exhausted. {e}", file=sys.stderr)
+                return None
+            else:
+                print(f"Error calling Google GenAI API: {e}", file=sys.stderr)
+                return None
     elif engine == "ollama":
         try:
-            prompt_content = processing_prompt.format(text=text) # Removed target_language from prompt formatting
+            prompt_content = processing_prompt.format(target_language=target_language, text=text)
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt_content}],
-                "stream": True # Ollama is always streaming, keep it True
+                "stream": True
             }
             headers = {'Content-Type': 'application/json'}
             try:
-                print(f"--- Calling Ollama API with model '{model_name}' for processing... Streaming output below: ---")
+                print(f"--- Calling Ollama API with model '{model_name}' for processing (streaming) ---")
                 response = requests.post(OLLAMA_API_URL, headers=headers, data=json.dumps(payload), stream=True)
                 response.raise_for_status()
             except requests.exceptions.ConnectionError as e:
-                print(f"Error: Could not connect to Ollama API at {OLLAMA_API_URL}. Is Ollama server running?", file=sys.stderr)
-                print(f"Connection error details: {e}", file=sys.stderr)
+                print(f"Error: Could not connect to Ollama API at {OLLAMA_API_URL}. {e}", file=sys.stderr)
                 return None
             except requests.exceptions.Timeout as e:
-                print(f"Error: Timeout connecting to Ollama API at {OLLAMA_API_URL}.", file=sys.stderr)
-                print(f"Timeout error details: {e}", file=sys.stderr)
+                print(f"Error: Timeout connecting to Ollama API at {OLLAMA_API_URL}. {e}", file=sys.stderr)
                 return None
             except requests.exceptions.RequestException as e:
                 print(f"Error calling Ollama API: {e}", file=sys.stderr)
-                if 'response' in locals() and response is not None:
-                    print(f"HTTP Status Code: {response.status_code}", file=sys.stderr)
-                    print(f"Response Text: {response.text}", file=sys.stderr)
                 return None
-            try:
-                processed_text_chunks = []
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            json_line = json.loads(line)
-                            if 'message' in json_line and 'content' in json_line['message']:
-                                content_chunk = json_line['message']['content']
-                                print(content_chunk, end="", flush=True)
-                                processed_text_chunks.append(content_chunk)
-                        except json.JSONDecodeError:
-                            print(f"Warning: Could not decode JSON line from Ollama stream: {line.decode() if isinstance(line, bytes) else line}", file=sys.stderr)
-                            continue
-                print("\n--- Ollama API call completed and output streamed. ---")
-                processed_text = "".join(processed_text_chunks).strip()
-                return processed_text
-            except Exception as e:
-                print(f"Error processing Ollama API streaming response: {e}", file=sys.stderr)
-                return None
+            processed_text_chunks = []
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        json_line = json.loads(line)
+                        if 'message' in json_line and 'content' in json_line['message']:
+                            processed_text_chunks.append(json_line['message']['content'])
+                            print(json_line['message']['content'], end="", flush=True)
+                    except json.JSONDecodeError:
+                        print(f"Warning: Could not decode JSON line.", file=sys.stderr)
+                        continue
+            print("\n--- Ollama API streaming completed. ---")
+            return "".join(processed_text_chunks).strip()
         except Exception as e:
             print(f"Unexpected error during Ollama processing: {e}", file=sys.stderr)
             return None
     else:
         print(f"Error: Invalid engine '{engine}'. Choose 'google' or 'ollama'.", file=sys.stderr)
         return None
+
 def get_language_name_from_code(language_code):
-    """Gets the full language name from a two-digit language code using pycountry."""
-    # Language code functionality removed as it's cleanup-only
-    return None
+    """Gets the full language name from a two-letter language code using pycountry."""
+    try:
+        lang = pycountry.languages.get(alpha_2=language_code)
+        return lang.name if lang else None
+    except KeyError:
+        return None
+
 def natural_sort_key(s):
     """Generates keys for natural sorting."""
-    return [int(text) if text.isdigit() else text.lower()
-            for text in re.split(re.compile('([0-9]+)'), s)]
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(re.compile('([0-9]+)'), s)]
 
-def get_available_gemini_models_from_api(api_key, potential_models): # potential_models is now effectively ignored
-    """
-    Queries Google Gemini API using client.models.list() to get available models.
-    Returns a list of valid/available Gemini model names directly from the API.
-    """
-    from google import genai
-    from google.api_core.exceptions import GoogleAPIError # Keep GoogleAPIError import
-    from google.genai import types # Keep types import
-
-    available_models = []
-    client = genai.Client(api_key=api_key) # Initialize client
-
-    print("--- Checking Google Gemini model availability from API using client.models.list()... ---")
-    try:
-        response_model_list = client.models.list() # Call client.models.list() to get all models
-        api_model_names = [model.name for model in response_model_list] # Extract all model names from API response into a list
-
-        if not api_model_names: # Check if API returned any models at all
-            print("Warning: Gemini API model list is empty. No models available from API.")
-            return [] # Return empty list if no models from API
-        else:
-            print(f"  Found {len(api_model_names)} models available from Gemini API.")
-            return api_model_names # Return the list of model names from the API
-
-    except GoogleAPIError as e: # Catch general API errors during list call
-        print(f"  Error listing Gemini models from API: {e}")
-        print("  Warning: Could not retrieve Gemini model list from API. Please check your API key and network connection.")
-        return [] # Return empty list on API error to indicate no models available
-    except Exception as e: # Catch any other unexpected exceptions during API list call
-        print(f"  Unexpected error during Gemini model list retrieval: {e}")
-        print("  Warning: Could not retrieve Gemini model list due to unexpected error. ")
-        return [] # Return empty list on unexpected error
-
-
-def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=False): # enable_pinyin is now irrelevant for cleanup-only
-    """Processes files for translation or cleanup based on arguments.
-       Now processes files regardless of extension."""
-
-    global DEFAULT_GEMINI_MODELS # Ensure we are using the global list
-
-    # DEFAULT_GEMINI_MODELS list is now populated in main() just once at startup
-    # No need to repopulate it here anymore.
-
+def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=False):
+    """Processes files for translation or cleanup based on arguments."""
     global last_request_time
     last_request_time = None
     quota_exhausted = False
-    exit_code = 0 # Initialize exit code to success
+    exit_code = 0
+
     if not args.files:
         print("Error: No files specified.", file=sys.stderr)
         return 1
-    all_files = [] # Initialize as empty list to handle glob correctly
-    for file_pattern in args.files: # Iterate through file patterns from args
-        resolved_files_for_pattern = glob.glob(file_pattern) # Expand each pattern
-        if not resolved_files_for_pattern: # Check if any files found for this pattern
+
+    all_files = []
+    for file_pattern in args.files:
+        files_found = glob.glob(file_pattern)
+        if not files_found:
             print(f"Warning: No files found matching pattern: '{file_pattern}'", file=sys.stderr)
-        all_files.extend(resolved_files_for_pattern) # Add found files to the list
-    if not all_files: # Check if the final list of files is empty after processing all patterns
-        print(f"Error: No files found matching any specified pattern(s).", file=sys.stderr)
+        all_files.extend(files_found)
+
+    if not all_files:
+        print("Error: No files found matching any specified pattern(s).", file=sys.stderr)
         return 1
-    target_language = None # Language is not relevant for cleanup
-    target_language_code = None # Language code is not relevant for cleanup
-    output_dir_base = args.output if args.output else OUTPUT_SUBFOLDER # Base output dir, before language code
-    # --- Construct output directory name ---
-    output_dir = os.path.join(os.getcwd(), output_dir_base) # Output dir for cleanup, no language code
-    os.makedirs(output_dir, exist_ok=True)
-    if args.engine == "google":
-        # DEFAULT_GEMINI_MODELS is populated in main()
-        # No need for fallback to DEFAULT_GEMINI_MODELS_BASE anymore
 
-        model_name = args.model if args.model else None # Let API use default model if None is specified
-        if args.model and not DEFAULT_GEMINI_MODELS and DEFAULT_GEMINI_MODELS != []: # If user specified a model but no models were loaded from API, and API model list is not explicitly empty (empty list means API call was attempted)
-            print(f"Warning: You specified model '{args.model}', but no Gemini models were loaded from the API. Using API default model instead (if available).", file=sys.stderr)
-        elif not DEFAULT_GEMINI_MODELS and DEFAULT_GEMINI_MODELS != []: # If no model specified by user and no models loaded from API
-             print(f"Warning: No Gemini models available from API. Using API default model (if available).", file=sys.stderr)
-
-
-    elif args.engine == "ollama":
-        default_model = DEFAULT_OLLAMA_MODELS[0]
-        model_name = args.model if args.model else default_model
+    if args.language and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
+        target_language_code = args.language.lower()
+        target_language = get_language_name_from_code(target_language_code)
+        if not target_language:
+            print(f"Error: Invalid language code '{args.language}'.", file=sys.stderr)
+            return 1
+    elif args.prompt_key == "cleanup":
+        target_language = None
+        target_language_code = None
     else:
-        model_name = None
-    processing_prompt_base = PROMPTS.get(args.prompt_key) # Should always be "cleanup" now
+        target_language = DEFAULT_TARGET_LANGUAGE
+        target_language_code = DEFAULT_TARGET_LANGUAGE
+
+    output_dir_base = args.output if args.output else OUTPUT_SUBFOLDER
+    original_files_dir = os.path.join(os.getcwd(), ORIGINAL_FILES_SUBFOLDER)
+    if target_language_code and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
+        output_dir = os.path.join(os.getcwd(), f"{output_dir_base}_{target_language_code}")
+    else:
+        output_dir = os.path.join(os.getcwd(), output_dir_base)
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(original_files_dir, exist_ok=True)
+
+    # Dynamically update model lists based on engine selection.
+    if args.engine == "google":
+        updated_models = get_google_models(GOOGLE_API_KEY)
+        global DEFAULT_GEMINI_MODELS
+        DEFAULT_GEMINI_MODELS = updated_models
+        model_name = args.model if args.model else (DEFAULT_GEMINI_MODELS[0] if DEFAULT_GEMINI_MODELS else "")
+    elif args.engine == "ollama":
+        updated_models = get_ollama_models()
+        global DEFAULT_OLLAMA_MODELS
+        DEFAULT_OLLAMA_MODELS = updated_models
+        model_name = args.model if args.model else (DEFAULT_OLLAMA_MODELS[0] if DEFAULT_OLLAMA_MODELS else "")
+    else:
+        model_name = ""
+
+    processing_prompt_base = PROMPTS.get(args.prompt_key) or PROMPTS[DEFAULT_PROMPT_KEY]
+    if enable_pinyin and args.prompt_key in ["translate", "translate_only"]:
+        processing_prompt_base = PROMPTS.get(args.prompt_key + "_pinyin")
+    elif args.prompt_key in ["translate", "translate_only"]:
+        processing_prompt_base = PROMPTS.get(args.prompt_key)
     if not processing_prompt_base:
         processing_prompt_base = PROMPTS[DEFAULT_PROMPT_KEY]
-    processing_prompt = processing_prompt_base # No more conditional prompt selection
+    processing_prompt = insert_custom_prompt(processing_prompt_base, custom_prompt_text) if custom_prompt_text else processing_prompt_base
 
-    # Insert custom prompt if provided
-    if custom_prompt_text:
-        processing_prompt = insert_custom_prompt(processing_prompt_base, custom_prompt_text)
-    else:
-        processing_prompt = processing_prompt_base
     processing_settings = {
         "Engine": args.engine,
-        "Model": model_name if model_name else "API Default", # Indicate "API Default" if no model name is explicitly set
-        "Prompt": args.prompt_key, # Will always be cleanup
+        "Model": model_name,
+        "Prompt": args.prompt_key,
         "Output Directory": output_dir,
         "Output File Suffix": args.suffix,
         "Files": args.files,
-        "Stream Output": stream_output, # Added stream output setting
-        "Custom Prompt": custom_prompt_text if custom_prompt_text else "None", # Include custom prompt in settings
+        "Stream Output": stream_output,
+        "Custom Prompt": custom_prompt_text if custom_prompt_text else "None",
+        "Chinese Pinyin": enable_pinyin
     }
+    if args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
+        processing_settings["Target Language"] = target_language
+
     for file_path in all_files:
         print(f"--- Processing file: '{file_path}' ---")
         try:
-            # SRT file handling removed for cleanup-only script
             if file_path.lower().endswith('.srt'):
-                print(f"Warning: SRT file '{file_path}' will be processed as a text file for cleanup. SRT-specific formatting will be ignored.")
+                base_name = os.path.basename(file_path)
+                name, ext = os.path.splitext(base_name)
+                output_file_path = os.path.join(output_dir, f"{name}_{target_language_code}{args.suffix}{ext}")
+                success = translate_srt_whole_file(
+                    input_file=file_path,
+                    output_file=output_file_path,
+                    target_language=target_language,
+                    engine=args.engine,
+                    model_name=model_name,
+                    google_api_key=GOOGLE_API_KEY,
+                    processing_prompt=processing_prompt,
+                    stream_output=stream_output
+                )
+                if success:
+                    print(f"Translated SRT '{file_path}' -> '{output_file_path}' using prompt '{args.prompt_key}' (whole-file)")
+                    try:
+                        shutil.move(file_path, os.path.join(original_files_dir, base_name))
+                    except Exception as e:
+                        print(f"Error moving original SRT: {e}", file=sys.stderr)
+                else:
+                    print(f"Failed to translate SRT file: {file_path}", file=sys.stderr)
+                continue
 
-            # Existing text file processing (and now SRT files too)
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
-            processed_text = translate_text( # Using translate_text but for cleanup prompt
+
+            processing_text = translate_text(
                 text,
-                target_language, # Will be None, not used in cleanup prompt
+                target_language,
                 args.engine,
                 model_name,
                 GOOGLE_API_KEY,
                 processing_prompt,
-                stream_output # Pass stream_output to translate_text
+                stream_output
             )
-            if processed_text:
+
+            if processing_text:
                 base_name = os.path.basename(file_path)
                 name, ext = os.path.splitext(base_name)
-                # --- Construct output filename ---
-                output_file_path = os.path.join(output_dir, f"{name}{args.suffix}{ext}") # No language code in filename for cleanup
-                print(f"  Saving processed output to: '{output_file_path}'") # Debug print before saving
+                output_file_path = os.path.join(output_dir, f"{name}_{target_language_code}{args.suffix}{ext}") if target_language_code and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"] else os.path.join(output_dir, f"{name}{args.suffix}{ext}")
                 with open(output_file_path, "w", encoding="utf-8") as outfile:
-                    outfile.write(processed_text)
-                print(f"  Successfully saved to: '{output_file_path}'") # Debug print after saving
-                print(f"\nProcessed '{file_path}' using {args.engine} engine, model '{model_name if model_name else 'API Default'}', prompt '{args.prompt_key}' -> '{output_file_path}'")
-            elif processed_text is None and args.engine == "google":
-                print(f"Processing failed for '{file_path}' due to Google Gemini Quota Exhaustion or Model issue (New SDK). Script will terminate file processing for Gemini errors.", file=sys.stderr)
+                    outfile.write(processing_text)
+                print(f"\nProcessed '{file_path}' using {args.engine} engine, model '{model_name}', prompt '{args.prompt_key}' and Pinyin {'enabled' if enable_pinyin else 'disabled'} -> '{output_file_path}'")
+                try:
+                    destination_original_file_path = os.path.join(original_files_dir, os.path.basename(file_path))
+                    os.rename(file_path, destination_original_file_path)
+                    print(f"Moved original file '{file_path}' to '{destination_original_file_path}'")
+                except Exception as move_error:
+                    print(f"Error moving original file '{file_path}': {move_error}", file=sys.stderr)
+            elif processing_text is None and args.engine == "google":
+                print(f"Processing failed for '{file_path}' due to Google GenAI Quota Exhaustion. Script will terminate.", file=sys.stderr)
                 quota_exhausted = True
-                exit_code = 1 # Set exit code to 1 for quota exhaustion or Gemini model issue
-                break # Add break here to stop processing further files for Google Gemini errors
+                exit_code = 1
+                break
             else:
                 print(f"Processing failed for '{file_path}'. See error messages above.", file=sys.stderr)
         except FileNotFoundError:
             print(f"Error: File not found: {file_path}", file=sys.stderr)
         except Exception as e:
-            print(f"Error processing {file_path}: Exception Type: {type(e)}, Message: {e}", file=sys.stderr) # Simplified error print
+            print(f"Error processing {file_path}: {type(e)} - {e}", file=sys.stderr)
         finally:
             print(f"--- Finished processing file: '{file_path}' ---")
+
     if quota_exhausted:
-        print("\n--- Script terminated early due to Google Gemini Quota Exhaustion or Model issue (New SDK). ---", file=sys.stderr)
-        return exit_code # Return non-zero exit code for quota exhaustion or Gemini errors
+        print("\n--- Script terminated early due to Google GenAI Quota Exhaustion. ---", file=sys.stderr)
+        return exit_code
+
     print("\n--- Processing Settings Used ---")
     for key, value in processing_settings.items():
         print(f"{key}: {value}")
     print("--- End Processing Settings ---")
-    return exit_code # Return 0 for successful processing (or 1 if error occurred but not quota exhaustion, though currently only quota exhaustion sets exit_code to 1)
+    return exit_code
+
 def main():
-    """Main function to always launch GUI, optionally pre-filled with command-line files."""
-
-    global DEFAULT_GEMINI_MODELS # Ensure we are modifying the global list
-
-    DEFAULT_GEMINI_MODELS = get_available_gemini_models_from_api(GOOGLE_API_KEY, DEFAULT_GEMINI_MODELS_BASE) # Populate Gemini models list ONCE at startup
-
-    parser = argparse.ArgumentParser(description="Cleanup text files using Google Gemini or Ollama.") # Updated description
+    parser = argparse.ArgumentParser(description="Translate or cleanup text files using Google GenAI or Ollama.")
     parser.add_argument("files", nargs="*", help="Path(s) to the text file(s) to process. Will be pre-filled in GUI.")
-    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help=f"AI engine to use: google or ollama.")
-    parser.add_argument("-m", "--model", "--model", dest="model", default=None, help=f"Model to use (engine specific). If not specified, API default model will be used for Google Gemini.") # Updated model help text
-    parser.add_argument("-p", "--prompt", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=PROMPTS.keys(), help=f"Prompt to use. Keywords: {', '.join(PROMPTS.keys())} (default: {DEFAULT_PROMPT_KEY})") # Keep prompt arg for CLI for potential advanced use, but default to cleanup
-    parser.add_argument("-o", "--output", default=None, help="Output directory (overrides '{OUTPUT_SUBFOLDER}').")
-    parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_SUFFIX, help=f"Suffix for processed file names.")
-    parser.add_argument("--no-stream", dest="stream_output_cli", action='store_false', default=False, help="Disable streaming output for Google Gemini (CLI only).") # CLI option to disable stream, default False (non-streaming CLI default)
-    parser.set_defaults(stream_output_cli=False) # Default stream is False for CLI
+    parser.add_argument("-l", "--language", default=None, help="Target language (e.g., en, id, fr).")
+    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help="AI engine to use: google or ollama.")
+    parser.add_argument("-m", "--model", dest="model", default=None, help="Model to use (engine specific).")
+    parser.add_argument("-p", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=PROMPTS.keys(), help=f"Prompt to use. Options: {', '.join(PROMPTS.keys())}")
+    parser.add_argument("-o", "--output", default=None, help="Output directory (overrides default).")
+    parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_SUFFIX, help="Suffix for processed file names.")
+    parser.add_argument("--no-stream", dest="stream_output_cli", action='store_false', default=False, help="Disable streaming output for Google GenAI (CLI only).")
+    parser.add_argument("--pinyin", dest="enable_pinyin_cli", action='store_true', default=False, help="Enable Chinese Pinyin transliteration (CLI only, for translate prompts).")
+    parser.set_defaults(stream_output_cli=False)
+    parser.set_defaults(enable_pinyin_cli=False)
     args = parser.parse_args()
+
+    # Dynamically update model lists based on selected engine
+    if args.engine == "google":
+        updated_models = get_google_models(GOOGLE_API_KEY)
+        global DEFAULT_GEMINI_MODELS
+        DEFAULT_GEMINI_MODELS = updated_models
+    elif args.engine == "ollama":
+        updated_models = get_ollama_models()
+        global DEFAULT_OLLAMA_MODELS
+        DEFAULT_OLLAMA_MODELS = updated_models
+
     resolved_files = []
     for file_pattern in args.files:
         resolved_files.extend(glob.glob(file_pattern))
     resolved_files.sort(key=natural_sort_key)
+
     gui_exit_code = use_gui(resolved_files, args)
-    if gui_exit_code is not None: # GUI mode was used
-        sys.exit(gui_exit_code) # Exit with code from GUI processing
-    else: # CLI mode (GUI was bypassed or not used)
-        sys.exit(process_files(args, args.stream_output_cli, enable_pinyin=False)) # enable_pinyin is now irrelevant
+    if gui_exit_code is not None:
+        sys.exit(gui_exit_code)
+    else:
+        sys.exit(process_files(args, args.stream_output_cli, enable_pinyin=args.enable_pinyin_cli))
+
 def use_gui(command_line_files, args):
-    """Launches a tkinter GUI for script options, optionally pre-filled with files.
-       Returns exit code from processing, or None if GUI is closed without processing."""
-
-    global DEFAULT_GEMINI_MODELS # Use the global list
-
     window = tk.Tk()
-    window.title("Text Cleanup Script GUI") # Updated title
-    exit_code_from_gui = None # Initialize exit code for GUI
+    window.title("Text Processing Script GUI")
+    exit_code_from_gui = None
+
     files_list_var = tk.Variable(value=command_line_files if command_line_files else [])
-    language_var = tk.StringVar(value="") # Language var is now irrelevant, keep empty
+    language_var = tk.StringVar(value=args.language if args.language else DEFAULT_TARGET_LANGUAGE)
     engine_var = tk.StringVar(value=args.engine if args.engine else DEFAULT_ENGINE)
-    model_var = tk.StringVar(value=args.model if args.model else "") # Keep model_var, but it can be empty for API default
-    prompt_var = tk.StringVar(value="cleanup") # Always set prompt_var to "cleanup"
+    model_var = tk.StringVar(value=args.model if args.model else "")
+
+    prompt_options = [key for key in PROMPTS.keys() if key not in ["translate_pinyin", "translate_only_pinyin"]]
+    prompt_display_options = [
+        "Cleanup and Translate" if key == "translate" else
+        "Cleanup" if key == "cleanup" else
+        "Translate Only" if key == "translate_only" else
+        "SRT Translate (Whole File)" if key == "srt_translate_whole_file" else
+        key.replace("_", " ").title()
+        for key in prompt_options
+    ]
+    prompt_value_map = dict(zip(prompt_display_options, prompt_options))
+
+    initial_prompt_key = args.prompt_key if args.prompt_key else DEFAULT_PROMPT_KEY
+    initial_prompt_display_value = None
+    for disp, key in prompt_value_map.items():
+        if key == initial_prompt_key:
+            initial_prompt_display_value = disp
+            break
+    if not initial_prompt_display_value:
+        initial_prompt_display_value = prompt_display_options[0] if prompt_display_options else ""
+
+    prompt_var = tk.StringVar(value=initial_prompt_display_value)
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
-    stream_output_var = tk.BooleanVar(value=False) # Default to non-streaming in GUI
-    custom_prompt_var = tk.StringVar(value="") # Variable to store custom prompt text
+    stream_output_var = tk.BooleanVar(value=False)
+    custom_prompt_var = tk.StringVar(value="")
+    enable_pinyin_var = tk.BooleanVar(value=False)
 
+    # Files frame
     files_frame = ttk.Frame(window, padding="10 10 10 10")
     files_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(files_frame, text="Files:").grid(row=0, column=0, sticky=tk.NW)
@@ -417,25 +505,31 @@ def use_gui(command_line_files, args):
     file_listbox.grid(row=1, column=0, sticky=(tk.W, tk.E))
     file_buttons_frame = ttk.Frame(files_frame, padding="0 0 0 0")
     file_buttons_frame.grid(row=1, column=1, sticky=(tk.N, tk.S))
+
     def add_files_to_list():
-        selected_files = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt;*.md;*.text;*.rtf;*.srt"), ("All files", "*.*")]) # Added .srt to file dialog
+        selected_files = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt;*.md;*.text;*.rtf;*.srt"), ("All files", "*.*")])
         if selected_files:
             current_files = list(files_list_var.get())
             updated_files = current_files + list(selected_files)
             updated_files.sort(key=natural_sort_key)
             files_list_var.set(tuple(updated_files))
+
     def remove_selected_files():
         selected_indices = file_listbox.curselection()
         if selected_indices:
             current_files = list(files_list_var.get())
             updated_files = [file for index, file in enumerate(current_files) if index not in selected_indices]
             files_list_var.set(tuple(updated_files))
+
     def clear_all_files():
         files_list_var.set(())
+
     def select_all_files():
         file_listbox.select_set(0, tk.END)
+
     def deselect_all_files():
         file_listbox.selection_clear(0, tk.END)
+
     def move_file_up():
         selected_indices = file_listbox.curselection()
         if selected_indices:
@@ -448,6 +542,7 @@ def use_gui(command_line_files, args):
             for index in selected_indices:
                 if index > 0:
                     file_listbox.select_set(index - 1)
+
     def move_file_down():
         selected_indices = file_listbox.curselection()
         if selected_indices:
@@ -460,115 +555,151 @@ def use_gui(command_line_files, args):
             for index in selected_indices:
                 if index < len(current_files) - 1:
                     file_listbox.select_set(index + 1)
-    clear_all_button = tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10) # Separate button creation
-    clear_all_button.grid(row=6, column=0, sticky=tk.W, pady=2) # Separate grid placement
+
     tk.Button(file_buttons_frame, text="Add File", command=add_files_to_list, width=10).grid(row=0, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Remove File", command=remove_selected_files, width=10).grid(row=1, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Select All", command=select_all_files, width=10).grid(row=2, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Deselect All", command=deselect_all_files, width=10).grid(row=3, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Move Up", command=move_file_up, width=10).grid(row=4, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Move Down", command=move_file_down, width=10).grid(row=5, column=0, sticky=tk.W, pady=2)
+    tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10).grid(row=6, column=0, sticky=tk.W, pady=2)
 
+    # Language frame
+    lang_frame = ttk.Frame(window, padding="10 10 10 10")
+    lang_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    tk.Label(lang_frame, text="Language Code:").grid(row=0, column=0, sticky=tk.W)
+    lang_entry = ttk.Entry(lang_frame, textvariable=language_var, width=30)
+    lang_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    tk.Label(lang_frame, text="(e.g., en, fr, id)").grid(row=0, column=2, sticky=tk.W)
+
+    # Engine frame
     engine_frame = ttk.Frame(window, padding="10 10 10 10")
     engine_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(engine_frame, text="Engine:").grid(row=0, column=0, sticky=tk.W)
     engine_options = ['google', 'ollama']
-    engine_combo = ttk.Combobox(engine_frame, textvariable=engine_var, values=engine_options, state="readonly")
+    engine_combo = ttk.Combobox(engine_frame, textvariable=engine_var, values=engine_options, state="readonly", width=50)
     engine_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
+
+    # Model frame with Refresh Button
     model_frame = ttk.Frame(window, padding="10 10 10 10")
     model_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    tk.Label(model_frame, text="Model (optional for Google):").grid(row=0, column=0, sticky=tk.W) # Updated label text
-    model_combo = ttk.Combobox(model_frame, textvariable=model_var, values=[], state="readonly")
+    tk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky=tk.W)
+    model_combo = ttk.Combobox(model_frame, textvariable=model_var, values=[], state="readonly", width=50)
     model_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    refresh_button = ttk.Button(model_frame, text="Refresh Models", command=lambda: refresh_models(), width=15)
+    refresh_button.grid(row=0, column=2, padx=5)
+
+    def refresh_models():
+        eng = engine_var.get()
+        if eng == "google":
+            new_models = get_google_models(GOOGLE_API_KEY)
+            global DEFAULT_GEMINI_MODELS
+            DEFAULT_GEMINI_MODELS = new_models
+            model_combo['values'] = new_models
+            model_var.set(new_models[0] if new_models else "")
+        elif eng == "ollama":
+            new_models = get_ollama_models()
+            global DEFAULT_OLLAMA_MODELS
+            DEFAULT_OLLAMA_MODELS = new_models
+            model_combo['values'] = new_models
+            model_var.set(new_models[0] if new_models else "")
 
     def update_model_options(*args):
-        selected_engine = engine_var.get()
-        if selected_engine == 'google':
-            model_options = DEFAULT_GEMINI_MODELS # Use the API-loaded list
-        elif selected_engine == 'ollama':
-            model_options = DEFAULT_OLLAMA_MODELS
+        eng = engine_var.get()
+        if eng == 'google':
+            model_combo['values'] = DEFAULT_GEMINI_MODELS
+            model_var.set(DEFAULT_GEMINI_MODELS[0] if DEFAULT_GEMINI_MODELS else "")
+        elif eng == 'ollama':
+            model_combo['values'] = DEFAULT_OLLAMA_MODELS
+            model_var.set(DEFAULT_OLLAMA_MODELS[0] if DEFAULT_OLLAMA_MODELS else "")
         else:
-            model_options = []
-
-        model_combo['values'] = model_options
-
-        if selected_engine == 'google':
-            if DEFAULT_GEMINI_MODELS:
-                model_combo.set('') # Set to blank initially in GUI to indicate optional, API default will be used if blank
-            else: # If no models loaded from API at all
-                tk.messagebox.showwarning("Warning", "No Google Gemini models available from API. Using API default model if you proceed.") # Warn user, but allow to proceed with API default
-                model_combo['values'] = [] # Clear model options
-                model_combo.set('') # Ensure it's blank
-        elif selected_engine == 'ollama':
-            model_var.set(DEFAULT_OLLAMA_MODELS[0] if DEFAULT_OLLAMA_MODELS else "") # Set default Ollama model if available
-        else:
+            model_combo['values'] = []
             model_var.set("")
-
-        # Calculate max width and set Combobox width
-        max_model_name_length = 0
-        for model_name in model_options:
-            max_model_name_length = max(max_model_name_length, len(model_name))
-        model_combo_width = max(max_model_name_length + 5, 20) # Add some padding, set minimum width
-        model_combo.config(width=model_combo_width)
-
-
     engine_var.trace_add('write', update_model_options)
+    update_model_options()
 
-    # Model list is populated in main(), no need to call update_model_options() here at GUI startup anymore.
-    model_combo['values'] = DEFAULT_GEMINI_MODELS # Set initial values (could be empty list)
-    update_model_options() # Call it once at startup to set initial width
+    # Prompt frame
+    prompt_frame = ttk.Frame(window, padding="10 10 10 10")
+    prompt_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    tk.Label(prompt_frame, text="Prompt:").grid(row=0, column=0, sticky=tk.W)
+    prompt_combo = ttk.Combobox(prompt_frame, textvariable=prompt_var, values=list(prompt_value_map.keys()), state="readonly", width=50)
+    prompt_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    def update_suffix_from_prompt(*args):
+        selected_disp = prompt_combo.get()
+        try:
+            selected_key = prompt_value_map[selected_disp]
+            suffix = PROMPT_SUFFIX_MAP.get(selected_key, DEFAULT_SUFFIX)
+            suffix_var.set(suffix)
+        except KeyError:
+            suffix_var.set(DEFAULT_SUFFIX)
+    update_suffix_from_prompt()
+    prompt_var.trace_add('write', update_suffix_from_prompt)
 
+    # Custom prompt frame
     custom_prompt_frame = ttk.Frame(window, padding="10 10 10 10")
-    custom_prompt_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    custom_prompt_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(custom_prompt_frame, text="Custom Prompt (optional):").grid(row=0, column=0, sticky=tk.NW)
     custom_prompt_text = tk.Text(custom_prompt_frame, height=3, width=50)
     custom_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E))
-    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip()) # Initialize custom_prompt_var with empty text
+    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip())
 
+    # Pinyin frame
+    pinyin_frame = ttk.Frame(window, padding="10 10 10 10")
+    pinyin_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    pinyin_check = ttk.Checkbutton(pinyin_frame, text="Enable Chinese Pinyin", variable=enable_pinyin_var)
+    pinyin_check.grid(row=0, column=0, sticky=tk.W)
+
+    # Output frame
     output_frame = ttk.Frame(window, padding="10 10 10 10")
-    output_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    output_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(output_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
     output_entry = ttk.Entry(output_frame, textvariable=output_dir_var, width=50)
     output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
     tk.Button(output_frame, text="Browse Dir", command=lambda: output_dir_var.set(filedialog.askdirectory())).grid(row=0, column=2, sticky=tk.W)
     tk.Label(output_frame, text="(optional)").grid(row=0, column=3, sticky=tk.W)
+
+    # Suffix frame
     suffix_frame = ttk.Frame(window, padding="10 10 10 10")
-    suffix_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    suffix_frame.grid(row=9, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(suffix_frame, text="Suffix:").grid(row=0, column=0, sticky=tk.W)
     suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, state='readonly', width=20)
     suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
-    stream_frame = ttk.Frame(window, padding="10 10 10 10")
-    stream_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google Gemini)", variable=stream_output_var) # Checkbox for stream output
-    stream_check.grid(row=0, column=0, sticky=tk.W)
-    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END))) # Removed prompt_value_map and enable_pinyin
-    process_button.grid(row=9, column=0, columnspan=3, pady=20)
 
-    window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0) ) # Close and exit 0 if GUI closed
+    # Stream frame
+    stream_frame = ttk.Frame(window, padding="10 10 10 10")
+    stream_frame.grid(row=10, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google GenAI)", variable=stream_output_var)
+    stream_check.grid(row=0, column=0, sticky=tk.W)
+
+    process_button = ttk.Button(window, text="Process", 
+                                command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END), enable_pinyin_var.get()))
+    process_button.grid(row=11, column=0, columnspan=3, pady=20)
+
+    window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0))
     window.mainloop()
-    return exit_code_from_gui # Return exit code from GUI, will be None if GUI closed without processing
-def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, stream_output, custom_prompt_text): # Removed prompt_value_map and enable_pinyin parameters
-    """Processes files based on GUI input and closes GUI."""
+    return exit_code_from_gui
+
+def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output, custom_prompt_text, enable_pinyin):
     files_input = files_list_var.get()
     if not files_input:
-        tk.messagebox.showerror("Error", "Please select at least one file.")
+        messagebox.showerror("Error", "Please select at least one file.")
         return
     class GUIArgs:
         pass
     gui_args = GUIArgs()
     gui_args.files = list(files_input)
-    gui_args.language = "" # Language is not relevant anymore
+    gui_args.language = language_var.get()
     gui_args.engine = engine_var.get()
-    gui_args.model = model_var.get() if model_var.get() else None # Get model from GUI, set to None if empty to use API default
-    gui_args.prompt_key = "cleanup" # Always set prompt_key to "cleanup"
+    gui_args.model = model_var.get()
+    gui_args.prompt_key = prompt_value_map[prompt_var.get()]
     gui_args.output = output_dir_var.get() if output_dir_var.get() else None
     gui_args.suffix = suffix_var.get()
-    gui_args.stream_output_gui = stream_output # Pass stream_output from GUI
-    gui_args.custom_prompt_text = custom_prompt_text.strip() # Get custom prompt text from GUI and strip whitespace
-    gui_args.enable_pinyin_gui = False # enable_pinyin is now irrelevant, set to False
-
+    gui_args.stream_output_gui = stream_output
+    gui_args.custom_prompt_text = custom_prompt_text.strip()
+    gui_args.enable_pinyin_gui = enable_pinyin
     window.destroy()
-    gui_exit_code = process_files(gui_args, stream_output, gui_args.custom_prompt_text, enable_pinyin=False) # enable_pinyin is now irrelevant
-    sys.exit(gui_exit_code) # Exit with code from file processing
+    gui_exit_code = process_files(gui_args, stream_output, gui_args.custom_prompt_text, enable_pinyin=gui_args.enable_pinyin_gui)
+    sys.exit(gui_exit_code)
+
 if __name__ == "__main__":
     main()
