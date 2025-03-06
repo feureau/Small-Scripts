@@ -27,16 +27,17 @@ ORIGINAL_FILES_SUBFOLDER = "original_files"
 CONTEXT_LINES = 5               # Number of previous lines for SRT context # Keep import, might be used elsewhere
 MAX_RETRIES = 3                 # Max retries for API calls - for SRT # Keep, might be used elsewhere
 # --- Prompts ---
-CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR).  The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**.
+CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR). The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**. Format the text properly with a structure that is fit for book publishing.
 **Your task is to perform aggressive cleaning and correction to produce a perfectly clean, readable, and well-formatted plain text.**
 **Specifically, your cleaning and correction MUST include:**
-* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.** This is the most important step. Ensure the text is perfectly readable and grammatically correct in English.
+* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.** This is the most important step. Ensure the text is perfectly readable and grammatically correct with proper terminal punctuation marks. Make sure all sentences ended with the proper terminal punctuation marks, even if it's a title  or ending with a linebreak.
 * **REMOVE ALL pagination numbers.**  This includes both Arabic numerals (e.g., 1, 2, 3...) and Roman numerals (e.g., I, II, III, IV, V...). Do not include any page numbers in the cleaned output.
 * **AGGRESSIVELY REMOVE** unnecessary line breaks WITHIN paragraphs** to create flowing paragraphs.**  Text within a paragraph should be on a single line unless it's a deliberate line break for formatting within that paragraph (which is unlikely in OCR cleanup).
 * **JOIN hyphenated words that are split across lines.** For example, if "state- \n ment" appears, it should be corrected to "statement".
 * **COLLAPSE multiple spaces and tabs into single spaces.** Remove leading and trailing whitespace from lines. Ensure consistent spacing throughout the text.
 * **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the output.  **Preserve these paragraph breaks.**
 * **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**  Ensure a clean and professional output.
+* **CHAPTER TITLE that is in roman numeral must be converted into arabic numbering with proper terminal punctuation marks at the end, for example Chapter IV becomes Chapter 4. Also, the title of the chapter must be terminated with proper terminal punctuation marks, for example Down the Rabbit Hole becomes Down the Rabbit Hole. Note the period at the end.**
 **IMPORTANT:** Provide **ONLY** the final, cleaned and corrected text, in **plain text format**.  Do **NOT** include the original OCR text. Do **NOT** include any page numbers.  Do **NOT** include any introductory phrases, notes, quotation marks, or anything else. Just the clean, corrected plain text, perfectly readable and free of errors.
 **Text to clean:** {text}"""
 PROMPTS = {
