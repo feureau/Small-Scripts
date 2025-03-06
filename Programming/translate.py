@@ -52,14 +52,15 @@ TRANSLATE_ONLY_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural
 Translate the following text to natural and idiomatic {target_language}. Produce a translation that sounds fluent and natural to a native speaker, formatted in Markdown.
 Text: {text}"""
 
-TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
+TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT include any introductory phrases, commentary, or extra text. ONLY provide the final translated text formatted in Markdown.**
 
-Translate the following text to natural and idiomatic {target_language}. For Chinese names and terms, include Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a Markdown-formatted translation.
+Translate the following text to natural and idiomatic {target_language} and output only the final translation. For Chinese names and terms, include Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a Markdown-formatted translation.
 Text: {text}"""
 
-CLEANUP_PROMPT = """Please clean up the following OCR text which contains errors, typos, and formatting issues. Remove pagination numbers and unnecessary line breaks, and format the text using Markdown.
-Provide ONLY the final cleaned and corrected text in Markdown.
+CLEANUP_PROMPT = """Please clean up the following OCR text which contains errors, typos, and formatting issues. Remove pagination numbers, unnecessary hyphenation, unnecessary line breaks, and format the text into proper format such that the resulting body of text is fit for a publication as a book. Use Markdown formatting.
+Do NOT include any introductory phrases, commentary, or extra text—provide or any extra commentary. ONLY the final cleaned and corrected text in Markdown.
 Text to clean: {text}"""
+
 
 # --- Modified SRT prompt ---
 # This prompt instructs the model to preserve the exact SRT format WITHOUT wrapping the output in markdown code fences.
@@ -181,7 +182,6 @@ def translate_text(text, target_language, engine, model_name, google_api_key, pr
     global last_request_time
     if engine == "google":
         from google import genai
-        # Instead of calling configure(), we now pass the api_key when creating the Client.
         client = genai.Client(api_key=google_api_key)
         try:
             current_time = time.time()
@@ -314,7 +314,7 @@ def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=Fals
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(original_files_dir, exist_ok=True)
 
-    # Dynamically update model lists based on engine selection.
+    # Dynamically update model lists based on selected engine
     if args.engine == "google":
         updated_models = get_google_models(GOOGLE_API_KEY)
         global DEFAULT_GEMINI_MODELS
@@ -443,15 +443,10 @@ def main():
     parser.set_defaults(enable_pinyin_cli=False)
     args = parser.parse_args()
 
-    # Dynamically update model lists based on selected engine
-    if args.engine == "google":
-        updated_models = get_google_models(GOOGLE_API_KEY)
-        global DEFAULT_GEMINI_MODELS
-        DEFAULT_GEMINI_MODELS = updated_models
-    elif args.engine == "ollama":
-        updated_models = get_ollama_models()
-        global DEFAULT_OLLAMA_MODELS
-        DEFAULT_OLLAMA_MODELS = updated_models
+    # Dynamically update model lists for both engines at launch
+    global DEFAULT_GEMINI_MODELS, DEFAULT_OLLAMA_MODELS
+    DEFAULT_GEMINI_MODELS = get_google_models(GOOGLE_API_KEY)
+    DEFAULT_OLLAMA_MODELS = get_ollama_models()
 
     resolved_files = []
     for file_pattern in args.files:
@@ -498,7 +493,6 @@ def use_gui(command_line_files, args):
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
     stream_output_var = tk.BooleanVar(value=False)
-    custom_prompt_var = tk.StringVar(value="")
     enable_pinyin_var = tk.BooleanVar(value=False)
 
     files_frame = ttk.Frame(window, padding="10 10 10 10")
@@ -635,20 +629,26 @@ def use_gui(command_line_files, args):
     update_suffix_from_prompt()
     prompt_var.trace_add('write', update_suffix_from_prompt)
 
+    # New frame: Processing Prompt Preview (shows the final prompt template)
+    prompt_preview_frame = ttk.Frame(window, padding="10 10 10 10")
+    prompt_preview_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    tk.Label(prompt_preview_frame, text="Processing Prompt Preview:").grid(row=0, column=0, sticky=tk.W)
+    prompt_preview_text = tk.Text(prompt_preview_frame, height=10, width=60)
+    prompt_preview_text.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E))
+
     custom_prompt_frame = ttk.Frame(window, padding="10 10 10 10")
-    custom_prompt_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    custom_prompt_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(custom_prompt_frame, text="Custom Prompt (optional):").grid(row=0, column=0, sticky=tk.NW)
     custom_prompt_text = tk.Text(custom_prompt_frame, height=3, width=50)
     custom_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E))
-    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip())
-
+    
     pinyin_frame = ttk.Frame(window, padding="10 10 10 10")
-    pinyin_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    pinyin_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     pinyin_check = ttk.Checkbutton(pinyin_frame, text="Enable Chinese Pinyin", variable=enable_pinyin_var)
     pinyin_check.grid(row=0, column=0, sticky=tk.W)
 
     output_frame = ttk.Frame(window, padding="10 10 10 10")
-    output_frame.grid(row=8, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    output_frame.grid(row=9, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(output_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
     output_entry = ttk.Entry(output_frame, textvariable=output_dir_var, width=50)
     output_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
@@ -656,19 +656,44 @@ def use_gui(command_line_files, args):
     tk.Label(output_frame, text="(optional)").grid(row=0, column=3, sticky=tk.W)
 
     suffix_frame = ttk.Frame(window, padding="10 10 10 10")
-    suffix_frame.grid(row=9, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    suffix_frame.grid(row=10, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(suffix_frame, text="Suffix:").grid(row=0, column=0, sticky=tk.W)
     suffix_entry = ttk.Entry(suffix_frame, textvariable=suffix_var, state='readonly', width=20)
     suffix_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
     stream_frame = ttk.Frame(window, padding="10 10 10 10")
-    stream_frame.grid(row=10, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    stream_frame.grid(row=11, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google GenAI)", variable=stream_output_var)
     stream_check.grid(row=0, column=0, sticky=tk.W)
 
+    # Function to update the processing prompt preview
+    def update_prompt_preview(*args):
+        selected_disp = prompt_combo.get()
+        try:
+            selected_key = prompt_value_map[selected_disp]
+        except KeyError:
+            selected_key = DEFAULT_PROMPT_KEY
+        # Determine base prompt using pinyin if enabled
+        if enable_pinyin_var.get() and selected_key in ["translate", "translate_only"]:
+            base_prompt = PROMPTS.get(selected_key + "_pinyin", PROMPTS.get(selected_key))
+        else:
+            base_prompt = PROMPTS.get(selected_key, PROMPTS.get(DEFAULT_PROMPT_KEY))
+        custom_prompt = custom_prompt_text.get("1.0", tk.END).strip()
+        if custom_prompt:
+            final_prompt = insert_custom_prompt(base_prompt, custom_prompt)
+        else:
+            final_prompt = base_prompt
+        prompt_preview_text.delete("1.0", tk.END)
+        prompt_preview_text.insert(tk.END, final_prompt)
+    # Bind update function to changes in prompt selection, custom prompt, and pinyin checkbox
+    prompt_var.trace_add("write", update_prompt_preview)
+    custom_prompt_text.bind("<KeyRelease>", lambda event: update_prompt_preview())
+    enable_pinyin_var.trace_add("write", update_prompt_preview)
+    update_prompt_preview()
+
     process_button = ttk.Button(window, text="Process", 
                                 command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END), enable_pinyin_var.get()))
-    process_button.grid(row=11, column=0, columnspan=3, pady=20)
+    process_button.grid(row=12, column=0, columnspan=3, pady=20)
 
     window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0))
     window.update_idletasks()
