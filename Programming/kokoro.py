@@ -102,7 +102,7 @@ class KokoroGUI:
         self.lang_dropdown.grid(row=0, column=3, padx=5)
         self.lang_dropdown.bind("<<ComboboxSelected>>", self.update_lang_code)
         ttk.Label(voice_frame, text="Speed:").grid(row=0, column=4, padx=5, sticky="w")
-        self.speed_var = tk.DoubleVar(value=0.7)
+        self.speed_var = tk.DoubleVar(value=0.8)
         ttk.Spinbox(voice_frame, from_=0.5, to=2.0, increment=0.1,
                     textvariable=self.speed_var, width=5).grid(row=0, column=5, padx=5)
         ttk.Label(voice_frame, text="Format:").grid(row=0, column=6, padx=5, sticky="w")

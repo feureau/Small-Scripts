@@ -16,7 +16,6 @@ External CLI and libraries:
 faster-whisper       # Provides the faster-whisper-xxl CLI used for transcription.
 torch                # Required for running Whisper models (and used by faster-whisper).
 pyannote.audio       # Required for diarization when using the -d flag.
-
 """
 
 import sys
@@ -155,7 +154,12 @@ def run_whisper_xxl_transcription(
 
     try:
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",       # Specify UTF-8 encoding
+            errors="replace"        # Replace problematic characters
         )
         # Stream output line-by-line as it's produced
         while True:

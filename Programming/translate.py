@@ -11,180 +11,148 @@ import pycountry
 import shutil
 import re
 import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog
-import tkinter.messagebox
-from collections import deque  # For storing previous lines - for SRT context # Keep import, might be used in other parts
+from tkinter import ttk, filedialog, messagebox
+from collections import deque  # For storing previous lines - for SRT context
 
 # --- Configuration ---
-DEFAULT_TARGET_LANGUAGE = "en" # Changed to "en" for two-letter code default
-DEFAULT_GEMINI_MODELS = ["gemini-2.0-pro-exp-02-05","gemini-2.0-flash-thinking-exp-01-21","gemini-2.0-flash-exp", "gemini-2.0-flash", "gemini-2.0-flash-lite-preview-02-05"]
-DEFAULT_OLLAMA_MODELS = ["mistral-small:24b", "phi4", "qwen2.5:14b"]
+DEFAULT_TARGET_LANGUAGE = "en"  # Two-letter code default
+# We rely solely on dynamic model loading – start with empty lists.
+DEFAULT_GEMINI_MODELS = []
+DEFAULT_OLLAMA_MODELS = []
 DEFAULT_ENGINE = "google"
 DEFAULT_SUFFIX = "_processed"
 OUTPUT_SUBFOLDER = "processed_output"
 ORIGINAL_FILES_SUBFOLDER = "original_files"
-CONTEXT_LINES = 5               # Number of previous lines for SRT context # Keep, might be used elsewhere
-MAX_RETRIES = 3                 # Max retries for API calls - for SRT # Keep, might be used elsewhere
+CONTEXT_LINES = 5   # Number of previous lines for SRT context
+MAX_RETRIES = 3     # Max retries for API calls
 
 # --- Prompts ---
+# These prompts are used for normal (non-SRT) translations with Markdown formatting.
 DEFAULT_TRANSLATION_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
 
-Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone. This text is from OCR and is **VERY MESSY**. It contains significant errors, typos, gibberish, and formatting problems, including leftover page numbers (like Roman numerals 'IV' or Arabic numerals '123').  You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted translation **using Markdown formatting for structural elements**.
+Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed. This text is from OCR and is **VERY MESSY**. You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted Markdown output.
 
-**Specifically, your cleaning, correction, and formatting MUST include:**
+**Specifically:**
+* Correct all OCR errors, typos, and gibberish.
+* Remove all page numbers.
+* Ensure proper paragraphing and line breaks.
+* Format structural elements using Markdown (e.g. `#`, `##`, `###`).
+* Remove extraneous whitespace and artifacts.
 
-* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.**  This is the most important step.  Ensure the translated text is free of any OCR artifacts and makes perfect sense.
-* **REMOVE ALL page numbers**, whether they are Roman numerals (e.g., I, II, III, IV, V...) or Arabic numerals (e.g., 1, 2, 3...). Do not include any page numbers in the translated output.
-* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the Markdown output.
-* **(NEW) Format structural elements using Markdown:** If the original text has structural elements like chapter headings, section headings, etc., please format them using Markdown.
-    * Use `#` for chapter headings, `##` for main section headings, and `###` for subsections, etc.  Try to infer the hierarchy from the text if possible, or use `#` for the most prominent headings and `##` for subsequent ones if hierarchy is unclear.
-    * Ensure paragraphs are separated by blank lines (standard Markdown).
-* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
-
-**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. Provide **ONLY** the final, cleaned, corrected, and translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include the original French text. Do **NOT** include any page numbers. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the clean, translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
-
+**Constraint:** Provide ONLY the final cleaned, corrected, and translated text in {target_language} formatted in Markdown.
+Text: {text}"""
 
 DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
 
-Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone. This text is from OCR and is **VERY MESSY**. It contains significant errors, typos, gibberish, and formatting problems, including leftover page numbers (like Roman numerals 'IV' or Arabic numerals '123').  You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted translation **using Markdown formatting for structural elements**.
+Translate the following text to natural and idiomatic {target_language} ensuring that for Chinese names and terms you include the original Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a natural, fluent Markdown-formatted translation.
+Text: {text}"""
 
-**Specifically, your cleaning, correction, and formatting MUST include:**
+TRANSLATE_ONLY_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
 
-* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.**  This is the most important step.  Ensure the translated text is free of any OCR artifacts and makes perfect sense.
-* **REMOVE ALL page numbers**, whether they are Roman numerals (e.g., I, II, III, IV, V...) or Arabic numerals (e.g., 1, 2, 3...). Do not include any page numbers in the translated output.
-* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the Markdown output.
-* **(NEW) Format structural elements using Markdown:** If the original text has structural elements like chapter headings, section headings, etc., please format them using Markdown.
-    * Use `#` for chapter headings, `##` for main section headings, and `###` for subsections, etc.  Try to infer the hierarchy from the text if possible, or use `#` for the most prominent headings and `##` for subsequent ones if hierarchy is unclear.
-    * Ensure paragraphs are separated by blank lines (standard Markdown).
-* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
+Translate the following text to natural and idiomatic {target_language}. Produce a translation that sounds fluent and natural to a native speaker, formatted in Markdown.
+Text: {text}"""
 
-**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED.  DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
+TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
 
-* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
-* **CHINESE CHARACTERS:**  You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
-* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
-* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
-    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
-    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)". In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
+Translate the following text to natural and idiomatic {target_language}. For Chinese names and terms, include Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a Markdown-formatted translation.
+Text: {text}"""
 
-**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pinyin with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final, cleaned, corrected, and translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include the original French text. Do **NOT** include any page numbers. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the clean, translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
+CLEANUP_PROMPT = """Please clean up the following OCR text which contains errors, typos, and formatting issues. Remove pagination numbers and unnecessary line breaks, and format the text using Markdown.
+Provide ONLY the final cleaned and corrected text in Markdown.
+Text to clean: {text}"""
 
-
-TRANSLATE_ONLY_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
-
-Translate the following text to natural and idiomatic {target_language}.  Produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one.  Format structural elements using Markdown where appropriate and ensure paragraphs are separated by blank lines.
-
-**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. Provide **ONLY** the final, translated text in {target_language}, **formatted in Markdown**. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
-
-
-TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
-
-Translate the following text to natural and idiomatic {target_language}. For Chinese names and general Chinese terms use Hànyǔ Pīnyīn for the term in the translation. Include Chinese character names and general Chinese terms in Chinese in the translation. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone.  Produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one.  Format structural elements using Markdown where appropriate and ensure paragraphs are separated by blank lines.
-
-**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED. DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
-
-* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
-* **CHINESE CHARACTERS:** You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
-* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
-* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
-    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
-    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)". In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
-
-**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pinyin with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final, translated text in {target_language}, **formatted in Markdown**. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
-
-
-CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR).  The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**.
-
-**Your task is to perform aggressive cleaning and correction to produce a perfectly clean, readable, and well-formatted text using Markdown formatting for structural elements.**
-
-**Specifically, your cleaning, correction, and formatting MUST include:**
-
-* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.** This is the most important step. Ensure the text is perfectly readable and grammatically correct in English.
-* **REMOVE ALL pagination numbers.**  This includes both Arabic numerals (e.g., 1, 2, 3...) and Roman numerals (e.g., I, II, III, IV, V...). Do not include any page numbers in the cleaned output.
-* **AGGRESSIVELY REMOVE **unnecessary line breaks WITHIN paragraphs** to create flowing paragraphs.**  Text within a paragraph should be on a single line unless it's a deliberate line break for formatting within that paragraph (which is unlikely in OCR cleanup).
-* **JOIN hyphenated words that are split across lines.** For example, if "state- \n ment" appears, it should be corrected to "statement".
-* **COLLAPSE multiple spaces and tabs into single spaces.** Remove leading and trailing whitespace from lines. Ensure consistent spacing throughout the text.
-* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the Markdown output.  **Preserve these paragraph breaks.**
-* **Format structural elements using Markdown:** If the original text has structural elements like headings, please format them using Markdown.
-    * Use `#` for main headings, `##` for main section headings, and `###` for subsections, etc. Try to infer the hierarchy from the text if possible.
-    * Ensure paragraphs are separated by blank lines (standard Markdown).
-* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
-
-**IMPORTANT:** Provide **ONLY** the final, cleaned and corrected text, **formatted in Markdown**.  Do **NOT** include the original OCR text. Do **NOT** include any page numbers.  Do **NOT** include any introductory phrases, notes, quotation marks, or anything else. Just the clean, corrected text, perfectly formatted in Markdown and free of errors.
-
-**Text to clean:** {text}"""
-
-
+# --- Modified SRT prompt ---
+# This prompt instructs the model to preserve the exact SRT format WITHOUT wrapping the output in markdown code fences.
 SRT_WHOLE_FILE_PROMPT = """TRANSLATE THE ENTIRE FOLLOWING SRT SUBTITLE FILE to {target_language}.
-**IMPORTANT: YOU MUST ABSOLUTELY PRESERVE THE EXACT SRT FORMAT.** This means:
-1.  Keep all subtitle numbers exactly as they are in the original.
-2.  Keep all timestamps (e.g., 00:01:02,304 --> 00:01:05,944) exactly as they are in the original. Do not modify them in any way.
-3.  Translate only the subtitle text lines that are between the timestamps.
-4.  Do not translate or modify any lines that are subtitle numbers or timestamps.
-5.  Preserve all punctuation and line breaks in the translated subtitle text, as much as possible while ensuring natural and fluent {target_language} translation.
-6.  The output MUST be a valid SRT file.
-7.  Do not add any extra text, notes, explanations, or anything else. Only output the translated SRT content.
-
-Here is the SRT file content to translate:
-{text}
-"""
-
+**IMPORTANT: PRESERVE THE EXACT SRT FORMAT WITHOUT ADDING CODE FENCES.**
+1. Keep all subtitle numbers exactly as they are.
+2. Keep all timestamps intact.
+3. Translate only the subtitle text between the timestamps.
+4. Do not add any markdown code fences (e.g., no ```).
+Output the translation as plain text.
+Text: {text}"""
 
 PROMPTS = {
-    "translate": DEFAULT_TRANSLATION_PROMPT_REFINED_V7, # Default translate prompt without Pinyin
-    "translate_pinyin": DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT, # Translate prompt WITH Pinyin
+    "translate": DEFAULT_TRANSLATION_PROMPT_REFINED_V7,
+    "translate_pinyin": DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT,
     "cleanup": CLEANUP_PROMPT,
-    "translate_only": TRANSLATE_ONLY_PROMPT_REFINED_V7, # Default translate_only prompt without Pinyin
-    "translate_only_pinyin": TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT, # translate_only prompt WITH Pinyin
+    "translate_only": TRANSLATE_ONLY_PROMPT_REFINED_V7,
+    "translate_only_pinyin": TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT,
     "srt_translate_whole_file": SRT_WHOLE_FILE_PROMPT
 }
-DEFAULT_PROMPT_KEY = "translate_only" # Changed default prompt to translate_only
+DEFAULT_PROMPT_KEY = "translate_only"
 
 PROMPT_SUFFIX_MAP = {
-    "translate": "_translated", # Suffix for cleanup+translate remains "_translated" for backward compatibility
-    "translate_pinyin": "_translated_pinyin", # Suffix for translate WITH Pinyin
+    "translate": "_translated",
+    "translate_pinyin": "_translated_pinyin",
     "cleanup": "_cleaned",
-    "translate_only": "_only_translated", # Suffix for translate_only is "_only_translated"
-    "translate_only_pinyin": "_only_translated_pinyin", # Suffix for translate_only WITH Pinyin
+    "translate_only": "_only_translated",
+    "translate_only_pinyin": "_only_translated_pinyin",
     "srt_translate_whole_file": "_translated_whole_file"
 }
 
-
-# Google Gemini API Key
+# Google GenAI API Key
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY_HERE"
     print("Warning: GOOGLE_API_KEY environment variable not set...")
 
-# Rate Limiting for Google Gemini
+# Rate Limiting for Google GenAI
 REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 last_request_time = None
 
 # Ollama API Configuration
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat") # Allow Ollama URL to be set via env var
-# --- End Configuration ---
+# For chat functions we use /api/chat; for model listing we now use the local endpoint /api/tags.
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434/api/chat")
+def get_ollama_tags_url():
+    if "/api/chat" in OLLAMA_API_URL:
+        return OLLAMA_API_URL.replace("/api/chat", "/api/tags")
+    else:
+        return OLLAMA_API_URL.rstrip("/") + "/api/tags"
+
+# --- Dynamic Model Listing Functions ---
+def get_google_models(api_key):
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        models_iterable = client.models.list()  # List available models using the new SDK
+        models = [model.name for model in models_iterable]
+        return models
+    except Exception as e:
+        print(f"Error retrieving Google models: {e}", file=sys.stderr)
+        return []
+
+def get_ollama_models():
+    try:
+        url = get_ollama_tags_url()
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        # Expecting a JSON object with a "models" key containing model objects.
+        models = [model["name"] for model in data.get("models", [])]
+        return models
+    except Exception as e:
+        print(f"Error retrieving Ollama models: {e}", file=sys.stderr)
+        return []
+# --- End Dynamic Model Listing ---
 
 def insert_custom_prompt(original_prompt, custom_prompt):
     """Inserts the custom prompt after the first line of the original prompt."""
     lines = original_prompt.splitlines(keepends=True)
     if len(lines) > 1:
-        lines.insert(1, custom_prompt.strip() + "\n\n") # Insert after the first line, add two newlines for separation
-    elif lines: # if only one line or empty, append after the first line if exists, else just prepend.
+        lines.insert(1, custom_prompt.strip() + "\n\n")
+    elif lines:
         lines.append("\n\n" + custom_prompt.strip() + "\n")
     else:
-        lines.insert(0, custom_prompt.strip() + "\n\n") # if prompt was empty, prepend.
-
+        lines.insert(0, custom_prompt.strip() + "\n\n")
     return "".join(lines)
 
-
 def translate_srt_whole_file(input_file, output_file, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False):
-    """Translates SRT file by sending the entire file content in one call."""
+    """Translates an SRT file by sending its entire content in one call."""
     try:
         with open(input_file, "r", encoding="utf-8-sig") as infile:
             srt_content = infile.read()
-
         translated_content = translate_text(
             text=srt_content,
             target_language=target_language,
@@ -194,7 +162,6 @@ def translate_srt_whole_file(input_file, output_file, target_language, engine, m
             processing_prompt=processing_prompt,
             stream_output=stream_output
         )
-
         if translated_content:
             try:
                 with open(output_file, "w", encoding="utf-8") as outfile:
@@ -205,231 +172,170 @@ def translate_srt_whole_file(input_file, output_file, target_language, engine, m
                 return False
         else:
             return False
-
     except Exception as e:
         print(f"Error reading SRT file: {e}", file=sys.stderr)
         return False
 
-
-def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False, prev_context=None): # Changed default to False (non-streaming default)
-    """Translates text using Google Gemini API or Ollama, with rate limiting for Gemini."""
+def translate_text(text, target_language, engine, model_name, google_api_key, processing_prompt, stream_output=False, prev_context=None):
+    """Translates text using Google GenAI or Ollama, with rate limiting for Google."""
     global last_request_time
-
     if engine == "google":
-        import google.generativeai as genai
-        from google.generativeai.types import GenerateContentResponse
-        from google.api_core.exceptions import ResourceExhausted
-
-        genai.configure(api_key=google_api_key)
-        model = genai.GenerativeModel(model_name)
-
+        from google import genai
+        # Instead of calling configure(), we now pass the api_key when creating the Client.
+        client = genai.Client(api_key=google_api_key)
         try:
-            # --- Rate Limiting for Google Gemini ---
             current_time = time.time()
             if last_request_time is not None:
                 time_since_last_request = current_time - last_request_time
                 if time_since_last_request < REQUEST_INTERVAL_SECONDS:
                     sleep_duration = REQUEST_INTERVAL_SECONDS - time_since_last_request
-                    print(f"Rate limit active (Google Gemini). Sleeping for {sleep_duration:.2f} seconds...")
+                    print(f"Rate limit active (Google GenAI). Sleeping for {sleep_duration:.2f} seconds...")
                     time.sleep(sleep_duration)
             last_request_time = time.time()
-            # --- End Rate Limiting ---
-
             prompt_content = processing_prompt.format(target_language=target_language, text=text)
-
-            if stream_output: # Conditional streaming based on stream_output parameter
-                print(f"--- Calling Google Gemini API with model '{model_name}' for processing... Streaming output below: ---")
-                response = model.generate_content(prompt_content, stream=True) # Important: stream=True
-
+            if stream_output:
+                print(f"--- Calling Google GenAI API with model '{model_name}' for processing (streaming) ---")
+                response = client.models.generate_content_stream(model=model_name, contents=prompt_content)
                 processed_text_chunks = []
-                for chunk in response: # Iterate through response chunks (parts)
-                    if chunk.text: # Check if the chunk has text content
-                        content_chunk = chunk.text
-                        print(content_chunk, end="", flush=True)
-                        processed_text_chunks.append(content_chunk)
-
-                print("\n--- Google Gemini API call completed and output streamed. ---")
-                processed_text = "".join(processed_text_chunks).strip()
-                return processed_text
-            else: # Non-streaming mode
-                print(f"--- Calling Google Gemini API with model '{model_name}' for processing... (Non-streaming) ---")
-                response = model.generate_content(prompt_content, stream=False) # stream=False for non-streaming
-                print("\n--- Google Gemini API call completed. ---")
-                processed_text = response.text
-                return processed_text
-
-
-        except ResourceExhausted as e:
-            print(f"Error: Google Gemini API Quota Exhausted.", file=sys.stderr)
-            print(f"  Detailed Quota Exhaustion Information:")
-            if hasattr(e, 'status_code'):
-                print(f"    HTTP Status Code: {e.status_code}")
-            if hasattr(e, 'message'):
-                print(f"    Error Message: {e.message}")
-            return None # Simplified error handling - return None directly
-
+                for chunk in response:
+                    if chunk.text:
+                        print(chunk.text, end="", flush=True)
+                        processed_text_chunks.append(chunk.text)
+                print("\n--- Google GenAI API streaming completed. ---")
+                return "".join(processed_text_chunks).strip()
+            else:
+                print(f"--- Calling Google GenAI API with model '{model_name}' for processing (non-streaming) ---")
+                response = client.models.generate_content(model=model_name, contents=prompt_content)
+                print("\n--- Google GenAI API call completed. ---")
+                return response.text
         except Exception as e:
-            print(f"Error calling Google Gemini API: {e}", file=sys.stderr)
-            return None
-
+            if "quota" in str(e).lower():
+                print(f"Error: Google GenAI API Quota Exhausted. {e}", file=sys.stderr)
+                return None
+            else:
+                print(f"Error calling Google GenAI API: {e}", file=sys.stderr)
+                return None
     elif engine == "ollama":
         try:
             prompt_content = processing_prompt.format(target_language=target_language, text=text)
-
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt_content}],
-                "stream": True # Ollama is always streaming, keep it True
+                "stream": True
             }
             headers = {'Content-Type': 'application/json'}
-
             try:
-                print(f"--- Calling Ollama API with model '{model_name}' for processing... Streaming output below: ---")
+                print(f"--- Calling Ollama API with model '{model_name}' for processing (streaming) ---")
                 response = requests.post(OLLAMA_API_URL, headers=headers, data=json.dumps(payload), stream=True)
                 response.raise_for_status()
             except requests.exceptions.ConnectionError as e:
-                print(f"Error: Could not connect to Ollama API at {OLLAMA_API_URL}. Is Ollama server running?", file=sys.stderr)
-                print(f"Connection error details: {e}", file=sys.stderr)
+                print(f"Error: Could not connect to Ollama API at {OLLAMA_API_URL}. {e}", file=sys.stderr)
                 return None
             except requests.exceptions.Timeout as e:
-                print(f"Error: Timeout connecting to Ollama API at {OLLAMA_API_URL}.", file=sys.stderr)
-                print(f"Timeout error details: {e}", file=sys.stderr)
+                print(f"Error: Timeout connecting to Ollama API at {OLLAMA_API_URL}. {e}", file=sys.stderr)
                 return None
             except requests.exceptions.RequestException as e:
                 print(f"Error calling Ollama API: {e}", file=sys.stderr)
-                if 'response' in locals() and response is not None:
-                    print(f"HTTP Status Code: {response.status_code}", file=sys.stderr)
-                    print(f"Response Text: {response.text}", file=sys.stderr)
                 return None
-
-            try:
-                processed_text_chunks = []
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            json_line = json.loads(line)
-                            if 'message' in json_line and 'content' in json_line['message']:
-                                content_chunk = json_line['message']['content']
-                                print(content_chunk, end="", flush=True)
-                                processed_text_chunks.append(content_chunk)
-                        except json.JSONDecodeError:
-                            print(f"Warning: Could not decode JSON line from Ollama stream: {line.decode() if isinstance(line, bytes) else line}", file=sys.stderr)
-                            continue
-                print("\n--- Ollama API call completed and output streamed. ---")
-                processed_text = "".join(processed_text_chunks).strip()
-                return processed_text
-
-            except Exception as e:
-                print(f"Error processing Ollama API streaming response: {e}", file=sys.stderr)
-                return None
-
+            processed_text_chunks = []
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        json_line = json.loads(line)
+                        if 'message' in json_line and 'content' in json_line['message']:
+                            processed_text_chunks.append(json_line['message']['content'])
+                            print(json_line['message']['content'], end="", flush=True)
+                    except json.JSONDecodeError:
+                        print(f"Warning: Could not decode JSON line.", file=sys.stderr)
+                        continue
+            print("\n--- Ollama API streaming completed. ---")
+            return "".join(processed_text_chunks).strip()
         except Exception as e:
             print(f"Unexpected error during Ollama processing: {e}", file=sys.stderr)
             return None
-
     else:
         print(f"Error: Invalid engine '{engine}'. Choose 'google' or 'ollama'.", file=sys.stderr)
         return None
 
-
 def get_language_name_from_code(language_code):
-    """Gets the full language name from a two-digit language code using pycountry."""
+    """Gets the full language name from a two-letter language code using pycountry."""
     try:
         lang = pycountry.languages.get(alpha_2=language_code)
-        if lang:
-            return lang.name
-        else:
-            return None
+        return lang.name if lang else None
     except KeyError:
         return None
 
 def natural_sort_key(s):
     """Generates keys for natural sorting."""
-    return [int(text) if text.isdigit() else text.lower()
-            for text in re.split(re.compile('([0-9]+)'), s)]
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(re.compile('([0-9]+)'), s)]
 
-def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=False): # Added enable_pinyin parameter
-    """Processes files for translation or cleanup based on arguments.
-       Now processes files regardless of extension."""
+def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=False):
+    """Processes files for translation or cleanup based on arguments."""
     global last_request_time
     last_request_time = None
     quota_exhausted = False
-    exit_code = 0 # Initialize exit code to success
+    exit_code = 0
 
     if not args.files:
         print("Error: No files specified.", file=sys.stderr)
         return 1
 
-    all_files = [] # Initialize as empty list to handle glob correctly
-    for file_pattern in args.files: # Iterate through file patterns from args
-        resolved_files_for_pattern = glob.glob(file_pattern) # Expand each pattern
-        if not resolved_files_for_pattern: # Check if any files found for this pattern
+    all_files = []
+    for file_pattern in args.files:
+        files_found = glob.glob(file_pattern)
+        if not files_found:
             print(f"Warning: No files found matching pattern: '{file_pattern}'", file=sys.stderr)
-        all_files.extend(resolved_files_for_pattern) # Add found files to the list
+        all_files.extend(files_found)
 
-    if not all_files: # Check if the final list of files is empty after processing all patterns
-        print(f"Error: No files found matching any specified pattern(s).", file=sys.stderr)
+    if not all_files:
+        print("Error: No files found matching any specified pattern(s).", file=sys.stderr)
         return 1
 
-
-    if args.language and (args.prompt_key == "translate" or args.prompt_key == "translate_only" or args.prompt_key == "srt_translate_whole_file"): # Language is relevant for translation prompts, including SRTs
+    if args.language and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
         target_language_code = args.language.lower()
         target_language = get_language_name_from_code(target_language_code)
         if not target_language:
-            print(f"Error: Invalid language code '{args.language}'. Use valid two-digit language code (e.g., en, fr, id).", file=sys.stderr)
-            print("       Refer to pycountry documentation for valid language codes.")
+            print(f"Error: Invalid language code '{args.language}'.", file=sys.stderr)
             return 1
-    elif args.prompt_key == "cleanup": # target_language not needed for cleanup
+    elif args.prompt_key == "cleanup":
         target_language = None
-        target_language_code = None # Set to None for cleanup
+        target_language_code = None
     else:
         target_language = DEFAULT_TARGET_LANGUAGE
-        target_language_code = DEFAULT_TARGET_LANGUAGE # Use default lang code if not specified for default translate
+        target_language_code = DEFAULT_TARGET_LANGUAGE
 
-    output_dir_base = args.output if args.output else OUTPUT_SUBFOLDER # Base output dir, before language code
+    output_dir_base = args.output if args.output else OUTPUT_SUBFOLDER
     original_files_dir = os.path.join(os.getcwd(), ORIGINAL_FILES_SUBFOLDER)
-
-    # --- Construct output directory name ---
-    if target_language_code and (args.prompt_key == "translate" or args.prompt_key == "translate_only" or args.prompt_key == "srt_translate_whole_file"): # Include srt_translate_whole_file
-        output_dir = os.path.join(os.getcwd(), f"{output_dir_base}_{target_language_code}") # Append language code to output folder
+    if target_language_code and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
+        output_dir = os.path.join(os.getcwd(), f"{output_dir_base}_{target_language_code}")
     else:
-        output_dir = os.path.join(os.getcwd(), output_dir_base) # Use base output dir for cleanup or no language specified
+        output_dir = os.path.join(os.getcwd(), output_dir_base)
 
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(original_files_dir, exist_ok=True)
 
+    # Dynamically update model lists based on engine selection.
     if args.engine == "google":
-        default_model = DEFAULT_GEMINI_MODELS[0]
-        model_name = args.model if args.model else default_model
+        updated_models = get_google_models(GOOGLE_API_KEY)
+        global DEFAULT_GEMINI_MODELS
+        DEFAULT_GEMINI_MODELS = updated_models
+        model_name = args.model if args.model else (DEFAULT_GEMINI_MODELS[0] if DEFAULT_GEMINI_MODELS else "")
     elif args.engine == "ollama":
-        default_model = DEFAULT_OLLAMA_MODELS[0]
-        model_name = args.model if args.model else default_model
+        updated_models = get_ollama_models()
+        global DEFAULT_OLLAMA_MODELS
+        DEFAULT_OLLAMA_MODELS = updated_models
+        model_name = args.model if args.model else (DEFAULT_OLLAMA_MODELS[0] if DEFAULT_OLLAMA_MODELS else "")
     else:
-        model_name = None
+        model_name = ""
 
-    processing_prompt_base = PROMPTS.get(args.prompt_key)
+    processing_prompt_base = PROMPTS.get(args.prompt_key) or PROMPTS[DEFAULT_PROMPT_KEY]
+    if enable_pinyin and args.prompt_key in ["translate", "translate_only"]:
+        processing_prompt_base = PROMPTS.get(args.prompt_key + "_pinyin")
+    elif args.prompt_key in ["translate", "translate_only"]:
+        processing_prompt_base = PROMPTS.get(args.prompt_key)
     if not processing_prompt_base:
         processing_prompt_base = PROMPTS[DEFAULT_PROMPT_KEY]
-
-    # Select Pinyin prompt if enabled and if it's a relevant prompt type
-    if enable_pinyin and (args.prompt_key == "translate" or args.prompt_key == "translate_only"):
-        processing_prompt_base = PROMPTS.get(args.prompt_key + "_pinyin") # Try to get the _pinyin version
-    elif args.prompt_key == "translate" or args.prompt_key == "translate_only":
-        processing_prompt_base = PROMPTS.get(args.prompt_key) # Get the base prompt (without _pinyin suffix) if pinyin is not enabled and prompt_key is translate or translate_only
-    else:
-        processing_prompt_base = PROMPTS.get(args.prompt_key) # For other prompt types (cleanup, srt), just use the base prompt
-
-
-    if not processing_prompt_base: # Fallback to default if _pinyin version not found or original prompt key was not translate/translate_only
-        processing_prompt_base = PROMPTS[DEFAULT_PROMPT_KEY]
-
-
-    # Insert custom prompt if provided
-    if custom_prompt_text:
-        processing_prompt = insert_custom_prompt(processing_prompt_base, custom_prompt_text)
-    else:
-        processing_prompt = processing_prompt_base
-
+    processing_prompt = insert_custom_prompt(processing_prompt_base, custom_prompt_text) if custom_prompt_text else processing_prompt_base
 
     processing_settings = {
         "Engine": args.engine,
@@ -438,61 +344,40 @@ def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=Fals
         "Output Directory": output_dir,
         "Output File Suffix": args.suffix,
         "Files": args.files,
-        "Stream Output": stream_output, # Added stream output setting
-        "Custom Prompt": custom_prompt_text if custom_prompt_text else "None", # Include custom prompt in settings
-        "Chinese Pinyin": enable_pinyin # Added Pinyin setting
+        "Stream Output": stream_output,
+        "Custom Prompt": custom_prompt_text if custom_prompt_text else "None",
+        "Chinese Pinyin": enable_pinyin
     }
-    if args.prompt_key == "translate" or args.prompt_key == "translate_only" or args.prompt_key == "srt_translate_whole_file": # Add target language for translation prompts, include srt_translate_whole_file
+    if args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"]:
         processing_settings["Target Language"] = target_language
-
 
     for file_path in all_files:
         print(f"--- Processing file: '{file_path}' ---")
         try:
-            # Handle SRT files differently
             if file_path.lower().endswith('.srt'):
                 base_name = os.path.basename(file_path)
                 name, ext = os.path.splitext(base_name)
                 output_file_path = os.path.join(output_dir, f"{name}_{target_language_code}{args.suffix}{ext}")
-
-                if args.prompt_key == "srt_translate_whole_file": # Use whole file SRT translation
-                    success = translate_srt_whole_file(
-                        input_file=file_path,
-                        output_file=output_file_path,
-                        target_language=target_language,
-                        engine=args.engine,
-                        model_name=model_name,
-                        google_api_key=GOOGLE_API_KEY,
-                        processing_prompt=processing_prompt,
-                        stream_output=stream_output
-                    )
-                else: # Default to whole file SRT translation if prompt is not explicitly set to whole file (or if an old/invalid SRT prompt is used)
-                    print(f"Warning: Using default SRT whole-file translation for prompt key '{args.prompt_key}'. Line-by-line SRT translation is removed.")
-                    success = translate_srt_whole_file(
-                        input_file=file_path,
-                        output_file=output_file_path,
-                        target_language=target_language,
-                        engine=args.engine,
-                        model_name=model_name,
-                        google_api_key=GOOGLE_API_KEY,
-                        processing_prompt=processing_prompt,
-                        stream_output=stream_output
-                    )
-
-
+                success = translate_srt_whole_file(
+                    input_file=file_path,
+                    output_file=output_file_path,
+                    target_language=target_language,
+                    engine=args.engine,
+                    model_name=model_name,
+                    google_api_key=GOOGLE_API_KEY,
+                    processing_prompt=processing_prompt,
+                    stream_output=stream_output
+                )
                 if success:
                     print(f"Translated SRT '{file_path}' -> '{output_file_path}' using prompt '{args.prompt_key}' (whole-file)")
-                    # Move original file
                     try:
                         shutil.move(file_path, os.path.join(original_files_dir, base_name))
                     except Exception as e:
                         print(f"Error moving original SRT: {e}", file=sys.stderr)
                 else:
                     print(f"Failed to translate SRT file: {file_path}", file=sys.stderr)
-
                 continue
 
-            # Existing text file processing
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
 
@@ -503,140 +388,129 @@ def process_files(args, stream_output, custom_prompt_text="", enable_pinyin=Fals
                 model_name,
                 GOOGLE_API_KEY,
                 processing_prompt,
-                stream_output # Pass stream_output to translate_text
+                stream_output
             )
 
-            if processed_text:
+            if processing_text:
                 base_name = os.path.basename(file_path)
                 name, ext = os.path.splitext(base_name)
-
-                # --- Construct output filename ---
-                if target_language_code and (args.prompt_key == "translate" or args.prompt_key == "translate_only" or args.prompt_key == "srt_translate_whole_file"): # Include srt_translate_whole_file
-                    output_file_path = os.path.join(output_dir, f"{name}_{target_language_code}{args.suffix}{ext}") # Append lang code to filename
-                else:
-                    output_file_path = os.path.join(output_dir, f"{name}{args.suffix}{ext}") # No lang code in filename for cleanup
-
+                output_file_path = os.path.join(output_dir, f"{name}_{target_language_code}{args.suffix}{ext}") if target_language_code and args.prompt_key in ["translate", "translate_only", "srt_translate_whole_file"] else os.path.join(output_dir, f"{name}{args.suffix}{ext}")
                 with open(output_file_path, "w", encoding="utf-8") as outfile:
-                    outfile.write(processed_text)
+                    outfile.write(processing_text)
                 print(f"\nProcessed '{file_path}' using {args.engine} engine, model '{model_name}', prompt '{args.prompt_key}' and Pinyin {'enabled' if enable_pinyin else 'disabled'} -> '{output_file_path}'")
-
                 try:
-                    original_file_name = os.path.basename(file_path)
-                    destination_original_file_path = os.path.join(original_files_dir, original_file_name)
+                    destination_original_file_path = os.path.join(original_files_dir, os.path.basename(file_path))
                     os.rename(file_path, destination_original_file_path)
                     print(f"Moved original file '{file_path}' to '{destination_original_file_path}'")
                 except Exception as move_error:
-                    print(f"Error moving original file '{file_path}' to '{original_files_dir}': {move_error}", file=sys.stderr)
-
-
-            elif processed_text is None and args.engine == "google":
-                print(f"Processing failed for '{file_path}' due to Google Gemini Quota Exhaustion. Script will terminate.", file=sys.stderr)
+                    print(f"Error moving original file '{file_path}': {move_error}", file=sys.stderr)
+            elif processing_text is None and args.engine == "google":
+                print(f"Processing failed for '{file_path}' due to Google GenAI Quota Exhaustion. Script will terminate.", file=sys.stderr)
                 quota_exhausted = True
-                exit_code = 1 # Set exit code to 1 for quota exhaustion
-                break # Add break here to stop processing further files
-
+                exit_code = 1
+                break
             else:
                 print(f"Processing failed for '{file_path}'. See error messages above.", file=sys.stderr)
-
         except FileNotFoundError:
             print(f"Error: File not found: {file_path}", file=sys.stderr)
         except Exception as e:
-            print(f"Error processing {file_path}: Exception Type: {type(e)}, Message: {e}", file=sys.stderr) # Simplified error print
+            print(f"Error processing {file_path}: {type(e)} - {e}", file=sys.stderr)
         finally:
             print(f"--- Finished processing file: '{file_path}' ---")
 
     if quota_exhausted:
-        print("\n--- Script terminated early due to Google Gemini Quota Exhaustion. ---", file=sys.stderr)
-        return exit_code # Return non-zero exit code for quota exhaustion
+        print("\n--- Script terminated early due to Google GenAI Quota Exhaustion. ---", file=sys.stderr)
+        return exit_code
 
     print("\n--- Processing Settings Used ---")
     for key, value in processing_settings.items():
         print(f"{key}: {value}")
     print("--- End Processing Settings ---")
-    return exit_code # Return 0 for successful processing (or 1 if error occurred but not quota exhaustion, though currently only quota exhaustion sets exit_code to 1)
-
-
+    return exit_code
 
 def main():
-    """Main function to always launch GUI, optionally pre-filled with command-line files."""
-    parser = argparse.ArgumentParser(description="Translate or cleanup text files using Google Gemini or Ollama.")
+    parser = argparse.ArgumentParser(description="Translate or cleanup text files using Google GenAI or Ollama.")
     parser.add_argument("files", nargs="*", help="Path(s) to the text file(s) to process. Will be pre-filled in GUI.")
-    parser.add_argument("-l", "--language", default=None, help="Target language (e.g., en, id, fr). (For translation prompts only)")
-    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help=f"AI engine to use: google or ollama.")
-    parser.add_argument("-m", "--model", "--model", dest="model", default=None, help=f"Model to use (engine specific).")
-    parser.add_argument("-p", "--prompt", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=PROMPTS.keys(), help=f"Prompt to use. Keywords: {', '.join(PROMPTS.keys())}")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (overrides '{OUTPUT_SUBFOLDER}').")
-    parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_SUFFIX, help=f"Suffix for processed file names.")
-    parser.add_argument("--no-stream", dest="stream_output_cli", action='store_false', default=False, help="Disable streaming output for Google Gemini (CLI only).") # CLI option to disable stream, default False (non-streaming CLI default)
-    parser.add_argument("--pinyin", dest="enable_pinyin_cli", action='store_true', default=False, help="Enable Chinese Pinyin transliteration (CLI only, for 'translate' and 'translate_only' prompts).") # CLI option for Pinyin
-    parser.set_defaults(stream_output_cli=False) # Default stream is False for CLI
-    parser.set_defaults(enable_pinyin_cli=False) # Default Pinyin is False for CLI
-
+    parser.add_argument("-l", "--language", default=None, help="Target language (e.g., en, id, fr).")
+    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help="AI engine to use: google or ollama.")
+    parser.add_argument("-m", "--model", dest="model", default=None, help="Model to use (engine specific).")
+    parser.add_argument("-p", "--prompt", dest="prompt_key", default=DEFAULT_PROMPT_KEY, choices=PROMPTS.keys(), help=f"Prompt to use. Options: {', '.join(PROMPTS.keys())}")
+    parser.add_argument("-o", "--output", default=None, help="Output directory (overrides default).")
+    parser.add_argument("-s", "--suffix", dest="suffix", default=DEFAULT_SUFFIX, help="Suffix for processed file names.")
+    parser.add_argument("--no-stream", dest="stream_output_cli", action='store_false', default=False, help="Disable streaming output for Google GenAI (CLI only).")
+    parser.add_argument("--pinyin", dest="enable_pinyin_cli", action='store_true', default=False, help="Enable Chinese Pinyin transliteration (CLI only, for translate prompts).")
+    parser.set_defaults(stream_output_cli=False)
+    parser.set_defaults(enable_pinyin_cli=False)
     args = parser.parse_args()
+
+    # Dynamically update model lists based on selected engine
+    if args.engine == "google":
+        updated_models = get_google_models(GOOGLE_API_KEY)
+        global DEFAULT_GEMINI_MODELS
+        DEFAULT_GEMINI_MODELS = updated_models
+    elif args.engine == "ollama":
+        updated_models = get_ollama_models()
+        global DEFAULT_OLLAMA_MODELS
+        DEFAULT_OLLAMA_MODELS = updated_models
 
     resolved_files = []
     for file_pattern in args.files:
         resolved_files.extend(glob.glob(file_pattern))
-
     resolved_files.sort(key=natural_sort_key)
 
     gui_exit_code = use_gui(resolved_files, args)
-    if gui_exit_code is not None: # GUI mode was used
-        sys.exit(gui_exit_code) # Exit with code from GUI processing
-    else: # CLI mode (GUI was bypassed or not used)
-        sys.exit(process_files(args, args.stream_output_cli, enable_pinyin=args.enable_pinyin_cli)) # Exit with code from CLI processing, pass enable_pinyin to process_files
+    if gui_exit_code is not None:
+        sys.exit(gui_exit_code)
+    else:
+        sys.exit(process_files(args, args.stream_output_cli, enable_pinyin=args.enable_pinyin_cli))
 
 def use_gui(command_line_files, args):
-    """Launches a tkinter GUI for script options, optionally pre-filled with files.
-       Returns exit code from processing, or None if GUI is closed without processing."""
-
-
     window = tk.Tk()
     window.title("Text Processing Script GUI")
-    exit_code_from_gui = None # Initialize exit code for GUI
+    exit_code_from_gui = None
 
     files_list_var = tk.Variable(value=command_line_files if command_line_files else [])
-    language_var = tk.StringVar(value=args.language if args.language else DEFAULT_TARGET_LANGUAGE) # Default is now DEFAULT_TARGET_LANGUAGE which is "en"
+    language_var = tk.StringVar(value=args.language if args.language else DEFAULT_TARGET_LANGUAGE)
     engine_var = tk.StringVar(value=args.engine if args.engine else DEFAULT_ENGINE)
     model_var = tk.StringVar(value=args.model if args.model else "")
 
-    prompt_options = list(PROMPTS.keys())
-    prompt_display_options = ["Cleanup and Translate" if key == "translate" else "Translate Only" if key == "translate_only" else "SRT Translate (Whole File)" if key == "srt_translate_whole_file" else key.replace("_", " ").title() for key in prompt_options if key not in ["translate_pinyin", "translate_only_pinyin"]] # Filter out pinyin prompts from display
-    prompt_value_map = {display_option: key for display_option, key in zip(prompt_display_options, prompt_options) if key not in ["translate_pinyin", "translate_only_pinyin"]} # Filter out pinyin prompts from map
+    prompt_options = [key for key in PROMPTS.keys() if key not in ["translate_pinyin", "translate_only_pinyin"]]
+    prompt_display_options = [
+        "Cleanup and Translate" if key == "translate" else
+        "Cleanup" if key == "cleanup" else
+        "Translate Only" if key == "translate_only" else
+        "SRT Translate (Whole File)" if key == "srt_translate_whole_file" else
+        key.replace("_", " ").title()
+        for key in prompt_options
+    ]
+    prompt_value_map = dict(zip(prompt_display_options, prompt_options))
 
-    # Determine initial prompt display value based on args.prompt_key or DEFAULT_PROMPT_KEY
     initial_prompt_key = args.prompt_key if args.prompt_key else DEFAULT_PROMPT_KEY
-    initial_prompt_display_value = ""
-    for display_option, key in prompt_value_map.items():
+    initial_prompt_display_value = None
+    for disp, key in prompt_value_map.items():
         if key == initial_prompt_key:
-            initial_prompt_display_value = display_option
+            initial_prompt_display_value = disp
             break
-    if not initial_prompt_display_value: # Fallback in case of issue (shouldn't happen with defined PROMPTS)
+    if not initial_prompt_display_value:
         initial_prompt_display_value = prompt_display_options[0] if prompt_display_options else ""
 
-
-    prompt_var = tk.StringVar(value=initial_prompt_display_value) # Set initial value to display name
-    prompt_var.set("Translate Only") # Set "translate_only" as default in GUI
-
+    prompt_var = tk.StringVar(value=initial_prompt_display_value)
     output_dir_var = tk.StringVar(value=args.output if args.output else "")
     suffix_var = tk.StringVar(value=args.suffix if args.suffix else DEFAULT_SUFFIX)
-    stream_output_var = tk.BooleanVar(value=False) # Default to non-streaming in GUI
-    custom_prompt_var = tk.StringVar(value="") # Variable to store custom prompt text
-    enable_pinyin_var = tk.BooleanVar(value=False) # Checkbox variable for Pinyin, default to False
-
+    stream_output_var = tk.BooleanVar(value=False)
+    custom_prompt_var = tk.StringVar(value="")
+    enable_pinyin_var = tk.BooleanVar(value=False)
 
     files_frame = ttk.Frame(window, padding="10 10 10 10")
     files_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(files_frame, text="Files:").grid(row=0, column=0, sticky=tk.NW)
-
     file_listbox = tk.Listbox(files_frame, listvariable=files_list_var, height=10, width=60, selectmode=tk.EXTENDED)
     file_listbox.grid(row=1, column=0, sticky=(tk.W, tk.E))
-
     file_buttons_frame = ttk.Frame(files_frame, padding="0 0 0 0")
     file_buttons_frame.grid(row=1, column=1, sticky=(tk.N, tk.S))
 
     def add_files_to_list():
-        selected_files = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt;*.md;*.text;*.rtf;*.srt"), ("All files", "*.*")]) # Added .srt to file dialog
+        selected_files = filedialog.askopenfilenames(filetypes=[("Text files", "*.txt;*.md;*.text;*.rtf;*.srt"), ("All files", "*.*")])
         if selected_files:
             current_files = list(files_list_var.get())
             updated_files = current_files + list(selected_files)
@@ -685,8 +559,8 @@ def use_gui(command_line_files, args):
                 if index < len(current_files) - 1:
                     file_listbox.select_set(index + 1)
 
-    clear_all_button = tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10) # Separate button creation
-    clear_all_button.grid(row=6, column=0, sticky=tk.W, pady=2) # Separate grid placement
+    clear_all_button = tk.Button(file_buttons_frame, text="Clear All", command=clear_all_files, width=10)
+    clear_all_button.grid(row=6, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Add File", command=add_files_to_list, width=10).grid(row=0, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Remove File", command=remove_selected_files, width=10).grid(row=1, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Select All", command=select_all_files, width=10).grid(row=2, column=0, sticky=tk.W, pady=2)
@@ -694,58 +568,71 @@ def use_gui(command_line_files, args):
     tk.Button(file_buttons_frame, text="Move Up", command=move_file_up, width=10).grid(row=4, column=0, sticky=tk.W, pady=2)
     tk.Button(file_buttons_frame, text="Move Down", command=move_file_down, width=10).grid(row=5, column=0, sticky=tk.W, pady=2)
 
-
     lang_frame = ttk.Frame(window, padding="10 10 10 10")
     lang_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    tk.Label(lang_frame, text="Language Code:").grid(row=0, column=0, sticky=tk.W) # Changed label to "Language Code"
+    tk.Label(lang_frame, text="Language Code:").grid(row=0, column=0, sticky=tk.W)
     lang_entry = ttk.Entry(lang_frame, textvariable=language_var, width=30)
     lang_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
-    tk.Label(lang_frame, text="(e.g., en, fr, id, for translation)").grid(row=0, column=2, sticky=tk.W)
+    tk.Label(lang_frame, text="(e.g., en, fr, id)").grid(row=0, column=2, sticky=tk.W)
 
     engine_frame = ttk.Frame(window, padding="10 10 10 10")
     engine_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(engine_frame, text="Engine:").grid(row=0, column=0, sticky=tk.W)
     engine_options = ['google', 'ollama']
-    engine_combo = ttk.Combobox(engine_frame, textvariable=engine_var, values=engine_options, state="readonly")
+    engine_combo = ttk.Combobox(engine_frame, textvariable=engine_var, values=engine_options, state="readonly", width=50)
     engine_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
 
     model_frame = ttk.Frame(window, padding="10 10 10 10")
     model_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky=tk.W)
-    model_combo = ttk.Combobox(model_frame, textvariable=model_var, values=[], state="readonly")
+    model_combo = ttk.Combobox(model_frame, textvariable=model_var, values=[], state="readonly", width=50)
     model_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
+    refresh_button = ttk.Button(model_frame, text="Refresh Models", command=lambda: refresh_models(), width=15)
+    refresh_button.grid(row=0, column=2, padx=5)
+
+    def refresh_models():
+        eng = engine_var.get()
+        if eng == "google":
+            new_models = get_google_models(GOOGLE_API_KEY)
+            global DEFAULT_GEMINI_MODELS
+            DEFAULT_GEMINI_MODELS = new_models
+            model_combo['values'] = new_models
+            model_var.set(new_models[0] if new_models else "")
+        elif eng == "ollama":
+            new_models = get_ollama_models()
+            global DEFAULT_OLLAMA_MODELS
+            DEFAULT_OLLAMA_MODELS = new_models
+            model_combo['values'] = new_models
+            model_var.set(new_models[0] if new_models else "")
 
     def update_model_options(*args):
-        selected_engine = engine_var.get()
-        if selected_engine == 'google':
+        eng = engine_var.get()
+        if eng == 'google':
             model_combo['values'] = DEFAULT_GEMINI_MODELS
             model_var.set(DEFAULT_GEMINI_MODELS[0] if DEFAULT_GEMINI_MODELS else "")
-        elif selected_engine == 'ollama':
+        elif eng == 'ollama':
             model_combo['values'] = DEFAULT_OLLAMA_MODELS
             model_var.set(DEFAULT_OLLAMA_MODELS[0] if DEFAULT_OLLAMA_MODELS else "")
         else:
             model_combo['values'] = []
             model_var.set("")
-
     engine_var.trace_add('write', update_model_options)
     update_model_options()
 
     prompt_frame = ttk.Frame(window, padding="10 10 10 10")
     prompt_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
     tk.Label(prompt_frame, text="Prompt:").grid(row=0, column=0, sticky=tk.W)
-    prompt_combo = ttk.Combobox(prompt_frame, textvariable=prompt_var, values=prompt_display_options, state="readonly")
+    prompt_combo = ttk.Combobox(prompt_frame, textvariable=prompt_var, values=list(prompt_value_map.keys()), state="readonly", width=50)
     prompt_combo.grid(row=0, column=1, sticky=(tk.W, tk.E))
-    # Need to map display options back to keys for prompt selection
-    prompt_value_map = {display_option: key for display_option, key in zip(prompt_display_options, prompt_options) if key not in ["translate_pinyin", "translate_only_pinyin"]} # Filter out pinyin prompts from map
-
-    # Initialize suffix AFTER prompt_value_map is created
     def update_suffix_from_prompt(*args):
-        selected_prompt_display = prompt_combo.get() # Get display value
-        selected_prompt_key = prompt_value_map[selected_prompt_display] # Map back to key
-        suffix = PROMPT_SUFFIX_MAP.get(selected_prompt_key, DEFAULT_SUFFIX)
-        suffix_var.set(suffix)
-
-    update_suffix_from_prompt() # Initial suffix update - called AFTER prompt_value_map is ready
+        selected_disp = prompt_combo.get()
+        try:
+            selected_key = prompt_value_map[selected_disp]
+            suffix = PROMPT_SUFFIX_MAP.get(selected_key, DEFAULT_SUFFIX)
+            suffix_var.set(suffix)
+        except KeyError:
+            suffix_var.set(DEFAULT_SUFFIX)
+    update_suffix_from_prompt()
     prompt_var.trace_add('write', update_suffix_from_prompt)
 
     custom_prompt_frame = ttk.Frame(window, padding="10 10 10 10")
@@ -753,11 +640,11 @@ def use_gui(command_line_files, args):
     tk.Label(custom_prompt_frame, text="Custom Prompt (optional):").grid(row=0, column=0, sticky=tk.NW)
     custom_prompt_text = tk.Text(custom_prompt_frame, height=3, width=50)
     custom_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E))
-    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip()) # Initialize custom_prompt_var with empty text
+    custom_prompt_var.set(custom_prompt_text.get("1.0", tk.END).strip())
 
     pinyin_frame = ttk.Frame(window, padding="10 10 10 10")
     pinyin_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    pinyin_check = ttk.Checkbutton(pinyin_frame, text="Enable Chinese Pinyin", variable=enable_pinyin_var) # Checkbox for Pinyin
+    pinyin_check = ttk.Checkbutton(pinyin_frame, text="Enable Chinese Pinyin", variable=enable_pinyin_var)
     pinyin_check.grid(row=0, column=0, sticky=tk.W)
 
     output_frame = ttk.Frame(window, padding="10 10 10 10")
@@ -776,36 +663,31 @@ def use_gui(command_line_files, args):
 
     stream_frame = ttk.Frame(window, padding="10 10 10 10")
     stream_frame.grid(row=10, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-    stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google Gemini)", variable=stream_output_var) # Checkbox for stream output
+    stream_check = ttk.Checkbutton(stream_frame, text="Stream Output (Google GenAI)", variable=stream_output_var)
     stream_check.grid(row=0, column=0, sticky=tk.W)
 
-    process_button = ttk.Button(window, text="Process", command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END), enable_pinyin_var.get())) # Pass enable_pinyin_var.get()
+    process_button = ttk.Button(window, text="Process", 
+                                command=lambda: process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output_var.get(), custom_prompt_text.get("1.0", tk.END), enable_pinyin_var.get()))
     process_button.grid(row=11, column=0, columnspan=3, pady=20)
 
-    # window.protocol("WM_DELETE_WINDOW", window.destroy) # Standard close operation
-    window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0) ) # Close and exit 0 if GUI closed
-
-
+    window.protocol("WM_DELETE_WINDOW", lambda: window.destroy() or sys.exit(0))
     window.update_idletasks()
     file_listbox_height_pixels = file_buttons_frame.winfo_height()
     clear_all_button_height_pixels = clear_all_button.winfo_height()
     max_listbox_height_pixels = clear_all_button_height_pixels
     file_listbox_height_pixels = min(file_listbox_height_pixels, max_listbox_height_pixels)
     char_height = file_listbox.winfo_height() / int(file_listbox.config()['height'][0]) if isinstance(file_listbox.config()['height'], tuple) and file_listbox.config()['height'] and file_listbox.config()['height'][0].isdigit() else (file_listbox.winfo_height() / int(file_listbox.config()['height']) if isinstance(file_listbox.config()['height'], str) and file_listbox.config()['height'].isdigit() else 1)
-    file_listbox_height_lines = max(3, int((file_listbox_height_pixels / char_height) / 2 ))
+    file_listbox_height_lines = max(3, int((file_listbox_height_pixels / char_height) / 2))
     file_listbox.config(height=file_listbox_height_lines)
 
     window.mainloop()
-    return exit_code_from_gui # Return exit code from GUI, will be None if GUI closed without processing
+    return exit_code_from_gui
 
-
-def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output, custom_prompt_text, enable_pinyin): # Accept enable_pinyin parameter
-    """Processes files based on GUI input and closes GUI."""
+def process_from_gui(window, files_list_var, language_var, engine_var, model_var, prompt_var, output_dir_var, suffix_var, prompt_value_map, stream_output, custom_prompt_text, enable_pinyin):
     files_input = files_list_var.get()
     if not files_input:
-        tk.messagebox.showerror("Error", "Please select at least one file.")
+        messagebox.showerror("Error", "Please select at least one file.")
         return
-
     class GUIArgs:
         pass
     gui_args = GUIArgs()
@@ -816,14 +698,12 @@ def process_from_gui(window, files_list_var, language_var, engine_var, model_var
     gui_args.prompt_key = prompt_value_map[prompt_var.get()]
     gui_args.output = output_dir_var.get() if output_dir_var.get() else None
     gui_args.suffix = suffix_var.get()
-    gui_args.stream_output_gui = stream_output # Pass stream_output from GUI
-    gui_args.custom_prompt_text = custom_prompt_text.strip() # Get custom prompt text from GUI and strip whitespace
-    gui_args.enable_pinyin_gui = enable_pinyin # Pass enable_pinyin from GUI
-
+    gui_args.stream_output_gui = stream_output
+    gui_args.custom_prompt_text = custom_prompt_text.strip()
+    gui_args.enable_pinyin_gui = enable_pinyin
     window.destroy()
-    gui_exit_code = process_files(gui_args, stream_output, gui_args.custom_prompt_text, enable_pinyin=gui_args.enable_pinyin_gui) # Pass enable_pinyin to process_files
-    sys.exit(gui_exit_code) # Exit with code from file processing
-
+    gui_exit_code = process_files(gui_args, stream_output, gui_args.custom_prompt_text, enable_pinyin=gui_args.enable_pinyin_gui)
+    sys.exit(gui_exit_code)
 
 if __name__ == "__main__":
     main()
