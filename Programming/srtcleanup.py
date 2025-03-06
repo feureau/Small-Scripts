@@ -2,7 +2,6 @@ import re
 import sys
 import glob
 from pathlib import Path
-import shutil
 
 def remove_timestamps_and_line_numbers(input_file, output_file):
     timestamp_pattern = re.compile(r'^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$')
@@ -16,13 +15,21 @@ def remove_timestamps_and_line_numbers(input_file, output_file):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: drag and drop SRT files or use: script.py *.srt")
+        print("Usage: drag and drop SRT files or use: srtcleanup.py *.srt")
         sys.exit(1)
 
-    # Expand wildcards in command-line arguments
     file_paths = []
+    # Expand wildcards if present, otherwise treat the argument as a literal file name.
     for arg in sys.argv[1:]:
-        file_paths.extend(glob.glob(arg, recursive=False))
+        if '*' in arg or '?' in arg:
+            expanded = glob.glob(arg)
+            file_paths.extend(expanded)
+        else:
+            file_paths.append(arg)
+
+    if not file_paths:
+        print("No valid files found.")
+        sys.exit(1)
 
     for input_path in file_paths:
         input_file = Path(input_path)
