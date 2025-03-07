@@ -28,6 +28,7 @@ MAX_RETRIES = 3     # Max retries for API calls
 
 # --- Prompts ---
 # These prompts are used for normal (non-SRT) translations with Markdown formatting.
+
 DEFAULT_TRANSLATION_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
 
 Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed. This text is from OCR and is **VERY MESSY**. You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted Markdown output.
@@ -42,28 +43,75 @@ Translate the following text to natural and idiomatic {target_language}. The goa
 **Constraint:** Provide ONLY the final cleaned, corrected, and translated text in {target_language} formatted in Markdown.
 Text: {text}"""
 
+# Replacing the conditional prompt for Chinese names and terms with the new version:
 DEFAULT_TRANSLATION_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
 
-Translate the following text to natural and idiomatic {target_language} ensuring that for Chinese names and terms you include the original Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a natural, fluent Markdown-formatted translation.
-Text: {text}"""
+Translate the following text to natural and idiomatic {target_language}. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone. This text is from OCR and is **VERY MESSY**. It contains significant errors, typos, gibberish, and formatting problems, including leftover page numbers (like Roman numerals 'IV' or Arabic numerals '123').  You **MUST** perform aggressive cleaning and correction during translation to produce a perfectly clean, readable, and well-formatted translation **using Markdown formatting for structural elements**.
+
+**Specifically, your cleaning, correction, and formatting MUST include:**
+
+* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.**  This is the most important step.  Ensure the translated text is free of any OCR artifacts and makes perfect sense.
+* **REMOVE ALL page numbers**, whether they are Roman numerals (e.g., I, II, III, IV, V...) or Arabic numerals (e.g., 1, 2, 3...). Do not include any page numbers in the translated output.
+* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the Markdown output.
+* **(NEW) Format structural elements using Markdown:** If the original text has structural elements like chapter headings, section headings, etc., please format them using Markdown.
+    * Use `#` for chapter headings, `##` for main section headings, and `###` for subsections, etc.  Try to infer the hierarchy from the text if possible, or use `#` for the most prominent headings and `##` for subsequent ones if hierarchy is unclear.
+    * Ensure paragraphs are separated by blank lines (standard Markdown).
+* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
+
+**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED.  DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
+
+* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
+* **CHINESE CHARACTERS:**  You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
+* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
+* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
+    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
+    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)".  In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
+
+**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pīnyīn with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final, cleaned, corrected, and translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include the original French text. Do **NOT** include any page numbers. Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the clean, translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
 
 TRANSLATE_ONLY_PROMPT_REFINED_V7 = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}.**
 
 Translate the following text to natural and idiomatic {target_language}. Produce a translation that sounds fluent and natural to a native speaker, formatted in Markdown.
 Text: {text}"""
 
-TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT include any introductory phrases, commentary, or extra text. ONLY provide the final translated text formatted in Markdown.**
+# Replacing the conditional translate-only prompt with the new version:
+TRANSLATE_ONLY_PROMPT_REFINED_V7_COND_FORMAT = """**IMPORTANT: TRANSLATE ALL TEXT to natural and idiomatic {target_language}. DO NOT LEAVE ANY TEXT IN THE ORIGINAL LANGUAGE. TRANSLATE EVERYTHING.**
 
-Translate the following text to natural and idiomatic {target_language} and output only the final translation. For Chinese names and terms, include Chinese characters and Hànyǔ Pīnyīn (with tone marks) using the specified formatting. Produce a Markdown-formatted translation.
-Text: {text}"""
+Translate the following text to natural and idiomatic {target_language} and output only the final translation. For Chinese names and terms use Hànyǔ Pīnyīn for the term in the translation. Include Chinese character names and general Chinese terms in Chinese in the translation. The goal is to produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one. Avoid literal, word-for-word translation. Instead, focus on conveying the meaning accurately using natural {target_language} phrasing, sentence structure, and idiomatic expressions. Rephrase sentences as needed to ensure a smooth and readable flow for a general {target_language} audience. Aim for a slightly informal and approachable tone.  Produce a translation that sounds fluent and natural to a native {target_language} speaker, as if written by one.  Format structural elements using Markdown where appropriate and ensure paragraphs are separated by blank lines.
 
-CLEANUP_PROMPT = """Please clean up the following OCR text which contains errors, typos, and formatting issues. Remove pagination numbers, unnecessary hyphenation, unnecessary line breaks, and format the text into proper format such that the resulting body of text is fit for a publication as a book. Use Markdown formatting.
-Do NOT include any introductory phrases, commentary, or extra text—provide or any extra commentary. ONLY the final cleaned and corrected text in Markdown.
-Text to clean: {text}"""
+**IMPORTANT: MANDATORY PINYIN TRANSLITERATION WITH TONE MARKS AND CONDITIONAL FORMATTING FOR CHINESE NAMES AND GENERAL CHINESE TERMS.  CHINESE CHARACTERS MUST BE INCLUDED. DO NOT ITALICIZE CHINESE NAMES OR TERMS.**
 
+* **ITALICS:** **DO NOT ITALICIZE CHINESE NAMES OR GENERAL CHINESE TERMS** in the output, even if they are italicized in the original text. However, if you identify POEMS or VERSES, **FIRST TRANSLATE THEM TO {target_language}**, and then format the **TRANSLATED POEMS/VERSES** in italics in the Markdown output using asterisks `*poem line*`. **ENSURE POEMS ARE TRANSLATED TO {target_language}.**
+* **CHINESE CHARACTERS:** You **MUST INCLUDE** the original Chinese characters for all **CHINESE NAMES** in the translation. **FOR GENERAL CHINESE TERMS ORIGINALLY IN CHINESE, INCLUDE CHINESE CHARACTERS IN BRACKETS AFTER THE TRANSLATED TERM.**
+* **PINYIN TRANSLITERATION (ALL CHINESE TERMS):** For **ALL CHINESE TERMS** (names and general terms originally in Chinese), you **ABSOLUTELY MUST** use **Hànyǔ Pīnyīn (汉语拼音)** - the standard and ONLY acceptable romanization system for Mandarin Chinese - for the transliterated term. **CRITICALLY IMPORTANT: Ensure Hanyu Pinyin is provided with CORRECT TONE MARKS for all Chinese terms.** **FOR BOTH NAMES AND GENERAL TERMS, INCLUDE HANYU PINYIN IN BRACKETS AFTER THE CHINESE CHARACTERS.** Example format for general terms:  `Translated Term (Chinese Characters Pinyin)`.
+* **CONDITIONAL FORMATTING FOR NAMES - IMPORTANT:**
+    * **CASE 1: TRANSLATED NAME IS DIFFERENT FROM PINYIN:** If the translated name is significantly different from the Pinyin (e.g., "Great Monkey King" vs. "Měi Hóuwáng"), use this format: **Translated Name (Chinese Characters Pinyin)**. Example: "Great Monkey King (美猴王 Měi Hóuwáng)".
+    * **CASE 2: TRANSLATED NAME IS ESSENTIALLY THE SAME AS PINYIN:** If the translated name is essentially the same as the Pinyin (just anglicized Pinyin, e.g., "Sun Wukong" which is very close to "Sūn Wùkōng"), use this format: **Pinyin (Chinese Characters)**. Example: "Sūn Wùkōng (孫悟空)". In this case, the Pinyin comes FIRST, followed by parentheses containing ONLY the Chinese characters.
 
-# --- Modified SRT prompt ---
-# This prompt instructs the model to preserve the exact SRT format WITHOUT wrapping the output in markdown code fences.
+**Constraint:** You MUST TRANSLATE ALL TEXT TO {target_language}, including poems. You MUST NOT italicize Chinese characters or Pinyin. You MUST translate poems or verses and then italicize them if detected. You MUST include Chinese characters for names and general Chinese terms, use Hanyu Pīnyīn with correct tone marks for names and general Chinese terms, and use the CONDITIONAL formatting for names as described in CASE 1 and CASE 2 above for names, and the general term format `Translated Term (Chinese Characters Pinyin)` for general terms. Do NOT use any other romanization method, do not omit tone marks or Chinese characters for Chinese terms, and adhere to the specified formatting. Provide **ONLY** the final translated text in {target_language}, **formatted in Markdown**.  Do **NOT** include any introductory phrases, notes, quotation marks, or anything else.  Just the translated text, perfectly formatted in Markdown and free of errors. Text: {text}"""
+
+# Replacing the cleanup prompt with the new version:
+CLEANUP_PROMPT = """Please clean up the following text which is the result of Optical Character Recognition (OCR).  The text is very messy and contains significant errors, typos, gibberish, and formatting problems typical of OCR output, including **pagination numbers and inconsistent line breaks within paragraphs**.
+
+**Your task is to perform aggressive cleaning and correction to produce a perfectly clean, readable, and well-formatted text using Markdown formatting for structural elements.**
+
+**Specifically, your cleaning, correction, and formatting MUST include:**
+
+* **AGGRESSIVELY correct ALL OCR errors, typos, and gibberish.** This is the most important step. Ensure the text is perfectly readable and grammatically correct in English.
+* **REMOVE ALL pagination numbers.**  This includes both Arabic numerals (e.g., 1, 2, 3...) and Roman numerals (e.g., I, II, III, IV, V...). Do not include any page numbers in the cleaned output.
+* **AGGRESSIVELY REMOVE **unnecessary line breaks WITHIN paragraphs** to create flowing paragraphs.**  Text within a paragraph should be on a single line unless it's a deliberate line break for formatting within that paragraph (which is unlikely in OCR cleanup).
+* **JOIN hyphenated words that are split across lines.** For example, if "state- \n ment" appears, it should be corrected to "statement".
+* **COLLAPSE multiple spaces and tabs into single spaces.** Remove leading and trailing whitespace from lines. Ensure consistent spacing throughout the text.
+* **Ensure proper paragraphing and line breaks for excellent readability.** Paragraphs should be clearly separated by blank lines in the Markdown output.  **Preserve these paragraph breaks.**
+* **Format structural elements using Markdown:** If the original text has structural elements like headings, please format them using Markdown.
+    * Use `#` for main headings, `##` for main section headings, and `###` for subsections, etc. Try to infer the hierarchy from the text if possible.
+    * Ensure paragraphs are separated by blank lines (standard Markdown).
+* **Remove ALL extra whitespace, formatting inconsistencies, and extraneous characters that are artifacts of the OCR process.**
+
+**IMPORTANT:** Provide **ONLY** the final, cleaned and corrected text, **formatted in Markdown**.  Do **NOT** include the original OCR text. Do **NOT** include any page numbers.  Do **NOT** include any introductory phrases, notes, quotation marks, or anything else. Just the clean, corrected text, perfectly formatted in Markdown and free of errors.
+
+**Text to clean:** {text}"""
+
 SRT_WHOLE_FILE_PROMPT = """TRANSLATE THE ENTIRE FOLLOWING SRT SUBTITLE FILE to {target_language}.
 **IMPORTANT: PRESERVE THE EXACT SRT FORMAT WITHOUT ADDING CODE FENCES.**
 1. Keep all subtitle numbers exactly as they are.
