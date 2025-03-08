@@ -2,8 +2,56 @@ import os
 import sys
 import re
 import subprocess
-import wave
 import glob
+import argparse
+
+def fix_optional_args(argv):
+    """
+    Preprocess sys.argv so that if -s/--silence or -sr/--sample-rate is
+    provided without a valid numeric value immediately following, insert
+    the default value.
+    """
+    new_argv = [argv[0]]
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-s", "--silence"):
+            if i + 1 < len(argv) and not argv[i+1].startswith('-'):
+                try:
+                    float(argv[i+1])
+                    new_argv.append(arg)
+                    new_argv.append(argv[i+1])
+                    i += 2
+                except ValueError:
+                    new_argv.append(arg)
+                    new_argv.append("5")
+                    i += 1
+            else:
+                new_argv.append(arg)
+                new_argv.append("5")
+                i += 1
+        elif arg in ("-sr", "--sample-rate"):
+            if i + 1 < len(argv) and not argv[i+1].startswith('-'):
+                try:
+                    int(argv[i+1])
+                    new_argv.append(arg)
+                    new_argv.append(argv[i+1])
+                    i += 2
+                except ValueError:
+                    new_argv.append(arg)
+                    new_argv.append("48000")
+                    i += 1
+            else:
+                new_argv.append(arg)
+                new_argv.append("48000")
+                i += 1
+        else:
+            new_argv.append(arg)
+            i += 1
+    return new_argv
+
+# Preprocess sys.argv before parsing with argparse.
+sys.argv = fix_optional_args(sys.argv)
 
 def numeric_sort_key(filename):
     """
@@ -17,18 +65,49 @@ def numeric_sort_key(filename):
     else:
         return base.lower()
 
-def get_duration(filename):
+def get_audio_properties(filename):
     """
-    Uses the wave module to return the duration of a WAV file in seconds.
+    Uses ffprobe to extract sample rate and channel count from an audio file.
     """
     try:
-        with wave.open(filename, 'rb') as wf:
-            frames = wf.getnframes()
-            rate = wf.getframerate()
-            duration = frames / float(rate)
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=sample_rate,channels",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            filename
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        lines = result.stdout.strip().split('\n')
+        if len(lines) >= 2:
+            sample_rate = int(lines[0])
+            channels = int(lines[1])
+            return sample_rate, channels
+        else:
+            return None, None
+    except Exception as e:
+        print(f"Error getting audio properties from {filename}: {e}")
+        return None, None
+
+def get_duration(filename):
+    """
+    Uses ffprobe to return the duration of an audio file in seconds.
+    Works for WAV, MP3, and most other formats.
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            filename
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        duration = float(result.stdout.strip())
         return duration
     except Exception as e:
-        print(f"Error reading {filename} with wave module: {e}")
+        print(f"Error reading {filename} with ffprobe: {e}")
         return 0
 
 def seconds_to_timestamp(seconds):
@@ -42,47 +121,114 @@ def seconds_to_timestamp(seconds):
     millis = int(round((seconds - int(seconds)) * 1000))
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: mergewav.py *.wav")
+def generate_silence_file(filename, duration, in_sample_rate, channels):
+    """
+    Uses ffmpeg to generate a WAV file containing silence.
+    The silence file is generated with the same sample rate and channel count as the input files.
+    """
+    channel_layout = "mono" if channels == 1 else "stereo" if channels == 2 else "stereo"
+    cmd = [
+        "ffmpeg", "-y",  # Overwrite if exists
+        "-f", "lavfi",
+        "-i", f"anullsrc=r={in_sample_rate}:cl={channel_layout}",
+        "-t", str(duration),
+        "-ac", str(channels),
+        "-c:a", "pcm_s16le",
+        filename
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print("Error generating silence file:", e)
         sys.exit(1)
 
-    # Expand wildcards using glob. Windows command-line doesn't auto-expand wildcards.
-    input_patterns = sys.argv[1:]
-    wav_files = []
-    for pattern in input_patterns:
-        # If the argument contains wildcards, expand it.
+def convert_to_wav(input_file, output_file, sample_rate, channels):
+    """
+    Converts an input audio file to WAV with the given sample rate and channel count.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_file,
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-c:a", "pcm_s16le",
+        output_file
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error converting {input_file} to WAV:", e)
+        sys.exit(1)
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Merge WAV/MP3 files with chapter markers and optional silence gaps."
+    )
+    parser.add_argument("files", nargs="+", help="Input WAV/MP3 files (wildcards allowed)")
+    parser.add_argument("-s", "--silence", nargs="?", type=float,
+                        help="Add silence (in seconds) after every file (default: 5 seconds if flag is used without a value)")
+    parser.add_argument("-sr", "--sample-rate", type=int, default=48000,
+                        help="Target sample rate for output (default: 48000)")
+    args = parser.parse_args()
+
+    # Expand wildcards for input files.
+    input_files = []
+    for pattern in args.files:
         if '*' in pattern or '?' in pattern:
             expanded = glob.glob(pattern)
-            wav_files.extend(expanded)
+            input_files.extend(expanded)
         else:
-            wav_files.append(pattern)
-    
-    if not wav_files:
-        print("No WAV files found matching the given pattern(s).")
+            input_files.append(pattern)
+
+    if not input_files:
+        print("No files found matching the given pattern(s).")
         sys.exit(1)
 
-    # Sort files numerically based on the first number found in the filename
-    sorted_files = sorted(wav_files, key=numeric_sort_key)
+    # Sort files numerically.
+    sorted_files = sorted(input_files, key=numeric_sort_key)
     print("Merging the following files in order:")
     for f in sorted_files:
         print("  ", f)
 
-    # Create a temporary file list for ffmpeg's concat demuxer
+    # Get audio properties from the first input file.
+    in_sample_rate, channels = get_audio_properties(sorted_files[0])
+    if in_sample_rate is None or channels is None:
+        print("Could not determine audio properties from the first input file.")
+        sys.exit(1)
+
+    # Convert all input files to temporary WAV files with identical parameters.
+    converted_files = []
+    for idx, infile in enumerate(sorted_files, start=1):
+        temp_wav = f"temp_{idx:03d}.wav"
+        print(f"Converting {infile} to {temp_wav} with {in_sample_rate} Hz and {channels} channel(s)")
+        convert_to_wav(infile, temp_wav, in_sample_rate, channels)
+        converted_files.append(temp_wav)
+
+    # If silence is enabled, generate a temporary silence file.
+    silence_file = None
+    if args.silence is not None:
+        silence_duration = args.silence
+        silence_file = "silence.wav"
+        print(f"Generating {silence_duration} seconds of silence in file: {silence_file} with {in_sample_rate} Hz and {channels} channel(s)")
+        generate_silence_file(silence_file, silence_duration, in_sample_rate, channels)
+
+    # Create a temporary file list for ffmpeg's concat demuxer.
+    # Use the converted WAV files and interleave the silence file if enabled.
     filelist_name = "filelist.txt"
     try:
         with open(filelist_name, "w", encoding="utf-8") as f:
-            for wav_file in sorted_files:
-                # ffmpeg expects each line to be: file 'filename'
+            for wav_file in converted_files:
                 f.write("file '{}'\n".format(wav_file))
+                if silence_file is not None:
+                    f.write("file '{}'\n".format(silence_file))
     except Exception as e:
         print("Error writing filelist.txt:", e)
         sys.exit(1)
 
-    # Compute chapters (start and end times) based on each file's duration.
+    # Compute chapters based on each converted file's duration and update cumulative time.
     chapters = []
     cumulative = 0.0
-    for wav_file in sorted_files:
+    for wav_file in converted_files:
         duration = get_duration(wav_file)
         chapter = {
             "title": os.path.basename(wav_file),
@@ -91,8 +237,10 @@ def main():
         }
         chapters.append(chapter)
         cumulative += duration
+        if args.silence is not None:
+            cumulative += args.silence
 
-    # Generate ffmetadata file (metadata.txt) for chapter markers.
+    # Generate ffmetadata file for chapter markers.
     metadata_file = "metadata.txt"
     try:
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -121,10 +269,12 @@ def main():
         print("Error writing SRT file:", e)
         sys.exit(1)
 
-    # Define the output file name.
+    # Define the output file.
     output_file = "merged.wav"
+    target_sample_rate = args.sample_rate
 
     # Build the ffmpeg command.
+    # Re-encode the audio (instead of copying) to force a uniform output sample rate.
     cmd = [
         "ffmpeg",
         "-f", "concat",
@@ -132,11 +282,12 @@ def main():
         "-i", filelist_name,
         "-i", metadata_file,
         "-map_metadata", "1",
-        "-c", "copy",
+        "-ar", str(target_sample_rate),
+        "-c:a", "pcm_s16le",
         output_file
     ]
     try:
-        print("\nRunning ffmpeg command to merge files and embed chapter markers...")
+        print("\nRunning ffmpeg command to merge files and embed chapter markers with sample rate conversion...")
         subprocess.run(cmd, check=True)
         print("\nMerged file created:", output_file)
         print("SRT file with chapter markers created:", srt_file)
@@ -146,10 +297,15 @@ def main():
         print("An error occurred:", err)
     finally:
         # Clean up temporary files.
-        if os.path.exists(filelist_name):
-            os.remove(filelist_name)
-        if os.path.exists(metadata_file):
-            os.remove(metadata_file)
+        for tmp in [filelist_name, metadata_file]:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if silence_file is not None and os.path.exists(silence_file):
+            os.remove(silence_file)
+        # Remove temporary converted files.
+        for tmp in converted_files:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
 if __name__ == '__main__':
     main()
