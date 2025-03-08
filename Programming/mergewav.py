@@ -4,6 +4,7 @@ import re
 import subprocess
 import glob
 import argparse
+import datetime
 
 def fix_optional_args(argv):
     """
@@ -128,7 +129,7 @@ def generate_silence_file(filename, duration, in_sample_rate, channels):
     """
     channel_layout = "mono" if channels == 1 else "stereo" if channels == 2 else "stereo"
     cmd = [
-        "ffmpeg", "-y",  # Overwrite if exists
+        "ffmpeg", "-y",
         "-f", "lavfi",
         "-i", f"anullsrc=r={in_sample_rate}:cl={channel_layout}",
         "-t", str(duration),
@@ -159,6 +160,17 @@ def convert_to_wav(input_file, output_file, sample_rate, channels):
     except subprocess.CalledProcessError as e:
         print(f"Error converting {input_file} to WAV:", e)
         sys.exit(1)
+
+def clean_title(filename):
+    """
+    Returns the basename of the original file.
+    If the name ends with a duplicate extension (e.g. '.mp3.mp3'),
+    it removes one instance.
+    """
+    title = os.path.basename(filename)
+    if title.lower().endswith(".mp3.mp3"):
+        title = title[:-4]
+    return title
 
 def main():
     parser = argparse.ArgumentParser(
@@ -225,13 +237,14 @@ def main():
         print("Error writing filelist.txt:", e)
         sys.exit(1)
 
-    # Compute chapters based on each converted file's duration and update cumulative time.
+    # Compute chapters based on each converted file's duration.
+    # Use the original (cleaned) filename for the chapter title.
     chapters = []
     cumulative = 0.0
-    for wav_file in converted_files:
-        duration = get_duration(wav_file)
+    for orig, conv in zip(sorted_files, converted_files):
+        duration = get_duration(conv)
         chapter = {
-            "title": os.path.basename(wav_file),
+            "title": clean_title(orig),
             "start": cumulative,
             "end": cumulative + duration
         }
@@ -256,7 +269,9 @@ def main():
         sys.exit(1)
 
     # Generate an SRT file with chapter markers.
-    srt_file = "merged.srt"
+    # Append a date-timestamp suffix to the filename.
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    srt_file = f"merged_{timestamp}.srt"
     try:
         with open(srt_file, "w", encoding="utf-8") as f:
             for idx, chapter in enumerate(chapters, start=1):
@@ -274,7 +289,7 @@ def main():
     target_sample_rate = args.sample_rate
 
     # Build the ffmpeg command.
-    # Re-encode the audio (instead of copying) to force a uniform output sample rate.
+    # Re-encode the audio to force a uniform output sample rate.
     cmd = [
         "ffmpeg",
         "-f", "concat",
@@ -302,7 +317,6 @@ def main():
                 os.remove(tmp)
         if silence_file is not None and os.path.exists(silence_file):
             os.remove(silence_file)
-        # Remove temporary converted files.
         for tmp in converted_files:
             if os.path.exists(tmp):
                 os.remove(tmp)
