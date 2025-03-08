@@ -25,6 +25,7 @@ import tkinter as tk
 from tkinter import filedialog
 from datetime import datetime
 import argparse
+import glob
 
 # ------------------- DEFAULT CONFIGURATION ------------------- #
 DEFAULT_MODEL = "large-v2"           # Options: "large-v2", "large-v3"
@@ -53,19 +54,39 @@ def is_media_file(filepath: str) -> bool:
     return os.path.splitext(filepath)[1].lower() in SUPPORTED_EXTENSIONS
 
 def get_files_from_args(args: list) -> list:
-    """Process command-line arguments and return a list of media files."""
+    """Process command-line arguments and return a list of media files.
+    
+    This function now expands wildcards automatically using glob.
+    """
     collected_files = []
     for arg in args:
-        arg = os.path.abspath(arg.strip('"').strip("'"))
-        if os.path.exists(arg):
-            if os.path.isdir(arg):
-                collected_files.extend(
-                    [os.path.join(arg, f) for f in os.listdir(arg) if is_media_file(f)]
-                )
-            elif is_media_file(arg):
-                collected_files.append(arg)
+        # Check if the argument contains wildcard characters
+        if '*' in arg or '?' in arg:
+            expanded_paths = glob.glob(arg)
+            if not expanded_paths:
+                print(f"Warning: No files match the pattern {arg}, skipping...")
+            for expanded in expanded_paths:
+                expanded = os.path.abspath(expanded.strip('"').strip("'"))
+                if os.path.exists(expanded):
+                    if os.path.isdir(expanded):
+                        collected_files.extend(
+                            [os.path.join(expanded, f) for f in os.listdir(expanded) if is_media_file(f)]
+                        )
+                    elif is_media_file(expanded):
+                        collected_files.append(expanded)
+                else:
+                    print(f"Warning: {expanded} does not exist, skipping...")
         else:
-            print(f"Warning: {arg} does not exist, skipping...")
+            arg = os.path.abspath(arg.strip('"').strip("'"))
+            if os.path.exists(arg):
+                if os.path.isdir(arg):
+                    collected_files.extend(
+                        [os.path.join(arg, f) for f in os.listdir(arg) if is_media_file(f)]
+                    )
+                elif is_media_file(arg):
+                    collected_files.append(arg)
+            else:
+                print(f"Warning: {arg} does not exist, skipping...")
     return collected_files
 
 def prompt_user_for_files_or_folder() -> list:
