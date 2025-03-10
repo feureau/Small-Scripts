@@ -1,42 +1,70 @@
-## Welcome to GitHub Pages
+## Welcome to Feureau's Small-Scripts
 
-You can use the [editor on GitHub](https://github.com/feureau/Small-Scripts/edit/master/README.md) to maintain and preview the content for your website in Markdown files.
+---
+# OSPL - One Sentence Per Line
 
-Whenever you commit to this repository, GitHub Pages will run [Jekyll](https://jekyllrb.com/) to rebuild the pages in your site, from the content in your Markdown files.
+## Overview
+OSPL (`ospl.py`) is a Python script that processes text files to ensure that each sentence appears on a separate line. It also maintains paragraph separation and correctly handles decorative or extra text before sentences by placing them on separate lines.
 
-### Markdown
+## Features
+- Converts input text files so that each sentence is on its own line.
+- Maintains paragraph separation (double line breaks).
+- Preserves extra text (such as decorative asterisks) by placing it on a separate line before the next sentence.
+- Handles broken-up text lines by joining them properly before tokenization.
+- Automatically downloads missing NLTK resources (`punkt_tab`) if required.
+- Supports batch processing of multiple text files using wildcard patterns.
+- Outputs the processed text files into an `output/` subfolder in the working directory.
 
-Markdown is a lightweight and easy-to-use syntax for styling your writing. It includes conventions for
+## Prerequisites
+- Python 3.6+
+- NLTK library
 
-```markdown
-Syntax highlighted code block
+### Installation
+Ensure you have Python installed, then install NLTK if you haven't already:
 
-# Header 1
-## Header 2
-### Header 3
-
-- Bulleted
-- List
-
-1. Numbered
-2. List
-
-**Bold** and _Italic_ and `Code` text
-
-[Link](url) and ![Image](src)
+```sh
+pip install nltk
 ```
 
-For more details see [GitHub Flavored Markdown](https://guides.github.com/features/mastering-markdown/).
+## Usage
+Run the script from the command line, specifying one or more text files:
 
-### Jekyll Themes
+```sh
+python ospl.py *.txt
+```
 
-Your Pages site will use the layout and styles from the Jekyll theme you have selected in your [repository settings](https://github.com/feureau/Small-Scripts/settings). The name of this theme is saved in the Jekyll `_config.yml` configuration file.
+### Example
+#### Input (`chapter_003.txt`)
+```
+CHAPTER I.
+Down the Rabbit-Hole
+Alice was beginning to get very tired of sitting by her sister on the bank, and
+of having nothing to do: once or twice she had peeped into the book her sister
+was reading, but it had no pictures or conversations in it, “and what is
+the use of a book,” thought Alice “without pictures or
+conversations?”
+```
+#### Output (`output/chapter_003.txt`)
+```
+CHAPTER I.
 
-### Support or Contact
+Down the Rabbit-Hole
 
-Having trouble with Pages? Check out our [documentation](https://help.github.com/categories/github-pages-basics/) or [contact support](https://github.com/contact) and we’ll help you sort it out.
+Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do.
+Once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it.
+“And what is the use of a book,” thought Alice, “without pictures or conversations?”
+```
 
-Below is the full documentation for both scripts. You can include these documents (or similar documentation) with your scripts to help others understand how to configure, use, and troubleshoot them.
+## How It Works
+1. Reads the input text file using UTF-8 encoding.
+2. Splits the text into paragraphs based on blank lines.
+3. Joins broken lines within paragraphs to form proper sentences.
+4. Tokenizes the text into sentences using NLTK.
+5. Ensures that extra text (such as decorative separators) is placed on its own line.
+6. Writes the processed text into the `output/` folder.
+
+## Handling Missing NLTK Data
+If the required NLTK tokenizer is missing, the script will automatically download it and retry processing.
 
 ---
 
@@ -567,6 +595,8 @@ This GUI tool utilizes [NVEncC](https://github.com/rigaya/NVEnc) for encoding an
 *   **Basic Error Handling:** While some error handling is implemented, more robust error reporting and user feedback could be added in future versions.
 *   **Limited Option Exposure:** The GUI does not expose all NVEncC options. Advanced users may need to use NVEncC directly via the command line for more fine-grained control.
 
+---
+
 ## Contributing
 
 Contributions to this project are welcome! If you find bugs, have feature requests, or want to contribute code improvements, please feel free to:
@@ -574,18 +604,12 @@ Contributions to this project are welcome! If you find bugs, have feature reques
 *   **Report Issues:**  Open issues on the GitHub repository to report bugs or suggest enhancements.
 *   **Submit Pull Requests:**  Fork the repository, make your changes, and submit pull requests with your contributions.
 
-## License
-
-This project is open-source and available under the GNU General Public License version 3 (GPLv3) license.
-
-## Contact/Support
+# Contact/Support
 
 For questions or support, pray to the AI god. Good luck.
 
----
-
 **Disclaimer:** This tool is provided as-is, without warranty. Please use it responsibly and at your own risk. Always verify your output files.
 
-```
+# License
 
-
+This project is open-source and available under the GNU General Public License version 3 (GPLv3) license.
