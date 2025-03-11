@@ -595,6 +595,112 @@ This GUI tool utilizes [NVEncC](https://github.com/rigaya/NVEnc) for encoding an
 *   **Basic Error Handling:** While some error handling is implemented, more robust error reporting and user feedback could be added in future versions.
 *   **Limited Option Exposure:** The GUI does not expose all NVEncC options. Advanced users may need to use NVEncC directly via the command line for more fine-grained control.
 
+# magickjpg.py - PNG to JPG Converter Script with ImageMagick
+
+This Python script converts PNG images to JPG format in the current working directory using ImageMagick. It's designed to be run from the command line and offers various options to control the JPG conversion process, such as quality, sampling factor, and more.  Newly generated JPG files are automatically moved into a `jpg` subfolder.
+
+## Features
+
+*   **PNG to JPG Conversion:** Converts all PNG images (or images matching a specified pattern) in the current directory to JPG format.
+*   **ImageMagick Powered:** Leverages the powerful ImageMagick command-line tools for image processing.
+*   **JPG Conversion Options:** Provides command-line arguments to control:
+    *   **Quality (`-q` or `--quality`):**  Adjust JPG quality for file size vs. image quality trade-off.
+    *   **Sampling Factor (`--sampling-factor`):**  Control chroma subsampling for color detail vs. file size.
+    *   **Density (`--density`):** Set DPI resolution for the output JPG images.
+    *   **Interlace Mode (`--interlace`):** Create progressive (interlaced) or baseline JPGs.
+    *   **Metadata Stripping (`--strip`):** Remove metadata to reduce file size.
+    *   **ICC Profile Embedding (`--profile`):** Embed a specific ICC color profile.
+    *   **Resizing (`--resize`):** Resize images before conversion using ImageMagick geometry strings.
+*   **Output to `jpg` Folder:**  Automatically creates a `jpg` subfolder and moves the newly created JPG files into it, keeping your original directory organized.
+*   **Help Text:** Includes `-h` or `--help` flag to display usage instructions and available options.
+*   **Cross-Platform (Windows Compatible):** Designed to run correctly on Windows command prompt.
+
+## Prerequisites
+
+Before running this script, you need to have the following software installed and properly configured:
+
+1.  **Python:** Python 3.x must be installed on your system. You can download it from [https://www.python.org/](https://www.python.org/).
+2.  **ImageMagick:** ImageMagick must be installed and the `magick` command-line tool must be accessible in your system's PATH environment variable. You can download ImageMagick from [https://imagemagick.org/](https://imagemagick.org/).  Make sure to install a version that includes the `magick` command (the newer unified command-line interface).
+
+## Installation
+
+1.  **Download the Script:** Download the Python script (`process_images.py` or `magickjpg.py`) to your desired location.
+2.  **Make it Executable (Optional on some systems):** On some systems, you might need to make the script executable using `chmod +x process_images.py` (on Linux/macOS). On Windows, this is generally not necessary.
+
+## Usage
+
+1.  **Open Command Prompt/Terminal:** Open your command prompt (on Windows) or terminal (on macOS/Linux).
+2.  **Navigate to the Directory with PNGs:** Use the `cd` command to navigate to the directory where your PNG images are located. This directory will be the **current working directory** for the script.
+3.  **Run the Script:** Execute the script using the `python` interpreter, providing the input file pattern as the first argument, followed by any desired options.
+
+    ```bash
+    python path/to/magickjpg.py <input_pattern> [options]
+    ```
+
+    *   `path/to/magickjpg.py`:  Replace this with the actual path to where you saved the script if you are not running it from the same directory. If the script is in your current directory, you can just use `magickjpg.py` (or `python magickjpg.py` on Windows).
+    *   `<input_pattern>`:  This is **required** and specifies the file pattern to match for conversion. Common patterns are:
+        *   `*.png`: To convert all PNG files.
+        *   `*.tif`: To convert all TIFF files.
+        *   `image*.png`: To convert PNG files starting with "image".
+        *   `single_image.bmp`: To convert a specific file named "single_image.bmp".
+    *   `[options]`:  These are optional flags to control the JPG conversion process. See the "Command-Line Arguments" section below for available options.
+
+## Command-Line Arguments
+
+| Argument/Option          | Short Flag | Type    | Description                                                                                                                                                              |
+| ------------------------ | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<input_pattern>`       | (positional) | String  | **Required.** Specifies the file pattern to match for image conversion (e.g., `*.png`, `image*.tif`).                                                                 |
+| `-q` / `--quality`       | `-q`       | Integer | JPEG quality level (0-100, higher is better quality, larger file size). Default is ImageMagick's default quality.                                                     |
+| `--sampling-factor`      |            | String  | JPEG chroma sampling factor (e.g., `'4:2:0'`, `'4:4:4'`). Controls color detail vs. file size.                                                                        |
+| `--density`            |            | Integer | DPI density for the output JPEG images.                                                                                                                                  |
+| `--interlace`          |            | String  | JPEG interlace mode. Choices: `'None'`, `'Plane'`, `'Line'`, `'Partition'`. Use `'Plane'` for progressive JPEGs (recommended for web).                               |
+| `--strip`              |            | Flag    | Strip metadata (EXIF, IPTC, etc.) from JPEG images to reduce file size.                                                                                                  |
+| `--profile`            |            | String  | Path to an ICC profile file to embed in the JPEG images.  Example: `"path/to/sRGB.icc"`.                                                                                   |
+| `--resize`             |            | String  | ImageMagick geometry string for resizing images before conversion. Examples: `'50%'`, `'800x600'`, `'800x>'`. Refer to ImageMagick documentation for geometry syntax. |
+| `-h` / `--help`          | `-h`       | Flag    | Display help message and exit.                                                                                                                                           |
+
+## Output
+
+The script will create a subfolder named `jpg` in the current working directory (if it doesn't already exist). All newly generated JPG files will be moved into this `jpg` folder.
+
+## Example Usage
+
+1.  **Convert all PNG files in the current directory to JPG with default settings:**
+
+    ```bash
+    python magickjpg.py *.png
+    ```
+
+2.  **Convert all PNG files to JPG with a quality level of 85:**
+
+    ```bash
+    python magickjpg.py *.png -q 85
+    ```
+
+3.  **Convert all PNG files, set quality to 90, use 4:2:0 sampling factor, and create progressive JPGs:**
+
+    ```bash
+    python magickjpg.py *.png -q 90 --sampling-factor 4:2:0 --interlace Plane
+    ```
+
+4.  **Convert all PNG files, resize them to 50% of their original size, and strip metadata:**
+
+    ```bash
+    python magickjpg.py *.png --resize 50% --strip
+    ```
+
+5.  **Get help information to see all available options:**
+
+    ```bash
+    python magickjpg.py -h
+    ```
+    or
+    ```bash
+    python magickjpg.py --help
+    ```
+
+
+
 ---
 
 ## Contributing
