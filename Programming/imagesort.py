@@ -85,7 +85,7 @@ class ImageSorterApp:
         self.cursor_y = event.y
 
     def window_resize(self, event=None):
-        if self.current_index < len(self.image_files):
+        if self.image_files:
             self.reset_zoom()
 
     def update_scrollregion(self, event=None):
@@ -94,10 +94,12 @@ class ImageSorterApp:
     def load_images(self):
         current_dir = os.getcwd()
         valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
-        
-        self.image_files = [f for f in os.listdir(current_dir) if f.lower().endswith(valid_extensions)]
-        for filename in self.image_files:
-            self.create_thumbnail(filename)
+        all_files = [f for f in os.listdir(current_dir) if f.lower().endswith(valid_extensions)]
+        self.image_files = []
+        for filename in all_files:
+            # Only add files that successfully create a thumbnail
+            if self.create_thumbnail(filename):
+                self.image_files.append(filename)
 
     def create_thumbnail(self, filename):
         try:
@@ -124,16 +126,19 @@ class ImageSorterApp:
                 lbl.bind("<Button-1>", lambda e, f=filename: self.show_preview_by_filename(f))
                 self.add_scroll_bindings(lbl)
                 lbl.pack(side=tk.TOP)
+            return True
         except Exception as e:
             print(f"Error loading {filename}: {e}")
+            return False
 
     def initial_preview(self):
         if self.image_files:
             self.show_preview(0)
 
     def show_preview_by_filename(self, filename):
-        index = self.image_files.index(filename)
-        self.show_preview(index)
+        if filename in self.image_files:
+            index = self.image_files.index(filename)
+            self.show_preview(index)
         
     def show_preview(self, index):
         if 0 <= index < len(self.image_files):
@@ -142,37 +147,48 @@ class ImageSorterApp:
             filename = self.image_files[self.current_index]
             self.load_preview_image(filename)
             self.center_filmstrip()
-    
+
     def load_preview_image(self, filename):
         try:
             self.original_image = Image.open(filename)
             self.reset_zoom()
         except Exception as e:
             print(f"Error loading preview for {filename}: {e}")
+            # Skip this file by moving to the next or previous available image
+            if self.image_files:
+                if self.current_index < len(self.image_files) - 1:
+                    self.show_preview(self.current_index + 1)
+                elif self.current_index > 0:
+                    self.show_preview(self.current_index - 1)
+                else:
+                    self.preview_canvas.delete("all")
 
     def update_highlight(self):
+        # Configure the style once
+        style = ttk.Style()
+        style.configure('Selected.TFrame', background='#5555ff')
         for i, frame in enumerate(self.thumbnail_frames):
             if i == self.current_index:
                 frame.configure(style='Selected.TFrame')
             else:
                 frame.configure(style='TFrame')
-        self.root.style = ttk.Style()
-        self.root.style.configure('Selected.TFrame', background='#5555ff')
 
     def center_filmstrip(self):
-        if self.thumbnail_frames:
-            frame = self.thumbnail_frames[self.current_index]
-            frame_x = frame.winfo_x()
-            frame_width = frame.winfo_width()
-            canvas_width = self.canvas.winfo_width()
-            
-            view_left = self.canvas.xview()[0] * self.filmstrip_frame.winfo_width()
-            view_right = self.canvas.xview()[1] * self.filmstrip_frame.winfo_width()
-            frame_center = frame_x + frame_width/2
-            
-            if frame_center < view_left or frame_center > view_right:
-                normalized = (frame_center - canvas_width/2) / self.filmstrip_frame.winfo_width()
-                self.canvas.xview_moveto(max(0, min(normalized, 1)))
+        # Ensure current_index is valid
+        if not self.thumbnail_frames or self.current_index >= len(self.thumbnail_frames):
+            return
+        frame = self.thumbnail_frames[self.current_index]
+        frame_x = frame.winfo_x()
+        frame_width = frame.winfo_width()
+        canvas_width = self.canvas.winfo_width()
+        
+        view_left = self.canvas.xview()[0] * self.filmstrip_frame.winfo_width()
+        view_right = self.canvas.xview()[1] * self.filmstrip_frame.winfo_width()
+        frame_center = frame_x + frame_width/2
+        
+        if frame_center < view_left or frame_center > view_right:
+            normalized = (frame_center - canvas_width/2) / self.filmstrip_frame.winfo_width()
+            self.canvas.xview_moveto(max(0, min(normalized, 1)))
 
     def next_image(self, event=None):
         if self.current_index < len(self.image_files) - 1:
@@ -263,14 +279,19 @@ class ImageSorterApp:
 
     def process_files(self):
         current_dir = os.getcwd()
-        files_to_process = [f for f in self.image_files if self.selected[f].get()]
+        # Only process files that are in the selected dictionary
+        files_to_process = [f for f in self.image_files if self.selected.get(f) and self.selected[f].get()]
         
         for filename in files_to_process:
             ext = os.path.splitext(filename)[1][1:].lower()
-            if not ext: continue
+            if not ext: 
+                continue
             dest_dir = os.path.join(current_dir, ext.upper())
             os.makedirs(dest_dir, exist_ok=True)
-            shutil.move(os.path.join(current_dir, filename), os.path.join(dest_dir, filename))
+            try:
+                shutil.move(os.path.join(current_dir, filename), os.path.join(dest_dir, filename))
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")
         
         self.refresh_interface()
 
@@ -282,6 +303,8 @@ class ImageSorterApp:
         self.selected.clear()
         self.thumbnail_frames.clear()
         self.preview_canvas.delete("all")
+        # Reset current_index so navigation starts fresh
+        self.current_index = 0
         self.load_images()
         self.root.after(100, self.initial_preview)
 
