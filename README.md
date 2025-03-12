@@ -1,6 +1,126 @@
 ## Welcome to Feureau's Small-Scripts
 
 ---
+
+# CropTransp
+
+CropTransp is a Python script that automatically trims transparent borders from image files (such as PNGs) using ImageMagick. It supports wildcard file patterns, customizable transparency thresholds with a default of 30%, and an option to specify a custom output directory. If installed, it also displays a progress bar via `tqdm`.
+
+---
+
+## Features
+
+- **Trim Transparent Borders:** Automatically crop images to remove transparent edges.
+- **Customizable Transparency Threshold:** Use the `-f/--fuzz` flag to set a tolerance level (default is 30%).
+- **Wildcard Support:** Accepts wildcard patterns (e.g., `*.png`) to process multiple images at once.
+- **Custom Output Directory:** Specify an output folder for the processed images.
+- **Progress Bar:** Displays progress if `tqdm` is installed.
+
+---
+
+## Prerequisites
+
+- **Python 3:** Ensure you have Python 3 installed.
+- **ImageMagick 7+:** The script requires ImageMagick v7 or later with the `magick` command available.  
+  [Installation instructions](https://imagemagick.org/script/download.php)
+- **tqdm (Optional):** For a progress bar, install using:
+  ```bash
+  pip install tqdm
+  ```
+
+---
+
+## Installation
+
+Clone the repository or download the script directly:
+
+```bash
+git clone https://github.com/yourusername/CropTransp.git
+cd CropTransp
+```
+
+Make the script executable:
+
+```bash
+chmod +x croptransp.py
+```
+
+---
+
+## Usage
+
+### Basic Command
+
+Trim transparent borders from one or more images:
+
+```bash
+./croptransp.py image1.png image2.png
+```
+
+### Options
+
+- **`-f, --fuzz`**:  
+  Set the transparency threshold as a percentage (default is `30%`).  
+  Example (using a 10% threshold):
+  ```bash
+  ./croptransp.py -f 10 image1.png
+  ```
+
+- **`-o, --output`**:  
+  Specify the output directory. Default is `TranspCrop`.
+  ```bash
+  ./croptransp.py -o OutputFolder *.png
+  ```
+
+- **Help:**
+  ```bash
+  ./croptransp.py -h
+  ```
+
+---
+
+## How It Works
+
+1. **File Expansion:**  
+   The script expands wildcard patterns to create a list of input files.
+2. **Output Directory Creation:**  
+   It creates an output directory (default `TranspCrop`) in the current working directory.
+3. **Image Processing:**  
+   Uses ImageMagick’s `magick` command to apply the `-trim` operation along with `-fuzz` (default 30%) and `+repage` to crop transparent borders.
+4. **Progress Indication:**  
+   If `tqdm` is available, a progress bar is displayed during processing.
+
+---
+
+## Example
+
+Process all PNG images in the current directory with a fuzz threshold of 20% and output them to a folder named `CroppedImages`:
+
+```bash
+./croptransp.py -f 20 -o CroppedImages *.png
+```
+
+---
+
+## Troubleshooting
+
+- **ImageMagick Warnings/Errors:**  
+  Ensure you are using ImageMagick v7+ and that the `magick` command is correctly installed and in your system's PATH.
+- **No Files Processed:**  
+  Verify that your input file patterns correctly match your images.
+- **Permission Issues:**  
+  Ensure the script is executable and you have write permissions for the output directory.
+
+---
+
+## Acknowledgments
+
+- [ImageMagick](https://imagemagick.org/) for their robust image processing capabilities.
+- [tqdm](https://github.com/tqdm/tqdm) for the progress bar functionality.
+
+Happy cropping!
+
+---
 # OSPL - One Sentence Per Line
 
 ## Overview
