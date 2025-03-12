@@ -1,6 +1,98 @@
 ## Welcome to Feureau's Small-Scripts
 
 ---
+# imagesort.py - Image Sorter
+
+A simple Python GUI application for sorting images using Tkinter and Pillow. This tool allows you to preview images in a filmstrip, select images for processing, zoom and pan within the preview, and automatically organize selected files into folders based on their file extensions.
+
+---
+
+## Features
+
+- **Graphical Interface:** Built with Tkinter for a responsive and intuitive user experience.
+- **Image Preview:** Display images in a main preview area with support for zooming and panning.
+- **Thumbnail Filmstrip:** Easily navigate through images using a horizontal filmstrip with thumbnails.
+- **Selection & Processing:** Mark images for processing (selection via checkboxes) and move them into directories categorized by file extension.
+- **Keyboard Shortcuts:** Quickly navigate images and control features using key bindings:
+  - **Left Arrow / 's' key:** Previous image.
+  - **Right Arrow / 'f' key:** Next image.
+  - **'d' key:** Toggle image selection.
+  - **'z' key:** Reset zoom.
+
+---
+
+## Prerequisites
+
+- **Python 3.x**
+- **Pillow:** Python Imaging Library fork  
+  Install via pip:
+  ```bash
+  pip install Pillow
+  ```
+
+*Note: Tkinter is included with most standard Python distributions.*
+
+---
+
+## Installation
+
+1. **Clone the Repository:**
+   ```bash
+   git clone https://github.com/yourusername/imagesorter.git
+   cd imagesorter
+   ```
+
+2. **Install Dependencies:**
+   ```bash
+   pip install Pillow
+   ```
+
+---
+
+## Usage
+
+1. **Prepare Your Images:**  
+   Place the image files you want to sort in the same folder as the `imagesort.py` script.
+
+2. **Run the Script:**
+   ```bash
+   python imagesort.py
+   ```
+
+3. **Navigate & Process:**
+   - **Preview & Navigate:**  
+     - Use the filmstrip to click on any thumbnail and see a larger preview.
+     - Use the left/right arrow keys (or 's' and 'f') to move between images.
+   - **Zoom & Pan:**  
+     - Scroll the mouse wheel over the preview to zoom in or out.
+     - Right-click and drag within the preview area to pan.
+   - **Select & Process:**  
+     - Press the 'd' key to toggle selection for the current image.
+     - Click on the "Process Selected" button to move all selected images into new subdirectories (folders named after their file extension).
+
+---
+
+## Troubleshooting
+
+- **Image Loading Errors:**  
+  If an image fails to load (e.g., "cannot identify image file"), it will be skipped from the interface. An error message will be printed to the console.
+
+- **Navigation Bounds:**  
+  The script prevents navigation beyond the available images. If you reach the last image, the next image navigation will be disabled.
+
+- **File Processing Issues:**  
+  Ensure that the image files are not open in another application during processing. If errors occur, check the console for specific messages.
+
+---
+
+## Acknowledgements
+
+- Built with [Tkinter](https://docs.python.org/3/library/tkinter.html) and [Pillow](https://python-pillow.org/).
+- Inspired by the need for a simple yet effective tool for managing and organizing image files.
+
+Enjoy sorting your images with ease!
+
+---
 
 # CropTransp
 
