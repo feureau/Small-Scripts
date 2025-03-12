@@ -1,5 +1,63 @@
 ## Welcome to Feureau's Small-Scripts
 
+# transcribeimage.py - Transcribe Image with Google Gen AI
+
+This Python script uses the [Google Gen AI Python SDK](https://googleapis.github.io/python-genai/) to extract and clean up text from image files. It dynamically determines the MIME type of each input file, allowing you to process any image file type (e.g., JPEG, PNG, WebP). The script also retrieves a list of available models from the API, prompts you to select one interactively, and processes the images in natural numerical order.
+
+## Features
+
+- **Dynamic Image Support:**  
+  Automatically detects the MIME type for any image file based on its extension.
+
+- **Interactive Model Selection:**  
+  Lists available models from the API and prompts you to choose one by entering its corresponding number.
+
+- **Natural File Sorting:**  
+  Uses natural sorting to process files in human-friendly numerical order (e.g., `2.webp` comes before `10.webp`).
+
+- **Transcription & Cleanup:**  
+  Extracts text from images using OCR-like functionality, cleans up formatting (removes extra line breaks and spaces), and outputs well-structured text.
+
+- **Output File Saving:**  
+  Saves the cleaned transcription to a text file (with a `_transcription.txt` suffix) for each processed image.
+
+## Usage
+
+Run the script with one or more file patterns as arguments. For example:
+
+```bash
+python transcribeimage.py *.webp *.jpg *.png
+```
+
+When you run the script, it will:
+
+1. **List Available Models:**  
+   Display all models returned by the API (without extra metadata) with their index numbers.
+
+2. **Prompt for Model Selection:**  
+   Ask you to enter a number corresponding to the model you want to use.
+
+3. **Process Files:**  
+   Expand the provided file patterns using wildcards, sort the files naturally, and then process each image:
+   - The script reads the image and automatically determines its MIME type.
+   - It sends the image along with a prompt instructing the model to extract and clean up the text.
+   - The cleaned transcription is printed to the console and saved to a file with the same base name as the image and a `_transcription.txt` suffix.
+
+## How It Works
+
+- **Dynamic MIME Type Detection:**  
+  The script uses Python’s `mimetypes` module to guess the MIME type of each file. Only files with a MIME type that starts with `"image/"` are processed.
+
+- **Interactive Model Selection:**  
+  All available models from the API are listed. You choose the model to use by entering its index number.
+
+- **Natural Sorting of Files:**  
+  File names are sorted in natural (human-friendly) order, ensuring that files like `2.webp` are processed before `10.webp`.
+
+- **Transcription & Cleanup:**  
+  The selected model extracts the text from each image and cleans up the output, removing unnecessary line breaks and spaces.
+
+
 ---
 # imagesort.py - Image Sorter
 
