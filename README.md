@@ -1,5 +1,97 @@
 ## Welcome to Feureau's Small-Scripts
 
+Here's a comprehensive README.md for your GitHub repository:
+
+
+# addhdr.py - HDR Metadata Injector
+
+A Python script for batch processing video files with HDR metadata injection and LUT embedding for professional video workflows.
+
+## Features
+
+- 🎥 Recursive directory scanning for video files
+- 🔮 Automatic HDR metadata injection (SMPTE ST 2086)
+- 🎨 Optional LUT embedding for HDR→SDR conversion
+- 🚀 Bulk processing with preserved directory structure
+- 🛠️ Cross-platform support (Windows/Linux/macOS)
+- 📊 Detailed error reporting and progress tracking
+- ⚙️ Customizable output directory and LUT path
+
+## Installation
+
+### Prerequisites
+- Python 3.7+
+- [MKVToolNix](https://mkvtoolnix.download/) (v68+ recommended)
+
+```bash
+# Clone repository
+git clone https://github.com/yourusername/hdr-injector.git
+cd hdr-injector
+
+# Install requirements (no external dependencies needed)
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+venv\Scripts\activate  # Windows
+```
+
+## Usage
+
+```bash
+# Automatic mode: Process all videos in current directory and subdirectories
+python addhdr.py
+
+# Process single file with LUT embedding
+python addhdr.py input.mkv
+
+# Process directory and subdirectories
+python addhdr.py /path/to/videos/
+
+# Wildcard pattern matching
+python addhdr.py *.mkv
+
+# Without LUT embedding
+python addhdr.py --no-lut input.mkv
+
+# Custom output directory
+python addhdr.py -o /custom/output/path input.mkv
+
+# Custom mkvmerge path
+python addhdr.py --mkvmerge-path "/usr/local/bin/mkvmerge" input.mkv
+```
+
+> ⚠️ **Note:** Always back up original files before processing
+
+## Technical Specifications
+
+### HDR Metadata Parameters
+- Color Primaries: BT.2020
+- Transfer Characteristics: ST.2084 (PQ)
+- Maximum Luminance: 1000 nits
+- Chromaticity Coordinates: SMPTE ST 2036-1
+- White Point: D65
+
+### Supported Formats
+- Containers: MKV, MP4, AVI, MOV, WMV, TS, M2TS
+- LUT Format: .cube files
+
+### Default LUT
+NBCU Technical LUT for PQ→SDR conversion (included in Resolve installations)
+
+## Troubleshooting
+
+**Q:** `mkvmerge not found`  
+**A:** Install [MKVToolNix](https://mkvtoolnix.download/) and verify it's in your system PATH
+
+**Q:** LUT file not found  
+**A:** Use `--lut /custom/path/to/lut.cube` or disable with `--no-lut`
+
+**Q:** Permission denied errors  
+**A:** Run with elevated privileges or check file/directory permissions
+
+**Q:** Output directory not created  
+**A:** Verify valid path and write permissions on target drive
+
+
 # transcribeimage.py - Transcribe Image with Google Gen AI
 
 This Python script uses the [Google Gen AI Python SDK](https://googleapis.github.io/python-genai/) to extract and clean up text from image files. It dynamically determines the MIME type of each input file, allowing you to process any image file type (e.g., JPEG, PNG, WebP). The script also retrieves a list of available models from the API, prompts you to select one interactively, and processes the images in natural numerical order.

@@ -10,21 +10,17 @@ DEFAULT_OUTPUT_SUBDIR = "HDR_Processed"
 def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: bool) -> bool:
     """Process a single file with HDR metadata and optional LUT embedding"""
     try:
-        # Validate input file
         if not os.path.isfile(input_file):
             print(f"Error: Input file not found: {input_file}")
             return False
 
-        # Prepare output filename
         base_name = os.path.splitext(os.path.basename(input_file))[0]
         suffix = "_HDR_CUBE" if embed_lut else "_HDR"
         output_filename = f"{base_name}{suffix}.mkv"
         
-        # Create output directory and prepare output path
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, output_filename)
 
-        # Build base command
         mkvmerge_command = [
             "mkvmerge",
             "-o", output_path,
@@ -41,17 +37,15 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             input_file
         ]
 
-        # Add LUT attachment if enabled and available
         if embed_lut:
             if not os.path.exists(lut_path):
                 print(f"Warning: LUT file not found at {lut_path}. Disabling LUT embedding.")
             else:
-                mkvmerge_command[3:3] = [  # Insert before output path
+                mkvmerge_command[3:3] = [ 
                     "--attachment-mime-type", "application/x-cube",
                     "--attach-file", lut_path
                 ]
 
-        # Run mkvmerge
         print(f"Processing: {input_file}")
         result = subprocess.run(
             mkvmerge_command,
@@ -59,13 +53,12 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             text=True,
             check=True
         )
-        
-        # Print results
+
         if result.stdout:
             print(f"Output:\n{result.stdout}")
         if result.stderr:
             print(f"Errors:\n{result.stderr}")
-
+            
         print(f"Successfully created: {output_path}")
         return True
 
@@ -83,11 +76,8 @@ def find_video_files(paths: List[str]) -> List[str]:
     """Find all video files in specified paths (supports wildcards)"""
     video_extensions = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.ts', '.m2ts'}
     video_files = []
-
     for pattern in paths:
-        # Expand wildcards and resolve paths
         expanded_paths = glob.glob(pattern, recursive=True)
-        
         for path in expanded_paths:
             if os.path.isfile(path):
                 if os.path.splitext(path)[1].lower() in video_extensions:
@@ -99,7 +89,6 @@ def find_video_files(paths: List[str]) -> List[str]:
                             video_files.append(os.path.join(root, file))
             else:
                 print(f"Warning: Path not found - {path}")
-
     return video_files
 
 def main():
@@ -109,8 +98,9 @@ def main():
     )
     parser.add_argument(
         "inputs",
-        nargs="+",
-        help="Input files/directories (supports wildcards)"
+        nargs="*",
+        help="Input files/directories (supports wildcards)\n"
+             "If none provided, processes all video files in current directory and subfolders."
     )
     parser.add_argument(
         "--lut",
@@ -132,8 +122,12 @@ def main():
         default="mkvmerge",
         help="Path to mkvmerge executable (default: system PATH)"
     )
-
+    
     args = parser.parse_args()
+
+    # Handle automatic file discovery when no inputs are provided
+    if not args.inputs:
+        args.inputs = ['.']  # Search current directory and subdirectories
 
     # Verify mkvmerge exists
     try:
@@ -153,7 +147,7 @@ def main():
         if len(video_files) > 1:
             args.output_dir = os.path.join(os.getcwd(), DEFAULT_OUTPUT_SUBDIR)
         else:
-            args.output_dir = os.getcwd()
+            args.output_dir = os.path.join(os.getcwd())
 
     print(f"Found {len(video_files)} video file(s) to process")
     print(f"Output directory: {args.output_dir}")
