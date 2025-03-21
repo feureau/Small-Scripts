@@ -1,91 +1,14 @@
-#!/usr/bin/env python
 import os
 import sys
-import subprocess
-
-# --- Minimal top-level flag processing ---
-
-def print_help():
-    help_text = (
-        "Usage: python kokoro.py [options] [files]\n"
-        "Options:\n"
-        "  -h, --help            Show this help message and exit\n"
-        "  -iv, --install-venv   Force setup of the Conda environment and exit\n"
-    )
-    print(help_text)
-    sys.exit(0)
-
-# Check for help flag
-if any(arg in sys.argv for arg in ["-h", "--help"]):
-    print_help()
-
-# Check for force install flag
-force_install = any(arg in sys.argv for arg in ["-iv", "--install-venv"])
-
-# --- Set the target environment location ---
-# Default path to kokoro.bat (adjust if necessary)
-DEFAULT_KOKORO_PATH = r"F:\AI\kokoro-tts\kokoro.bat"
-# The Conda environment will be created in the same folder as kokoro.bat
-DEFAULT_KOKORO_DIR = os.path.dirname(DEFAULT_KOKORO_PATH)
-TARGET_ENV_PATH = os.path.join(DEFAULT_KOKORO_DIR, "kokoro_env")
-
-# --- Relaunch or create the environment ---
-# When using a prefix, CONDA_PREFIX is set to the full path.
-if os.environ.get("CONDA_PREFIX") != TARGET_ENV_PATH:
-    if force_install:
-        try:
-            print(f"Creating Conda environment at '{TARGET_ENV_PATH}' with Python 3.12 using conda-forge...")
-            subprocess.check_call([
-                "conda", "create", "--prefix", TARGET_ENV_PATH, "python=3.12", "-y", "-c", "conda-forge"
-            ])
-            print("Installing required packages: ftfy, libffi, and uv...")
-            subprocess.check_call([
-                "conda", "install", "--prefix", TARGET_ENV_PATH,
-                "ftfy", "libffi", "uv", "-y", "-c", "conda-forge"
-            ])
-            print(f"Conda environment created and dependencies installed at '{TARGET_ENV_PATH}'.")
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating environment: {e}")
-        sys.exit(0)
-    else:
-        # Relaunch this script using the target environment
-        cmd = ["conda", "run", "--prefix", TARGET_ENV_PATH, "python"] + sys.argv
-        try:
-            subprocess.check_call(cmd)
-        except subprocess.CalledProcessError as e:
-            print(f"Error re-launching script in Conda environment: {e}")
-        sys.exit(0)
-
-# --- Now we are inside the target Conda environment ---
 import glob
+import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
-import ftfy  # For fixing text encoding issues
-import codecs  # For encoding/decoding
+import ftfy  # Import the ftfy module
+import codecs  # Import the codecs module for encoding/decoding
 
-def setup_conda_environment(env_path=TARGET_ENV_PATH, python_version="3.12"):
-    """
-    Checks if the Conda environment exists at the given path.
-    If not, creates it and installs the necessary dependencies.
-    This function is for use during normal processing.
-    """
-    if not os.path.exists(env_path):
-        try:
-            print(f"Creating Conda environment at '{env_path}' with Python {python_version} using conda-forge...")
-            subprocess.check_call([
-                "conda", "create", "--prefix", env_path, f"python={python_version}", "-y", "-c", "conda-forge"
-            ])
-            print("Installing required packages: ftfy, libffi, and uv...")
-            subprocess.check_call([
-                "conda", "install", "--prefix", env_path,
-                "ftfy", "libffi", "uv", "-y", "-c", "conda-forge"
-            ])
-        except Exception as e:
-            messagebox.showerror("Conda Error", f"Error setting up Conda environment: {e}")
-            sys.exit(1)
-    else:
-        print(f"Conda environment already exists at '{env_path}'.")
+DEFAULT_KOKORO_PATH = r"F:\AI\kokoro-tts\kokoro.bat"
 
 class KokoroGUI:
     def __init__(self, root, initial_files):
@@ -113,7 +36,10 @@ class KokoroGUI:
         ]
         self.file_list = []
         self.actual_lang_code = "en-gb"
+
+        # Use a default kokoro.bat path without a config file.
         self.kokoro_path = DEFAULT_KOKORO_PATH
+
         self.create_widgets()
         if initial_files:
             self.add_files(initial_files)
@@ -299,19 +225,6 @@ class KokoroGUI:
             messagebox.showerror("Error", f"Kokoro TTS batch file not found at:\n{self.kokoro_path}\nPlease check the path in the 'Kokoro TTS Path' section.")
             return
 
-        # Ensure the Conda environment is set up (if needed)
-        setup_conda_environment(env_path=TARGET_ENV_PATH, python_version="3.12")
-
-        # Before running kokoro.bat, activate the uv virtual environment.
-        kokoro_dir = os.path.dirname(self.kokoro_path)
-        try:
-            subprocess.check_call(["uv", "venv", ".venv"], cwd=kokoro_dir)
-            subprocess.check_call(["uv", "sync"], cwd=kokoro_dir)
-        except Exception as e:
-            print("Error activating uv environment:", e)
-            # Depending on your needs, you might want to abort here.
-            # For now, we'll continue.
-
         processing_params = {
             "voice": self.voice_var.get(),
             "language": self.actual_lang_code,
@@ -338,10 +251,7 @@ class KokoroGUI:
             output_file = os.path.join(wav_dir, output_filename)
             log_file = os.path.join(log_dir, output_filename + ".log")
 
-            # Construct the command to run Kokoro using the Conda environment.
-            # (We use conda run here for consistency.)
             cmd = [
-                "conda", "run", "--prefix", TARGET_ENV_PATH,
                 self.kokoro_path,
                 input_file_path,
                 output_file,
@@ -427,10 +337,8 @@ class KokoroGUI:
 
 if __name__ == "__main__":
     initial_files = []
-    # Remove our flags so that file arguments work properly.
-    args = [arg for arg in sys.argv[1:] if arg not in ["-iv", "--install-venv"]]
-    if args:
-        for arg in args:
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
             for path in glob.glob(arg, recursive=True):
                 if os.path.isfile(path):
                     initial_files.append(os.path.abspath(path))
