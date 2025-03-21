@@ -270,6 +270,22 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     original_crop_h = crop_h.get()
     original_crop_x = crop_x.get()
     original_crop_y = crop_y.get()
+    
+    # --- New: Automatically update crop offsets when crop width or height is changed ---
+    def update_crop_offsets(*args):
+        try:
+            new_crop_w = int(crop_w.get())
+            new_crop_h = int(crop_h.get())
+            new_crop_x = (input_width - new_crop_w) // 2
+            new_crop_y = (input_height - new_crop_h) // 2
+            crop_x.set(str(new_crop_x))
+            crop_y.set(str(new_crop_y))
+        except ValueError:
+            pass
+    crop_w.trace("w", update_crop_offsets)
+    crop_h.trace("w", update_crop_offsets)
+    # --------------------------------------------------------------------------------
+    
     resolution_map = {
         "No Resize": (None, None, None),
         "HD 1080p":  (1920, 1080, "20"),
@@ -374,19 +390,15 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     resolution_menu = tk.OptionMenu(resolution_frame, resolution_var, *resolution_map.keys())
     resolution_menu.pack(side='left', padx=(5,0))
     tk.Checkbutton(options_frame, text="Enable FRUC (fps=60)", variable=fruc_enable).pack(anchor='w')
-
     # NVVFX Denoise Checkbox with condition
     nvvfx_denoise_check = tk.Checkbutton(options_frame, text="Enable Denoising (NVVFX - for < 1080p)", variable=nvvfx_denoise_var)
     nvvfx_denoise_check.pack(anchor='w')
     if input_height >= 1080 and input_width >= 1920:  # Corrected condition: AND instead of OR
         nvvfx_denoise_check.config(state='disabled') # Disable if resolution is 1080p OR HIGHER in BOTH dimensions
-
     # NVVFX Artifact Reduction Checkbox
     artifact_reduction_var = tk.BooleanVar(value=False) # default off
     artifact_reduction_check = tk.Checkbutton(options_frame, text="Enable Artifact Reduction (NVVFX)", variable=artifact_reduction_var)
     artifact_reduction_check.pack(anchor='w')
-
-
     # QVBR and GOP side-by-side
     qvbr_frame = tk.Frame(options_frame)
     qvbr_frame.pack(anchor='w', pady=(10, 0))
