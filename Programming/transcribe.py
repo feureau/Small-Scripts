@@ -6,7 +6,10 @@ transcribe_only_xxl.py - Transcription script using Faster Whisper XXL
 - Uses Faster Whisper XXL's CLI.
 - Includes robust error handling and logging.
 - Supports optional speaker diarization using pyannote_v3.1 (GPU required) when the -d flag is passed.
-- Implements options for model selection, task, language (auto-detect by default), output format/directory, sentence splitting, and audio processing enhancements.
+- Implements options for model selection, task, language (auto-detect by default), output directory,
+  sentence splitting, audio processing enhancements, and output format selection.
+- When no output flag is passed, it defaults to SRT.
+- Use --srt to output SRT, --text to output plain text (UTF-8, without timestamps), or both.
 - Expects your Hugging Face token to be set in the environment variable HF_TOKEN.
 - Streams transcribed output continuously as it is produced.
 Python 3.7 or higher is required.
@@ -26,11 +29,12 @@ from tkinter import filedialog
 from datetime import datetime
 import argparse
 import glob
+import re
 
 # ------------------- DEFAULT CONFIGURATION ------------------- #
 DEFAULT_MODEL = "large-v2"           # Options: "large-v2", "large-v3"
 DEFAULT_TASK = "transcribe"          # Options: "transcribe", "translate"
-DEFAULT_OUTPUT_FORMAT = "srt"        # Options: "srt", "json", "txt", "vtt", etc.
+# The default output will be SRT (unless overridden by output flags)
 DEFAULT_ENABLE_DIARIZATION = False   # Diarization disabled by default
 DEFAULT_LANGUAGE = None              # None means auto-detect language
 DEFAULT_SENTENCE = True              # Sentence splitting enabled by default
@@ -112,27 +116,41 @@ def run_whisper_xxl_transcription(
     language: str,
     model: str,
     task: str,
-    output_format: str,
     output_dir: str,
     sentence: bool,
     max_comma: int,
     max_gap: float,
     max_line_count: int,
     ff_rnndn_xiph: bool,
-    ff_speechnorm: bool
-) -> bool:
+    ff_speechnorm: bool,
+    produce_srt: bool
+) -> str:
     """
     Runs the Faster Whisper XXL CLI with specified flags on the given file.
     Streams the output continuously to the console.
     Saves the output file in the specified output directory (or the file's directory if not provided)
     with a unique timestamp.
+    
+    Returns the full path to the generated SRT file if successful, or an empty string if failure.
+    
+    The 'produce_srt' parameter controls the status messages:
+      - If True, the console shows the SRT output file name.
+      - If False (i.e. only plaintext is requested), a status message indicates that
+        an intermediate SRT will be generated for conversion.
     """
     # Determine output directory: user-specified or the file's directory.
     file_directory = output_dir if output_dir else os.path.dirname(file_path)
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"{base_name}_{timestamp}.{output_format}"
+    # We always generate SRT as intermediate output.
+    output_filename = f"{base_name}_{timestamp}.srt"
     output_path = os.path.join(file_directory, output_filename)
+
+    # Status update based on requested output.
+    if produce_srt:
+        print(f"📂 Expected output file will be renamed to: {output_filename}")
+    else:
+        print("📂 Transcription will generate an intermediate SRT file which will be converted to plain text output.")
 
     # Build the command for transcription
     command = [
@@ -145,7 +163,7 @@ def run_whisper_xxl_transcription(
         command.extend(["--language", language])
     command.extend([
         "--task", task,
-        "--output_format", output_format,
+        "--output_format", "srt",  # Always output SRT for further processing.
         "--output_dir", file_directory,
     ])
 
@@ -169,7 +187,6 @@ def run_whisper_xxl_transcription(
         command.extend(["--diarize", ENABLE_DIARIZATION_METHOD])
     
     print(f"\n🔥 Transcribing: {os.path.basename(file_path)}")
-    print(f"📂 Expected output file will be renamed to: {output_filename}")
     # Uncomment the line below for debugging the full command:
     # print("DEBUG Command:", " ".join(command))
 
@@ -192,23 +209,42 @@ def run_whisper_xxl_transcription(
         return_code = process.poll()
         if return_code != 0:
             print(f"\n❌ Error: Process returned non-zero exit code {return_code}")
-            return False
+            return ""
         
-        # Rename the output file if it exists (default output is base_name.output_format)
-        expected_output = os.path.join(file_directory, f"{base_name}.{output_format}")
+        # Rename the output file if it exists (default output is base_name.srt)
+        expected_output = os.path.join(file_directory, f"{base_name}.srt")
         if os.path.exists(expected_output):
             os.rename(expected_output, output_path)
             print(f"\n✅ Output file renamed to: {os.path.basename(output_path)}")
         else:
             print(f"\n❌ Expected output file not found: {expected_output}")
+            return ""
         
-        return True
+        return output_path
     except FileNotFoundError:
         print("❌ Faster Whisper XXL CLI not found. Please ensure it is installed and in your PATH.")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Unexpected error during transcription: {e}")
-        return False
+        return ""
+
+def convert_srt_to_plaintext(srt_path: str) -> str:
+    """
+    Converts an SRT file into plain text by stripping out line numbers,
+    timestamps, and blank lines.
+    
+    Returns the plain text content.
+    """
+    plaintext_lines = []
+    timestamp_pattern = re.compile(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}')
+    with open(srt_path, "r", encoding="utf-8", errors="replace") as infile:
+        for line in infile:
+            line = line.strip()
+            # Skip index lines (only digits) and timestamp lines
+            if line.isdigit() or timestamp_pattern.match(line) or line == "":
+                continue
+            plaintext_lines.append(line)
+    return "\n".join(plaintext_lines)
 
 def print_help_message():
     """Print the help message detailing the script usage and options."""
@@ -222,13 +258,13 @@ Options:
   -l, --lang LANGUAGE       Specify language code for transcription (e.g., "en", "es"). 
                             Default: {default_lang}
   -m, --model MODEL         Specify model size (e.g., "large-v2", "large-v3"). (Default: {DEFAULT_MODEL})
-  -t, --task TASK           Specify task: transcribe or translate. (Default: {DEFAULT_TASK})
-  -f, --output_format FORMAT
-                            Specify output format (srt, json, txt, vtt, etc.). (Default: {DEFAULT_OUTPUT_FORMAT})
+  --task TASK               Specify task: transcribe or translate. (Default: {DEFAULT_TASK})
   -o, --output_dir DIRECTORY
                             Specify output directory. (Default: same as input file's directory)
-  -s, --sentence            Enable sentence splitting. (Default: Enabled)
-  -S, --no-sentence         Disable sentence splitting.
+  --srt                     Output SRT file. (Default if no output flag is provided)
+  --text                    Output plaintext file (UTF-8, without timestamps).
+  --sentence                Enable sentence splitting. (Default: Enabled)
+  --no-sentence             Disable sentence splitting.
   -c, --max_comma COUNT     Maximum number of commas before splitting a sentence. (Default: {DEFAULT_MAX_COMMA})
   -g, --max_gap GAP         Maximum gap in seconds between sentences. (Default: {DEFAULT_MAX_GAP})
   -n, --max_line_count COUNT
@@ -240,8 +276,9 @@ Options:
 
 Examples:
   python3 transcribe_only_xxl.py myvideo.mp4
-  python3 transcribe_only_xxl.py -d -l en -m large-v3 myvideo.mp4
-  python3 transcribe_only_xxl.py /path/to/directory
+  python3 transcribe_only_xxl.py --diarization --lang en --model large-v3 myvideo.mp4
+  python3 transcribe_only_xxl.py --text myvideo.mp4
+  python3 transcribe_only_xxl.py --srt --text /path/to/directory
     """
     print(help_text)
 
@@ -256,15 +293,16 @@ def main():
     parser.add_argument("-l", "--lang", type=str, default=DEFAULT_LANGUAGE, help="Specify language code for transcription. Default is auto-detect.")
     # Model selection with short flag -m
     parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL, help=f"Specify model size (e.g., 'large-v2', 'large-v3'). (Default: {DEFAULT_MODEL})")
-    # Task specification with short flag -t
-    parser.add_argument("-t", "--task", type=str, default=DEFAULT_TASK, help=f"Specify task: transcribe or translate. (Default: {DEFAULT_TASK})")
-    # Output format with short flag -f
-    parser.add_argument("-f", "--output_format", type=str, default=DEFAULT_OUTPUT_FORMAT, help=f"Specify output format (srt, json, txt, vtt, etc.). (Default: {DEFAULT_OUTPUT_FORMAT})")
+    # Task specification with --task (note: not to be confused with --text output flag)
+    parser.add_argument("--task", type=str, default=DEFAULT_TASK, help=f"Specify task: transcribe or translate. (Default: {DEFAULT_TASK})")
     # Output directory override with short flag -o
-    parser.add_argument("-o", "--output_dir", type=str, default=None, help="Specify output directory. Default: same as input file's directory")
-    # Sentence splitting: enable or disable with -s and -S
-    parser.add_argument("-s", "--sentence", dest="sentence", action="store_true", help="Enable sentence splitting. (Default: Enabled)")
-    parser.add_argument("-S", "--no-sentence", dest="sentence", action="store_false", help="Disable sentence splitting.")
+    parser.add_argument("-o", "--output_dir", type=str, default=None, help="Specify output directory. (Default: same as input file's directory)")
+    # New output format flags: --srt and --text
+    parser.add_argument("-s", "--srt", action="store_true", help="Output SRT file.")
+    parser.add_argument("-t", "--text", action="store_true", help="Output plaintext file (without timestamps).")
+    # Sentence splitting: use long flags to avoid conflict with --srt flag
+    parser.add_argument("--sentence", dest="sentence", action="store_true", help="Enable sentence splitting. (Default: Enabled)")
+    parser.add_argument("--no-sentence", dest="sentence", action="store_false", help="Disable sentence splitting.")
     parser.set_defaults(sentence=DEFAULT_SENTENCE)
     # Sentence splitting parameters with short flags -c, -g, -n
     parser.add_argument("-c", "--max_comma", type=int, default=DEFAULT_MAX_COMMA, help=f"Maximum number of commas before splitting a sentence. (Default: {DEFAULT_MAX_COMMA})")
@@ -290,24 +328,51 @@ def main():
         print("No files selected. Exiting.")
         sys.exit(0)
 
+    # Determine output flags:
+    # Default is to output SRT if neither flag is provided.
+    produce_srt = args.srt or (not args.srt and not args.text)
+    produce_text = args.text
+
     for file_path in files:
-        success = run_whisper_xxl_transcription(
+        # Run transcription (always generates SRT)
+        srt_path = run_whisper_xxl_transcription(
             file_path=file_path,
             enable_diarization=args.diarization,
             language=args.lang,
             model=args.model,
             task=args.task,
-            output_format=args.output_format,
             output_dir=args.output_dir,
             sentence=args.sentence,
             max_comma=args.max_comma,
             max_gap=args.max_gap,
             max_line_count=args.max_line_count,
             ff_rnndn_xiph=args.ff_rnndn_xiph,
-            ff_speechnorm=args.ff_speechnorm
+            ff_speechnorm=args.ff_speechnorm,
+            produce_srt=produce_srt
         )
-        if not success:
+        if not srt_path:
             print(f"⚠️ Skipping file due to transcription failure: {file_path}")
+            continue
+
+        # If plain text output is requested, convert the SRT file.
+        if produce_text:
+            plain_text = convert_srt_to_plaintext(srt_path)
+            base, _ = os.path.splitext(srt_path)
+            txt_path = base + ".txt"
+            try:
+                with open(txt_path, "w", encoding="utf-8") as txt_file:
+                    txt_file.write(plain_text)
+                print(f"✅ Plain text output created: {os.path.basename(txt_path)}")
+            except Exception as e:
+                print(f"❌ Failed to write plain text file: {e}")
+        
+        # If SRT output is not requested (i.e. only plain text was desired), remove the SRT file.
+        if not produce_srt:
+            try:
+                os.remove(srt_path)
+                print(f"ℹ️ Intermediate SRT file removed as only plain text was requested.")
+            except Exception as e:
+                print(f"❌ Could not remove intermediate SRT file: {e}")
 
     print("\n✅ All processing completed successfully!")
 
