@@ -103,7 +103,7 @@ class VideoProcessorApp:
     def __init__(self, root, initial_files):
         self.root = root
         self.root.title("Video Processing Tool")
-        # Updated LUT location (using raw string to avoid escape issues)
+        # Updated LUT location
         self.lut_file = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCU\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
         self.subtitles_by_file = {}
         self.file_list = []
@@ -739,23 +739,23 @@ class VideoProcessorApp:
         with open(srt_file, 'w', encoding='utf-8') as f:
             f.write(normalized_content)
 
-    # Run NVEnc command and output progress on a single dynamic line
+    # Run NVEnc command and update output dynamically on a single line
     def run_nvenc_command(self, cmd):
         print("Running NVEnc command:")
         print(" ".join(cmd))
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=env, universal_newlines=True, bufsize=1)
-        # Read character by character to catch carriage returns
         while True:
-            char = process.stdout.read(1)
-            if char == '' and process.poll() is not None:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
                 break
-            if char:
-                if char == '\r':
-                    sys.stdout.write('\r')
+            if line:
+                if "\r" in line:
+                    progress = line.split("\r")[-1].strip()
+                    sys.stdout.write("\r" + progress)
                     sys.stdout.flush()
                 else:
-                    sys.stdout.write(char)
+                    sys.stdout.write(line)
                     sys.stdout.flush()
         process.stdout.close()
         ret = process.wait()
@@ -790,7 +790,7 @@ class VideoProcessorApp:
                                              convert_to_hdr, convert_hdr, ass_burn, resize_algo, target_res, do_resize)
         ret = self.run_nvenc_command(cmd)
         if ret == 0:
-            print(f"Done processing: {file_path}")
+            print(f"\nDone processing: {file_path}")
             return (output_file, final_width, final_height)
         else:
             print(f"[ERROR] Error encoding {file_path}: return code {ret}")
@@ -833,9 +833,21 @@ class VideoProcessorApp:
             cmd.extend(["--vpp-ngx-truehdr"])
         return cmd
 
+    # Updated: Extract subtitles by default regardless of burning selection.
     def encode_single_pass(self, file_path, qvbr_value, fruc_enable, fruc_fps_target,
                            generate_log, eight_bit, convert_to_hdr, convert_hdr):
-        out_file, _, _ = self.build_nvenc_command_and_run(file_path, None)
+        out_file, width, height = self.build_nvenc_command_and_run(file_path, None)
+        # Now, regardless of burning, extract all embedded subtitle tracks (if any)
+        if file_path in self.subtitles_by_file:
+            output_dir = os.path.join(os.path.dirname(file_path), self.file_options[file_path].get("resolution", "4k"))
+            base_name, ext = os.path.splitext(os.path.basename(file_path))
+            for sub in self.subtitles_by_file[file_path]:
+                if sub["type"] == "embedded":
+                    ass_path = os.path.join(output_dir, f"{base_name}_track{sub['track_id']}.ass")
+                    srt_path = os.path.join(output_dir, f"{base_name}_track{sub['track_id']}.srt")
+                    print(f"Extracting subtitles for track {sub['track_id']}...")
+                    self.extract_embedded_subtitle_to_ass(file_path, ass_path, sub["track_id"], width, height)
+                    self.extract_subtitle_to_srt(file_path, srt_path, sub["track_id"])
         options = self.file_options.get(file_path, {})
         convert_to_hdr = options.get("hdr", self.hdr_var.get())
         eight_bit = options.get("eight_bit", self.eight_bit_var.get())
@@ -943,7 +955,7 @@ class VideoProcessorApp:
                 return "0,0,0,0"
         return "0,0,0,0"
 
-    # When processing starts, close GUI and return to console.
+    # When processing starts, close the GUI and return to console.
     def start_processing(self):
         if not self.file_list:
             messagebox.showwarning("No Files", "Please add at least one file to process.")
@@ -967,24 +979,10 @@ class VideoProcessorApp:
             eight_bit = options.get("eight_bit", self.eight_bit_var.get())
             convert_to_hdr = options.get("hdr", self.hdr_var.get())
             convert_hdr = options.get("convert_hdr", self.convert_hdr_var.get())
-            chosen_sub = None
-            if file_path in self.subtitles_by_file:
-                for sub in self.subtitles_by_file[file_path]:
-                    if sub["selected"]:
-                        chosen_sub = sub
-                        break
-            if not chosen_sub:
-                self.encode_single_pass(file_path, qvbr_value, fruc_enable, fruc_fps_target,
-                                          generate_log, eight_bit, convert_to_hdr, convert_hdr)
-            else:
-                if chosen_sub["type"] == "embedded":
-                    self.encode_with_embedded_sub(file_path, chosen_sub["track_id"], qvbr_value,
-                                                    fruc_enable, fruc_fps_target, generate_log,
-                                                    eight_bit, convert_to_hdr, convert_hdr)
-                else:
-                    self.encode_with_external_srt(file_path, chosen_sub["path"], qvbr_value,
-                                                  fruc_enable, fruc_fps_target, generate_log,
-                                                  eight_bit, convert_to_hdr, convert_hdr)
+            # For burning subtitles, a selected track would trigger a different path.
+            # Here, in "single pass", we extract all embedded subtitle tracks by default.
+            self.encode_single_pass(file_path, qvbr_value, fruc_enable, fruc_fps_target,
+                                      generate_log, eight_bit, convert_to_hdr, convert_hdr)
         print("Processing Complete.")
 
 if __name__ == "__main__":
