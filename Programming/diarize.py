@@ -2,8 +2,7 @@ import sys
 import glob
 import os
 import torch
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+
 from pydub import AudioSegment
 from pyannote.audio import Pipeline
 
@@ -30,7 +29,7 @@ def main():
         sys.exit(1)
     
     # Load the pre-trained diarization pipeline using your token.
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=hf_token).to(torch.device("cuda"))
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token).to(torch.device("cuda"))
     
     # Process each audio file
     for file in files:
