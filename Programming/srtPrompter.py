@@ -24,62 +24,11 @@ import pycountry # For language codes
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
 
 # 2. User Prompt Template - **REVISED TO INCLUDE FULL LANGUAGE NAME**
-USER_PROMPT_TEMPLATE = """**Primary Goal:** The objective is to generate YouTube metadata optimized for **maximum virality and discoverability**. All generated elements (Title, Description, Hashtags, Tags) must adhere to **YouTube SEO best practices** and be designed to **maximize engagement, watch time, and reach**, contributing to the video's potential to go viral.
-
-Please analyze the content and timing information from the **SRT content provided below this prompt**. While the _core content_ should be derived from this provided SRT data, you are **required** to **substantially supplement** this with relevant external knowledge to **achieve significant length and enhance SEO/discoverability crucial for virality**. Focus on understanding the _topic_ deeply and incorporating a wide range of relevant keywords and context.
-
-1.  **YouTube Title:**
-    *   **Create a highly click-worthy and attention-grabbing title engineered for virality.** Maximize clicks while accurately representing the core hook.
-    *   **Deduce the most effective viral title style** based on the *topic, tone, and content* of the provided SRT data.
-    *   **Incorporate relevant emojis** strategically to boost visual appeal and CTR.
-    *   Keep title concise for display (ideally 60-70 characters, flexible for impact).
-    *   Incorporate primary keywords naturally for searchability, including terms viewers are likely searching for.
-    *   Focus on titles that **spark intense curiosity, evoke strong emotions, promise significant value, or hint at controversy/debate** relevant to the content.
-
-2.  **YouTube Description:**
-    *   **Goal:** Write an **exceptionally detailed, comprehensive, and SEO-saturated description.** The primary objective here is **substantial length and thoroughness**. **Actively strive to get as close to the 5000-character limit as possible without exceeding it, prioritizing length and rich detail over brevity.** Enrich the SRT basis extensively with contextual information and a high volume of relevant keywords.
-    *   **Understanding the Topic:** Infer the main subject/theme deeply. Identify specific entities accurately. Use this understanding to **target a broad range of relevant search queries**.
-    *   **Formatting:** Use **reader-friendly paragraphs**. Avoid numbered lists for main content. Structure for readability despite the length.
-    *   **Opening:** Start with 2-4 compelling sentences summarizing the core value/hook, **front-loading crucial keywords**.
-    *   **Detailed Elaboration / Main Body:**
-        *   **Expand massively** on the SRT topics using multiple, well-structured paragraphs per theme. **Your main task here is extensive elaboration.**
-        *   **Proactively research and incorporate significant external information** to add depth, context, and length. This MUST include: relevant historical background, definitions of key terms/concepts, related contemporary discussions or controversies, information about key people/organizations/media involved (even if not named in SRT), common audience questions, differing perspectives, and potential implications/future developments related to the topic.
-        *   Break down content into logical themes. Discuss each theme **at length**, significantly enriching the explanation **far beyond** the SRT content using your knowledge base for maximum SEO and informational value.
-        *   For each theme, extract core points from the SRT, then **extensively add related details, context, examples, analyses, and elaborations based on external knowledge.**
-        *   Quote impactful statements from the transcript *when appropriate*, but focus primarily on original elaboration.
-        *   If discussing specific media, use official titles and **incorporate a wide array of related SEO keywords** (actors, directors, studios, genre specifics, plot points, fan theories, critical reception, related works).
-        *   Weave a **very rich, dense, and diverse array of relevant keywords** naturally throughout – include **long-tail keywords, semantic variations, question-based keywords, and terms reflecting various facets of viewer search intent.** Aim for **maximum appropriate keyword density and variation**. **Revisit key concepts using different phrasing and related keywords multiple times** throughout the description to reinforce SEO signals and build length. Do not shy away from this strategic repetition.
-        *   **IMPORTANT: The YouTube Description MUST ABSOLUTELY NOT CONTAIN ANY FILE REFERENCES, MARKERS, OR TEXT THAT LOOKS LIKE FILE PATHS OR FILE IDENTIFIERS. OMIT COMPLETELY.**
-    *   **Timestamps Section (Optional but Recommended):** Identify key segments (5-10+ if content supports) to improve navigation. Use `MM:SS – Detailed, Keyword-Rich Topic Description`. Use approximate start times. **Output only the list of timestamps without any introductory title.**
-    *   **Closing:** Conclude with a clear CTA encouraging **likes, subscriptions, shares, comments, and notification bell clicks**. Reinforce the video's value using keywords.
-
-**Hashtags:**
-*   Generate 3-5 **strategically chosen hashtags**. Mix broad, specific, and potentially trending terms. Use popular, relevant terms even if not in SRT. **Output only the list of hashtags without any introductory title.**
-
-**Overall Character Limit (Title + Description + Hashtags):**
-*   Total combined count **must not exceed 5000 characters**. The main focus for length increase is the **Description**.
-
-**Tags (Keywords):**
-*   Generate a comprehensive list (**maximize relevance within the character limit**) of keywords/phrases optimized for YouTube search (aim for 25+ if applicable).
-*   Include main topics, specifics, synonyms, common misspellings, long-tail variations, question queries, broader concepts from SRT and external knowledge. **Focus intensely on search terms.**
-*   **Character Limit (Tags):** Total count **must not exceed 500 characters**.
-*   **Output only the list of tags/keywords without any introductory title.**
-
-**General Instructions:**
-
-*   **ABSOLUTELY NO FILE REFERENCES IN OUTPUT:** Non-negotiable. Must be completely absent.
-*  **DO NOT INCLUDE CITATION**
-*   **Virality & SEO First:** Prioritize maximizing viral potential via strong SEO, engagement hooks, and clickability. **Length and detail in the description are key to this.**
-*   **Extensive External Knowledge REQUIRED:** You MUST use your knowledge base extensively to elaborate, add context, and integrate keywords far beyond the SRT.
-*   **SRT as Foundation Only:** The SRT provides the core topic/quotes, but the bulk of the description's text must be expanded information.
-*   **Paragraph Format (Description):** Maintain paragraph structure.
-*   **YouTube Best Practices:** Adhere strictly to best practices.
-*   **Tone:** Engaging/informative for description; highly attention-grabbing/viral for title.
-*   **No Section Titles in Output:** Ensure final output has no headers (Timestamps:, Hashtags:, Tags:).
-
-Please process the **SRT content provided immediately following these instructions** according to this comprehensive, virality-focused, and **length-demanding** prompt. Pay EXTREME attention to eliminating ALL file references and section titles, and focus on **generating a significantly longer, deeply SEO-integrated description.**
-
+USER_PROMPT_TEMPLATE = """Read the following SRT transcript and distill it into a single, vivid, and detailed Stable Diffusion SDXL prompt that captures the essence, mood, and key visual elements described in the dialogue. The prompt should be concise, formatted as one sentence, and include only descriptors that can guide image generation. Do not include any negative prompt or additional commentary.
 ---
+Transcript: 
+
+
 
 """ + "\n\n" + "Full SRT file content:\n{srt_content}"
 
@@ -103,7 +52,7 @@ REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
 # 7. Output Subfolder Name
 # OUTPUT_SUBFOLDER_NAME = "seo_outputs" # NOT USED ANYMORE
-RAW_OUTPUT_SUBFOLDER_NAME = "ytSEO" # Subfolder for raw API responses - RENAMED to ytSEO
+RAW_OUTPUT_SUBFOLDER_NAME = "SDXL_prompts" # Subfolder for raw API responses - RENAMED to ytSEO
 
 
 # --- Prompts and Suffixes ---
