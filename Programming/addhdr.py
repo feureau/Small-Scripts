@@ -103,7 +103,6 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             print(f"Error: Could not rename file for rotation step: {rename_err}")
             print(f"Warning: Skipping rotation for {output_path}. File remains as created by mkvmerge.")
             # Return True as mkvmerge succeeded, but log the issue. Rotation didn't happen.
-            # No need to set rotation_applied = False here, it defaults based on rotation value
             return mkv_success
 
         print(f"Applying rotation ({rotation} degrees) using ffmpeg...")
@@ -170,7 +169,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             except OSError as restore_err:
                  print(f"CRITICAL WARNING: Could not restore original file from {intermediate_path}: {restore_err}")
 
-    # Return True if mkvmerge succeeded, regardless of rotation success/failure
+    # Return True if mkvmerge succeeded
     return mkv_success
 
 
@@ -196,8 +195,6 @@ def find_video_files(paths: List[str]) -> List[str]:
                     for file in files:
                         if os.path.splitext(file)[1].lower() in video_extensions:
                             video_files.add(os.path.abspath(os.path.join(root, file)))
-            # else: # Avoid warning if glob returns nothing for a pattern
-            #     print(f"Warning: Path specified by pattern not found - {path}")
 
     return sorted(list(video_files)) # Return sorted list
 
@@ -224,14 +221,20 @@ def main():
         dest="embed_lut",
         help="Add HDR metadata without LUT embedding (default: embed LUT if available)"
     )
+    # --- MODIFIED ROTATE ARGUMENT ---
     parser.add_argument(
         "-r", "--rotate",
-        type=int,
-        choices=[0, 90, 180, 270],
-        default=0, # Default to 0 (no rotation)
-        help="Rotation angle (degrees) to add as metadata using ffmpeg after mkvmerge.\n"
-             "Requires ffmpeg. Allowed values: 0, 90, 180, 270. Default: 0 (no rotation)."
+        nargs='?',          # Allows 0 or 1 argument after the flag
+        const=90,           # Value if flag is present with NO argument (e.g., -r)
+        default=0,          # Value if flag is ABSENT entirely
+        metavar='ANGLE',    # Hint in help message for the optional value
+        # type and choices removed - validation done after parsing
+        help="Rotation angle (degrees) to add as metadata using ffmpeg.\n"
+             "Allowed: 0, 90, 180, 270.\n"
+             "If flag is present without a value (-r), defaults to 90.\n"
+             "If flag is absent, defaults to 0 (no rotation)."
     )
+    # --- END MODIFIED ROTATE ARGUMENT ---
     parser.add_argument(
         "-o", "--output-dir",
         help=f"Custom output directory\n(default: Create '{DEFAULT_OUTPUT_SUBDIR}' if multiple files/dirs processed,\n otherwise use current directory for single file input)"
@@ -244,10 +247,29 @@ def main():
     parser.add_argument(
         "--ffmpeg-path",
         default="ffmpeg", # Assume it's in PATH by default
-        help="Path to ffmpeg executable (default: check system PATH). Required if --rotate is not 0."
+        help="Path to ffmpeg executable (default: check system PATH). Required if rotation is applied."
     )
 
     args = parser.parse_args()
+
+    # --- Manually Validate Rotation Argument ---
+    valid_rotations = [0, 90, 180, 270]
+    try:
+        # args.rotate could be the int from default/const, or a string if user provided '-r 180'
+        rotation_angle = int(args.rotate)
+        if rotation_angle not in valid_rotations:
+            # Use parser.error to exit gracefully with help message
+            parser.error(f"argument -r/--rotate: invalid choice: {args.rotate} (choose from {', '.join(map(str, valid_rotations))})")
+        # Store the validated integer back into args.rotate
+        args.rotate = rotation_angle
+    except ValueError:
+        # Handle case where user provides non-integer, e.g., -r ninety
+        parser.error(f"argument -r/--rotate: invalid integer value: '{args.rotate}'")
+    except TypeError:
+        # Should not happen with nargs='?' and default/const, but for safety
+        parser.error(f"argument -r/--rotate: unexpected value type processing '{args.rotate}'")
+    # --- End Rotation Validation ---
+
 
     # --- Verify Tool Paths ---
     mkvmerge_exe = shutil.which(args.mkvmerge_path)
@@ -256,23 +278,20 @@ def main():
         print("Please install MKVToolNix or specify the correct path with --mkvmerge-path")
         return
     else:
-        # Update args.mkvmerge_path to the full path found, important for subprocess calls
-        args.mkvmerge_path = mkvmerge_exe
+        args.mkvmerge_path = mkvmerge_exe # Use the full path found
         print(f"Using mkvmerge: {args.mkvmerge_path}")
 
-
     ffmpeg_exe = None
-    if args.rotate != 0: # Only check for ffmpeg if rotation is requested
+    # We use the validated integer args.rotate here
+    if args.rotate != 0: # Only check for ffmpeg if rotation is actually needed
         ffmpeg_exe = shutil.which(args.ffmpeg_path)
         if not ffmpeg_exe:
              print(f"Error: Rotation ({args.rotate} deg) requested, but ffmpeg not found using path '{args.ffmpeg_path}'.")
              print("Please install ffmpeg, specify the correct path with --ffmpeg-path, or use --rotate 0.")
              return
         else:
-             # Update args.ffmpeg_path to the full path found
-             args.ffmpeg_path = ffmpeg_exe
+             args.ffmpeg_path = ffmpeg_exe # Use the full path found
              print(f"Using ffmpeg: {args.ffmpeg_path}")
-    # No need for an else here, ffmpeg_path remains None if not needed/not found when rotate=0
 
     # --- Find Input Files ---
     if not args.inputs:
@@ -285,27 +304,24 @@ def main():
         return
 
     # --- Determine Output Directory ---
-    # Use absolute path for output directory
     if not args.output_dir:
-        # Determine if multiple sources or a directory was specified
         multiple_sources = len(video_files) > 1
-        input_was_dir = any(os.path.isdir(p) for p in args.inputs)
-
+        input_was_dir = any(os.path.isdir(p) for p in args.inputs if os.path.exists(p)) # Check existence too
         if multiple_sources or input_was_dir:
-            # Use default subdir if multiple files found OR if any input was a directory
              output_dir_abs = os.path.abspath(os.path.join(os.getcwd(), DEFAULT_OUTPUT_SUBDIR))
         else:
-             # Use current dir if single file input and input was not a directory path
              output_dir_abs = os.path.abspath(os.getcwd())
     else:
-        # Use user-provided path, make it absolute
         output_dir_abs = os.path.abspath(args.output_dir)
 
     print(f"\nFound {len(video_files)} video file(s) to process.")
     print(f"Output directory: {output_dir_abs}")
     print(f"Processing mode: {'HDR with LUT' if args.embed_lut else 'HDR only'}")
-    if args.rotate != 0 and ffmpeg_exe: # Check ffmpeg_exe is valid here
+    # Use the validated integer args.rotate here
+    if args.rotate != 0 and ffmpeg_exe:
         print(f"Rotation requested: {args.rotate} degrees (using ffmpeg)")
+    elif args.rotate !=0 and not ffmpeg_exe:
+         print(f"Rotation requested ({args.rotate}) but ffmpeg not found/validated. Rotation will be skipped.")
     else:
         print("Rotation: None")
 
@@ -315,7 +331,8 @@ def main():
     total_files = len(video_files)
     for i, file in enumerate(video_files, 1):
         print(f"\n--- Processing file {i}/{total_files} ---")
-        if process_file(file, output_dir_abs, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe): # Pass found ffmpeg_exe path
+        # Pass the validated integer args.rotate and the validated ffmpeg_exe path
+        if process_file(file, output_dir_abs, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe):
             success_count += 1
         print("-" * 40) # Separator between files
 
@@ -323,7 +340,7 @@ def main():
     print(f"Successfully processed (mkvmerge step): {success_count}/{total_files}")
     if success_count < total_files:
         print("Some files failed during the mkvmerge step. Check error messages above.")
-    # Note: Success count only reflects mkvmerge success. Rotation failures are logged as warnings during processing.
+    # Note: Success count only reflects mkvmerge success. Rotation failures are logged as warnings.
 
 # --- Script Entry Point ---
 if __name__ == "__main__":
