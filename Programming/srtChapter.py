@@ -24,63 +24,37 @@ import pycountry # For language codes
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
 
 # 2. User Prompt Template - **REVISED TO INCLUDE FULL LANGUAGE NAME**
-USER_PROMPT_TEMPLATE = """**Primary Goal:** The objective is to generate YouTube metadata optimized for **maximum virality and discoverability**. All generated elements (Title, Description, Hashtags, Tags) must adhere to **YouTube SEO best practices** and be designed to **maximize engagement, watch time, and reach**, contributing to the video's potential to go viral.
+USER_PROMPT_TEMPLATE = """Please analyze the following SRT transcript and generate a *new* SRT file containing only chapter markers based on the content.
 
-**IMPORTANT:** You will be provided with SRT content **alongside this prompt** (e.g., as an attachment or separate data input). This SRT data is the **foundation** for your analysis and content generation. You **must** locate and process this accompanying SRT data to fulfill the request. Use the content within this SRT data as the primary source for generating all requested metadata elements.
+Follow these instructions carefully:
 
-While the _core content_ should be derived from this provided SRT data, you are **required** to **substantially supplement** this with relevant external knowledge to **achieve significant length and enhance SEO/discoverability crucial for virality**. Focus on understanding the _topic_ deeply and incorporating a wide range of relevant keywords and context found within or related to the SRT content.
+1.  **Identify Chapters:**  
+    Read through the source transcript and identify significant shifts in the topics being discussed. Each point where the conversation moves to a distinctly new topic should mark the beginning of a chapter.
 
-1.  **YouTube Title:**
-    * **Create a highly click-worthy and attention-grabbing title engineered for virality.** Maximize clicks while accurately representing the core hook from the SRT.
-    * **Deduce the most effective viral title style** based on the *topic, tone, and content* of the provided SRT data.
-    * **Incorporate relevant emojis** strategically to boost visual appeal and CTR.
-    * Keep title concise for display (ideally 60-70 characters, flexible for impact).
-    * Incorporate primary keywords naturally for searchability, including terms viewers are likely searching for based on the SRT topic.
-    * Focus on titles that **spark intense curiosity, evoke strong emotions, promise significant value, or hint at controversy/debate** relevant to the SRT content.
+2.  **Chapter Placement & Spacing:**  
+    Determine the start time for each chapter based on the timestamp of the subtitle line where the new topic begins. Aim to select chapter start times that result in chapters being *approximately* 15 to 45 seconds apart, but prioritize logical content breaks over enforcing a strict interval. Flexibility is key here; some intervals might be shorter or longer if the topic dictates.
 
-2.  **YouTube Description:**
-    * **Goal:** Write an **exceptionally detailed, comprehensive, and SEO-saturated description based on the provided SRT.** Generate a **comprehensive and highly detailed description**, utilizing the available space effectively. Your primary objective remains substantial length and thoroughness for SEO, but the **total combined character count for Title, Description (including Timestamps), and Hashtags MUST strictly remain under 5000 characters.** Enrich the SRT basis extensively with contextual information and a high volume of relevant keywords derived from or related to the SRT.
-    * **Understanding the Topic:** Infer the main subject/theme deeply *from the SRT*. Identify specific entities accurately *mentioned in the SRT*. Use this understanding to **target a broad range of relevant search queries**.
-    * **Formatting:** Use **reader-friendly paragraphs**. Avoid numbered lists for main content. Structure for readability despite the length.
-    * **Opening:** Start with 2-4 compelling sentences summarizing the core value/hook *from the SRT*, **front-loading crucial keywords**.
-    * **Detailed Elaboration / Main Body:**
-        * **Expand significantly** on the topics *found in the SRT* using multiple, well-structured paragraphs per theme. **Your main task here is extensive elaboration based on the SRT's core points.**
-        * **Proactively research and incorporate significant external information** to add depth, context, and length *related to the topics identified in the SRT*. This MUST include: relevant historical background, definitions of key terms/concepts *from the SRT*, related contemporary discussions or controversies, information about key people/organizations/media involved (*even if not named directly in SRT but clearly relevant*), common audience questions *about the SRT topic*, differing perspectives, and potential implications/future developments related to the topic *discussed in the SRT*.
-        * Break down content into logical themes *present in the SRT*. Discuss each theme **at length**, significantly enriching the explanation **far beyond** the raw SRT content using your knowledge base for maximum SEO and informational value, *while ensuring relevance to the source SRT*.
-        * For each theme, extract core points *from the SRT*, then **extensively add related details, context, examples, analyses, and elaborations based on external knowledge.**
-        * Quote impactful statements *from the SRT transcript* when appropriate, but focus primarily on original elaboration.
-        * If discussing specific media *mentioned or clearly implied in the SRT*, use official titles and **incorporate a wide array of related SEO keywords** (actors, directors, studios, genre specifics, plot points, fan theories, critical reception, related works).
-        * Weave a **very rich, dense, and diverse array of relevant keywords** naturally throughout – include **long-tail keywords, semantic variations, question-based keywords, and terms reflecting various facets of viewer search intent related to the SRT topic.** Aim for **maximum appropriate keyword density and variation**. **Revisit key concepts using different phrasing and related keywords multiple times** throughout the description to reinforce SEO signals and build length. Do not shy away from this strategic repetition.
-        * **IMPORTANT: The YouTube Description MUST ABSOLUTELY NOT CONTAIN ANY FILE REFERENCES, MARKERS, OR TEXT THAT LOOKS LIKE FILE PATHS OR FILE IDENTIFIERS. OMIT COMPLETELY.**
-    * **Timestamps Section:** Identify key segments *within the SRT data* to improve navigation. Use `MM:SS – Detailed, Keyword-Rich Topic Description`. Use approximate start times *from the SRT*. **Output only the list of timestamps without any introductory title. Max 2-3 words.**
-    * **Closing:** Conclude with a clear CTA encouraging **likes, subscriptions, shares, comments, and notification bell clicks**. Reinforce the video's value using keywords *related to the SRT topic*.
-    * **IMPORTANT:** Do not include section title in the description. Also, do not use any list in the description section. All list must be converted into proper text.
+3.  **Adjusted Chapter Start Timestamp:**  
+    When assigning the start timestamp for a chapter marker, set it to a moment **slightly before** the original subtitle timestamp where the new topic begins. However, the adjusted start time **must not overlap** the end time of the previous subtitle. If the calculated adjustment would cause overlap, use the original subtitle’s start timestamp instead.
 
-**Hashtags:**
-* Generate **exactly 3** strategically chosen hashtags *relevant to the SRT content*. Mix broad, specific, and potentially trending terms. Use popular, relevant terms even if not explicitly in SRT but strongly related to the topic. **Output only the list of hashtags without any introductory title.**
+4.  **Chapter Marker Display Duration:**  
+    Each generated chapter marker in the output SRT must have a display duration of **exactly 1 second**. Calculate the end time by adding precisely `00:00:01,000` to the chapter's start timestamp.
 
-**Overall Character Limit (Title + Description + Hashtags):**
-* **Strict Overall Character Limit:** The total combined character count for the generated **Title + Description (including Timestamps section) + Hashtags** absolutely **must not exceed 5000 characters**. Verify this limit before finalizing the output.
+5.  **End Time Capping:**  
+    For the final chapter marker, if the calculated end time extends beyond the end time of the last subtitle in the source transcript, adjust the final marker’s end time to match the last subtitle’s end time exactly.
 
-**Tags (Keywords):**
-* Generate a comprehensive list of keywords/phrases optimized for Youtube *based on the SRT content and related external knowledge*, **maximizing relevance within the strict character limit.**
-* Include main topics, specifics, synonyms, common misspellings, long-tail variations, question queries, broader concepts *from the SRT and related external knowledge*. Focus intensely on search terms *relevant to the SRT's subject matter*.
-* **Strict Character Limit (Tags):** The total character count for all tags combined **absolutely must not exceed 500 characters**.
-* **Action Required:** If your initial list of generated tags exceeds 500 characters, you **MUST** shorten the list by removing less relevant or redundant tags until the total character count is **strictly below 500 characters**. Prioritize the most impactful and diverse tags.
-* **Final Check:** Ensure the total character count of the final tag list is under 500 characters.
-* **Output only the list of tags/keywords without any introductory title.**
+6.  **Framerate Compliance:**  
+    Ensure that all timestamps comply with a **24 FPS** framerate standard, meaning all `mmm` millisecond values must be frame-accurate and consistent with `24 fps` rounding (increments of approximately `41.666... ms`). Round all times to the nearest valid frame boundary for 24fps compatibility.
 
-**General Instructions:**
+7.  **Output Format:**  
+    The output must be a valid SRT file containing only the chapter markers. Each entry should include:
+    * A sequential number (starting from `1`).
+    * A timestamp line in the format `HH:MM:SS,mmm --> HH:MM:SS,mmm` (using the adjusted start time and a duration of exactly 1 second, or capped for the final marker).
+    * A concise and descriptive chapter title that reflects the content of the upcoming segment.
+    * A blank line separating entries.
 
-* **ABSOLUTELY NO FILE REFERENCES IN OUTPUT:** Non-negotiable. Must be completely absent from the final output (this refers to file paths/names, not citation markers which are handled below).
-* **Virality & SEO First:** Prioritize maximizing viral potential via strong SEO, engagement hooks, and clickability, all derived from and expanding upon the provided SRT data. **Length and detail in the description remain key, within the overall limits.**
-* **Extensive External Knowledge REQUIRED:** You MUST use your knowledge base extensively to elaborate, add context, and integrate keywords far beyond the raw SRT, *always staying relevant to the core topics identified within the SRT.*
-* **SRT as Foundation Only:** The SRT provides the core topic/quotes, but the bulk of the description's text must be expanded information *related to that core*.
-* **Paragraph Format (Description):** Maintain paragraph structure.
-* **YouTube Best Practices:** Adhere strictly to best practices.
-* **Tone:** Engaging/informative for description; highly attention-grabbing/viral for title.
-* **No Section Titles in Output:** Ensure final output has no headers (Timestamps:, Hashtags:, Tags:).
-* **Final Output Cleaning:** Before presenting the final result, review all generated text (Title, Description, Hashtags, Tags) and **remove any citation markers, source indicators, or similar notations** (e.g., `[1]`, `[citation needed]`, `Source: X`, `(Source: SRT)`). The final output delivered to the user must be completely free of such markers. 
+Do not include any of the original subtitle text in the output.
+
 
 """ + "\n\n" + "Full SRT file content:\n{srt_content}"
 
@@ -104,7 +78,7 @@ REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
 # 7. Output Subfolder Name
 # OUTPUT_SUBFOLDER_NAME = "seo_outputs" # NOT USED ANYMORE
-RAW_OUTPUT_SUBFOLDER_NAME = "SEO_prompts" # Subfolder for raw API responses - RENAMED to ytSEO
+RAW_OUTPUT_SUBFOLDER_NAME = "SDXL_prompts" # Subfolder for raw API responses - RENAMED to ytSEO
 
 
 # --- Prompts and Suffixes ---

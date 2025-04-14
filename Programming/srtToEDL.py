@@ -24,22 +24,22 @@ def generate_timeline_data(srt_file_path, output_file_path):
         except UnicodeDecodeError:
             print(f"Warning: UTF-8 decoding failed for '{srt_file_path}'. Trying latin-1 encoding.")
             try:
-                 with open(srt_file_path, 'r', encoding='latin-1') as srt_file:
-                     srt_content = srt_file.read()
+                with open(srt_file_path, 'r', encoding='latin-1') as srt_file:
+                    srt_content = srt_file.read()
             except Exception as enc_e:
-                 print(f"Error: Could not read file '{srt_file_path}' with tested encodings: {enc_e}")
-                 return False # Indicate failure
+                print(f"Error: Could not read file '{srt_file_path}' with tested encodings: {enc_e}")
+                return False  # Indicate failure
     except FileNotFoundError:
         print(f"Error: SRT file not found at {srt_file_path}")
-        return False # Indicate failure
+        return False  # Indicate failure
     except Exception as e:
         print(f"Error reading SRT file '{srt_file_path}': {e}")
-        return False # Indicate failure
+        return False  # Indicate failure
 
     # --- Standard EDL Header ---
-    title = os.path.splitext(os.path.basename(srt_file_path))[0] # Use filename as title
+    title = os.path.splitext(os.path.basename(srt_file_path))[0]  # Use filename as title
     # Clean up title slightly for EDL if needed (optional)
-    title = re.sub(r'[^\w\s-]', '', title).strip() # Remove non-alphanumeric/space/hyphen
+    title = re.sub(r'[^\w\s-]', '', title).strip()  # Remove non-alphanumeric/space/hyphen
     edl_header = f"TITLE: {title}\nFCM: NON-DROP FRAME\n\n"
 
     # --- Parse SRT Entries ---
@@ -57,21 +57,20 @@ def generate_timeline_data(srt_file_path, output_file_path):
         # Write empty EDL if requested or handle as error
         try:
             with open(output_file_path, 'w', encoding='utf-8') as output_file:
-                 output_file.write(edl_header)
-                 output_file.write("# No valid timestamp entries found in source SRT.\n")
+                output_file.write(edl_header)
+                output_file.write("# No valid timestamp entries found in source SRT.\n")
             print(f"Empty EDL file created: '{output_file_path}'")
-            return True # Considered success (empty file created)
+            return True  # Considered success (empty file created)
         except Exception as e:
             print(f"Error writing empty EDL file '{output_file_path}': {e}")
-            return False # Indicate failure
-
+            return False  # Indicate failure
 
     # --- Process Entries and Build EDL Body ---
     edl_body = ""
-    processed_count = 0 # Use this for the sequential EDL event number
+    processed_count = 0  # Use this for the sequential EDL event number
     for i, entry in enumerate(srt_entries):
         seq_num_str, start_time_str, end_time_str, text, next_seq_num_str = entry
-        original_srt_index = seq_num_str # Keep track of original index if needed
+        original_srt_index = seq_num_str  # Keep track of original index if needed
 
         try:
             # Standardize separator to dot before parsing
@@ -85,7 +84,6 @@ def generate_timeline_data(srt_file_path, output_file_path):
             # End time is not used directly for marker calculation in this EDL style, but parse it for validation
             end_time_dt_validation = datetime.strptime(f"{dummy_date} {end_time_str_std}", "%Y-%m-%d %H:%M:%S.%f")
 
-
             # --- Format Timestamps for EDL (HH:MM:SS:FF - Non-Drop Frame) ---
             # Assuming the EDL format uses frames, calculate from milliseconds.
             # Using hundredths derived from milliseconds as it matches the example's precision appearance.
@@ -93,32 +91,34 @@ def generate_timeline_data(srt_file_path, output_file_path):
 
             # EDL timecodes often represent the *start* of the frame.
             # The example shows end time = start time + 1 frame/hundredth. Replicate that.
-            end_time_plus_one_dt = start_time_dt + timedelta(microseconds=10000) # Add 1/100th sec
+            end_time_plus_one_dt = start_time_dt + timedelta(microseconds=10000)  # Add 1/100th sec
             end_plus_one_frames_or_hundredths = f"{end_time_plus_one_dt.microsecond // 10000:02d}"
 
             start_tc = start_time_dt.strftime(f"%H:%M:%S:{start_frames_or_hundredths}")
             # Use the calculated "plus one" time for the end timecodes based on the example format
             end_tc = end_time_plus_one_dt.strftime(f"%H:%M:%S:{end_plus_one_frames_or_hundredths}")
 
-
             # --- Get Marker Label from Subtitle Text ---
             # Clean up subtitle text (remove leading/trailing whitespace, join lines with space)
             cleaned_text = ' '.join(line.strip() for line in text.strip().splitlines())
             # Remove potential HTML tags common in SRT
             cleaned_text = re.sub(r'<[^>]+>', '', cleaned_text)
-            # Replace characters problematic for EDL M comments (like '|', maybe newlines)
+            # Replace characters problematic for EDL M comments (like '|', newlines, etc.)
             marker_label = cleaned_text.replace('|', '_').replace('\n', ' ').replace('\r', '').strip()
-            if not marker_label: # Handle empty subtitles
-                marker_label = f"Marker_{original_srt_index}" # Use original SRT index
+
+            # Filter the marker label to include only letters and numbers
+            marker_label = re.sub(r'[^A-Za-z0-9 ]', '', marker_label)
+
+            if not marker_label:  # If the marker label becomes empty after filtering, use a fallback.
+                marker_label = f"Marker_{original_srt_index}"
 
             # Limit marker label length if necessary (EDL comments can have limits)
-            max_marker_len = 60 # Adjust as needed
+            max_marker_len = 60  # Adjust as needed
             if len(marker_label) > max_marker_len:
                 marker_label = marker_label[:max_marker_len-3] + "..."
 
-
             # --- Assemble EDL Event ---
-            processed_count += 1 # Increment the EDL event number
+            processed_count += 1  # Increment the EDL event number
             event_number_str = f"{processed_count:03}"
 
             # Line 1: Event#, Reel(use 001?), Track, Type, Transition, Start, End, RecStart, RecEnd
@@ -129,12 +129,8 @@ def generate_timeline_data(srt_file_path, output_file_path):
 
             # Line 2: Comments/Metadata
             # Using the format from the example: |C:Color |M:Marker Name |D:Duration(1 frame)
-            # Some NLEs prefer M2 for marker names in comments
-            # Using '* FROM CLIP NAME:' is also common for source info
-            # Let's stick close to the user's original example format
-            edl_line2 = f"* FROM CLIP NAME: {os.path.basename(srt_file_path)}\n" # Optional but good practice
-            # edl_line2 = f"* COMMENT:\n" # This line seems unnecessary based on example output
-            edl_line2 += f" |C:ResolveColorBlue |M:{marker_label} |D:1\n\n" # Mimic example closely
+            edl_line2 = f"* FROM CLIP NAME: {os.path.basename(srt_file_path)}\n"  # Optional but good practice
+            edl_line2 += f" |C:ResolveColorBlue |M:{marker_label} |D:1\n\n"  # Mimic example closely
 
             edl_body += edl_line1 + edl_line2
 
@@ -143,7 +139,6 @@ def generate_timeline_data(srt_file_path, output_file_path):
         except Exception as parse_e:
             print(f"Warning: Skipping entry index {original_srt_index} in '{srt_file_path}' due to processing error: {parse_e}")
 
-
     # --- Write the Complete EDL File ---
     try:
         with open(output_file_path, 'w', encoding='utf-8') as output_file:
@@ -151,15 +146,14 @@ def generate_timeline_data(srt_file_path, output_file_path):
             output_file.write(edl_body)
 
         if processed_count > 0:
-             print(f"EDL file generated successfully ({processed_count} markers) for '{srt_file_path}' and saved to '{output_file_path}'")
+            print(f"EDL file generated successfully ({processed_count} markers) for '{srt_file_path}' and saved to '{output_file_path}'")
         else:
-             print(f"EDL file generated, but contained no valid markers, for '{srt_file_path}'. Saved to '{output_file_path}'")
-        return True # Indicate success
+            print(f"EDL file generated, but contained no valid markers, for '{srt_file_path}'. Saved to '{output_file_path}'")
+        return True  # Indicate success
 
     except Exception as e:
         print(f"Error writing EDL file '{output_file_path}': {e}")
-        return False # Indicate failure
-
+        return False  # Indicate failure
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -194,14 +188,13 @@ if __name__ == "__main__":
         literal_path = os.path.join(current_dir, pattern)
         if os.path.isfile(literal_path) and pattern.lower().endswith('.srt'):
             # Found the literal file (and it's a file, not a directory)
-            srt_files_to_process = [literal_path] # Use the full path
+            srt_files_to_process = [literal_path]  # Use the full path
         # Optional: Add a check here if the file exists but doesn't end with .srt
         elif os.path.isfile(literal_path) and not pattern.lower().endswith('.srt'):
-             print(f"Warning: File '{pattern}' exists but does not have a .srt extension. Skipping.")
+            print(f"Warning: File '{pattern}' exists but does not have a .srt extension. Skipping.")
         # If the literal file doesn't exist or isn't a file, srt_files_to_process remains empty.
 
     # --- END OF CORRECTION ---
-
 
     if not srt_files_to_process:
         # Use repr(pattern) to show potential non-printable characters if any
@@ -218,7 +211,7 @@ if __name__ == "__main__":
 
         # --- Create the output file path with .edl extension ---
         base_name = os.path.splitext(os.path.basename(srt_file_path_full))[0]
-        output_dir = os.path.dirname(srt_file_path_full) # Output in same dir as input
+        output_dir = os.path.dirname(srt_file_path_full)  # Output in same dir as input
         output_file_path = os.path.join(output_dir, f"{base_name}.edl")
 
         if generate_timeline_data(srt_file_path_full, output_file_path):

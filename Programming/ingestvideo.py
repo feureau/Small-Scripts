@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox
 from collections import Counter
 from multiprocessing import Pool
 import glob  # Import the glob module
+
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
 # ---------------------------------------------------------------------
@@ -76,6 +77,7 @@ def get_video_color_info(video_file):
         "mastering_display_metadata": mastering_display_metadata,
         "max_cll": max_cll
     }
+
 def run_ffprobe_for_audio_streams(video_file):
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
@@ -105,6 +107,7 @@ def run_ffprobe_for_audio_streams(video_file):
     for track_number, audio in enumerate(audio_info, start=1):
         audio['track_number'] = track_number
     return audio_info
+
 def get_video_resolution(video_file):
     cap = cv2.VideoCapture(video_file)
     if not cap.isOpened():
@@ -114,6 +117,7 @@ def get_video_resolution(video_file):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
     return height, width
+
 def get_video_duration(video_file):
     cap = cv2.VideoCapture(video_file)
     if not cap.isOpened():
@@ -123,6 +127,7 @@ def get_video_duration(video_file):
     frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     cap.release()
     return (frame_count / fps) if fps else None
+
 # ---------------------------------------------------------------------
 # Step 2: Automatic Crop Detection
 # ---------------------------------------------------------------------
@@ -132,7 +137,8 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
     if duration is None or duration < 1:
         print("Unable to determine video duration or video is too short.")
         return None, None, None, None
-    round_value = "4"
+    # Set round_value to "2" to ensure mod2 rounding in ffmpeg cropdetect
+    round_value = "2"
     sample_interval = 300  # 5 minutes
     num_samples = max(12, min(72, int(duration // sample_interval)))
     if num_samples < 12:
@@ -195,6 +201,7 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
         print("No crop parameters found. Using full frame.")
         w, h, x, y = input_width, input_height, 0, 0
     return w, h, x, y
+
 # ---------------------------------------------------------------------
 # Step 3: Basic Tkinter GUI for user settings
 # ---------------------------------------------------------------------
@@ -202,9 +209,11 @@ def add_files(file_listbox):
     files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4 *.mkv *.avi *.mov")])
     for file in files:
         file_listbox.insert('end', file)
+
 def delete_selected(file_listbox):
     for index in reversed(file_listbox.curselection()):
         file_listbox.delete(index)
+
 def move_up(file_listbox):
     selected = file_listbox.curselection()
     for idx in selected:
@@ -213,6 +222,7 @@ def move_up(file_listbox):
             file_listbox.delete(idx)
             file_listbox.insert(idx - 1, value)
             file_listbox.select_set(idx - 1)
+
 def move_down(file_listbox):
     selected = file_listbox.curselection()
     for idx in reversed(selected):
@@ -221,6 +231,7 @@ def move_down(file_listbox):
             file_listbox.delete(idx)
             file_listbox.insert(idx + 1, value)
             file_listbox.select_set(idx + 1)
+
 def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height):
     root = tk.Tk()
     root.title("Video Processing Settings")
@@ -233,6 +244,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     scrollbar = tk.Scrollbar(main_frame, orient='vertical', command=canvas.yview)
     scrollbar.pack(side='right', fill='y')
     canvas.configure(yscrollcommand=scrollbar.set)
+
     def _on_mousewheel(event):
         if platform.system() == 'Windows':
             delta = int(-1 * (event.delta / 120))
@@ -242,11 +254,14 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             delta = int(-1 * (event.delta / 120))
         canvas.yview_scroll(delta, "units")
     canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
     inner_frame = tk.Frame(canvas)
     canvas.create_window((0, 0), window=inner_frame, anchor='nw')
+
     def _configure_event(event):
         canvas.configure(scrollregion=canvas.bbox("all"))
     inner_frame.bind("<Configure>", _configure_event)
+
     decoding_mode = tk.StringVar(value="Hardware")
     hdr_enable = tk.BooleanVar(value=default_hdr)
     sleep_enable = tk.BooleanVar(value=False)
@@ -262,6 +277,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     metadata_text = None
     audio_vars = []
     convert_vars = []
+
     crop_w = tk.StringVar(value=str(crop_params[0]['crop_w']) if crop_params else "0")
     crop_h = tk.StringVar(value=str(crop_params[0]['crop_h']) if crop_params else "0")
     crop_x = tk.StringVar(value=str(crop_params[0]['crop_x']) if crop_params else "0")
@@ -270,14 +286,23 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     original_crop_h = crop_h.get()
     original_crop_x = crop_x.get()
     original_crop_y = crop_y.get()
-    
+
     # --- New: Automatically update crop offsets when crop width or height is changed ---
     def update_crop_offsets(*args):
         try:
             new_crop_w = int(crop_w.get())
             new_crop_h = int(crop_h.get())
+            # Force crop width and height to be even
+            new_crop_w = new_crop_w - (new_crop_w % 2)
+            new_crop_h = new_crop_h - (new_crop_h % 2)
+            # Recalculate offsets so the crop is centered.
             new_crop_x = (input_width - new_crop_w) // 2
             new_crop_y = (input_height - new_crop_h) // 2
+            # Optionally enforce mod2 on offsets too
+            new_crop_x = new_crop_x - (new_crop_x % 2)
+            new_crop_y = new_crop_y - (new_crop_y % 2)
+            crop_w.set(str(new_crop_w))
+            crop_h.set(str(new_crop_h))
             crop_x.set(str(new_crop_x))
             crop_y.set(str(new_crop_y))
         except ValueError:
@@ -285,7 +310,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     crop_w.trace("w", update_crop_offsets)
     crop_h.trace("w", update_crop_offsets)
     # --------------------------------------------------------------------------------
-    
+
     resolution_map = {
         "No Resize": (None, None, None),
         "HD 1080p":  (1920, 1080, "20"),
@@ -299,6 +324,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             if recommended_qvbr is not None:
                 qvbr.set(recommended_qvbr)
     resolution_var.trace("w", on_resolution_change)
+
     # -------------
     # Update Metadata
     # -------------
@@ -509,6 +535,13 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             crop_h_val = int(crop_h.get())
             crop_x_val = int(crop_x.get())
             crop_y_val = int(crop_y.get())
+            
+            # Adjust all values to be even (nearest lower even number)
+            crop_w_val -= crop_w_val % 2
+            crop_h_val -= crop_h_val % 2
+            crop_x_val -= crop_x_val % 2
+            crop_y_val -= crop_y_val % 2
+
             if crop_w_val <= 0 or crop_h_val <= 0:
                 messagebox.showerror("Error", "Crop width and height must be positive integers.")
                 return
@@ -528,8 +561,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             "hdr_enable": hdr_enable.get(),
             "resolution_choice": resolution_choice,
             "fruc_enable": fruc_enable.get(),
-            "denoise_enable": nvvfx_denoise_var.get(), # Use nvvfx_denoise_var here
-            "artifact_enable": artifact_reduction_var.get(), # Use artifact_reduction_var here
+            "denoise_enable": nvvfx_denoise_var.get(),  # Use nvvfx_denoise_var here
+            "artifact_enable": artifact_reduction_var.get(),  # Use artifact_reduction_var here
             "qvbr": qvbr.get(),
             "gop_len": gop_len.get(),
             "max_processes": max_processes.get(),
@@ -565,6 +598,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     window_height = int(screen_height * 2 / 3)
     root.geometry(f"{window_width}x{window_height}")
     root.mainloop()
+
 # ---------------------------------------------------------------------
 # Step 4: The main encode function
 # ---------------------------------------------------------------------
@@ -594,7 +628,6 @@ def process_video(file_path, settings):
         "--bframes","4",
         "--tf-level","4",
         "--split-enc","forced_4",
-        # "--tier", "1",
         "--profile", "high",
         "--multipass", "2pass-full",
         "--aq",
@@ -624,25 +657,25 @@ def process_video(file_path, settings):
     crop = settings["crop_params"]
     left = crop["crop_x"]
     top = crop["crop_y"]
-    crop_w = crop["crop_w"]
-    crop_h = crop["crop_h"]
-    if left + crop_w > input_width:
-        crop_w = input_width - left
-    if top + crop_h > input_height:
-        crop_h = input_height - top
-    right = input_width - (left + crop_w)
-    bottom = input_height - (top + crop_h)
+    crop_w_val = crop["crop_w"]
+    crop_h_val = crop["crop_h"]
+    if left + crop_w_val > input_width:
+        crop_w_val = input_width - left
+    if top + crop_h_val > input_height:
+        crop_h_val = input_height - top
+    right = input_width - (left + crop_w_val)
+    bottom = input_height - (top + crop_h_val)
     right = max(right, 0)
     bottom = max(bottom, 0)
     command.extend(["--crop", f"{left},{top},{right},{bottom}"])
     # Additional features
     if settings["fruc_enable"]:
         command.extend(["--vpp-fruc", "fps=60"])
-    # Conditional NVVFX Denoise - Corrected line:
+    # Conditional NVVFX Denoise
     if settings["denoise_enable"]:
-        command.append("--vpp-nvvfx-denoise") # Removed " strength=0"
+        command.append("--vpp-nvvfx-denoise")
     # NVVFX Artifact Reduction - always add if enabled
-    if settings["artifact_enable"]: # Use artifact_enable from settings
+    if settings["artifact_enable"]:
         command.append("--vpp-nvvfx-artifact-reduction")
     chosen_res = settings["resolution_choice"]
     resolution_map = {
@@ -670,7 +703,6 @@ def process_video(file_path, settings):
                         "algo=bilinear",
                         "--output-res", f"{target_width}x{target_height}"
                     ])
-                # If exactly same size, do nothing => "No Resize"
     # Audio
     selected_tracks = settings["audio_tracks"]
     tracks_to_copy = []
@@ -706,6 +738,7 @@ def process_video(file_path, settings):
         log.write(f"Processing file: {file_path}\n")
         log.write(f"Output file: {output_file}\n")
         log.write(f"Status: {status}\n")
+
 def process_wrapper(args):
     """
     Top-level function so it can be pickled by multiprocessing on Windows.
@@ -713,6 +746,7 @@ def process_wrapper(args):
     """
     vf, settings = args
     process_video(vf, settings)
+
 def process_batch(video_files, settings):
     try:
         mp = int(settings.get("max_processes", "1"))
@@ -726,6 +760,7 @@ def process_batch(video_files, settings):
     tasks = [(vf, settings) for vf in video_files]
     with Pool(mp) as p:
         p.map(process_wrapper, tasks)
+
 # ---------------------------------------------------------------------
 # Main Script Logic (Batch + GUI)
 # ---------------------------------------------------------------------
