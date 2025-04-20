@@ -1,0 +1,641 @@
+Composition {
+	CurrentTime = 0,
+	RenderRange = { 0, 31 },
+	GlobalRange = { 0, 31 },
+	CurrentID = 12,
+	HiQ = true,
+	PlaybackUpdateMode = 0,
+	StereoMode = false,
+	Version = "DaVinci Resolve Studio 20.0.0b.0023",
+	SavedOutputs = 0,
+	HeldTools = 0,
+	DisabledTools = 0,
+	LockedTools = 0,
+	AudioOffset = 0,
+	Resumable = true,
+	OutputClips = {
+	},
+	CustomData = { TEMPLATE_ID = "Templates/Edit/Titles/Subtitles/Animated/Statement" },
+	Tools = {
+		MediaOut1 = Saver {
+			Inputs = {
+				Index = Input { Value = "0", },
+				Input = Input {
+					SourceOp = "ColorSpaceTransform1",
+					Source = "Output",
+				}
+			},
+			ViewInfo = OperatorInfo { Pos = { 440, 49.5 } },
+		},
+		MacroTool1 = GroupOperator {
+			CtrlWZoom = false,
+			CustomData = { HighlightStyle = { { Time = 0, Element2 = { ElementScaleX = 0.7, ElementColorG = "Back1G", ElementShape = 2, ElementColorR = "Back1R", ElementEnabled = 1, ElementPriority = 0, ElementShearY = "Tilt", BorderLevel = 2, BorderRound = "Roundness", ElementScaleY = 0.7, ElementShearX = "Slant", ElementColorB = "Back1B" } }, { Time = 0.667, Element2 = { ElementScaleY = 1.024, ElementScaleX = 1.024 } }, { Time = 1, Element2 = { ElementScaleY = 1, ElementScaleX = 1 } } }, Path = { Map = { ["Setting:"] = "Templates:\\Templates.drfx\\Edit\\Titles\\Subtitles\\Animated\\" } }, },
+			Inputs = ordered() {
+				StyledText = InstanceInput {
+					SourceOp = "Template",
+					Source = "StyledText",
+					Page = "Controls",
+				},
+				MaxWords = InstanceInput {
+					SourceOp = "Template",
+					Source = "Words",
+					Page = "Controls",
+				},
+				WriteOn = InstanceInput {
+					SourceOp = "Template",
+					Source = "WriteOn",
+					Page = "Controls",
+					Default = 0,
+				},
+				Speaker = InstanceInput {
+					SourceOp = "Template",
+					Source = "Speaker",
+					Page = "Controls",
+				},
+				Speed = InstanceInput {
+					SourceOp = "Template",
+					Source = "Speed",
+					Page = "Controls",
+					Default = 10,
+				},
+				InputSep1 = InstanceInput {
+					SourceOp = "Template",
+					Source = "KerningSeparator",
+					Page = "Controls",
+				},
+				Input35 = InstanceInput {
+					SourceOp = "Template",
+					Source = "Center",
+					Name = "Center",
+					Page = "Controls",
+					DefaultX = 0,
+					DefaultY = 0,
+				},
+				Input1 = InstanceInput {
+					SourceOp = "Template",
+					Source = "Font",
+					ControlGroup = 1,
+					Page = "Controls",
+				},
+				Input2 = InstanceInput {
+					SourceOp = "Template",
+					Source = "Style",
+					ControlGroup = 1,
+					Page = "Controls",
+				},
+				InputR = InstanceInput {
+					SourceOp = "Template",
+					Source = "Red1Clone",
+					Name = "Color",
+					ControlGroup = 2,
+					Page = "Controls",
+				},
+				InputG = InstanceInput {
+					SourceOp = "Template",
+					Source = "Green1Clone",
+					ControlGroup = 2,
+					Page = "Controls",
+				},
+				InputB = InstanceInput {
+					SourceOp = "Template",
+					Source = "Blue1Clone",
+					ControlGroup = 2,
+					Page = "Controls",
+				},
+				InputA = InstanceInput {
+					SourceOp = "Template",
+					Source = "Alpha1Clone",
+					ControlGroup = 2,
+					Page = "Controls",
+					Default = 1,
+				},
+				Input7 = InstanceInput {
+					SourceOp = "Template",
+					Source = "Size",
+					Page = "Controls",
+					Default = 0.06,
+				},
+				Input8 = InstanceInput {
+					SourceOp = "Template",
+					Source = "CharacterSpacingClone",
+					Name = "Tracking",
+					Page = "Controls",
+					Default = 1,
+				},
+				WordSpacing = InstanceInput {
+					SourceOp = "Template",
+					Source = "WordSpacing",
+					Page = "Controls",
+					Default = 1,
+				},
+				Input9 = InstanceInput {
+					SourceOp = "Template",
+					Source = "LineSpacingClone",
+					Page = "Controls",
+					Default = 1,
+				},
+				Input29 = InstanceInput {
+					SourceOp = "Template",
+					Source = "StylisticSet",
+					Page = "Controls",
+					Default = 0,
+				},
+				InputSep2 = InstanceInput {
+					SourceOp = "Template",
+					Source = "KerningSeparator",
+					Page = "Controls",
+				},
+				Back1R = InstanceInput {
+					SourceOp = "Template",
+					Source = "HBackR",
+					Name = "Back Color",
+					ControlGroup = 20,
+					Page = "Controls",
+					Default = 1,
+				},
+				Back1G = InstanceInput {
+					SourceOp = "Template",
+					Source = "HBackG",
+					ControlGroup = 20,
+					Page = "Controls",
+					Default = 0,
+				},
+				Back1B = InstanceInput {
+					SourceOp = "Template",
+					Source = "HBackB",
+					ControlGroup = 20,
+					Page = "Controls",
+					Default = 0,
+				},
+				Roundness = InstanceInput {
+					SourceOp = "Template",
+					Source = "Roundness",
+					Page = "Controls",
+					Default = 0.157,
+				},
+				Slant = InstanceInput {
+					SourceOp = "Template",
+					Source = "Slant",
+					Page = "Controls",
+				},
+				Tilt = InstanceInput {
+					SourceOp = "Template",
+					Source = "Tilt",
+					Page = "Controls",
+				}
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Template",
+					Source = "Output",
+				}
+			},
+			ViewInfo = GroupInfo {
+				Pos = { 127.333, 4.04546 },
+				Flags = {
+					Expanded = true,
+					AllowPan = false,
+					AutoSnap = true,
+					RemoveRouters = true
+				},
+				Size = { 126, 66.3636, 63, 24.2424 },
+				Direction = "Horizontal",
+				PipeStyle = "Direct",
+				Scale = 1,
+				Offset = { 0, 0 }
+			},
+			Tools = ordered() {
+				Template = TextPlus {
+					CtrlWShown = false,
+					Inputs = {
+						Round2 = Input {
+							Value = Number {
+								Value = 0.157
+							},
+						},
+						Size2 = Input {
+							Value = Number {
+								Value = 1
+							},
+						},
+						ElementShape2 = Input {
+							Value = Number {
+								Value = 2
+							},
+						},
+						Softness2 = Input {
+							Value = Number {
+								Value = 1
+							},
+						},
+						Level2 = Input {
+							Value = Number {
+								Value = 2
+							},
+						},
+						Priority8 = Input {
+							Value = Number {
+								Value = 4
+							},
+						},
+						Priority2 = Input {
+							Value = Number {
+								Value = -10
+							},
+						},
+						GlobalOut = Input { Value = 31, },
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						Center = Input { Value = { 0.5, 0.2 }, },
+						SelectTransform = Input { Value = 1, },
+						SelectElement = Input { Value = 2, },
+						Select = Input { Value = 2, },
+						Enabled3 = Input { Value = 1, },
+						Enabled8 = Input { Value = 1, },
+						StyledText = Input {
+							SourceOp = "TemplateSubtitle",
+							Source = "Value",
+						},
+						Font = Input { Value = "BigNoodleTitling", },
+						Style = Input { Value = "Oblique", },
+						Size = Input { Value = 0.06, },
+						VerticalJustificationNew = Input { Value = 3, },
+						HorizontalJustificationNew = Input { Value = 3, },
+						Softness3 = Input { Value = 1, },
+						SoftnessX3 = Input { Value = 10, },
+						SoftnessY3 = Input { Value = 10, },
+						SoftnessOnFillColorToo3 = Input { Value = 1, },
+						SoftnessGlow3 = Input { Value = 0.717, },
+						Red8 = Input { Value = 0, },
+						Green8 = Input { Value = 0, },
+						Blue8 = Input { Value = 0, },
+						SoftnessX8 = Input { Value = 5, },
+						SoftnessY8 = Input { Value = 5, },
+						Offset8 = Input { Value = { 0.05, -0.05 }, }
+					},
+					ViewInfo = OperatorInfo { Pos = { -1.52588e-05, 8.75758 } },
+					UserControls = ordered() { StyledText = { TEC_ReadOnly = true, TEC_Wrap = true, ICS_ControlPage = "Controls", LINKID_DataType = "StyledText", INPID_InputControl = "TextEditControl", TEC_Lines = 3, LINKS_Name = "Subtitle", }, Words = { INP_Integer = true, ICS_ControlPage = "Controls", INP_MaxScale = 10, INP_Default = 20, INP_MinScale = 1, INP_MinAllowed = 1, LINKID_DataType = "Number", INP_External = false, LINKS_Name = "Words per line", }, WriteOn = { INP_Default = 0, INP_Integer = true, INP_External = false, ICS_ControlPage = "Controls", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", LINKID_DataType = "Number", INPID_InputControl = "CheckboxControl", LINKS_Name = "Write On Words", }, Speaker = { INP_External = false, LINKID_DataType = "Number", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", ICS_ControlPage = "Controls", INPID_InputControl = "CheckboxControl", LINKS_Name = "Show Speaker", }, Speed = { INP_Default = 10, ICS_ControlPage = "Controls", INP_External = false, LINKID_DataType = "Number", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", INPID_InputControl = "SliderControl", INP_MaxScale = 20, LINKS_Name = "Animation Speed", }, HBackR = { CLRC_NoSliders = true, INPID_InputControl = "ColorControl", INP_Default = 1, ICS_ControlPage = "Controls", IC_ControlID = 0, CLRC_ShowWheel = false, LINKID_DataType = "Number", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", INP_External = false, IC_ControlGroup = 15, LINKS_Name = "Background Color", }, HBackG = { CLRC_NoSliders = true, INPID_InputControl = "ColorControl", INP_Default = 0, INP_External = false, LINKID_DataType = "Number", IC_ControlID = 1, INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", ICS_ControlPage = "Controls", IC_ControlGroup = 15, }, HBackB = { CLRC_NoSliders = true, INPID_InputControl = "ColorControl", INP_Default = 0, INP_External = false, LINKID_DataType = "Number", IC_ControlID = 2, INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", ICS_ControlPage = "Controls", IC_ControlGroup = 14, }, Roundness = { INP_Default = 0.157, INP_External = false, ICS_ControlPage = "Controls", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", LINKID_DataType = "Number", INPID_InputControl = "SliderControl", LINKS_Name = "Roundness", }, Slant = { ICS_ControlPage = "Controls", INP_MinScale = -0.5, INP_External = false, LINKID_DataType = "Number", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", INPID_InputControl = "SliderControl", INP_MaxScale = 0.5, LINKS_Name = "Slant", }, Tilt = { ICS_ControlPage = "Controls", INP_MinScale = -0.5, INP_External = false, LINKID_DataType = "Number", INPS_ExecuteOnChange = "tool:UpdateWordAnimation()", INPID_InputControl = "SliderControl", INP_MaxScale = 0.5, LINKS_Name = "Tilt", } }
+				}
+			},
+		},
+		ColorSpaceTransform1 = ColorSpaceTransform {
+			CtrlWZoom = false,
+			Inputs = {
+				InputColorSpace = Input { Value = FuID { "REC2020_COLORSPACE" }, },
+				InputGamma = Input { Value = FuID { "REC2100_PQ_EOTF_GAMMA" }, },
+				IsRec2390ScalingEnabled = Input { Value = 1, },
+				SrcLumMax = Input {
+					Value = 48,
+					Disabled = true,
+				},
+				DstLumMax = Input {
+					Value = 1000,
+					Disabled = true,
+				},
+				Input = Input {
+					SourceOp = "Template",
+					Source = "Output",
+				}
+			},
+			ViewInfo = OperatorInfo { Pos = { 288.667, 13.1364 } },
+			Version = 1
+		}
+	},
+	Frames = {
+		{
+			FrameTypeID = "ChildFrame",
+			Mode = 3,
+			LayoutPreset = 0,
+			PresetName = "Default",
+			Left = 0,
+			Top = 0,
+			Width = 1896,
+			Height = 899,
+			ZoneInfo = { AuxRight = { Expanded = true }, ["!Left"] = {
+				}, AuxLeft = { Expanded = true }, Right = { Expanded = true, }, Left = { Expanded = false, }, ["!Right"] = {
+				} },
+			ViewInfo = { Viewer1 = { Show = true, RatioX = 1.0523311132255, RatioY = 0.01, }, InnerLeft = { PixelX = 420, RatioY = 100, }, MainSplit = { RatioX = 100, RatioY = 0.996453900709221, }, CenterSplit = { RatioX = 1, RatioY = 100, }, Viewer2 = { Show = true, RatioX = 0.947668886774499, RatioY = 0.01, }, Comments = { Show = false }, Time = { Show = true, RatioX = 100, }, InnerColumns = { RatioX = 100, RatioY = 2.00354609929078, }, Keyframes = { Show = false, }, LayoutStrip = { Show = true, }, Inspector = { Show = true, RatioX = 100, RatioY = 1, }, InnerRight = {
+				}, MediaPool = { Show = false, }, OuterColumns = { RatioX = 100, RatioY = 1, }, Effects = { Show = true, Adjust = false, RatioX = 1, RatioY = 100, MRU = 1 }, Clips = { Show = false, }, Metadata = { Show = false, }, OuterLeft = {
+				}, ViewerSplit = { RatioX = 100, RatioY = 1, }, Nodes = { Show = true, RatioX = 1, RatioY = 100, }, OuterRight = { PixelX = 420, RatioY = 100, }, ActionStrip = { Show = true, RatioX = 100, }, Spline = { Show = false, } },
+			Views = ordered() {
+				MediaPool = "MediaPoolView",
+				Effects = MultiView {
+					Active = "EffectView",
+					ViewList = ordered() {
+						EffectView = "EffectView"
+					},
+				},
+				Nodes = MultiView {
+					Active = "FlowView",
+					ViewList = ordered() {
+						FlowView = "FlowView"
+					},
+					FlowView = FlowView {
+						Flags = {
+							AutoHideNavigator = true,
+							AutoSnap = true,
+							RemoveRouters = true
+						},
+						NavigatorSize = { 200, 140 },
+						Direction = "Horizontal",
+						PipeStyle = "Direct",
+						RootScale = 1,
+						RootOffset = { 26, 29 }
+					}
+				},
+				Keyframes = MultiView {
+					Active = "TimelineView",
+					ViewList = ordered() {
+						TimelineView = "TimelineView"
+					},
+					TimelineView = TimelineView {
+						TreeControlState = {
+						},
+						DisplayMode = "All Tools",
+						ShowCurrentTimeTools = false,
+						Filter = "Show All",
+						ShowSelectedTools = false,
+						ShowAnimatedToolsOnly = false,
+						ShowEditBoxes = false,
+						KeyFrameView = {
+							Position = { Left = 232, Bottom = 324 },
+							ScaleX = 0.248936170212767,
+							OffsetX = 18797.1702127661,
+							OffsetY = 0,
+							AutoScaling = "scroll",
+							AutoSnapTo = "frame",
+							AutoSnapToGuidelines = true,
+							GuidelinesGrabEnabled = true,
+							GuidelinesSnapTo = "none"
+						},
+						Spreadsheet = { LeftPos = 232, Visible = false }
+					}
+				},
+				Spline = MultiView {
+					Active = "SplineView",
+					ViewList = ordered() {
+						SplineView = "SplineEditorView"
+					},
+					SplineView = SplineEditorView {
+						LeftPos = 264,
+						ScaleX = 0.2,
+						ScaleY = 0.00334448160535117,
+						OffsetX = 18787.6,
+						OffsetY = 0,
+						AutoScaling = "scroll",
+						AutoSnapTo = "frame",
+						AutoSnapToGuidelines = true,
+						GuidelinesSnapTo = "frame",
+						ShowKeyMarkers = false,
+						IndependentHandles = false,
+						ShowNonSplineModifiers = false,
+						GuidelinesGrabEnabled = true,
+						ShowOneToolOnly = false,
+						ShowSelectedTools = false,
+						ShowAllInputs = false,
+						Filter = "Show All"
+					}
+				},
+				Inspector = MultiView {
+					Active = "Tools",
+					ViewList = ordered() {
+						Tools = "ControlView",
+						Modifiers = "ModifierView"
+					},
+				},
+				Viewer1 = MultiView {
+					Active = "LeftView",
+					ViewList = ordered() {
+						LeftView = "PreviewContainer"
+					},
+				},
+				Viewer2 = MultiView {
+					Active = "RightView",
+					ViewList = ordered() {
+						RightView = "PreviewContainer"
+					},
+				},
+				Time = "TimeView",
+				ActionStrip = "ActionStripView",
+				LayoutStrip = "LayoutStripView",
+				Clips = "ClipsView",
+				Metadata = "MetadataView"
+			},
+			Layout = {
+				{ ID = "LayoutStrip", FixedY = 36, Resolve = false, Flat = true },
+				{
+					{
+						{ ID = "MediaPool", Fusion = false, RatioX = 1 },
+						{ ID = "Effects", RatioX = 1 },
+						Zone = "Left",
+						Rows = 2,
+						PaneID = "OuterLeft",
+						PixelX = 420
+					},
+					{
+						{
+							{
+								{ ID = "MediaPool", Fusion = false, RatioX = 1 },
+								{ ID = "Effects", RatioX = 1 },
+								PaneID = "InnerLeft",
+								MaxViews = 1,
+								PixelX = 420,
+								Rows = 2,
+								Zone = "!Left"
+							},
+							{
+								{
+									{ ID = "Viewer1", RatioY = 0.01, RatioX = 1 },
+									{ ID = "Viewer2", RatioX = 1 },
+									RatioY = 1,
+									Columns = 2,
+									PaneID = "ViewerSplit"
+								},
+								{ ID = "Time", FixedY = 83, Flat = true },
+								RatioX = 1,
+								Rows = 2
+							},
+							{
+								{ ID = "Inspector", RatioY = 1 },
+								{ ID = "Metadata", RatioY = 1, Fusion = false },
+								PaneID = "InnerRight",
+								MaxViews = 1,
+								PixelX = 420,
+								Rows = 2,
+								Zone = "!Right"
+							},
+							RatioY = 2,
+							Columns = 3,
+							PaneID = "InnerColumns"
+						},
+						{ ID = "ActionStrip", FixedY = 50, Flat = true },
+						{
+							{ ID = "Nodes", RatioX = 1 },
+							{ ID = "Spline", RatioX = 1 },
+							{ ID = "Keyframes", RatioX = 1 },
+							RatioY = 1,
+							Columns = 3,
+							PaneID = "MainSplit"
+						},
+						{ Fusion = false, ID = "Clips", LARGE_FixedY = 160, MEDIUM_FixedY = 138, SMALL_FixedY = 110 },
+						RatioX = 1,
+						Rows = 4,
+						PaneID = "CenterSplit"
+					},
+					{
+						{ ID = "Inspector", RatioY = 1 },
+						{ ID = "Metadata", RatioY = 1, Fusion = false },
+						Zone = "Right",
+						Rows = 2,
+						PaneID = "OuterRight",
+						PixelX = 420
+					},
+					RatioY = 1,
+					Columns = 3,
+					PaneID = "OuterColumns"
+				},
+				RatioX = 1,
+				Rows = 2,
+				RatioY = 1
+			},
+			TopBar = {
+				Left = { "Left", "MediaPool", "Effects", "Clips", "Nodes", "Console" },
+				Right = { "Spline", "Keyframes", "Metadata", "Inspector", "Right" }
+			}
+		}
+	},
+	Prefs = {
+		Comp = {
+			Interactive = {
+				Proxy = {
+					Scale = 1,
+				},
+			},
+			Views = {
+				RightView = {
+					Viewer = {
+						EnableLUTs = true,
+						Layer = ":Default",
+					},
+					SideB = { PrevCtrlInactiveColor = 4278255360, PickW = 1, PickH = 1, PrevCtrlActiveColor = 4278190335, Viewer = { EnableLUTs = false, LUTPlugin = "FusionViewLUT", NearZ = 0, FitMarginX = 0, FitMarginType = 0, FarZ = -1000, FitMarginY = 0 } },
+					ViewLUT = { {
+							Tools = ordered() {
+								FusionViewLUT1 = ViewLUTOp {
+									CtrlWZoom = false,
+									NameSet = true,
+									Inputs = {
+									},
+								}
+							},
+							ID = "FusionViewLUT"
+						}, SelectedPlugin = "FusionViewLUT", SelectedName = "", Recent = { SelectedPlugin = "FusionViewLUT", FusionViewLUT = {
+								Tools = ordered() {
+									FusionViewLUT1 = ViewLUTOp {
+										CtrlWZoom = false,
+										NameSet = true,
+										Inputs = {
+											Red = Input {
+												SourceOp = "FusionViewLUT1Red",
+												Source = "Value",
+											},
+											Green = Input {
+												SourceOp = "FusionViewLUT1Green",
+												Source = "Value",
+											},
+											Blue = Input {
+												SourceOp = "FusionViewLUT1Blue",
+												Source = "Value",
+											},
+											Alpha = Input {
+												SourceOp = "FusionViewLUT1Alpha",
+												Source = "Value",
+											}
+										},
+										Tools = {
+											FusionViewLUT1Red = LUTBezier {
+												KeyColorSplines = {
+													[0] = {
+														[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+														[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+													}
+												},
+												SplineColor = { Red = 0, Green = 0, Blue = 0 },
+												CtrlWZoom = false,
+												NameSet = true,
+											},
+											FusionViewLUT1Green = LUTBezier {
+												KeyColorSplines = {
+													[0] = {
+														[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+														[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+													}
+												},
+												SplineColor = { Red = 0, Green = 0, Blue = 0 },
+												CtrlWZoom = false,
+												NameSet = true,
+											},
+											FusionViewLUT1Blue = LUTBezier {
+												KeyColorSplines = {
+													[0] = {
+														[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+														[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+													}
+												},
+												SplineColor = { Red = 0, Green = 0, Blue = 0 },
+												CtrlWZoom = false,
+												NameSet = true,
+											},
+											FusionViewLUT1Alpha = LUTBezier {
+												KeyColorSplines = {
+													[0] = {
+														[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+														[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+													}
+												},
+												SplineColor = { Red = 0, Green = 0, Blue = 0 },
+												CtrlWZoom = false,
+												NameSet = true,
+											}
+										},
+									}
+								}
+							}, SelectedName = "" } },
+				},
+				LeftView = {
+					SideB = { PrevCtrlInactiveColor = 4278255360, PickW = 1, PickH = 1, PrevCtrlActiveColor = 4278190335, Viewer = { EnableLUTs = false, LUTPlugin = "FusionViewLUT", NearZ = 0, FitMarginX = 0, FitMarginType = 0, FarZ = -1000, FitMarginY = 0 } },
+				},
+				View1 = {
+					PrevCtrlInactiveColor = 4278255360,
+					PickW = 1,
+					PickH = 1,
+					PrevCtrlActiveColor = 4278190335,
+					SideB = { PrevCtrlInactiveColor = 4278255360, PickW = 1, PickH = 1, PrevCtrlActiveColor = 4278190335, Viewer = { EnableLUTs = false, LUTPlugin = "FusionViewLUT", NearZ = 0, FitMarginX = 0, FitMarginType = 0, FarZ = -1000, FitMarginY = 0 } }
+				},
+				Defaults = {
+					Viewer = {
+						Layer = "",
+					},
+				},
+			},
+			Paths = {
+				Map = {
+					["ResolveCaches:"] = "C:\\Users\\Feureau\\Videos\\Davinci Resolve\\CacheClip\\6e7afd0b-3653-4fb8-866b-397f543f7d31\\d389eae1-3257-4abf-af9d-5fab737f4252\\998163cd-9011-4e99-85b7-a99230779db9\\Fusion",
+				},
+			},
+			FrameFormat = {
+				Rate = 24,
+				GuideRatio = 1.77777777777778,
+				DepthFull = 3,
+				DepthPreview = 3,
+				DepthInteractive = 3,
+			},
+			Unsorted = {
+				GlobalEnd = 31
+			},
+			ActionStrip = {
+				ToolbarName = "Custom"
+			},
+		}
+	},
+}
