@@ -1,4 +1,4 @@
-# --- START OF FILE GPTBatcher_Multimodal_Logged.py ---
+# --- START OF FILE GPTBatcher_Multimodal_Logged_v2.py ---
 
 import os
 import sys
@@ -48,7 +48,7 @@ ALL_SUPPORTED_EXTENSIONS = SUPPORTED_TEXT_EXTENSIONS + SUPPORTED_IMAGE_EXTENSION
 
 # 4. Output file extensions
 RAW_OUTPUT_FILE_EXTENSION = "_raw_output.txt"
-LOG_FILE_EXTENSION = "_processing.log" # New extension for log files
+LOG_FILE_EXTENSION = "_processing.log" # Extension for log files
 DEFAULT_RAW_OUTPUT_SUFFIX = "_raw" # Suffix for output and log filenames
 
 # 5. Default Models and Engine - Placeholders, will be updated dynamically
@@ -60,8 +60,9 @@ DEFAULT_ENGINE = "google"
 REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
-# 7. Output Subfolder Name
+# 7. Output Subfolder Names
 RAW_OUTPUT_SUBFOLDER_NAME = "output_results"
+LOG_SUBFOLDER_NAME = "processing_logs" # <-- NEW: Subfolder for logs
 
 ################################################################################
 # --- End of Customizable Variables ---
@@ -71,7 +72,7 @@ RAW_OUTPUT_SUBFOLDER_NAME = "output_results"
 last_request_time = None
 
 # --- Model Fetching Functions ---
-# (fetch_google_models and fetch_ollama_models remain the same as before)
+# (fetch_google_models and fetch_ollama_models remain the same)
 def fetch_google_models(api_key):
     """Fetches available 'generateContent' models from Google Generative AI."""
     if not api_key:
@@ -84,6 +85,7 @@ def fetch_google_models(api_key):
              if "generateContent" in m.supported_generation_methods:
                  models.append(m.name)
         print(f"Found Google models (raw): {models}")
+        # Prioritize pro/flash models in sorting
         models.sort(key=lambda x: (not ('pro' in x or 'flash' in x), x))
         print(f"Sorted Google models: {models}")
         return models, None
@@ -105,14 +107,16 @@ def fetch_ollama_models():
         response.raise_for_status()
         data = response.json()
         if "models" in data and isinstance(data["models"], list):
-             model_names = sorted([
+             # Separate models with and without tags for better sorting
+             models_with_tags = sorted([
                  model.get("name") for model in data["models"]
                  if model.get("name") and ':' in model.get("name")
              ])
-             model_names.extend(sorted([
+             models_without_tags = sorted([
                  model.get("name") for model in data["models"]
                  if model.get("name") and ':' not in model.get("name")
-             ]))
+             ])
+             model_names = models_with_tags + models_without_tags # List base models last
              print(f"Found Ollama models: {model_names}")
              return model_names, None
         else:
@@ -172,7 +176,6 @@ def read_file_content(filepath):
 # --- API Call Functions ---
 # (call_generative_ai_api, call_google_gemini_api, call_ollama_api remain the same)
 # Note: These functions already return specific error messages prefixed with "Error:".
-# We rely on these specific messages being returned on failure.
 def call_generative_ai_api(engine, prompt_text, api_key, model_name,
                            image_bytes=None, mime_type=None, stream_output=False):
     """Calls the selected AI API (Google or Ollama) to get content, handling multimodal."""
@@ -224,14 +227,14 @@ def call_google_gemini_api(prompt_text, api_key, model_name,
             if "vision" not in model_name and "1.5" not in model_name:
                  print(f"Warning: Selected model '{model_name}' might not be optimized for vision tasks.")
             try:
-                encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                # Directly use bytes, SDK handles encoding
                 request_payload = [
                     prompt_text,
-                    {"inline_data": {"mime_type": mime_type, "data": encoded_image}}
+                    {"inline_data": {"mime_type": mime_type, "data": image_bytes}}
                 ]
             except Exception as e:
-                 print(f"Error encoding image for Google API: {e}")
-                 return f"Error: Failed to encode image data - {e}"
+                 print(f"Error preparing image for Google API: {e}")
+                 return f"Error: Failed to prepare image data - {e}"
         else:
             print("--- Preparing text-only request for Google Gemini (Model: {}): ---".format(model_name))
             print(prompt_text[:1000] + "..." if len(prompt_text) > 1000 else prompt_text)
@@ -245,83 +248,72 @@ def call_google_gemini_api(prompt_text, api_key, model_name,
         api_response_text = ""
         try:
             if stream_output:
-                # Streaming logic remains complex, ensure robust error checking within the loop if used extensively
                 response = model.generate_content(request_payload, generation_config=generation_config, stream=True)
                 full_response_text = ""
                 print("\n--- Streaming Response ---")
                 for chunk in response:
-                    # Simplified handling for brevity - needs more robust error checking in production
-                    if chunk.text:
+                    if chunk.parts:
                         print(chunk.text, end="", flush=True)
                         full_response_text += chunk.text
-                    # Add checks for prompt_feedback and finish_reason here if needed
+                    # Add checks for prompt_feedback, finish_reason, safety_ratings within loop if needed
+                    if hasattr(chunk, 'prompt_feedback') and chunk.prompt_feedback and chunk.prompt_feedback.block_reason:
+                        block_reason = chunk.prompt_feedback.block_reason
+                        print(f"\nERROR: Stream interrupted by safety filter ({block_reason}).")
+                        return f"Error: Stream blocked by safety filter ({block_reason})." # Stop processing
+                    # Consider checking finish_reason if available in chunks
                 print("\n--- End of Stream ---")
                 api_response_text = full_response_text.strip()
-                # Add final safety checks based on potentially available response attributes after stream
-                # ... (omitted for brevity, see previous version for examples)
+                # Check final response object attributes if needed (may vary if stream ended early)
+                # final_finish_reason = getattr(response, 'finish_reason', 'UNKNOWN') # May not be reliable after stream
+                # print(f"Stream finished (Reported reason might be inaccurate: {final_finish_reason})")
 
-            else: # Non-streaming (more reliable error info)
+            else: # Non-streaming
                 response = model.generate_content(request_payload, generation_config=generation_config, stream=False)
                 print("\n--- Google Gemini API call completed (non-streaming). ---")
 
-                # Robust check for prompt feedback first
+                # Check for blocking first (more reliable in non-streaming)
                 if hasattr(response, 'prompt_feedback') and response.prompt_feedback and response.prompt_feedback.block_reason:
                      block_reason = response.prompt_feedback.block_reason
                      print(f"ERROR: Input prompt blocked due to: {block_reason}")
-                     # Return specific error
                      return f"Error: Prompt blocked by safety filter ({block_reason})."
 
                 # Then check candidates and finish reason
                 if not hasattr(response, 'candidates') or not response.candidates:
-                     # If no candidates, check prompt feedback again for detailed reason
                      block_reason = getattr(getattr(response, 'prompt_feedback', None), 'block_reason', 'Unknown')
                      print(f"ERROR: No candidates found in response (Reason: {block_reason}).")
-                     return f"Error: No response generated (Reason: {block_reason})." # Specific error
+                     return f"Error: No response generated (Reason: {block_reason})."
 
-                # We have candidates, check the first one
                 candidate = response.candidates[0]
-                finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN') # Default if missing
+                finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
                 safety_ratings = getattr(candidate, 'safety_ratings', None)
 
                 if finish_reason != 'STOP':
                     print(f"WARNING: Generation finished unexpectedly: {finish_reason}")
                     if finish_reason == 'SAFETY':
                         print(f"Safety Ratings: {safety_ratings}")
-                        return f"Error: Response generation stopped due to safety ({finish_reason})." # Specific error
-                    # For other reasons like MAX_TOKENS, try getting text but return error if unavailable
+                        return f"Error: Response generation stopped due to safety ({finish_reason})."
                     try:
-                        api_response_text = response.text # Attempt to get partial text
+                        api_response_text = response.text # Attempt partial text
                         print(f"Warning: Generation stopped early ({finish_reason}), partial text retrieved.")
-                        # Proceed with the partial text
                     except (ValueError, AttributeError) as e:
                          print(f"Error accessing partial text after non-STOP finish ({finish_reason}): {e}")
-                         return f"Error: Generation stopped ({finish_reason}), couldn't retrieve text." # Specific error
+                         return f"Error: Generation stopped ({finish_reason}), couldn't retrieve text."
                 else: # Finish reason is STOP
                      try:
-                        # This is the primary success path for getting text
-                        api_response_text = response.text
+                        api_response_text = response.text # Primary success path
                      except (ValueError, AttributeError) as e:
-                          # This might happen if the response is empty even with STOP, or other issues
-                          print(f"Error accessing response text despite STOP reason: {e}. Finish Reason: {finish_reason}")
-                          # Check prompt feedback again just in case
                           block_reason = getattr(getattr(response, 'prompt_feedback', None), 'block_reason', None)
                           if block_reason:
+                              print(f"Error accessing text despite STOP (Prompt Block Reason: {block_reason}): {e}")
                               return f"Error: No text content found (Prompt Block Reason: {block_reason})."
                           else:
-                              # Return a specific error about text access
+                              print(f"Error accessing response text despite STOP reason: {e}. Finish Reason: {finish_reason}")
                               return f"Error: Could not retrieve text from response (Finish Reason: {finish_reason})."
 
-
         except Exception as e:
-            # Catch potential errors during the generate_content call itself
             print(f"Error during Gemini content generation: {e}", file=sys.stderr)
-            # Log the traceback for detailed debugging if needed
-            # traceback.print_exc()
-            # Return specific error
             return f"Error: Gemini generation failed - {str(e)[:150]}"
 
-        # If we got here with non-empty text, return it
-        # Handle the case where response is valid but .text is empty (though less common now with checks above)
         if api_response_text is None: api_response_text = "" # Ensure string type
         return api_response_text.strip()
 
@@ -334,9 +326,9 @@ def call_google_gemini_api(prompt_text, api_key, model_name,
     except GoogleAPIError as e:
          print(f"Error configuring or calling Google Gemini API: {e}", file=sys.stderr)
          return f"Error: Google API Call Failed - {str(e)[:100]}"
-    except Exception as e: # Catch-all for unexpected issues like configuration
+    except Exception as e: # Catch-all for unexpected issues
         print(f"Unexpected error in Google API setup or call: {e}", file=sys.stderr)
-        traceback.print_exc() # Print stack trace for unexpected errors
+        traceback.print_exc()
         return f"Error: Unexpected Google API issue - {str(e)[:100]}"
 
 def call_ollama_api(prompt_text, model_name, image_bytes=None):
@@ -429,7 +421,7 @@ def generate_output_filenames(input_filepath, output_suffix):
     return output_filename_base, raw_output_filename, log_filename
 
 def save_raw_api_response(api_response_text, output_folder, raw_output_filename):
-    """Saves the raw API response text to the specified file."""
+    """Saves the raw API response text to the specified file in the main output folder."""
     # Note: api_response_text can contain error messages if API call failed
     if api_response_text is None: # Explicitly check for None
          api_response_text = "[Error: API response was None]"
@@ -448,9 +440,10 @@ def save_raw_api_response(api_response_text, output_folder, raw_output_filename)
         print(f"**ERROR: Could not save raw API response to file: {output_filepath}**\nError details: {e}")
         # We should still attempt to save the log file even if this fails
 
-def save_processing_log(log_data, output_folder, log_filename):
-    """Saves the processing parameters and outcome to a log file."""
-    log_filepath = os.path.join(output_folder, log_filename)
+# MODIFIED: Takes log_folder instead of output_folder
+def save_processing_log(log_data, log_folder, log_filename):
+    """Saves the processing parameters and outcome to a log file in the dedicated log folder."""
+    log_filepath = os.path.join(log_folder, log_filename) # <-- Use log_folder
     timestamp_format = "%Y-%m-%d %H:%M:%S"
 
     try:
@@ -470,10 +463,12 @@ def save_processing_log(log_data, output_folder, log_filename):
                 logfile.write(f"  Image MIME Type: {log_data.get('mime_type', 'N/A')}\n")
                 logfile.write(f"  Image Size (bytes): {log_data.get('image_size', 'N/A')}\n")
             logfile.write(f"  Streaming Enabled: {log_data.get('stream_output', 'N/A')}\n")
-            logfile.write(f"  Output Directory: {log_data.get('output_folder', 'N/A')}\n")
+            # MODIFIED: Log both output locations for clarity
+            logfile.write(f"  Output Directory (Raw Files): {log_data.get('output_folder', 'N/A')}\n")
+            logfile.write(f"  Log Directory: {log_folder}\n") # Log the folder where this file lives
             logfile.write(f"  Output Suffix: {log_data.get('output_suffix', 'N/A')}\n")
             logfile.write(f"  Raw Output File: {log_data.get('raw_output_filename', 'N/A')}\n")
-            logfile.write(f"  Log File: {log_filename}\n") # Log its own name
+            logfile.write(f"  Log File: {log_filename}\n") # Log its own name (relative to log_folder)
             logfile.write("-"*50 + "\n")
             logfile.write("Prompt Sent to API:\n")
             # Log the full prompt for debugging - can be very long
@@ -486,16 +481,18 @@ def save_processing_log(log_data, output_folder, log_filename):
                 if log_data.get('traceback_info'):
                     logfile.write(f"  Traceback:\n{log_data.get('traceback_info')}\n")
             logfile.write("="*56 + "\n")
+        # Updated confirmation messages
         print(f"Processing log saved to: {log_filepath}")
-        print(f"Raw API response saved to: {os.path.join(output_folder, log_data.get('raw_output_filename', 'N/A'))}")
+        print(f"Raw API response saved to: {os.path.join(log_data.get('output_folder', 'N/A'), log_data.get('raw_output_filename', 'N/A'))}")
     except Exception as e:
         print(f"**ERROR: Could not save processing log file: {log_filepath}**\nError details: {e}")
 
 
 # --- Core Processing ---
 
+# MODIFIED: Added log_folder parameter
 def process_single_file(input_filepath, api_key, engine, user_prompt_template, model_name,
-                        stream_output, output_suffix, output_folder):
+                        stream_output, output_suffix, output_folder, log_folder):
     """
     Processes a single input file, calls the API, saves raw output and a detailed log file.
     Returns (generated_content, error_message) where generated_content is None on failure.
@@ -509,7 +506,8 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
         'api_key_provided': bool(api_key),
         'stream_output': stream_output,
         'output_suffix': output_suffix,
-        'output_folder': output_folder,
+        'output_folder': output_folder, # Store the main output folder path
+        # 'log_folder': log_folder, # Not strictly needed in log_data as it's passed separately
         'status': 'Failure', # Default status
         'error_message': None,
         'traceback_info': None,
@@ -519,10 +517,10 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
         'duration': -1,
     }
 
-    # Generate filenames early
+    # Generate filenames early (filenames only, not paths)
     _, raw_output_filename, log_filename = generate_output_filenames(input_filepath, output_suffix)
     log_data['raw_output_filename'] = raw_output_filename
-    log_data['log_filename'] = log_filename # Log its own name too
+    # log_data['log_filename'] = log_filename # Not needed in log_data as it's passed separately
 
     api_response_text = None # Initialize
     generated_content = None # Final content if successful
@@ -537,8 +535,7 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
             log_data['error_message'] = f"File Read Error: {read_error_msg}"
             # Save the read error into the 'raw output' file for consistency
             save_raw_api_response(log_data['error_message'], output_folder, raw_output_filename)
-            # No API call made, return error
-            raise Exception(log_data['error_message']) # Use exception flow to get to finally block for logging
+            raise Exception(log_data['error_message']) # Use exception flow for logging
 
         log_data['is_image'] = is_image
         log_data['mime_type'] = mime_type
@@ -550,11 +547,9 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
             print(f"Type: Image ({mime_type})")
             image_bytes_for_api = content_data
             log_data['image_size'] = len(content_data) if content_data else 0
-            # For images, prompt is just the template
-            log_data['prompt_sent'] = prompt_for_api
+            log_data['prompt_sent'] = prompt_for_api # Prompt is just the template
         else: # Is text file
             print("Type: Text")
-            # Append text file content
             file_content_str = content_data if content_data else " [File was empty or could not be read fully]"
             prompt_for_api += f"\n\n--- File Content Start ---\n{file_content_str}\n--- File Content End ---"
             log_data['prompt_sent'] = prompt_for_api # Log the full combined prompt
@@ -571,7 +566,7 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
         )
 
         # --- Process API Response ---
-        # Save the raw response regardless of whether it's an error message or content
+        # Save the raw response to the main output folder
         save_raw_api_response(api_response_text, output_folder, raw_output_filename)
 
         # Check if the response indicates an error
@@ -580,36 +575,34 @@ def process_single_file(input_filepath, api_key, engine, user_prompt_template, m
             print(f"API Call Failed: {error_detail}")
             log_data['status'] = 'Failure'
             log_data['error_message'] = error_detail
-            # No successful content generated
             generated_content = None
         else:
             # Success!
             log_data['status'] = 'Success'
             log_data['error_message'] = None
-            generated_content = api_response_text # The response is the content
+            generated_content = api_response_text
 
     except Exception as e:
-        # Catch errors from file reading or other unexpected issues before/during API call
         print(f"**ERROR during processing {input_filepath}: {e}**")
         log_data['status'] = 'Failure'
-        # Store specific error if not already set by API call failure
         if not log_data.get('error_message'):
              log_data['error_message'] = f"Processing Exception: {str(e)}"
-        log_data['traceback_info'] = traceback.format_exc() # Capture stack trace
+        log_data['traceback_info'] = traceback.format_exc()
 
         # Ensure raw output file contains the error if API wasn't called or failed early
         if api_response_text is None:
+             # Try saving error to raw output file in the main output folder
              save_raw_api_response(f"[ERROR] {log_data['error_message']}\n\n{log_data['traceback_info']}", output_folder, raw_output_filename)
 
-        generated_content = None # Ensure content is None on exception
+        generated_content = None
 
     finally:
         # --- Finalize and Log ---
         end_time = datetime.datetime.now()
         log_data['end_time'] = end_time
         log_data['duration'] = (end_time - start_time).total_seconds()
-        # Save the log file with all collected data
-        save_processing_log(log_data, output_folder, log_filename)
+        # MODIFIED: Pass log_folder to save_processing_log
+        save_processing_log(log_data, log_folder, log_filename)
 
         # Return the final content (None if failed) and error message
         return generated_content, log_data.get('error_message')
@@ -664,7 +657,8 @@ def use_gui(initial_api_key, command_line_files=None, args=None):
     window.title("Multimodal AI Batch Processor")
     current_api_key = {'key': initial_api_key}
     settings = {}
-    files_list_var = tk.Variable(value=command_line_files if command_line_files else [])
+    # Ensure command_line_files is a list for Variable
+    files_list_var = tk.Variable(value=list(command_line_files) if command_line_files else [])
     engine_var = tk.StringVar(value=args.engine if args else DEFAULT_ENGINE)
     model_var = tk.StringVar()
     output_dir_var = tk.StringVar(value=args.output if args else RAW_OUTPUT_SUBFOLDER_NAME)
@@ -731,7 +725,7 @@ def use_gui(initial_api_key, command_line_files=None, args=None):
             model_combo['values'] = models; model_combo.configure(state="readonly")
             default_to_set = ""; model_to_check = getattr(cmd_line_args, 'model', None)
             if model_to_check and model_to_check in models: default_to_set = model_to_check
-            elif models: default_to_set = models[0]
+            elif models: default_to_set = models[0] # Default to first in sorted list
             model_var.set(default_to_set)
             if not default_to_set: model_combo.set("Select a model")
         else: model_combo.set("No models found"); model_var.set(""); model_combo.configure(state="disabled")
@@ -739,7 +733,7 @@ def use_gui(initial_api_key, command_line_files=None, args=None):
 
     effective_args = args if args is not None else ArgsWrapper()
     engine_var.trace_add("write", lambda *trace: update_models(effective_args, *trace))
-    window.after(150, lambda: update_models(effective_args))
+    window.after(150, lambda: update_models(effective_args)) # Delay slightly to allow window draw
 
     # Process Button Logic (Validation mostly unchanged)
     def process_from_gui():
@@ -780,6 +774,7 @@ def add_files_to_list(files_list_var, file_listbox, window):
             f_normalized = os.path.normpath(f_raw).replace("\\", "/")
             if f_normalized not in current_files:
                  base_f = os.path.basename(f_normalized)
+                 # Check for duplicate *basenames* to avoid processing the same file from different paths inadvertently
                  already_exists = any(os.path.basename(existing) == base_f for existing in current_files)
                  if not already_exists:
                      current_files.append(f_normalized); newly_added_paths.append(f_normalized); added_count += 1
@@ -787,6 +782,7 @@ def add_files_to_list(files_list_var, file_listbox, window):
             # else: print(f"Skipping duplicate file (exact path match): {f_normalized}") # Less verbose
         if added_count > 0:
             current_files.sort(); files_list_var.set(tuple(current_files))
+            # Scroll to the last added item
             try: file_listbox.see(current_files.index(newly_added_paths[-1]))
             except (ValueError, IndexError): file_listbox.see(tk.END)
             print(f"Added {added_count} new unique file(s).")
@@ -797,6 +793,7 @@ def remove_selected_files(files_list_var, file_listbox):
      selected_indices = file_listbox.curselection()
      if not selected_indices: print("No files selected to remove."); return
      current_files = list(files_list_var.get()); removed_count = 0
+     # Remove from end to avoid index shifting issues
      for i in sorted(selected_indices, reverse=True):
          try: removed_item = current_files.pop(i); removed_count += 1 # print(f"Removed: {removed_item}") # Less verbose
          except IndexError: print(f"Warning: Index {i} out of bounds during removal.")
@@ -808,8 +805,8 @@ def main():
     initial_api_key = get_api_key(force_gui=False)
 
     parser = argparse.ArgumentParser(description="Multimodal AI Batch Processor - Process text/image files using AI")
-    parser.add_argument("files", nargs="*", help=f"Path(s) to input file(s). Supports patterns and extensions like {', '.join(ALL_SUPPORTED_EXTENSIONS)}.")
-    parser.add_argument("-o", "--output", default=RAW_OUTPUT_SUBFOLDER_NAME, help=f"Output directory for raw responses and logs. Default: '{RAW_OUTPUT_SUBFOLDER_NAME}'.")
+    parser.add_argument("files", nargs="*", help=f"Path(s) to input file(s). Supports patterns and extensions like {', '.join(ALL_SUPPORTED_EXTENSIONS)}. If none provided, scans current directory.")
+    parser.add_argument("-o", "--output", default=RAW_OUTPUT_SUBFOLDER_NAME, help=f"Base output directory name. Default: '{RAW_OUTPUT_SUBFOLDER_NAME}'. Raw files go here, logs go into '{LOG_SUBFOLDER_NAME}' subdirectory.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help=f"Suffix for output/log filenames. Default: '{DEFAULT_RAW_OUTPUT_SUFFIX}'.")
     parser.add_argument("--stream", action='store_true', default=False, help="Enable streaming output (Google Engine Only / Experimental).")
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help=f"AI engine to use. Default: '{DEFAULT_ENGINE}'.")
@@ -817,7 +814,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Expand File Patterns from Command Line (Unchanged)
+    # Expand File Patterns from Command Line
     filepaths_from_cli = []
     if args.files:
         print("Expanding file patterns from command line...")
@@ -830,22 +827,48 @@ def main():
                          _, ext = os.path.splitext(f)
                          if ext.lower() in ALL_SUPPORTED_EXTENSIONS:
                              valid_files.append(os.path.normpath(f).replace("\\", "/"))
-                         # else: print(f"Skipping unsupported file type from pattern '{pattern}': {f}") # Less verbose
-                    # else: print(f"Skipping directory found by pattern '{pattern}': {f}") # Less verbose
+                         # else: print(f"Skipping unsupported file type from pattern '{pattern}': {f}") # Verbose
+                    # else: print(f"Skipping directory found by pattern '{pattern}': {f}") # Verbose
                 if valid_files:
-                     # print(f"  Pattern '{pattern}' matched: {len(valid_files)} supported file(s)") # Less verbose
                      filepaths_from_cli.extend(valid_files)
-                # else: print(f"Warning: Pattern '{pattern}' did not match any supported files.") # Less verbose
+                # else: print(f"Warning: Pattern '{pattern}' did not match any supported files.") # Verbose
             except Exception as e: print(f"Error processing pattern '{pattern}': {e}")
-        filepaths_from_cli = sorted(list(set(filepaths_from_cli)))
-        print(f"Total unique supported files from command line: {len(filepaths_from_cli)}")
-        args.files = filepaths_from_cli
+        filepaths_from_cli = sorted(list(set(filepaths_from_cli))) # Ensure unique and sorted
 
-    # Launch GUI (Unchanged)
+    # --- NEW: Scan current directory if no files were provided ---
+    if not filepaths_from_cli and not args.files: # Check if list is empty AND no args were initially passed
+        print("\nINFO: No input files specified. Scanning current directory for supported files...")
+        current_dir = os.getcwd()
+        scanned_files = []
+        try:
+            for entry in os.listdir(current_dir):
+                full_path = os.path.join(current_dir, entry)
+                if os.path.isfile(full_path):
+                    _, ext = os.path.splitext(entry)
+                    if ext.lower() in ALL_SUPPORTED_EXTENSIONS:
+                        norm_path = os.path.normpath(full_path).replace("\\", "/")
+                        scanned_files.append(norm_path)
+        except OSError as e:
+            print(f"Warning: Could not scan directory '{current_dir}': {e}")
+
+        if scanned_files:
+            scanned_files.sort()
+            print(f"Found {len(scanned_files)} supported files in the current directory.")
+            filepaths_from_cli = scanned_files # Use the scanned files
+            args.files = filepaths_from_cli # Update args for consistency if GUI uses it
+        else:
+            print("No supported files found in the current directory.")
+            # Proceed to GUI, but it will likely show an empty list unless user adds manually
+
+    if filepaths_from_cli:
+        print(f"Prepared {len(filepaths_from_cli)} file(s) for processing.")
+        args.files = filepaths_from_cli # Update args.files for GUI
+
+    # --- Launch GUI ---
     gui_settings = use_gui(initial_api_key=initial_api_key, command_line_files=filepaths_from_cli, args=args)
     if not gui_settings: print("Operation cancelled or GUI closed."); return
 
-    # Extract Settings (Unchanged)
+    # --- Extract Settings from GUI ---
     input_file_paths_gui = gui_settings.get('files', [])
     custom_prompt_template = gui_settings.get('custom_prompt', USER_PROMPT_TEMPLATE)
     output_folder_base = gui_settings.get('output_dir', RAW_OUTPUT_SUBFOLDER_NAME)
@@ -855,27 +878,35 @@ def main():
     model_name = gui_settings.get('model')
     final_api_key = gui_settings.get('api_key')
 
-    # Final Validation (Unchanged)
+    # --- Final Validation ---
     if not input_file_paths_gui: print("Error: No input files selected for processing."); return
     if not model_name: print("Error: No model selected."); return
     if engine == 'google' and not final_api_key: print("Error: Google engine selected, but final API Key is missing."); return
 
-    # Prepare for Processing (Create output dir logic unchanged)
-    all_input_filepaths = sorted(list(set(input_file_paths_gui)))
+    # --- Prepare for Processing (Create output directories) ---
+    all_input_filepaths = sorted(list(set(input_file_paths_gui))) # Final list from GUI
     if not all_input_filepaths: print("Error: No valid input file paths specified."); return
 
+    # Define output paths based on GUI settings
     output_folder_path = os.path.join(os.getcwd(), output_folder_base)
+    log_folder_path = os.path.join(output_folder_path, LOG_SUBFOLDER_NAME) # <-- Logs go here
+
+    # Create directories with error handling
     try:
         os.makedirs(output_folder_path, exist_ok=True)
-        print(f"Ensured output directory exists: {output_folder_path}")
+        print(f"Ensured base output directory exists: {output_folder_path}")
+        os.makedirs(log_folder_path, exist_ok=True) # <-- Create log subfolder
+        print(f"Ensured log directory exists: {log_folder_path}")
     except OSError as e:
-        print(f"Error creating output directory '{output_folder_path}': {e}")
+        print(f"Error creating output directories ('{output_folder_path}' or '{log_folder_path}'): {e}")
         # Use temporary Tk root for messagebox if main GUI is gone
         temp_root = tk.Tk(); temp_root.withdraw()
         try:
-             if tkinter.messagebox.askyesno("Directory Error", f"Could not create output directory:\n{output_folder_path}\n\nSave output files to the current working directory instead? ({os.getcwd()})", parent=temp_root):
+             # Offer fallback to current directory for *both* raw and log files
+             if tkinter.messagebox.askyesno("Directory Error", f"Could not create output directories:\n{output_folder_path}\n{log_folder_path}\n\nSave ALL output files (raw and logs) to the current working directory instead? ({os.getcwd()})", parent=temp_root):
                   output_folder_path = os.getcwd()
-                  print(f"Proceeding with output to current directory: {output_folder_path}")
+                  log_folder_path = os.getcwd() # Fallback log path is also CWD
+                  print(f"Proceeding with output (raw and logs) to current directory: {output_folder_path}")
              else: print("Exiting due to output directory error."); return
         finally: temp_root.destroy()
 
@@ -884,7 +915,8 @@ def main():
     processed_files = 0; failed_files = 0; total_files = len(all_input_filepaths)
     print(f"\nStarting batch processing for {total_files} file(s)...")
     print(f"Engine: {engine}, Model: {model_name}")
-    print(f"Output Directory: {output_folder_path}")
+    print(f"Raw Output Directory: {output_folder_path}")
+    print(f"Log Directory: {log_folder_path}") # <-- Inform user about log location
     print("-" * 50)
 
     for i, input_filepath in enumerate(all_input_filepaths):
@@ -899,7 +931,8 @@ def main():
             model_name=model_name,
             stream_output=stream_output,
             output_suffix=suffix,
-            output_folder=output_folder_path # Pass the final output folder path
+            output_folder=output_folder_path, # Pass the main output folder path
+            log_folder=log_folder_path        # <-- Pass the dedicated log folder path
         )
 
         # Report outcome based on return values
@@ -907,19 +940,16 @@ def main():
             print("\n--- Generated Content (Success) ---")
             max_console_print = 1000
             print(generated_content[:max_console_print] + ('...' if len(generated_content) > max_console_print else ''))
-            # Confirmation of saves is now printed by logging function
-            # print("--- (Full response and log saved to file) ---")
+            # Confirmation of saves is printed by logging function
             processed_files += 1
         else:
-            # Error message should contain specifics now
             print(f"\n--- FAILED to process file: {os.path.basename(input_filepath)} ---")
             print(f"Error logged: {error_message or 'Unknown processing error.'}")
-            # Confirmation of saves is now printed by logging function
-            # print("--- (Error details saved to raw output and log file) ---")
+            # Confirmation of saves is printed by logging function
             failed_files += 1
         print("-" * 30) # Separator between files
 
-    # Final Summary (Unchanged)
+    # --- Final Summary ---
     print("\n=========================================")
     print("          Batch Processing Summary")
     print("=========================================")
@@ -927,13 +957,14 @@ def main():
     print(f"Successfully processed: {processed_files}")
     print(f"Failed: {failed_files}")
     if processed_files > 0 or failed_files > 0:
-        print(f"\nRaw API responses and processing logs saved in: '{output_folder_path}'")
+        print(f"\nRaw API responses saved in: '{output_folder_path}'")
+        print(f"Processing logs saved in: '{log_folder_path}'") # <-- Mention log path
     if failed_files > 0:
-        print("\nCheck console output and *.log files for details on failures.")
+        print("\nCheck console output and *.log files in the log directory for details on failures.")
     print("=========================================")
 
 
 if __name__ == "__main__":
     main()
 
-# --- END OF FILE GPTBatcher_Multimodal_Logged.py ---
+# --- END OF FILE GPTBatcher_Multimodal_Logged_v2.py ---
