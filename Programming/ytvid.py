@@ -909,7 +909,7 @@ class VideoProcessorApp:
             print("8-bit selected: Skipping mkvmerge HDR tagging.")
             return output_file
         base, ext = os.path.splitext(output_file)
-        merged_output = base + "_HDR_CUBE" + ext
+        merged_output = base + "" + ext
         cube_file = self.lut_file
         if not os.path.exists(cube_file):
             print(f"LUT file not found: {cube_file}. Skipping HDR attachment.")

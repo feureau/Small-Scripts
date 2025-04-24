@@ -20,7 +20,7 @@ for i = 1, #mf - 1 do
 
     if isLastMarker then endFrame = mf[i + 1][1] end
 
-    fileName = mf[i][2]
+    fileName = string.format("%02d-", i) .. mf[i][2]
     project:SetRenderSettings({
         ["SelectAllFrames"] = false,
         ["MarkIn"] = startFrame,
