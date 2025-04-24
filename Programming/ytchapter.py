@@ -89,9 +89,9 @@ SUPPORTED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif'
 ALL_SUPPORTED_EXTENSIONS = SUPPORTED_TEXT_EXTENSIONS + SUPPORTED_IMAGE_EXTENSIONS
 
 # 4. Output file extensions
-RAW_OUTPUT_FILE_EXTENSION = ".srt"
+RAW_OUTPUT_FILE_EXTENSION = ".txt"
 LOG_FILE_EXTENSION = "_processing.log" # Extension for log files
-DEFAULT_RAW_OUTPUT_SUFFIX = "_output" # Suffix for output and log filenames
+DEFAULT_RAW_OUTPUT_SUFFIX = "_yt-chapter" # Suffix for output and log filenames
 
 # 5. Default Models and Engine - Placeholders, will be updated dynamically
 DEFAULT_GEMINI_MODEL = ""
@@ -103,7 +103,7 @@ REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
 # 7. Output Subfolder Names
-RAW_OUTPUT_SUBFOLDER_NAME = "output_results"
+RAW_OUTPUT_SUBFOLDER_NAME = "yt_chapter"
 LOG_SUBFOLDER_NAME = "processing_logs" # <-- NEW: Subfolder for logs
 
 ################################################################################
