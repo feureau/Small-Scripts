@@ -181,43 +181,42 @@ class VideoProcessorApp:
         self.upscale_ngxvsr_button.grid(row=1, column=2, sticky=tk.W)
 
         # --- Options Panel Layout ---
-        # Row 1: Convert to 8 bit
         tk.Label(self.options_frame, text="Convert to 8 bit:").grid(row=1, column=0, sticky=tk.W)
         self.eight_bit_checkbox = tk.Checkbutton(self.options_frame, variable=self.eight_bit_var,
                                                  command=self.apply_gui_options_to_selected_files)
         self.eight_bit_checkbox.grid(row=1, column=1, sticky=tk.W)
-        # Row 2: Convert to HDR (applies --vpp-ngx-truehdr)
+
         tk.Label(self.options_frame, text="Convert to HDR:").grid(row=2, column=0, sticky=tk.W)
         self.convert_hdr_checkbox = tk.Checkbutton(self.options_frame, variable=self.convert_hdr_var,
                                                    command=self.apply_gui_options_to_selected_files)
         self.convert_hdr_checkbox.grid(row=2, column=1, sticky=tk.W)
-        # Row 3: HDR Metadata
+
         tk.Label(self.options_frame, text="HDR Metadata:").grid(row=3, column=0, sticky=tk.W)
         self.hdr_checkbox = tk.Checkbutton(self.options_frame, variable=self.hdr_var,
                                            command=self.apply_gui_options_to_selected_files)
         self.hdr_checkbox.grid(row=3, column=1, sticky=tk.W)
-        # Row 4: Vertical Crop
+
         tk.Label(self.options_frame, text="Vertical Crop:").grid(row=4, column=0, sticky=tk.W)
         self.crop_checkbox = tk.Checkbutton(self.options_frame, variable=self.crop_var,
                                             command=self.apply_gui_options_to_selected_files)
         self.crop_checkbox.grid(row=4, column=1, sticky=tk.W)
-        # Row 5: QVBR Value
+
         tk.Label(self.options_frame, text="QVBR Value:").grid(row=5, column=0, sticky=tk.W)
         self.qvbr_entry = tk.Entry(self.options_frame, textvariable=self.qvbr_var, width=10)
         self.qvbr_entry.grid(row=5, column=1, sticky=tk.W)
         self.qvbr_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
-        # Row 6: Enable FRUC
+
         tk.Label(self.options_frame, text="Enable FRUC:").grid(row=6, column=0, sticky=tk.W)
         self.fruc_checkbox = tk.Checkbutton(self.options_frame, variable=self.fruc_var,
                                             command=lambda: [self.toggle_fruc_fps(), self.apply_gui_options_to_selected_files()])
         self.fruc_checkbox.grid(row=6, column=1, sticky=tk.W)
-        # Row 7: FRUC FPS Target
+
         tk.Label(self.options_frame, text="FRUC FPS Target:").grid(row=7, column=0, sticky=tk.W)
         self.fruc_fps_entry = tk.Entry(self.options_frame, textvariable=self.fruc_fps_var, width=10)
         self.fruc_fps_entry.grid(row=7, column=1, sticky=tk.W)
         self.fruc_fps_entry.configure(state="disabled")
         self.fruc_fps_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
-        # Row 8: Subtitle Alignment
+
         tk.Label(self.options_frame, text="Subtitle Alignment:").grid(row=8, column=0, sticky=tk.W)
         self.align_frame = tk.Frame(self.options_frame)
         self.align_frame.grid(row=8, column=1, columnspan=3, sticky=tk.W)
@@ -233,13 +232,13 @@ class VideoProcessorApp:
                                               variable=self.alignment_var, value="bottom",
                                               command=self.apply_gui_options_to_selected_files)
         self.align_bottom_rb.pack(anchor="w")
-        # Row 9: Subtitle Font Size
+
         tk.Label(self.options_frame, text="Subtitle Font Size:").grid(row=9, column=0, sticky=tk.W)
         self.subtitle_font_size_entry = tk.Entry(self.options_frame, textvariable=self.subtitle_font_size_var, width=10)
         self.subtitle_font_size_entry.grid(row=9, column=1, sticky=tk.W)
         self.subtitle_font_size_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
-        # --- End Options Panel Layout ---
 
+        # --- End Options Panel Layout ---
         self.subtitle_tracks_frame = tk.LabelFrame(root, text="Burn Subtitle Tracks", padx=10, pady=10)
         self.subtitle_tracks_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -445,8 +444,6 @@ class VideoProcessorApp:
                 track_info = {}
         if track_info:
             all_tracks.append(track_info)
-        w = get_input_width(file_path)
-        h = get_input_height(file_path)
         existing_embedded_ids = {s["track_id"] for s in self.subtitles_by_file[file_path] if s["type"] == "embedded"}
         for track in all_tracks:
             if "track_id" not in track:
@@ -643,9 +640,7 @@ class VideoProcessorApp:
                     parts = line.split(",")
                     if len(parts) >= 10:
                         subtitle_text = parts[9]
-                        print(f"[DEBUG] Before ftfy: {subtitle_text}")
                         normalized_text = normalize_text(subtitle_text)
-                        print(f"[DEBUG] After ftfy: {normalized_text}")
                         parts[9] = normalized_text
                         line = ",".join(parts)
                         start_ts = parts[1]
@@ -722,7 +717,7 @@ class VideoProcessorApp:
                 content = normalize_text(content)
                 with open(srt_file, 'w', encoding='utf-8') as f:
                     f.write(content)
-                print(f"[WARN] Converted SRT {srt_file} from CP1252 to UTF-8 and normalized text using ftfy. **Ensure subtitles display correctly.**")
+                print(f"[WARN] Converted SRT {srt_file} from CP1252 to UTF-8 and normalized text. Ensure subtitles display correctly.")
             except Exception as e_conv:
                 print(f"[ERROR] SRT Conversion failed for {srt_file}: {e_conv}")
                 return
@@ -733,7 +728,7 @@ class VideoProcessorApp:
             with open(srt_file, 'r', encoding='utf-8') as f:
                 content_utf8 = f.read()
         except Exception as e_read_utf8:
-            print(f"[ERROR] Error re-reading SRT as UTF-8 for normalization: {srt_file}: {e_read_utf8}")
+            print(f"[ERROR] Error re-reading SRT as UTF-8: {srt_file}: {e_read_utf8}")
             return
         normalized_content = normalize_text(content_utf8)
         with open(srt_file, 'w', encoding='utf-8') as f:
@@ -773,21 +768,29 @@ class VideoProcessorApp:
         generate_log = file_options.get("generate_log", self.generate_log_var.get())
         convert_to_hdr = file_options.get("hdr", self.hdr_var.get())
         convert_hdr = file_options.get("convert_hdr", self.convert_hdr_var.get())
+
         if output_file is None:
+            # OUTPUT FILE NAMED WITH _temp SUFFIX FOR mkvmerge
             output_dir = os.path.join(os.path.dirname(file_path), resolution)
             os.makedirs(output_dir, exist_ok=True)
             base_name, ext = os.path.splitext(os.path.basename(file_path))
             if eight_bit:
-                output_file = os.path.join(output_dir, f"{base_name}_8bit{ext}")
+                temp_name = f"{base_name}_8bit_temp{ext}"
             else:
-                output_file = os.path.join(output_dir, f"{base_name}{ext}")
+                temp_name = f"{base_name}_temp{ext}"
+            output_file = os.path.join(output_dir, temp_name)
+
         final_width, final_height = self.compute_final_resolution(file_path)
         do_resize = resolution in ["4k", "8k"]
         resize_algo = upscale_algo
         target_res = f"{final_width}x{final_height}"
-        cmd = self.construct_nvencc_command(file_path, output_file, qvbr_value, eight_bit,
-                                             fruc_enable, fruc_fps_target, generate_log,
-                                             convert_to_hdr, convert_hdr, ass_burn, resize_algo, target_res, do_resize)
+
+        cmd = self.construct_nvencc_command(
+            file_path, output_file, qvbr_value, eight_bit,
+            fruc_enable, fruc_fps_target, generate_log,
+            convert_to_hdr, convert_hdr, ass_burn,
+            resize_algo, target_res, do_resize
+        )
         ret = self.run_nvenc_command(cmd)
         if ret == 0:
             print(f"\nDone processing: {file_path}")
@@ -798,7 +801,8 @@ class VideoProcessorApp:
 
     def construct_nvencc_command(self, file_path, output_file, qvbr_value, eight_bit,
                                   fruc_enable, fruc_fps_target, generate_log,
-                                  convert_to_hdr, convert_hdr, ass_burn, resize_algo, target_res, do_resize):
+                                  convert_to_hdr, convert_hdr, ass_burn,
+                                  resize_algo, target_res, do_resize):
         cmd = [
             "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value),
             "--preset", "p1", "--output-depth", "8" if eight_bit else "10",
@@ -839,7 +843,8 @@ class VideoProcessorApp:
         out_file, width, height = self.build_nvenc_command_and_run(file_path, None)
         # Now, regardless of burning, extract all embedded subtitle tracks (if any)
         if file_path in self.subtitles_by_file:
-            output_dir = os.path.join(os.path.dirname(file_path), self.file_options[file_path].get("resolution", "4k"))
+            output_dir = os.path.join(os.path.dirname(file_path),
+                                      self.file_options[file_path].get("resolution", "4k"))
             base_name, ext = os.path.splitext(os.path.basename(file_path))
             for sub in self.subtitles_by_file[file_path]:
                 if sub["type"] == "embedded":
@@ -908,29 +913,40 @@ class VideoProcessorApp:
         if eight_bit:
             print("8-bit selected: Skipping mkvmerge HDR tagging.")
             return output_file
+
+        # STRIP OFF '_temp' TO GET FINAL FILENAME
         base, ext = os.path.splitext(output_file)
-        merged_output = base + "" + ext
+        if base.endswith("_temp"):
+            final_base = base[:-5]
+        else:
+            final_base = base
+        merged_output = final_base + ext
+
         cube_file = self.lut_file
         if not os.path.exists(cube_file):
             print(f"LUT file not found: {cube_file}. Skipping HDR attachment.")
             return output_file
-        cmd = ["mkvmerge.exe", "-o", merged_output,
-               "--colour-matrix", "0:9", "--colour-range", "0:1",
-               "--colour-transfer-characteristics", "0:16", "--colour-primaries", "0:9",
-               "--max-content-light", "0:1000", "--max-frame-light", "0:300",
-               "--max-luminance", "0:1000", "--min-luminance", "0:0.01",
-               "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.69,0.15,0.06",
-               "--white-colour-coordinates", "0:0.3127,0.3290",
-               "--attachment-mime-type", "application/x-cube",
-               "--attach-file", cube_file, output_file]
+
+        cmd = [
+            "mkvmerge.exe", "-o", merged_output,
+            "--colour-matrix", "0:9", "--colour-range", "0:1",
+            "--colour-transfer-characteristics", "0:16", "--colour-primaries", "0:9",
+            "--max-content-light", "0:1000", "--max-frame-light", "0:300",
+            "--max-luminance", "0:1000", "--min-luminance", "0:0.01",
+            "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.69,0.15,0.06",
+            "--white-colour-coordinates", "0:0.3127,0.3290",
+            "--attachment-mime-type", "application/x-cube",
+            "--attach-file", cube_file,
+            output_file
+        ]
         try:
             subprocess.run(cmd, check=True, env=env)
             print(f"mkvmerge complete => {merged_output}")
             try:
                 os.remove(output_file)
-                print(f"Deleted original file: {output_file}")
+                print(f"Deleted temporary file: {output_file}")
             except Exception as e_del:
-                print(f"[ERROR] Error deleting original file {output_file}: {e_del}")
+                print(f"[ERROR] Error deleting temporary file {output_file}: {e_del}")
             return merged_output
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Error running mkvmerge: {e}")
@@ -942,7 +958,7 @@ class VideoProcessorApp:
         if not crop_var:
             return "0,0,0,0"
         input_width = get_input_width(file_path)
-        resolution = options.get(file_path, {}).get("resolution", self.resolution_var.get())
+        resolution = options.get("resolution", self.resolution_var.get())
         if resolution == "4k":
             if input_width >= 3840:
                 return "528,0,528,0"
@@ -955,18 +971,12 @@ class VideoProcessorApp:
                 return "0,0,0,0"
         return "0,0,0,0"
 
-    # When processing starts, close the GUI and return to console.
     def start_processing(self):
         if not self.file_list:
             messagebox.showwarning("No Files", "Please add at least one file to process.")
             return
-        files_to_process_list = self.file_list
-        if not files_to_process_list:
-            print("[WARN] No files in list to process.")
-            messagebox.showwarning("No Files in List", "Please add files to the list to process.")
-            return
         self.root.destroy()  # Close the GUI
-        for file_path in files_to_process_list:
+        for file_path in self.file_list:
             options = self.file_options.get(file_path, {})
             try:
                 qvbr_value = int(options.get("qvbr", self.qvbr_var.get()))
@@ -979,20 +989,15 @@ class VideoProcessorApp:
             eight_bit = options.get("eight_bit", self.eight_bit_var.get())
             convert_to_hdr = options.get("hdr", self.hdr_var.get())
             convert_hdr = options.get("convert_hdr", self.convert_hdr_var.get())
-            # For burning subtitles, a selected track would trigger a different path.
-            # Here, in "single pass", we extract all embedded subtitle tracks by default.
-            self.encode_single_pass(file_path, qvbr_value, fruc_enable, fruc_fps_target,
-                                      generate_log, eight_bit, convert_to_hdr, convert_hdr)
+            self.encode_single_pass(
+                file_path, qvbr_value, fruc_enable, fruc_fps_target,
+                generate_log, eight_bit, convert_to_hdr, convert_hdr
+            )
         print("Processing Complete.")
 
 if __name__ == "__main__":
-    import sys
     import glob
     from tkinterdnd2 import TkinterDnD
-    print("#" * 80)
-    print("#  THIS IS A BANNER THERE ARE MANY LIKE IT BUT THIS ONE IS MINE ")
-    print("#")
-    print("#" * 80)
     expanded_files = []
     for arg in sys.argv[1:]:
         if '*' in arg or '?' in arg:

@@ -1,4 +1,11 @@
-import re
+# --- IMPORTANT: This script requires the 'regex' module ---
+# Install it using: pip install regex
+# ---------------------------------------------------------
+
+# Replace 'import re' with 'import regex as re'
+# import re # Original line
+import regex as re # Use the regex module for better Unicode support
+
 from datetime import datetime, timedelta
 import glob
 import os
@@ -16,12 +23,14 @@ def parse_srt_block_debug(block_text, block_index):
     time_pattern_ms = r"((?:\d{2}:)?\d{2}:\d{2}[,.:]\d{3})" # Note [,.':'] here
 
     # Primary pattern using the corrected time sub-pattern
+    # Added re.UNICODE flag here as well, just in case it affects parsing,
+    # though less likely to be needed than for the text content itself.
     block_pattern = re.compile(
         r"^\s*(\d+)\s*\n"                               # 1: Index
         r"\s*" + time_pattern_ms + r"\s*-->\s*"         # 2: Start Time
         r"\s*" + time_pattern_ms + r"\s*\r?\n"          # 3: End Time (added \r?)
         r"(.*)",                                        # 4: Text (greedy, remaining content)
-        re.DOTALL
+        re.DOTALL | re.UNICODE # Added re.UNICODE flag
     )
     match = block_pattern.match(block_text)
 
@@ -37,7 +46,7 @@ def parse_srt_block_debug(block_text, block_index):
             r"\s*" + time_pattern_ms + r"\s*-->\s*"         # Start Time
             r"\s*" + time_pattern_ms + r"\s*\s*\r?\n"       # End Time (more space before \n)
             r"(.*)",
-            re.DOTALL
+            re.DOTALL | re.UNICODE # Added re.UNICODE flag
         )
         match = block_pattern_alt.match(block_text)
         if match:
@@ -51,46 +60,53 @@ def parse_srt_block_debug(block_text, block_index):
 
 def generate_timeline_data(srt_file_path, output_file_path):
     """
-    Generates timeline data using split-and-parse with corrected time normalization.
+    Generates timeline data using split-and-parse with corrected time normalization,
+    ensuring UTF-8 input/output and preserving specific text characters (alphanumeric,
+    whitespace, underscore) while removing emojis and other symbols.
     """
     try:
-        try:
-            with open(srt_file_path, 'rb') as f_byte:
-                raw_bytes = f_byte.read()
-            try:
-                srt_content = raw_bytes.decode('utf-8')
-                encoding_used = 'utf-8'
-            except UnicodeDecodeError:
-                print(f"Warning: UTF-8 decoding failed for '{srt_file_path}'. Trying latin-1 encoding.")
-                srt_content = raw_bytes.decode('latin-1')
-                encoding_used = 'latin-1'
-        except Exception as enc_e:
-            print(f"Error: Could not read/decode file '{srt_file_path}': {enc_e}")
-            return False
+        # --- Attempt to read file STRICTLY as UTF-8 ---
+        # Read as bytes first
+        with open(srt_file_path, 'rb') as f_byte:
+            raw_bytes = f_byte.read()
+
+        # Try decoding as UTF-8. If it fails, raise UnicodeDecodeError.
+        # Removed the latin-1 fallback.
+        srt_content = raw_bytes.decode('utf-8')
+        encoding_used = 'utf-8'
+        if DEBUG_MODE: print(f"File '{srt_file_path}' read successfully using {encoding_used} encoding.")
+
     except FileNotFoundError:
         print(f"Error: SRT file not found at {srt_file_path}")
         return False
+    except UnicodeDecodeError:
+        # Report specific UTF-8 decode error and skip file
+        print(f"Error: Could not decode file '{srt_file_path}' as UTF-8. Please ensure the input file is saved in UTF-8 format.")
+        return False
     except Exception as e:
+        # Catch any other reading errors
         print(f"Error reading SRT file '{srt_file_path}': {e}")
         return False
 
-    if DEBUG_MODE: print(f"File '{srt_file_path}' read using {encoding_used} encoding.")
 
     # --- Standard EDL Header ---
     title = os.path.splitext(os.path.basename(srt_file_path))[0]
+    # Keep a more relaxed filter for the title, maybe just removing path/name forbidden chars
     title = re.sub(r'[<>:"/\\|?*\n\r]', '', title).strip()
     if not title: title = "Untitled"
     edl_header = f"TITLE: {title}\nFCM: NON-DROP FRAME\n\n"
 
     # --- Split content into blocks ---
     normalized_content = srt_content.replace('\r\n', '\n').replace('\r', '\n')
-    srt_blocks = re.split(r'\n\s*\n+', normalized_content.strip())
+    # Split using regex with UNICODE flag just in case \s needs it for various newlines
+    srt_blocks = re.split(r'\n\s*\n+', normalized_content.strip(), flags=re.UNICODE)
 
     if DEBUG_MODE: print(f"Split into {len(srt_blocks)} potential blocks.")
 
     if not srt_blocks or (len(srt_blocks) == 1 and not srt_blocks[0].strip()):
          print(f"Warning: Could not split SRT file '{srt_file_path}' into meaningful blocks.")
          try: # Write empty EDL
+            # Ensure writing empty file is also UTF-8
             with open(output_file_path, 'w', encoding='utf-8') as output_file:
                 output_file.write(edl_header)
                 output_file.write("# Source file empty or could not be split into blocks.\n")
@@ -151,33 +167,55 @@ def generate_timeline_data(srt_file_path, output_file_path):
                 # Now parse using the padded and CORRECTLY normalized string
                 dummy_date = "1900-01-01"
                 if DEBUG_MODE: print(f"DEBUG: Attempting strptime with: '{start_time_str_pad}' and '{end_time_str_pad}'")
+                # strptime doesn't need re.UNICODE flag
                 start_time_dt = datetime.strptime(f"{dummy_date} {start_time_str_pad}", "%Y-%m-%d %H:%M:%S.%f")
                 end_time_dt_validation = datetime.strptime(f"{dummy_date} {end_time_str_pad}", "%Y-%m-%d %H:%M:%S.%f")
                 if DEBUG_MODE: print(f"DEBUG: strptime successful.")
 
                 # -- EDL Formatting (remains the same) --
                 start_frames_or_hundredths = f"{start_time_dt.microsecond // 10000:02d}"
-                end_time_plus_one_dt = start_time_dt + timedelta(microseconds=10000)
+                # EDL is end-exclusive, and often uses 1 frame duration for markers.
+                # The original code adds 1/100th of a second (10000 microseconds), which might
+                # not be exactly one frame depending on frame rate, but matches the original script's logic.
+                # Let's keep the original logic of adding 10000 microseconds.
+                end_time_plus_one_dt = start_time_dt + timedelta(microseconds=10000) # Add 1/100th sec
                 end_plus_one_frames_or_hundredths = f"{end_time_plus_one_dt.microsecond // 10000:02d}"
+
                 start_tc = start_time_dt.strftime(f"%H:%M:%S:{start_frames_or_hundredths}")
+                # Use the calculated end point
                 end_tc = end_time_plus_one_dt.strftime(f"%H:%M:%S:{end_plus_one_frames_or_hundredths}")
 
-                # -- Text Cleaning (remains the same) --
+
+                # -- Text Cleaning (MODIFIED to keep only alphanumeric, whitespace, and underscore) --
                 cleaned_text = ' '.join(line.strip() for line in text.strip().splitlines())
-                cleaned_text = re.sub(r'<[^>]+>', '', cleaned_text)
-                marker_label = cleaned_text.replace('|', '_').strip()
+                cleaned_text = re.sub(r'<[^>]+>', '', cleaned_text) # Remove HTML tags
+
+                # --- NEW FILTER: Keep \w (alphanumeric + underscore, with UNICODE) and \s (whitespace, with UNICODE) ---
+                # This pattern [^\w\s]+ matches any character NOT in the set of \w or \s.
+                # This effectively removes emojis, punctuation, and other symbols.
+                marker_label = re.sub(r'[^\w\s]+', '', cleaned_text, re.UNICODE)
+
+                # Normalize multiple spaces to single space AFTER filtering
                 marker_label = re.sub(r'\s+', ' ', marker_label).strip()
+
+                # Replace pipe '|' which conflicts with Resolve marker syntax, after the main filtering
+                marker_label = marker_label.replace('|', '_') # Do this after main filter
 
                 if not marker_label: marker_label = f"Marker_{original_srt_index}"
 
+                # Ensure marker label doesn't exceed a reasonable length (Resolve limit ~80)
                 max_marker_len = 80
                 if len(marker_label) > max_marker_len: marker_label = marker_label[:max_marker_len-3] + "..."
+
 
                 # Assemble EDL Event
                 processed_count += 1
                 event_number_str = f"{processed_count:03}"
+                # Standard EDL format: EventNo SourceClipName StartTC_In EndTC_In StartTC_Out EndTC_Out
+                # Using '001' as SourceClipName placeholder as we derive from SRT filename
                 edl_line1 = f"{event_number_str}  001      V     C        {start_tc} {end_tc} {start_tc} {end_tc}\n"
                 edl_line2 = f"* FROM CLIP NAME: {os.path.basename(srt_file_path)}\n"
+                # Marker line - now includes preserved characters based on the new filter
                 edl_line2 += f" |C:ResolveColorBlue |M:{marker_label} |D:1\n\n"
 
                 edl_body += edl_line1 + edl_line2
@@ -186,14 +224,17 @@ def generate_timeline_data(srt_file_path, output_file_path):
                 print(f"Warning: Skipping entry index {original_srt_index} (from block {i+1}) due to time format/parsing error: {time_e} (Input: '{start_time_str}' / '{end_time_str}'; Processed as: '{start_time_str_pad}' / '{end_time_str_pad}')")
                 skipped_block_count += 1
             except Exception as parse_e:
+                # Catch unexpected errors during processing of a valid block
                 print(f"Warning: Skipping entry index {original_srt_index} (from block {i+1}) due to processing error: {parse_e} on text: '{text[:50].replace('\n', ' ')}...'")
                 skipped_block_count += 1
 
         except Exception as block_proc_e:
+             # Catch errors related to accessing parsed_data etc.
              print(f"Error processing parsed block {i+1}: {block_proc_e}")
              skipped_block_count += 1
 
-    # --- Write the Complete EDL File ---
+
+    # --- Write the Complete EDL File (Ensured UTF-8 Output) ---
     try:
         with open(output_file_path, 'w', encoding='utf-8') as output_file:
             output_file.write(edl_header)
@@ -219,11 +260,13 @@ def generate_timeline_data(srt_file_path, output_file_path):
         return False # Indicate failure on write error
 
 
-# --- Main execution block (remains the same) ---
+# --- Main execution block ---
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("\nUsage: python srt_to_timeline.py <srt_file_pattern>")
         print("  Processes SRT files matching the pattern and creates corresponding .edl files.")
+        print("  Requires input SRT files to be encoded in UTF-8.")
+        print("  Markers will contain only letters, numbers, whitespace, and underscores.")
         print("\nExamples:")
         print("  Process a specific file (use quotes if name has spaces/special chars):")
         print("    python srt_to_timeline.py \"My Subtitles 😊 [ENG].srt\"")
@@ -269,11 +312,11 @@ if __name__ == "__main__":
             processed_count_total += 1
         else:
             error_count += 1
-            print(f"^^^ Errors occurred during processing of {os.path.basename(srt_file_path_full)}")
+            print(f"^^^ Failed to process {os.path.basename(srt_file_path_full)} due to errors (check warnings above).")
 
     print(f"\n--- Processing Complete ---")
-    print(f"Attempted processing for: {processed_count_total} file(s).")
+    print(f"Successfully attempted processing for: {processed_count_total} file(s).")
     if error_count > 0:
-        print(f"Encountered errors processing: {error_count} file(s). Check warnings and debug logs above.")
+        print(f"Failed to process: {error_count} file(s). Check warnings and debug logs above.")
     elif processed_count_total > 0 :
-         print("Processing attempt complete.") # Simplified final message
+         print("All attempted files processed successfully.") # Simplified final message
