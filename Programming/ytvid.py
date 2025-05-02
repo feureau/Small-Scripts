@@ -738,8 +738,7 @@ class VideoProcessorApp:
     def run_nvenc_command(self, cmd):
         print("Running NVEnc command:")
         print(" ".join(cmd))
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   env=env, universal_newlines=True, bufsize=1)
+        process = subprocess.Popen(cmd,stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True,encoding='utf-8',errors='replace',bufsize=1)
         while True:
             line = process.stdout.readline()
             if not line and process.poll() is not None:
