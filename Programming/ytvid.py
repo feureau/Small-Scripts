@@ -116,7 +116,7 @@ class VideoProcessorApp:
         # HDR Metadata is on by default for SDR videos
         self.hdr_var = tk.BooleanVar(value=True)
         self.crop_var = tk.BooleanVar(value=False)
-        self.qvbr_var = tk.StringVar(value="6")
+        self.qvbr_var = tk.StringVar(value="12")
         self.fruc_var = tk.BooleanVar(value=False)
         self.fruc_fps_var = tk.StringVar(value="60")
         self.alignment_var = tk.StringVar(value="middle")
@@ -523,7 +523,7 @@ class VideoProcessorApp:
                 self.hdr_var.set(file_options.get("hdr", False))
                 self.convert_hdr_var.set(file_options.get("convert_hdr", False))
                 self.crop_var.set(file_options.get("crop", False))
-                self.qvbr_var.set(file_options.get("qvbr", "6"))
+                self.qvbr_var.set(file_options.get("qvbr", "12"))
                 self.fruc_var.set(file_options.get("fruc", False))
                 self.fruc_fps_var.set(file_options.get("fruc_fps", "60"))
                 self.alignment_var.set(file_options.get("alignment", "middle"))
