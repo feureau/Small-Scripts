@@ -61,12 +61,9 @@ def revoke_token():
                     params={'token': data['refresh_token']},
                     headers={'content-type': 'application/x-www-form-urlencoded'}
                 )
-        except:
-            pass
-        try:
-            os.remove(TOKEN_FILE)
-        except:
-            pass
+        except: pass
+        try: os.remove(TOKEN_FILE)
+        except: pass
 
 def setup_revocation_on_exit():
     atexit.register(revoke_token)
@@ -87,9 +84,13 @@ def get_authenticated_service(secrets_path):
         else:
             flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
             try:
-                creds = flow.run_local_server(port=OAUTH_PORT, open_browser=True)
+                creds = flow.run_local_server(
+                    port=OAUTH_PORT,
+                    open_browser=True,
+                    timeout=300
+                )
             except MismatchingStateError:
-                creds = flow.run_local_server(port=OAUTH_PORT, open_browser=True)
+                creds = flow.run_console()
             except Exception:
                 creds = flow.run_console()
         with open(TOKEN_FILE, 'w') as f:
@@ -102,7 +103,27 @@ def sanitize_filename(name):
     s = re.sub(r"[^A-Za-z0-9 ]+", "", stem)
     return re.sub(r"\s+", " ", s).strip()
 
-# --- Video Entry Model ---
+def sanitize_description(desc: str) -> str:
+    # remove control chars
+    desc = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', desc)
+    # truncate to 5000 chars
+    return desc[:5000]
+
+def sanitize_tags(tags_list):
+    clean = []
+    total_len = 0
+    for t in tags_list:
+        t = t.strip()
+        if not t: continue
+        # each tag max 30 chars
+        t = t[:30]
+        if total_len + len(t) > 500:  # total tags length limit
+            break
+        clean.append(t)
+        total_len += len(t)
+    return clean
+
+# --- VideoEntry model ---
 class VideoEntry:
     def __init__(self, filepath):
         p = Path(filepath)
@@ -125,22 +146,20 @@ class VideoEntry:
         self.playlistId = ''
         self.publishAt = None
 
-# --- Main Application ---
+# --- Main GUI app ---
 class UploaderApp:
     def __init__(self):
         setup_revocation_on_exit()
         self.client_secrets = None
-        try:
-            os.remove(LOG_FILE)
-        except:
-            pass
-        # Auto-scan videos
+        try: os.remove(LOG_FILE)
+        except: pass
+        # auto-scan videos
         self.video_entries = []
         for pat in VIDEO_PATTERNS:
             for f in glob.glob(pat):
                 if f not in [v.filepath for v in self.video_entries]:
                     self.video_entries.append(VideoEntry(f))
-        # Build and run GUI
+        # build GUI
         self.root = tk.Tk()
         self.save_log_var = tk.BooleanVar(master=self.root, value=False)
         self.root.title('YouTube Batch Uploader')
@@ -150,14 +169,16 @@ class UploaderApp:
     def build_gui(self):
         frm = ttk.Frame(self.root, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
-        # Credentials selection
-        ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials).pack(fill=tk.X, pady=(0,5))
-        # Video list
+
+        ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials)\
+            .pack(fill=tk.X, pady=(0,5))
+
         self.tree = ttk.Treeview(frm, columns=('file','title'), show='headings')
         self.tree.heading('file', text='File')
         self.tree.heading('title', text='Title')
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
         self.refresh_tree()
+
         # Schedule & Interval
         sched = ttk.LabelFrame(frm, text='Schedule & Interval', padding=10)
         sched.pack(fill=tk.X, pady=5)
@@ -173,6 +194,7 @@ class UploaderApp:
         self.interval_minute = ttk.Spinbox(sched, from_=0, to=59, width=5)
         self.interval_minute.set(0)
         self.interval_minute.grid(row=2, column=1, sticky='w')
+
         # Metadata Defaults
         meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
         meta.pack(fill=tk.X, pady=5)
@@ -209,11 +231,12 @@ class UploaderApp:
         ttk.Label(meta, text='Playlist ID').grid(row=10, column=0)
         self.playlist_ent = ttk.Entry(meta)
         self.playlist_ent.grid(row=10, column=1, sticky='ew')
-        # Settings buttons
+
         btn_frm = ttk.Frame(frm)
         btn_frm.pack(fill=tk.X, pady=5)
         ttk.Button(btn_frm, text='Save Settings', command=self.save_settings).pack(side=tk.LEFT)
         ttk.Button(btn_frm, text='Load Settings', command=self.load_settings).pack(side=tk.LEFT, padx=5)
+
         ttk.Checkbutton(frm, text='Save Log File', variable=self.save_log_var).pack(anchor='w', pady=5)
         ttk.Button(frm, text='Process & Upload', command=self.process_upload).pack(pady=10)
 
@@ -279,9 +302,13 @@ class UploaderApp:
         if not self.client_secrets:
             messagebox.showerror('Error','No credentials selected')
             return
-        # Read GUI values
-        desc = self.desc_txt.get('1.0','end').strip()
-        tags = [t.strip() for t in self.tags_ent.get().split(',') if t.strip()]
+
+        # Read and sanitize GUI values
+        raw_desc = self.desc_txt.get('1.0','end').rstrip('\n')
+        desc = sanitize_description(raw_desc)
+        raw_tags = [t.strip() for t in self.tags_ent.get().split(',')]
+        tags = sanitize_tags(raw_tags)
+
         cat = CATEGORY_MAP.get(self.cat_cb.get(), '24')
         vlang = LANGUAGES.get(self.vlang_cb.get(), 'en')
         dlang = LANGUAGES.get(self.dlang_cb.get(), 'en')
@@ -293,18 +320,21 @@ class UploaderApp:
         playlist_id = self.playlist_ent.get().strip()
         base_time = self.start_ent.get()
         hrs = int(self.interval_hour.get()); mins = int(self.interval_minute.get())
+
         # Authenticate
         try:
             service = get_authenticated_service(self.client_secrets)
         except Exception as auth_ex:
             messagebox.showerror('Auth Error', f'Authentication failed: {auth_ex}')
             return
-        # Close GUI
+
+        # Close GUI immediately
         try:
             self.root.quit()
             self.root.destroy()
         except:
             pass
+
         # Compute publish times
         try:
             loc = datetime.strptime(base_time, '%Y-%m-%d %H:%M')
@@ -312,6 +342,7 @@ class UploaderApp:
             utc_dt = loc.replace(tzinfo=loc_tz).astimezone(timezone.utc)
         except:
             utc_dt = datetime.now(timezone.utc)
+
         for i, e in enumerate(self.video_entries):
             e.description = desc
             e.tags = tags
@@ -326,52 +357,70 @@ class UploaderApp:
             e.playlistId = playlist_id
             delta = timedelta(hours=hrs, minutes=mins) * i
             e.publishAt = (utc_dt + delta).strftime('%Y-%m-%dT%H:%M:%SZ')
-        # Upload
+
         self.upload_all(service)
 
     def upload_all(self, service):
         for e in self.video_entries:
             media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
-            body = {
-                'snippet': {
-                    'title': e.title,
-                    'description': e.description,
-                    'tags': e.tags,
-                    'categoryId': e.categoryId,
-                    'defaultLanguage': e.defaultLanguage,
-                    'defaultAudioLanguage': e.videoLanguage,
-                    'recordingDetails': {'recordingDate': e.recordingDate}
-                },
-                'status': {
-                    'privacyStatus': 'private',
-                    'publishAt': e.publishAt,
-                    'selfDeclaredMadeForKids': e.madeForKids,
-                    'license': 'youtube',
-                    'embeddable': e.embeddable,
-                    'publicStatsViewable': e.publicStatsViewable
-                }
+            snippet = {'title': e.title}
+            if e.description:
+                snippet['description'] = e.description
+            if e.tags:
+                snippet['tags'] = e.tags
+            snippet.update({
+                'categoryId': e.categoryId,
+                'defaultLanguage': e.defaultLanguage,
+                'defaultAudioLanguage': e.videoLanguage,
+                'recordingDetails': {'recordingDate': e.recordingDate}
+            })
+            status = {
+                'privacyStatus': 'private',
+                'publishAt': e.publishAt,
+                'selfDeclaredMadeForKids': e.madeForKids,
+                'license': 'youtube',
+                'embeddable': e.embeddable,
+                'publicStatsViewable': e.publicStatsViewable
             }
-            req = service.videos().insert(part='snippet,status', body=body, media_body=media, notifySubscribers=e.notifySubscribers)
+            body = {'snippet': snippet, 'status': status}
+
+            req = service.videos().insert(
+                part='snippet,status',
+                body=body,
+                media_body=media,
+                notifySubscribers=e.notifySubscribers
+            )
+
             print(f"Uploading {Path(e.filepath).name}", flush=True)
-            status = None; resp = None
+            progress, resp = None, None
             while resp is None:
-                status, resp = req.next_chunk()
-                if status:
-                    print(f"  {int(status.progress()*100)}%", flush=True)
-            vid = resp['id']; print(f"Done: https://youtu.be/{vid}", flush=True)
+                progress, resp = req.next_chunk()
+                if progress:
+                    print(f"  {int(progress.progress()*100)}%", flush=True)
+
+            vid = resp['id']
+            print(f"Done: https://youtu.be/{vid}", flush=True)
             logger.info(f"Uploaded {e.filepath} -> {vid}")
+
             if e.playlistId:
                 try:
-                    service.playlistItems().insert(part='snippet', body={'snippet': {'playlistId': e.playlistId, 'resourceId': {'kind': 'youtube#video', 'videoId': vid}}}).execute()
+                    service.playlistItems().insert(
+                        part='snippet',
+                        body={'snippet': {
+                            'playlistId': e.playlistId,
+                            'resourceId': {'kind': 'youtube#video', 'videoId': vid}
+                        }}
+                    ).execute()
                     print(f"  Added to playlist {e.playlistId}", flush=True)
-                    logger.info(f"Added {vid} to playlist {e.playlistId}")
                 except Exception as ex:
                     print(f"  Playlist add failed: {ex}", flush=True)
                     logger.error(f"Playlist error for {vid}: {ex}")
+
         if self.save_log_var.get():
             with open(LOG_FILE, 'w') as f:
                 f.write("\n".join(log_records))
         revoke_token()
+
 
 if __name__ == '__main__':
     UploaderApp()
