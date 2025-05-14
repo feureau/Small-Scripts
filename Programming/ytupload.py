@@ -61,9 +61,12 @@ def revoke_token():
                     params={'token': data['refresh_token']},
                     headers={'content-type': 'application/x-www-form-urlencoded'}
                 )
-        except: pass
-        try: os.remove(TOKEN_FILE)
-        except: pass
+        except:
+            pass
+        try:
+            os.remove(TOKEN_FILE)
+        except:
+            pass
 
 def setup_revocation_on_exit():
     atexit.register(revoke_token)
@@ -72,7 +75,7 @@ def setup_revocation_on_exit():
         sys.exit(1)
     signal.signal(signal.SIGINT, on_sig)
 
-# --- OAuth Authentication ---
+# --- OAuth Authentication with retry and fallback ---
 def get_authenticated_service(secrets_path):
     from oauthlib.oauth2.rfc6749.errors import MismatchingStateError
     creds = None
@@ -99,7 +102,7 @@ def sanitize_filename(name):
     s = re.sub(r"[^A-Za-z0-9 ]+", "", stem)
     return re.sub(r"\s+", " ", s).strip()
 
-# --- Video Data Model ---
+# --- Video Entry Model ---
 class VideoEntry:
     def __init__(self, filepath):
         p = Path(filepath)
@@ -127,14 +130,17 @@ class UploaderApp:
     def __init__(self):
         setup_revocation_on_exit()
         self.client_secrets = None
-        try: os.remove(LOG_FILE)
-        except: pass
+        try:
+            os.remove(LOG_FILE)
+        except:
+            pass
         # Auto-scan videos
         self.video_entries = []
         for pat in VIDEO_PATTERNS:
             for f in glob.glob(pat):
                 if f not in [v.filepath for v in self.video_entries]:
                     self.video_entries.append(VideoEntry(f))
+        # Build and run GUI
         self.root = tk.Tk()
         self.save_log_var = tk.BooleanVar(master=self.root, value=False)
         self.root.title('YouTube Batch Uploader')
@@ -144,31 +150,68 @@ class UploaderApp:
     def build_gui(self):
         frm = ttk.Frame(self.root, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
+        # Credentials selection
         ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials).pack(fill=tk.X, pady=(0,5))
+        # Video list
         self.tree = ttk.Treeview(frm, columns=('file','title'), show='headings')
-        self.tree.heading('file', text='File'); self.tree.heading('title', text='Title')
+        self.tree.heading('file', text='File')
+        self.tree.heading('title', text='Title')
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
         self.refresh_tree()
+        # Schedule & Interval
         sched = ttk.LabelFrame(frm, text='Schedule & Interval', padding=10)
         sched.pack(fill=tk.X, pady=5)
         ttk.Label(sched, text='First Publish (YYYY-MM-DD HH:MM)').grid(row=0, column=0)
-        self.start_ent = ttk.Entry(sched); self.start_ent.insert(0, datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')); self.start_ent.grid(row=0, column=1)
-        ttk.Label(sched, text='Interval Hours').grid(row=1, column=0) ; self.interval_hour = ttk.Spinbox(sched, from_=0, to=168, width=5); self.interval_hour.set(1); self.interval_hour.grid(row=1, column=1)
-        ttk.Label(sched, text='Interval Minutes').grid(row=2, column=0); self.interval_minute = ttk.Spinbox(sched, from_=0, to=59, width=5); self.interval_minute.set(0); self.interval_minute.grid(row=2, column=1)
+        self.start_ent = ttk.Entry(sched)
+        self.start_ent.insert(0, datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'))
+        self.start_ent.grid(row=0, column=1, sticky='w')
+        ttk.Label(sched, text='Interval Hours').grid(row=1, column=0)
+        self.interval_hour = ttk.Spinbox(sched, from_=0, to=168, width=5)
+        self.interval_hour.set(1)
+        self.interval_hour.grid(row=1, column=1, sticky='w')
+        ttk.Label(sched, text='Interval Minutes').grid(row=2, column=0)
+        self.interval_minute = ttk.Spinbox(sched, from_=0, to=59, width=5)
+        self.interval_minute.set(0)
+        self.interval_minute.grid(row=2, column=1, sticky='w')
+        # Metadata Defaults
         meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
         meta.pack(fill=tk.X, pady=5)
-        ttk.Label(meta, text='Description').grid(row=0, column=0); self.desc_txt = tk.Text(meta, height=3); self.desc_txt.grid(row=0, column=1, sticky='ew')
-        ttk.Label(meta, text='Tags').grid(row=1, column=0); self.tags_ent = ttk.Entry(meta); self.tags_ent.grid(row=1, column=1, sticky='ew')
-        ttk.Label(meta, text='Category').grid(row=2, column=0); self.cat_cb = ttk.Combobox(meta, values=list(CATEGORY_MAP.keys())); self.cat_cb.set('Entertainment'); self.cat_cb.grid(row=2, column=1, sticky='ew')
-        ttk.Label(meta, text='Video Lang').grid(row=3, column=0); self.vlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys())); self.vlang_cb.set('English'); self.vlang_cb.grid(row=3, column=1, sticky='ew')
-        ttk.Label(meta, text='Default Lang').grid(row=4, column=0); self.dlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys())); self.dlang_cb.set('English'); self.dlang_cb.grid(row=4, column=1, sticky='ew')
-        ttk.Label(meta, text='Recording Date (UTC)').grid(row=5, column=0); self.rec_ent = ttk.Entry(meta); self.rec_ent.insert(0, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')); self.rec_ent.grid(row=5, column=1, sticky='ew')
-        self.notify_var = tk.BooleanVar(value=False); ttk.Checkbutton(meta, text='Notify Subscribers', variable=self.notify_var).grid(row=6, column=0, sticky='w')
-        self.kids_var = tk.BooleanVar(value=False); ttk.Checkbutton(meta, text='Made for Kids', variable=self.kids_var).grid(row=7, column=0, sticky='w')
-        self.embed_var = tk.BooleanVar(value=True); ttk.Checkbutton(meta, text='Embeddable', variable=self.embed_var).grid(row=8, column=0, sticky='w')
-        self.stats_var = tk.BooleanVar(value=False); ttk.Checkbutton(meta, text='Public Stats Visible', variable=self.stats_var).grid(row=9, column=0, sticky='w')
-        ttk.Label(meta, text='Playlist ID').grid(row=10, column=0); self.playlist_ent = ttk.Entry(meta); self.playlist_ent.grid(row=10, column=1, sticky='ew')
-        btn_frm = ttk.Frame(frm); btn_frm.pack(fill=tk.X, pady=5)
+        ttk.Label(meta, text='Description').grid(row=0, column=0)
+        self.desc_txt = tk.Text(meta, height=3)
+        self.desc_txt.grid(row=0, column=1, sticky='ew')
+        ttk.Label(meta, text='Tags').grid(row=1, column=0)
+        self.tags_ent = ttk.Entry(meta)
+        self.tags_ent.grid(row=1, column=1, sticky='ew')
+        ttk.Label(meta, text='Category').grid(row=2, column=0)
+        self.cat_cb = ttk.Combobox(meta, values=list(CATEGORY_MAP.keys()))
+        self.cat_cb.set('Entertainment')
+        self.cat_cb.grid(row=2, column=1, sticky='ew')
+        ttk.Label(meta, text='Video Lang').grid(row=3, column=0)
+        self.vlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()))
+        self.vlang_cb.set('English')
+        self.vlang_cb.grid(row=3, column=1, sticky='ew')
+        ttk.Label(meta, text='Default Lang').grid(row=4, column=0)
+        self.dlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()))
+        self.dlang_cb.set('English')
+        self.dlang_cb.grid(row=4, column=1, sticky='ew')
+        ttk.Label(meta, text='Recording Date (UTC)').grid(row=5, column=0)
+        self.rec_ent = ttk.Entry(meta)
+        self.rec_ent.insert(0, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        self.rec_ent.grid(row=5, column=1, sticky='ew')
+        self.notify_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta, text='Notify Subscribers', variable=self.notify_var).grid(row=6, column=0, sticky='w')
+        self.kids_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta, text='Made for Kids', variable=self.kids_var).grid(row=7, column=0, sticky='w')
+        self.embed_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(meta, text='Embeddable', variable=self.embed_var).grid(row=8, column=0, sticky='w')
+        self.stats_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta, text='Public Stats Visible', variable=self.stats_var).grid(row=9, column=0, sticky='w')
+        ttk.Label(meta, text='Playlist ID').grid(row=10, column=0)
+        self.playlist_ent = ttk.Entry(meta)
+        self.playlist_ent.grid(row=10, column=1, sticky='ew')
+        # Settings buttons
+        btn_frm = ttk.Frame(frm)
+        btn_frm.pack(fill=tk.X, pady=5)
         ttk.Button(btn_frm, text='Save Settings', command=self.save_settings).pack(side=tk.LEFT)
         ttk.Button(btn_frm, text='Load Settings', command=self.load_settings).pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(frm, text='Save Log File', variable=self.save_log_var).pack(anchor='w', pady=5)
@@ -204,27 +247,29 @@ class UploaderApp:
             'intervalMinutes': self.interval_minute.get(),
             'saveLog': self.save_log_var.get()
         }
-        f = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')])
-        if f:
-            with open(f,'w') as out: json.dump(cfg,out)
+        path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')])
+        if path:
+            with open(path,'w') as out:
+                json.dump(cfg,out)
             messagebox.showinfo('Saved','Settings saved')
 
     def load_settings(self):
-        f = filedialog.askopenfilename(filetypes=[('JSON','*.json')])
-        if f:
-            with open(f) as inp: cfg = json.load(inp)
-            self.desc_txt.delete('1.0','end'); self.desc_txt.insert('1.0', cfg.get('description',''))
-            self.tags_ent.delete(0, tk.END); self.tags_ent.insert(0, cfg.get('tags',''))
+        path = filedialog.askopenfilename(filetypes=[('JSON','*.json')])
+        if path:
+            with open(path) as inp:
+                cfg = json.load(inp)
+            self.desc_txt.delete('1.0','end'); self.desc_txt.insert('1.0',cfg.get('description',''))
+            self.tags_ent.delete(0,tk.END); self.tags_ent.insert(0,cfg.get('tags',''))
             self.cat_cb.set(cfg.get('category','Entertainment'))
             self.vlang_cb.set(cfg.get('videoLang','English'))
             self.dlang_cb.set(cfg.get('defaultLang','English'))
-            self.rec_ent.delete(0, tk.END); self.rec_ent.insert(0, cfg.get('recordingDate',''))
+            self.rec_ent.delete(0,tk.END); self.rec_ent.insert(0, cfg.get('recordingDate',''))
             self.notify_var.set(cfg.get('notify',False))
             self.kids_var.set(cfg.get('madeForKids',False))
             self.embed_var.set(cfg.get('embeddable',True))
             self.stats_var.set(cfg.get('publicStatsVisible',False))
-            self.playlist_ent.delete(0, tk.END); self.playlist_ent.insert(0, cfg.get('playlistId',''))
-            self.start_ent.delete(0, tk.END); self.start_ent.insert(0, cfg.get('firstPublish',''))
+            self.playlist_ent.delete(0,tk.END); self.playlist_ent.insert(0, cfg.get('playlistId',''))
+            self.start_ent.delete(0,tk.END); self.start_ent.insert(0, cfg.get('firstPublish',''))
             self.interval_hour.set(cfg.get('intervalHours',1))
             self.interval_minute.set(cfg.get('intervalMinutes',0))
             self.save_log_var.set(cfg.get('saveLog',False))
@@ -232,8 +277,9 @@ class UploaderApp:
 
     def process_upload(self):
         if not self.client_secrets:
-            messagebox.showerror('Error','No credentials selected'); return
-        # read GUI values
+            messagebox.showerror('Error','No credentials selected')
+            return
+        # Read GUI values
         desc = self.desc_txt.get('1.0','end').strip()
         tags = [t.strip() for t in self.tags_ent.get().split(',') if t.strip()]
         cat = CATEGORY_MAP.get(self.cat_cb.get(), '24')
@@ -247,38 +293,64 @@ class UploaderApp:
         playlist_id = self.playlist_ent.get().strip()
         base_time = self.start_ent.get()
         hrs = int(self.interval_hour.get()); mins = int(self.interval_minute.get())
-        # authenticate
+        # Authenticate
         try:
             service = get_authenticated_service(self.client_secrets)
         except Exception as auth_ex:
             messagebox.showerror('Auth Error', f'Authentication failed: {auth_ex}')
             return
-        # close GUI
-        self.root.destroy()
-        # parse start time
+        # Close GUI
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except:
+            pass
+        # Compute publish times
         try:
             loc = datetime.strptime(base_time, '%Y-%m-%d %H:%M')
             loc_tz = datetime.now().astimezone().tzinfo
             utc_dt = loc.replace(tzinfo=loc_tz).astimezone(timezone.utc)
         except:
             utc_dt = datetime.now(timezone.utc)
-        # assign metadata and publishAt
         for i, e in enumerate(self.video_entries):
-            e.description, e.tags, e.categoryId = desc, tags, cat
-            e.videoLanguage, e.defaultLanguage = vlang, dlang
+            e.description = desc
+            e.tags = tags
+            e.categoryId = cat
+            e.videoLanguage = vlang
+            e.defaultLanguage = dlang
             e.recordingDate = rec
-            e.notifySubscribers, e.madeForKids = notify, kids
-            e.embeddable, e.publicStatsViewable = embed, stats
+            e.notifySubscribers = notify
+            e.madeForKids = kids
+            e.embeddable = embed
+            e.publicStatsViewable = stats
             e.playlistId = playlist_id
             delta = timedelta(hours=hrs, minutes=mins) * i
             e.publishAt = (utc_dt + delta).strftime('%Y-%m-%dT%H:%M:%SZ')
-        # upload
+        # Upload
         self.upload_all(service)
 
     def upload_all(self, service):
         for e in self.video_entries:
             media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
-            body = {'snippet': {'title': e.title, 'description': e.description, 'tags': e.tags, 'categoryId': e.categoryId, 'defaultLanguage': e.defaultLanguage, 'defaultAudioLanguage': e.videoLanguage, 'recordingDetails': {'recordingDate': e.recordingDate}}, 'status': {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids, 'license': 'youtube', 'embeddable': e.embeddable, 'publicStatsViewable': e.publicStatsViewable}}
+            body = {
+                'snippet': {
+                    'title': e.title,
+                    'description': e.description,
+                    'tags': e.tags,
+                    'categoryId': e.categoryId,
+                    'defaultLanguage': e.defaultLanguage,
+                    'defaultAudioLanguage': e.videoLanguage,
+                    'recordingDetails': {'recordingDate': e.recordingDate}
+                },
+                'status': {
+                    'privacyStatus': 'private',
+                    'publishAt': e.publishAt,
+                    'selfDeclaredMadeForKids': e.madeForKids,
+                    'license': 'youtube',
+                    'embeddable': e.embeddable,
+                    'publicStatsViewable': e.publicStatsViewable
+                }
+            }
             req = service.videos().insert(part='snippet,status', body=body, media_body=media, notifySubscribers=e.notifySubscribers)
             print(f"Uploading {Path(e.filepath).name}", flush=True)
             status = None; resp = None
