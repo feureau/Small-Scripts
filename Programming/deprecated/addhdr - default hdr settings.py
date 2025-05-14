@@ -41,18 +41,17 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         mkvmerge_command = [
             mkvmerge_path,
             "-o", output_path,  # Output directly to final name initially
-            "--colour-matrix", "0:9",  # BT.2020 non-constant
-            "--colour-range", "0:1",  # Limited
-            "--colour-transfer-characteristics", "0:16",  # PQ (SMPTE ST 2084)
-            "--colour-primaries", "0:9",  # BT.2020
-            "--max-content-light", "0:1000",  # Maximum Content Light Level: 1000 cd/m2
-            "--max-frame-light", "0:400",  # Maximum Frame-Average Light Level: 400 cd/m2
-            "--max-luminance", "0:1000",  # Mastering display luminance: max: 1000 cd/m2
-            "--min-luminance", "0:0.0001",  # Mastering display luminance: min: 0.0001 cd/m2
-            "--chromaticity-coordinates", "0:0.708,0.292,0.170,0.797,0.131,0.046",  # Mastering display color primaries: BT.2020
-            "--white-colour-coordinates", "0:0.3127,0.3290",  # Mastering display white point: D65 for BT.2020
+            "--colour-matrix", "0:9",
+            "--colour-range", "0:1",
+            "--colour-transfer-characteristics", "0:16",
+            "--colour-primaries", "0:9",
+            "--max-content-light", "0:1000",
+            "--max-frame-light", "0:300",
+            "--max-luminance", "0:1000",
+            "--min-luminance", "0:0.01",
+            "--chromaticity-coordinates", "0:0.68,0.32,0.265,0.690,0.15,0.06",
+            "--white-colour-coordinates", "0:0.3127,0.3290",
         ]
-
         if embed_lut:
             if not os.path.exists(lut_path):
                 print(f"Warning: LUT file not found at {lut_path}. Disabling LUT embedding for {input_file}.")
