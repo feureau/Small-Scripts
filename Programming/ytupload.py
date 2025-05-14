@@ -3,25 +3,58 @@ import sys
 import json
 import signal
 import atexit
+import re
 import requests
 import logging
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import glob
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 # Constants
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-CLIENT_SECRETS_FILE = None  # set via GUI file picker
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly"
+]
 TOKEN_FILE = 'token.json'
 LOG_FILE = 'ytupload.log'
+OAUTH_PORT = 8080
+VIDEO_PATTERNS = ['*.mp4', '*.mkv', '*.avi']
 
-# Configure logging
+CATEGORY_MAP = {
+    'Film & Animation': '1',
+    'Autos & Vehicles': '2',
+    'Music': '10',
+    'Pets & Animals': '15',
+    'Sports': '17',
+    'Travel & Events': '19',
+    'Gaming': '20',
+    'People & Blogs': '22',
+    'Comedy': '23',
+    'Entertainment': '24',
+    'News & Politics': '25',
+    'Howto & Style': '26',
+    'Education': '27',
+    'Science & Technology': '28',
+    'Nonprofits & Activism': '29'
+}
+LANGUAGES = {
+    'English': 'en',
+    'Spanish': 'es',
+    'French': 'fr',
+    'German': 'de',
+    'Japanese': 'ja',
+    'Chinese': 'zh'
+}
+LICENSE_OPTIONS = {'YouTube Standard': 'youtube', 'Creative Commons': 'creativeCommon'}
+
+# Logging config
 logging.basicConfig(
     filename=LOG_FILE,
     filemode='a',
@@ -30,201 +63,222 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Revocation logic
-
-def revoke_token(token_path=TOKEN_FILE):
-    if not os.path.exists(token_path):
-        return
-    logging.info(f"Revoking token file: {token_path}")
-    try:
-        data = json.load(open(token_path))
-        refresh_token = data.get('refresh_token')
-        if refresh_token:
-            resp = requests.post(
-                'https://oauth2.googleapis.com/revoke',
-                params={'token': refresh_token},
-                headers={'content-type': 'application/x-www-form-urlencoded'}
-            )
-            if resp.status_code == 200:
-                logging.info('Refresh token successfully revoked.')
-            else:
-                logging.warning(f'Failed to revoke token: {resp.text}')
-    except Exception as e:
-        logging.error(f"Error revoking token: {e}")
-    try:
-        os.remove(token_path)
-        logging.info(f"Deleted token file: {token_path}")
-    except OSError as e:
-        logging.warning(f"Could not delete token file: {e}")
+def revoke_token():
+    if os.path.exists(TOKEN_FILE):
+        try:
+            data = json.load(open(TOKEN_FILE))
+            if 'refresh_token' in data:
+                requests.post(
+                    'https://oauth2.googleapis.com/revoke',
+                    params={'token': data['refresh_token']},
+                    headers={'content-type': 'application/x-www-form-urlencoded'}
+                )
+        except Exception:
+            pass
+        try:
+            os.remove(TOKEN_FILE)
+        except Exception:
+            pass
 
 
 def setup_revocation_on_exit():
-    atexit.register(lambda: revoke_token())
-    def handle_sigint(signum, frame):
-        logging.info('Interrupted by user, revoking token')
+    atexit.register(revoke_token)
+    def on_sigint(signum, frame):
         revoke_token()
         sys.exit(1)
-    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGINT, on_sigint)
 
-# YouTube API client
+# OAuth
 
-def get_authenticated_service():
-    if CLIENT_SECRETS_FILE is None:
-        raise RuntimeError('Client secrets file not set')
+def get_authenticated_service(client_secrets_path):
     creds = None
     if Path(TOKEN_FILE).exists():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-        logging.info(f"Loaded existing token: {TOKEN_FILE}")
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            logging.info('Access token expired, refreshing...')
             creds.refresh(Request())
-            logging.info('Token refreshed successfully')
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                CLIENT_SECRETS_FILE, SCOPES)
-            # Use console flow for manual browser/account control
-            if hasattr(flow, 'run_console'):
+            flow = InstalledAppFlow.from_client_secrets_file(client_secrets_path, SCOPES)
+            try:
+                creds = flow.run_local_server(port=OAUTH_PORT, open_browser=True)
+            except Exception:
                 creds = flow.run_console()
-            else:
-                print('Opening browser for authentication...')
-                creds = flow.run_local_server()
-            logging.info('Obtained new credentials via OAuth flow')
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
-            logging.info(f"Saved token to {TOKEN_FILE}")
-    youtube = build('youtube', 'v3', credentials=creds)
-    try:
-        response = youtube.channels().list(part='snippet', mine=True).execute()
-        channel_title = response['items'][0]['snippet']['title']
-        logging.info(f"Authenticated to channel: {channel_title}")
-        print(f"✅ Authenticated to channel: {channel_title}")
-    except Exception as e:
-        logging.warning(f"Could not confirm channel: {e}")
-    return youtube
+        with open(TOKEN_FILE, 'w') as f:
+            f.write(creds.to_json())
+    return build('youtube', 'v3', credentials=creds)
 
-# Data model for each video
+# sanitize
 
-class VideoRow:
+def sanitize_filename(name):
+    stem = Path(name).stem
+    s = re.sub(r'[^A-Za-z0-9 ]+', '', stem)
+    return re.sub(r'\s+', ' ', s).strip()
+
+# video model
+class VideoEntry:
     def __init__(self, filepath):
-        self.filepath = filepath
-        self.title = Path(filepath).stem
-        self.publish_at = None
+        p = Path(filepath)
+        clean = sanitize_filename(p.name)
+        new_name = f"{clean}{p.suffix}"
+        new_path = p.with_name(new_name)
+        if p.name != new_name:
+            os.rename(p, new_path)
+        self.filepath = str(new_path)
+        self.title = sanitize_filename(new_path.stem)
+        self.description = ''
+        self.tags = []
+        self.categoryId = CATEGORY_MAP['Entertainment']
+        self.videoLanguage = 'en'
+        self.defaultLanguage = 'en'
+        self.recordingDate = None
+        self.notifySubscribers = False
+        self.madeForKids = False
+        self.license = 'youtube'
+        self.embeddable = True
+        self.publicStatsViewable = False
+        self.publishAt = None
 
-# GUI for batch upload
-
-class UploadGUI:
-    def __init__(self, video_paths):
-        self.videos = [VideoRow(p) for p in video_paths]
-        self.start_time = datetime.now()
-        self.interval_hours = 1
-        logging.info(f"Starting GUI with {len(self.videos)} videos")
+class UploaderApp:
+    def __init__(self):
+        setup_revocation_on_exit()
+        self.client_secrets = None
+        # scan videos
+        self.video_entries = []
+        for pat in VIDEO_PATTERNS:
+            for f in glob.glob(pat):
+                if f not in [v.filepath for v in self.video_entries]:
+                    self.video_entries.append(VideoEntry(f))
         self.root = tk.Tk()
         self.root.title('YouTube Batch Uploader')
-        self.build_ui()
+        self.build_gui()
+        self.root.mainloop()
 
-    def build_ui(self):
+    def build_gui(self):
         frm = ttk.Frame(self.root, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
-
-        cred_btn = ttk.Button(frm, text='Select client_secrets.json', command=self.pick_credentials)
-        cred_btn.pack(fill=tk.X, pady=(0,10))
-
-        cols = ('title', 'publish_at')
-        self.tree = ttk.Treeview(frm, columns=cols, show='headings')
+        # creds
+        ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials).pack(fill=tk.X)
+        # list
+        self.tree = ttk.Treeview(frm, columns=('file','title'), show='headings')
+        self.tree.heading('file', text='File')
         self.tree.heading('title', text='Title')
-        self.tree.heading('publish_at', text='Publish At')
-        for v in self.videos:
-            self.tree.insert('', tk.END, values=(v.title, ''))
-        self.tree.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.refresh_tree()
+        # metadata defaults
+        meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
+        meta.pack(fill=tk.X)
+        ttk.Label(meta, text='Description').grid(row=0,column=0)
+        self.desc_txt = tk.Text(meta, height=3)
+        self.desc_txt.grid(row=0,column=1,sticky='ew')
+        ttk.Label(meta, text='Tags (comma)').grid(row=1,column=0)
+        self.tags_ent = ttk.Entry(meta)
+        self.tags_ent.grid(row=1,column=1,sticky='ew')
+        ttk.Label(meta, text='Category').grid(row=2,column=0)
+        self.cat_cb = ttk.Combobox(meta,values=list(CATEGORY_MAP.keys()))
+        self.cat_cb.set('Entertainment')
+        self.cat_cb.grid(row=2,column=1,sticky='ew')
+        ttk.Label(meta, text='Video Lang').grid(row=3,column=0)
+        self.vlang_cb = ttk.Combobox(meta,values=list(LANGUAGES.keys()))
+        self.vlang_cb.set('English')
+        self.vlang_cb.grid(row=3,column=1,sticky='ew')
+        ttk.Label(meta, text='Default Lang').grid(row=4,column=0)
+        self.dlang_cb = ttk.Combobox(meta,values=list(LANGUAGES.keys()))
+        self.dlang_cb.set('English')
+        self.dlang_cb.grid(row=4,column=1,sticky='ew')
+        ttk.Label(meta, text='Recording Date').grid(row=5,column=0)
+        self.rec_ent = ttk.Entry(meta)
+        self.rec_ent.insert(0,datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        self.rec_ent.grid(row=5,column=1,sticky='ew')
+        self.notify_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta,text='Notify Subscribers',variable=self.notify_var).grid(row=6,column=1,sticky='w')
+        self.kids_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta,text='Made for Kids',variable=self.kids_var).grid(row=7,column=1,sticky='w')
+        ttk.Label(meta,text='License').grid(row=8,column=0)
+        self.lic_cb=ttk.Combobox(meta,values=list(LICENSE_OPTIONS.keys()))
+        self.lic_cb.set('YouTube Standard')
+        self.lic_cb.grid(row=8,column=1,sticky='ew')
+        self.embed_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(meta,text='Embeddable',variable=self.embed_var).grid(row=9,column=1,sticky='w')
+        self.stats_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta,text='Public Stats Visible',variable=self.stats_var).grid(row=10,column=1,sticky='w')
+        # schedule
+        sched=ttk.LabelFrame(frm,text='Schedule',padding=10)
+        sched.pack(fill=tk.X,pady=5)
+        ttk.Label(sched,text='First Publish (YYYY-MM-DD HH:MM)').grid(row=0,column=0)
+        self.start_ent=ttk.Entry(sched)
+        self.start_ent.insert(0,datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M'))
+        self.start_ent.grid(row=0,column=1,sticky='w')
+        # process
+        ttk.Button(frm,text='Process & Upload',command=self.process_upload).pack(pady=10)
 
-        settings = ttk.LabelFrame(frm, text='Global Settings', padding=10)
-        settings.pack(fill=tk.X, pady=5)
+    def refresh_tree(self):
+        for i in self.tree.get_children(): self.tree.delete(i)
+        for e in self.video_entries:
+            self.tree.insert('',tk.END,values=(Path(e.filepath).name,e.title))
 
-        ttk.Label(settings, text='First Publish (YYYY-MM-DD HH:MM)').grid(row=0, column=0)
-        self.start_entry = ttk.Entry(settings)
-        self.start_entry.insert(0, self.start_time.strftime('%Y-%m-%d %H:%M'))
-        self.start_entry.grid(row=0, column=1, padx=5)
-
-        ttk.Label(settings, text='Interval (hours)').grid(row=1, column=0)
-        self.interval_entry = ttk.Spinbox(settings, from_=1, to=168, width=5)
-        self.interval_entry.set(self.interval_hours)
-        self.interval_entry.grid(row=1, column=1, sticky=tk.W)
-
-        apply_btn = ttk.Button(settings, text='Apply Schedule to All', command=self.apply_schedule)
-        apply_btn.grid(row=2, column=0, columnspan=2, pady=5)
-
-        upload_btn = ttk.Button(frm, text='Start Upload', command=self.on_start)
-        upload_btn.pack(pady=10)
-
-    def pick_credentials(self):
-        global CLIENT_SECRETS_FILE
-        path = filedialog.askopenfilename(
-            title='Select client_secrets.json',
-            filetypes=[('JSON files', '*.json')]
-        )
+    def select_credentials(self):
+        path=filedialog.askopenfilename(title='Select credentials JSON',filetypes=[('JSON','*.json')])
         if path:
-            CLIENT_SECRETS_FILE = path
-            logging.info(f"Selected credentials file: {path}")
-            messagebox.showinfo('Credentials Selected', f'Selected: {path}')
+            self.client_secrets=path
+            logging.info(f"Selected credentials: {path}")
 
-    def apply_schedule(self):
+    def process_upload(self):
+        if not getattr(self,'client_secrets',None):
+            messagebox.showerror('Error','No credentials selected')
+            return
         try:
-            dt = datetime.strptime(self.start_entry.get(), '%Y-%m-%d %H:%M')
-            interval = int(self.interval_entry.get())
-        except Exception as e:
-            messagebox.showerror('Invalid input', f'Error parsing date/time or interval: {e}')
-            return
-        for idx, v in enumerate(self.videos):
-            v.publish_at = dt + timedelta(hours=interval * idx)
-            self.tree.set(self.tree.get_children()[idx], 'publish_at', v.publish_at.strftime('%Y-%m-%dT%H:%M:%SZ'))
-        logging.info('Applied schedule to all videos')
-
-    def on_start(self):
-        if CLIENT_SECRETS_FILE is None:
-            messagebox.showerror('Missing Credentials', 'Please select client_secrets.json before uploading.')
-            return
+            base_dt=datetime.strptime(self.start_ent.get(),'%Y-%m-%d %H:%M')
+            base_dt=base_dt.replace(tzinfo=timezone.utc)
+        except:
+            base_dt=datetime.now(timezone.utc)
+        # defaults
+        desc=self.desc_txt.get('1.0','end').strip()
+        tags=[t.strip() for t in self.tags_ent.get().split(',') if t.strip()]
+        cat=CATEGORY_MAP.get(self.cat_cb.get(),'24')
+        vlang=LANGUAGES.get(self.vlang_cb.get(),'en')
+        dlang=LANGUAGES.get(self.dlang_cb.get(),'en')
+        rec=self.rec_ent.get().strip()
+        notify=self.notify_var.get()
+        kids=self.kids_var.get()
+        lic=LICENSE_OPTIONS.get(self.lic_cb.get(),'youtube')
+        embed=self.embed_var.get()
+        stats=self.stats_var.get()
+        for i,e in enumerate(self.video_entries):
+            e.description=desc
+            e.tags=tags
+            e.categoryId=cat
+            e.videoLanguage=vlang
+            e.defaultLanguage=dlang
+            e.recordingDate=rec
+            e.notifySubscribers=notify
+            e.madeForKids=kids
+            e.license=lic
+            e.embeddable=embed
+            e.publicStatsViewable=stats
+            dt=base_dt+timedelta(hours=i+1)
+            e.publishAt=dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         self.root.destroy()
         self.upload_all()
 
     def upload_all(self):
-        youtube = get_authenticated_service()
-        for v in self.videos:
-            logging.info(f"Uploading {v.filepath} scheduled at {v.publish_at}")
-            body = {
-                'snippet': {'title': v.title},
-                'status': {'privacyStatus': 'private', 'publishAt': v.publish_at.strftime('%Y-%m-%dT%H:%M:%SZ')}
-            }
-            request = youtube.videos().insert(
-                part=','.join(body.keys()),
-                body=body,
-                media_body=v.filepath,
-                notifySubscribers=False
-            )
-            try:
-                response = request.execute()
-                logging.info(f"Success: {v.filepath} -> https://youtu.be/{response['id']}")
-            except Exception as e:
-                logging.error(f"Failed upload {v.filepath}: {e}")
-        logging.info('All uploads complete')
+        service=get_authenticated_service(self.client_secrets)
+        for e in self.video_entries:
+            media=MediaFileUpload(e.filepath,chunksize=-1,resumable=True)
+            body={'snippet':{'title':e.title,'description':e.description,'tags':e.tags,'categoryId':e.categoryId,
+                    'defaultLanguage':e.defaultLanguage,'defaultAudioLanguage':e.videoLanguage,
+                    'recordingDetails':{'recordingDate':e.recordingDate}},
+                  'status':{'privacyStatus':'private','publishAt':e.publishAt,
+                    'selfDeclaredMadeForKids':e.madeForKids,'license':e.license,
+                    'embeddable':e.embeddable,'publicStatsViewable':e.publicStatsViewable}}
+            request=service.videos().insert(part=','.join(body.keys()),body=body,media_body=media,notifySubscribers=e.notifySubscribers)
+            print(f"Uploading {Path(e.filepath).name}",flush=True)
+            status=None;response=None
+            while response is None:
+                status,response=request.next_chunk()
+                if status: print(f"  {int(status.progress()*100)}%",flush=True)
+            print(f"Done: https://youtu.be/{response['id']}",flush=True)
+            logging.info(f"Uploaded {e.filepath} -> {response['id']}")
         revoke_token()
-        logging.info('Session complete, exiting')
 
-
-def main():
-    if len(sys.argv) < 2:
-        print('Usage: python ytupload.py <video_pattern1> [pattern2 ...]')
-        sys.exit(1)
-    patterns = sys.argv[1:]
-    video_paths = []
-    for pat in patterns:
-        video_paths.extend(glob.glob(pat, recursive=True))
-    video_paths = list(dict.fromkeys(video_paths))
-    if not video_paths:
-        print('No video files found for given patterns.')
-        sys.exit(1)
-    setup_revocation_on_exit()
-    UploadGUI(video_paths).root.mainloop()
-
-if __name__ == '__main__':
-    main()
+if __name__=='__main__':
+    UploaderApp()
