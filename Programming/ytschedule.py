@@ -86,7 +86,7 @@ def setup_revocation_on_exit():
         sys.exit(1)
     if hasattr(signal, 'SIGINT'): signal.signal(signal.SIGINT, on_sig)
     if hasattr(signal, 'SIGTERM'): signal.signal(signal.SIGTERM, on_sig)
-    if hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, on_sig) # Windows specific
+    if hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, on_sig)
 
 
 # --- OAuth Authentication ---
@@ -155,7 +155,7 @@ def sanitize_tags(raw_tags):
             current_length += len(tag) + (1 if len(clean) > 1 else 0)
     return clean
 
-# --- VideoData model (was DraftVideo) ---
+# --- VideoData model ---
 class VideoData:
     def __init__(self, video_id, title, current_snippet, current_status):
         self.video_id = video_id
@@ -187,7 +187,8 @@ class SchedulerApp:
     def __init__(self):
         self.client_secrets_path = None
         self.service = None
-        self.loaded_videos = [] # Renamed from self.draft_videos
+        self.all_channel_videos = [] # Stores all fetched VideoData objects
+        self.current_filter_applied = "all" # To know which filter is active
 
         try:
             if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
@@ -213,21 +214,24 @@ class SchedulerApp:
         self.select_cred_button = ttk.Button(cred_frm, text='Select Credentials JSON', command=self.select_credentials)
         self.select_cred_button.pack(side=tk.LEFT, padx=(0,10))
 
-        # --- Load Videos Frame ---
-        load_videos_lf = ttk.LabelFrame(frm, text="Load Videos", padding=5)
-        load_videos_lf.pack(fill=tk.X, pady=5)
+        # --- Load and Filter Videos Frame ---
+        load_filter_lf = ttk.LabelFrame(frm, text="Video List Management", padding=5)
+        load_filter_lf.pack(fill=tk.X, pady=5)
 
-        self.load_all_button = ttk.Button(load_videos_lf, text='Load All My Videos', command=lambda: self.load_videos_gui(privacy_filter="all"), state=tk.DISABLED)
+        self.load_all_button = ttk.Button(load_filter_lf, text='Load All My Videos (Refresh)', command=self.gui_load_all_videos, state=tk.DISABLED)
         self.load_all_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
         
-        self.load_private_button = ttk.Button(load_videos_lf, text='Load Private', command=lambda: self.load_videos_gui(privacy_filter="private"), state=tk.DISABLED)
-        self.load_private_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        self.filter_all_button = ttk.Button(load_filter_lf, text='Show All', command=lambda: self.apply_filter_to_treeview("all"), state=tk.DISABLED)
+        self.filter_all_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        
+        self.filter_private_button = ttk.Button(load_filter_lf, text='Filter: Private', command=lambda: self.apply_filter_to_treeview("private"), state=tk.DISABLED)
+        self.filter_private_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
 
-        self.load_unlisted_button = ttk.Button(load_videos_lf, text='Load Unlisted', command=lambda: self.load_videos_gui(privacy_filter="unlisted"), state=tk.DISABLED)
-        self.load_unlisted_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        self.filter_unlisted_button = ttk.Button(load_filter_lf, text='Filter: Unlisted', command=lambda: self.apply_filter_to_treeview("unlisted"), state=tk.DISABLED)
+        self.filter_unlisted_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
 
-        self.load_public_button = ttk.Button(load_videos_lf, text='Load Public', command=lambda: self.load_videos_gui(privacy_filter="public"), state=tk.DISABLED)
-        self.load_public_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        self.filter_public_button = ttk.Button(load_filter_lf, text='Filter: Public', command=lambda: self.apply_filter_to_treeview("public"), state=tk.DISABLED)
+        self.filter_public_button.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
 
 
         # --- Treeview for videos ---
@@ -263,14 +267,14 @@ class SchedulerApp:
         self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
         
         ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w', pady=2)
-        self.interval_hour_var = tk.StringVar(value='24') 
+        self.interval_hour_var = tk.StringVar(value='1') 
         self.interval_hour_spin = ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_hour_var)
-        self.interval_hour_spin.grid(row=1, column=1, sticky='w', padx=5, pady=2) # Changed sticky to 'w'
+        self.interval_hour_spin.grid(row=1, column=1, sticky='w', padx=5, pady=2)
         
         ttk.Label(sched, text='Interval Minutes:').grid(row=2, column=0, sticky='w', pady=2)
         self.interval_minute_var = tk.StringVar(value='0')
         self.interval_minute_spin = ttk.Spinbox(sched, from_=0, to=59, width=5, textvariable=self.interval_minute_var)
-        self.interval_minute_spin.grid(row=2, column=1, sticky='w', padx=5, pady=(2,5)) # Changed sticky to 'w'
+        self.interval_minute_spin.grid(row=2, column=1, sticky='w', padx=5, pady=(2,5))
         sched.grid_columnconfigure(1, weight=1)
 
         # --- Metadata Defaults Frame ---
@@ -309,18 +313,21 @@ class SchedulerApp:
         s = ttk.Style()
         s.configure("Accent.TButton", font=("Helvetica", 10, "bold"))
 
-
-    def enable_load_buttons(self, enabled=True):
+    def enable_video_management_buttons(self, enabled=True):
         state = tk.NORMAL if enabled else tk.DISABLED
-        self.load_all_button.config(state=state)
-        self.load_private_button.config(state=state)
-        self.load_unlisted_button.config(state=state)
-        self.load_public_button.config(state=state)
+        self.load_all_button.config(state=state) # This is the main load/refresh button
+        # Filter buttons depend on self.all_channel_videos having content
+        filter_state = tk.NORMAL if enabled and self.all_channel_videos else tk.DISABLED
+        self.filter_all_button.config(state=filter_state)
+        self.filter_private_button.config(state=filter_state)
+        self.filter_unlisted_button.config(state=filter_state)
+        self.filter_public_button.config(state=filter_state)
 
-    def refresh_tree(self):
+    def _populate_treeview(self, videos_to_display):
+        """Helper function to populate the treeview with a given list of videos."""
         for item in self.tree.get_children():
             self.tree.delete(item)
-        for vd in self.loaded_videos: # Iterate through self.loaded_videos
+        for vd in videos_to_display:
             publish_at_display = "Not Scheduled"
             current_publish_at = vd.current_status.get('publishAt')
             if current_publish_at:
@@ -337,6 +344,28 @@ class SchedulerApp:
                 publish_at_display 
             ))
 
+    def apply_filter_to_treeview(self, privacy_filter="all"):
+        if not self.all_channel_videos:
+            messagebox.showinfo("No Videos Loaded", "Please load videos from your channel first using 'Load All My Videos'.", parent=self.root)
+            return
+
+        logger.info(f"Applying filter: {privacy_filter}")
+        self.current_filter_applied = privacy_filter
+        
+        if privacy_filter == "all":
+            self._populate_treeview(self.all_channel_videos)
+            return
+
+        filtered_list = []
+        for vd in self.all_channel_videos:
+            if vd.current_status.get('privacyStatus') == privacy_filter:
+                filtered_list.append(vd)
+        
+        self._populate_treeview(filtered_list)
+        if not filtered_list:
+            messagebox.showinfo("Filter Result", f"No videos found matching filter: '{privacy_filter}'.", parent=self.root)
+
+
     def select_credentials(self):
         path = filedialog.askopenfilename(title='Select client_secrets.json', filetypes=[('JSON files', '*.json')], parent=self.root)
         if path:
@@ -347,105 +376,106 @@ class SchedulerApp:
                 self.service = get_authenticated_service(self.client_secrets_path)
                 logger.info("Successfully authenticated with YouTube API after selecting credentials.")
                 messagebox.showinfo("Authentication Success", "Successfully authenticated with YouTube.", parent=self.root)
-                self.enable_load_buttons(True) # Enable load buttons
+                self.enable_video_management_buttons(True) # Enable main load button
             except Exception as e:
                 logger.error(f"Failed to authenticate after selecting credentials: {e}")
                 messagebox.showerror("Authentication Failed", f"Could not authenticate with YouTube: {e}", parent=self.root)
                 self.service = None
-                self.enable_load_buttons(False) # Disable load buttons
+                self.enable_video_management_buttons(False) # Keep all disabled
 
-    def fetch_videos_from_api(self, privacy_filter="all"): # Renamed from fetch_schedulable_videos_from_api
+    def fetch_all_videos_from_api(self):
         if not self.service:
             logger.error("YouTube service not initialized. Authenticate first.")
-            messagebox.showerror("Error", "Not authenticated. Select credentials and ensure authentication is successful.", parent=self.root)
+            messagebox.showerror("Error", "Not authenticated.", parent=self.root)
             return []
 
-        logger.info(f"Fetching videos (filter: {privacy_filter}) from channel...")
-        fetched_videos = []
+        logger.info(f"Fetching all videos from channel using uploads playlist...")
+        all_videos_data = []
         try:
-            channel_response = self.service.channels().list(part="id", mine=True).execute()
+            # 1. Get uploads playlist ID
+            channel_response = self.service.channels().list(part="contentDetails", mine=True).execute()
             if not channel_response.get("items"):
-                logger.error("Could not determine channel ID.")
+                logger.error("Could not determine channel ID for uploads playlist.")
                 messagebox.showerror("Error", "Could not determine your channel ID.", parent=self.root)
                 return []
-            channel_id = channel_response["items"][0]["id"]
-            logger.info(f"Operating on channel ID: {channel_id}")
-
-            video_ids = []
-            next_page_token = None
-            page_count = 0
-            max_pages = 20 
-            logger.info(f"Scanning up to {max_pages*50} most recent videos.")
-
-            while page_count < max_pages:
-                page_count += 1
-                search_request = self.service.search().list(
-                    part="id", channelId=channel_id, type="video",
-                    order="date", maxResults=50, pageToken=next_page_token
-                )
-                search_response = search_request.execute()
-                
-                for item in search_response.get("items", []):
-                    video_ids.append(item["id"]["videoId"])
-                
-                next_page_token = search_response.get("nextPageToken")
-                if not next_page_token: break
             
-            logger.info(f"Found {len(video_ids)} video IDs in channel scan. Fetching details and filtering...")
-            if not video_ids:
-                messagebox.showinfo("No Videos Found", "No videos were found in the initial channel scan.", parent=self.root)
+            uploads_playlist_id = channel_response["items"][0]["contentDetails"]["relatedPlaylists"].get("uploads")
+            if not uploads_playlist_id:
+                logger.error("Could not find uploads playlist ID for the channel.")
+                messagebox.showerror("Error", "Could not find uploads playlist for your channel.", parent=self.root)
                 return []
+            logger.info(f"Found uploads playlist ID: {uploads_playlist_id}")
 
-            for i in range(0, len(video_ids), 50):
-                chunk_ids = video_ids[i:i+50]
-                if not chunk_ids: continue
-
-                videos_request = self.service.videos().list(part="snippet,status", id=",".join(chunk_ids))
-                videos_response = videos_request.execute()
-
-                for video_item in videos_response.get("items", []):
-                    status = video_item.get("status", {})
-                    snippet = video_item.get("snippet", {})
-                    
-                    upload_status_ok = status.get("uploadStatus") in ["processed", "uploaded", "succeeded"]
-                    if not upload_status_ok:
-                        continue # Skip if not processed
-
-                    current_privacy = status.get("privacyStatus")
-                    match_filter = False
-                    if privacy_filter == "all":
-                        match_filter = True
-                    elif privacy_filter == "private" and current_privacy == "private":
-                        match_filter = True
-                    elif privacy_filter == "unlisted" and current_privacy == "unlisted":
-                        match_filter = True
-                    elif privacy_filter == "public" and current_privacy == "public":
-                        match_filter = True
-                    
-                    if match_filter:
-                        video_data_obj = VideoData( # Using new class name
-                            video_item["id"], 
-                            snippet.get("title", "No Title"), 
-                            snippet, 
-                            status
-                        )
-                        fetched_videos.append(video_data_obj)
-                        logger.info(f"Loaded: ID={video_data_obj.video_id}, Title='{video_data_obj.original_title}', Privacy='{current_privacy}', PublishAt='{status.get('publishAt', 'None')}'")
+            # 2. Paginate through playlistItems
+            next_page_token = None
+            video_count = 0
+            max_videos_to_scan = 1000 # Safety limit for very large channels
             
-            logger.info(f"Total videos loaded matching filter '{privacy_filter}': {len(fetched_videos)}")
-            if not fetched_videos:
-                 messagebox.showinfo("No Matching Videos", f"No videos matching the filter '{privacy_filter}' were found (or they were not processed).", parent=self.root)
+            while video_count < max_videos_to_scan:
+                playlist_items_request = self.service.playlistItems().list(
+                    playlistId=uploads_playlist_id,
+                    part="snippet,status,contentDetails", # status needed for privacyStatus
+                    maxResults=50,
+                    pageToken=next_page_token
+                )
+                playlist_items_response = playlist_items_request.execute()
+
+                for item in playlist_items_response.get("items", []):
+                    video_count +=1
+                    # Ensure it's a video and has necessary details
+                    if item.get("snippet", {}).get("resourceId", {}).get("kind") == "youtube#video":
+                        video_id = item["snippet"]["resourceId"]["videoId"]
+                        snippet = item["snippet"]
+                        status = item.get("status", {}) # Status might not be present for very new/processing videos
+                        
+                        # We still need to check uploadStatus from a videos.list call if not in playlistItem status
+                        # However, playlistItem status *should* have privacyStatus.
+                        # For simplicity here, we'll rely on playlistItem's status if available.
+                        # A more robust solution might do a videos.list for uploadStatus if critical.
+
+                        upload_status_ok = status.get("uploadStatus") in ["processed", "uploaded", "succeeded"]
+                        # If uploadStatus is not directly available here, assume OK if privacyStatus is set,
+                        # or consider an additional videos.list call for a batch of IDs later if needed.
+                        # For now, let's assume playlistItem status is sufficient for filtering.
+                        if not status.get("privacyStatus"): # If no privacy status, video might be weird (e.g. deleted after being in playlist)
+                            logger.warning(f"Video ID {video_id} from playlist has no privacyStatus, skipping.")
+                            continue
+                        
+                        # We will perform uploadStatus check more reliably after getting all video details
+                        # For now, just grab everything from the playlist.
+
+                        video_data_obj = VideoData(
+                            video_id,
+                            snippet.get("title", "No Title"),
+                            snippet, # This is playlistItem snippet
+                            status   # This is playlistItem status
+                        )
+                        all_videos_data.append(video_data_obj)
+                
+                next_page_token = playlist_items_response.get("nextPageToken")
+                if not next_page_token:
+                    break
+                if video_count >= max_videos_to_scan:
+                    logger.warning(f"Reached max scan limit of {max_videos_to_scan} videos from playlist.")
+                    messagebox.showwarning("Scan Limit", f"Scanned the {max_videos_to_scan} most recent videos. "
+                                                       "If you have more, not all may be loaded.", parent=self.root)
+                    break
+            
+            logger.info(f"Total videos fetched from uploads playlist: {len(all_videos_data)}")
+            if not all_videos_data:
+                 messagebox.showinfo("No Videos Found", "No videos found in your channel's uploads playlist.", parent=self.root)
 
         except Exception as e:
-            logger.error(f"Error fetching videos: {e}")
+            logger.error(f"Error fetching all videos from API: {e}")
             if "quotaExceeded" in str(e).lower():
                  messagebox.showerror("API Quota Error", f"Failed to fetch videos due to YouTube API quota limitations. Please try again later.\nDetails: {e}", parent=self.root)
             else:
                 messagebox.showerror("API Error", f"Failed to fetch videos: {e}", parent=self.root)
-            return []
-        return fetched_videos
+            return [] # Return empty list on error
+        return all_videos_data
 
-    def load_videos_gui(self, privacy_filter="all"): # Renamed from load_schedulable_videos_gui
+
+    def gui_load_all_videos(self):
         if not self.client_secrets_path:
             messagebox.showerror('Error', 'No credentials JSON selected.', parent=self.root)
             return
@@ -453,18 +483,22 @@ class SchedulerApp:
             try: 
                 self.service = get_authenticated_service(self.client_secrets_path)
                 logger.info("Successfully authenticated with YouTube API.")
-                self.enable_load_buttons(True)
             except Exception as auth_ex:
                 logger.error(f"Authentication failed: {auth_ex}")
                 messagebox.showerror('Auth Error', f'Authentication failed: {auth_ex}', parent=self.root)
                 self.service = None
-                self.enable_load_buttons(False)
+                self.enable_video_management_buttons(False)
                 return
         
-        self.loaded_videos = self.fetch_videos_from_api(privacy_filter) # Use new method name and pass filter
-        self.refresh_tree() # self.refresh_tree() iterates over self.loaded_videos
-        if self.loaded_videos:
-            messagebox.showinfo("Videos Loaded", f"Loaded {len(self.loaded_videos)} videos matching filter '{privacy_filter}'.", parent=self.root)
+        self.all_channel_videos = self.fetch_all_videos_from_api() 
+        self.current_filter_applied = "all" # Reset filter to "all"
+        self._populate_treeview(self.all_channel_videos) # Display all fetched videos
+        
+        if self.all_channel_videos:
+            messagebox.showinfo("Videos Loaded", f"Successfully loaded {len(self.all_channel_videos)} videos from your channel.", parent=self.root)
+        
+        # Enable filter buttons regardless of whether videos were found, so user can see "No videos found" message if they filter.
+        self.enable_video_management_buttons(True)
 
 
     def process_scheduling_gui(self):
@@ -474,26 +508,28 @@ class SchedulerApp:
             return
 
         videos_to_schedule = []
-        for item_widget_id in selected_items_indices:
-            video_id_in_tree = self.tree.item(item_widget_id)['values'][0]
-            for vd_obj in self.loaded_videos: # Iterate through self.loaded_videos
-                if vd_obj.video_id == video_id_in_tree:
-                    videos_to_schedule.append(vd_obj)
-                    break
+        # Important: Get VideoData objects from self.all_channel_videos based on selected IDs in tree
+        # because the tree might be showing a filtered list.
+        selected_video_ids_in_tree = {self.tree.item(item_widget_id)['values'][0] for item_widget_id in selected_items_indices}
+
+        for vd_obj in self.all_channel_videos:
+            if vd_obj.video_id in selected_video_ids_in_tree:
+                videos_to_schedule.append(vd_obj)
         
         if not videos_to_schedule:
-            messagebox.showerror("Error", "Selected videos not found in the internal list. Try reloading videos.", parent=self.root)
+            messagebox.showerror("Error", "Selected videos could not be fully matched. Try reloading the video list.", parent=self.root)
             return
 
         logger.info(f"Processing {len(videos_to_schedule)} selected videos for scheduling.")
 
-        if not self.service:
+        if not self.service: # Should ideally be available if videos are loaded
              try: self.service = get_authenticated_service(self.client_secrets_path)
              except Exception as e:
                 logger.error(f"Authentication error during scheduling: {e}")
                 messagebox.showerror("Auth Error", f"Authentication failed: {e}", parent=self.root)
                 return
 
+        # --- Get scheduling parameters from GUI ---
         new_title_base = self.title_ent.get().strip()
         new_desc_base = self.desc_txt.get('1.0','end-1c').strip()
         new_tags_list_base = sanitize_tags([t.strip() for t in self.tags_ent.get().split(',') if t.strip()])
@@ -503,14 +539,13 @@ class SchedulerApp:
         try:
             start_time_str = self.start_ent.get()
             local_dt = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M')
-            try:
-                local_tz = datetime.now().astimezone().tzinfo
-            except AttributeError: # Fallback for Python < 3.9
+            try: local_tz = datetime.now().astimezone().tzinfo
+            except AttributeError: 
                 offset_seconds = -timezone.utc.utcoffset(datetime.now()).total_seconds() if timezone.utc.utcoffset(datetime.now()) else 0
                 local_tz = timezone(timedelta(seconds=offset_seconds))
             start_utc_dt = local_dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
             
-            if start_utc_dt < datetime.now(timezone.utc) + timedelta(minutes=10): # Add a 10 min buffer
+            if start_utc_dt < datetime.now(timezone.utc) + timedelta(minutes=10): # Future buffer
                 messagebox.showerror("Error", "The first publish time must be at least 10 minutes in the future.", parent=self.root)
                 return
             logger.info(f"Scheduling first video at (UTC): {start_utc_dt.isoformat()}")
@@ -527,7 +562,7 @@ class SchedulerApp:
             if interval_delta < min_interval and len(videos_to_schedule) > 1 :
                  if not messagebox.askyesno("Warning: Short Interval", 
                                        f"The interval ({interval_h}h {interval_m}m) is less than 15 minutes. "
-                                       "YouTube might have limitations on very frequent scheduling. Continue?", parent=self.root):
+                                       "YouTube might have limitations. Continue?", parent=self.root):
                     return
             if interval_delta <= timedelta(0) and len(videos_to_schedule) > 1 : 
                 interval_delta = min_interval
@@ -536,18 +571,30 @@ class SchedulerApp:
             messagebox.showerror("Error", "Interval hours/minutes must be numbers.", parent=self.root)
             return
 
+        # --- Apply settings to selected VideoData objects ---
         current_publish_time = start_utc_dt
         for i, vd_obj in enumerate(videos_to_schedule):
+            # Metadata
             if new_title_base: vd_obj.title_to_set = new_title_base
+            else: vd_obj.title_to_set = vd_obj.original_title # Ensure it defaults back if field cleared
+
             if new_desc_base: vd_obj.description_to_set = new_desc_base
-            if self.tags_ent.get().strip():
-                 vd_obj.tags_to_set = new_tags_list_base
+            else: vd_obj.description_to_set = vd_obj.current_snippet.get('description', '')
+
+            if self.tags_ent.get().strip(): vd_obj.tags_to_set = new_tags_list_base
+            else: vd_obj.tags_to_set = vd_obj.current_snippet.get('tags', [])
+            
             if new_cat_choice != '(Keep Original)':
                 vd_obj.categoryId_to_set = CATEGORY_MAP.get(new_cat_choice, vd_obj.categoryId_to_set)
+            # else it keeps its original or default from VideoData init
+            
             if new_mfd_choice != '(Keep Original)':
                 vd_obj.madeForKids_to_set = True if new_mfd_choice == 'Yes' else False
-            
+            # else it keeps its original
+
+            # Scheduling
             vd_obj.publishAt_to_set = current_publish_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            vd_obj.privacyStatus_to_set = 'private' # Ensure it's set to private for scheduling
             logger.info(f"Video '{vd_obj.original_title}' (ID: {vd_obj.video_id}) set to schedule for: {vd_obj.publishAt_to_set}")
             
             if i < len(videos_to_schedule) - 1:
@@ -580,21 +627,38 @@ class SchedulerApp:
             progress_label.config(text=f"Processing {i+1}/{total_videos}: {vd.original_title[:50]}...")
             progress_win.update_idletasks()
             
-            snippet_body = {'title': vd.title_to_set, 'description': vd.description_to_set,
-                            'tags': vd.tags_to_set, 'categoryId': vd.categoryId_to_set}
-            if vd.defaultLanguage_to_set: snippet_body['defaultLanguage'] = vd.defaultLanguage_to_set
-            if vd.videoLanguage_to_set: snippet_body['defaultAudioLanguage'] = vd.videoLanguage_to_set
-            snippet_body['recordingDetails'] = {'recordingDate': vd.recordingDate_to_set} if vd.recordingDate_to_set else None
+            # Prepare snippet for update. Only include fields that are being set.
+            snippet_body = {
+                'title': vd.title_to_set, 
+                'description': vd.description_to_set,
+                'tags': vd.tags_to_set, 
+                'categoryId': vd.categoryId_to_set
+            }
+            # Optional fields:
+            if vd.defaultLanguage_to_set is not None: snippet_body['defaultLanguage'] = vd.defaultLanguage_to_set
+            if vd.videoLanguage_to_set is not None: snippet_body['defaultAudioLanguage'] = vd.videoLanguage_to_set
+            # Recording date needs careful handling: API expects ISO 8601 or null to clear
+            if vd.recordingDate_to_set:
+                 snippet_body['recordingDetails'] = {'recordingDate': vd.recordingDate_to_set}
+            elif 'recordingDetails' in vd.current_snippet: # If it had one and now it's cleared
+                 snippet_body['recordingDetails'] = None
 
-            status_body = {'privacyStatus': vd.privacyStatus_to_set, 'publishAt': vd.publishAt_to_set,
-                           'selfDeclaredMadeForKids': vd.madeForKids_to_set,
-                           'embeddable': vd.embeddable_to_set}
+
+            status_body = {
+                'privacyStatus': vd.privacyStatus_to_set, # Should be 'private' for scheduling
+                'publishAt': vd.publishAt_to_set,
+                'selfDeclaredMadeForKids': vd.madeForKids_to_set,
+                'embeddable': vd.embeddable_to_set 
+            }
             video_update_body = {'id': vd.video_id, 'snippet': snippet_body, 'status': status_body}
 
             try:
                 request = self.service.videos().update(part='snippet,status', body=video_update_body)
                 response = request.execute()
                 logger.info(f"Successfully updated ID: {response['id']}. Publish: {response['status'].get('publishAt', 'N/A')}")
+                # Update local VideoData object's status (important if not re-fetching immediately)
+                vd.current_status = response.get('status', vd.current_status)
+                vd.current_snippet = response.get('snippet', vd.current_snippet) # Update snippet too
                 success_count +=1
             except Exception as e:
                 logger.error(f"Failed to update video ID {vd.video_id}: {e}")
@@ -607,11 +671,10 @@ class SchedulerApp:
         logger.info(summary_message)
         messagebox.showinfo("Scheduling Complete", summary_message, parent=self.root)
 
-        if success_count > 0 or failure_count > 0 : 
-             # Reload with the last used filter or a default like "all"
-             # For simplicity, just call load_videos_gui without args (defaults to "all")
-             # or store last_filter and use it. Here, reloading all.
-             self.load_videos_gui(privacy_filter="all")
+        # After scheduling, refresh the tree view with the current filter
+        # This will reflect changes like `publishAt` being set.
+        if success_count > 0 or failure_count > 0 :
+             self.apply_filter_to_treeview(self.current_filter_applied)
 
 
     def on_exit(self):
