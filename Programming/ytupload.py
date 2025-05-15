@@ -109,18 +109,26 @@ def sanitize_description(desc: str) -> str:
     # truncate to 5000 chars
     return desc[:5000]
 
-def sanitize_tags(tags_list):
+def sanitize_tags(raw_tags):
     clean = []
-    total_len = 0
-    for t in tags_list:
-        t = t.strip()
-        if not t: continue
-        # each tag max 30 chars
-        t = t[:30]
-        if total_len + len(t) > 500:  # total tags length limit
+    for t in raw_tags:
+        tag = t.strip()
+        if not tag:
+            continue
+        # remove control chars
+        tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)
+        # whitelist alphanumeric and space
+        tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)
+        # per‑tag cap
+        tag = tag[:30]
+        if not tag:
+            continue
+        # test if adding this tag would exceed 500 chars including commas
+        candidate = clean + [tag]
+        joined = ",".join(candidate)
+        if len(joined) > 500:
             break
-        clean.append(t)
-        total_len += len(t)
+        clean.append(tag)
     return clean
 
 # --- VideoEntry model ---
@@ -363,17 +371,43 @@ class UploaderApp:
     def upload_all(self, service):
         for e in self.video_entries:
             media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
+
+            # --- Sanitize description ---
+            raw_desc = (e.description or '').rstrip('\n')
+            desc = ''
+            if raw_desc.strip():
+                desc = re.sub(r'[\x00-\x1F\x7F]', '', raw_desc)[:5000]
+
+            # --- Sanitize tags ---
+            clean_tags = []
+            total_len = 0
+            for t in (e.tags or []):
+                tag = t.strip()
+                if not tag:
+                    continue
+                tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)  # drop control chars
+                tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)  # keep only alnum+space
+                tag = tag[:30]  # per-tag cap
+                if not tag:
+                    continue
+                if total_len + len(tag) > 500:  # total cap
+                    break
+                clean_tags.append(tag)
+                total_len += len(tag)
+
+            # --- Build snippet & status ---
             snippet = {'title': e.title}
-            if e.description:
-                snippet['description'] = e.description
-            if e.tags:
-                snippet['tags'] = e.tags
+            if desc:
+                snippet['description'] = desc
+            if clean_tags:
+                snippet['tags'] = clean_tags
             snippet.update({
                 'categoryId': e.categoryId,
                 'defaultLanguage': e.defaultLanguage,
                 'defaultAudioLanguage': e.videoLanguage,
                 'recordingDetails': {'recordingDate': e.recordingDate}
             })
+
             status = {
                 'privacyStatus': 'private',
                 'publishAt': e.publishAt,
@@ -382,26 +416,49 @@ class UploaderApp:
                 'embeddable': e.embeddable,
                 'publicStatsViewable': e.publicStatsViewable
             }
+
             body = {'snippet': snippet, 'status': status}
 
-            req = service.videos().insert(
-                part='snippet,status',
-                body=body,
-                media_body=media,
-                notifySubscribers=e.notifySubscribers
-            )
+            def do_insert(body, notify):
+                return service.videos().insert(
+                    part='snippet,status',
+                    body=body,
+                    media_body=media,
+                    notifySubscribers=notify
+                )
 
             print(f"Uploading {Path(e.filepath).name}", flush=True)
-            progress, resp = None, None
-            while resp is None:
-                progress, resp = req.next_chunk()
-                if progress:
-                    print(f"  {int(progress.progress()*100)}%", flush=True)
+
+            req = do_insert(body, e.notifySubscribers)
+
+            progress = None
+            resp = None
+            try:
+                while resp is None:
+                    progress, resp = req.next_chunk()
+                    if progress:
+                        print(f"  {int(progress.progress() * 100)}%", flush=True)
+            except Exception as upload_ex:
+                # If tags are invalid, retry without them
+                if 'invalidTags' in str(upload_ex):
+                    print("  Warning: tags rejected by API, retrying without tags...", flush=True)
+                    snippet.pop('tags', None)
+                    body['snippet'] = snippet
+                    req = do_insert(body, e.notifySubscribers)
+                    progress, resp = None, None
+                    while resp is None:
+                        progress, resp = req.next_chunk()
+                        if progress:
+                            print(f"  {int(progress.progress() * 100)}%", flush=True)
+                else:
+                    # re-raise any other errors
+                    raise
 
             vid = resp['id']
             print(f"Done: https://youtu.be/{vid}", flush=True)
-            logger.info(f"Uploaded {e.filepath} -> {vid}")
+            logger.info(f"Uploaded {e.filepath} → {vid}")
 
+            # Playlist insertion (unchanged)...
             if e.playlistId:
                 try:
                     service.playlistItems().insert(
@@ -412,10 +469,12 @@ class UploaderApp:
                         }}
                     ).execute()
                     print(f"  Added to playlist {e.playlistId}", flush=True)
+                    logger.info(f"Added {vid} to playlist {e.playlistId}")
                 except Exception as ex:
                     print(f"  Playlist add failed: {ex}", flush=True)
                     logger.error(f"Playlist error for {vid}: {ex}")
 
+        # After all uploads
         if self.save_log_var.get():
             with open(LOG_FILE, 'w') as f:
                 f.write("\n".join(log_records))
