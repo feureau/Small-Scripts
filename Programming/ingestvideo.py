@@ -1,3 +1,4 @@
+
 import os
 import sys
 import subprocess
@@ -681,29 +682,40 @@ def process_video(file_path, settings):
     chosen_res = settings["resolution_choice"]
     resolution_map = {
         "No Resize": (None, None),
-        "HD 1080p":  (1080, 1080),
-        "4K 2160p":  (2160, 2160),
+        "HD 1080p":  (1080, 1080), # Note: These are target heights, width will be calculated or set
+        "4K 2160p":  (2160, 2160), # For simplicity assuming square pixels for this map
         "8K 4320p":  (4320, 4320)
     }
     if chosen_res in resolution_map:
-        target_width, target_height = resolution_map[chosen_res]
-        # If not "No Resize" => check up vs down scale
-        if target_width is not None and target_height is not None:
-            if target_width > input_width or target_height > input_height:
+        target_h_res_map, _ = resolution_map[chosen_res] # Using the first value as target height for scaling logic
+        
+        # Determine target width and height based on choice, maintaining aspect ratio for output-res
+        current_crop_w = crop_w_val
+        current_crop_h = crop_h_val
+
+        if target_h_res_map is not None: # If not "No Resize"
+            output_res_h = target_h_res_map
+            output_res_w = int(current_crop_w * (output_res_h / current_crop_h))
+            # Ensure output width is even
+            output_res_w = output_res_w - (output_res_w % 2)
+
+            if output_res_w > current_crop_w or output_res_h > current_crop_h:
                 # Up-scaling => use superres
                 command.extend([
                     "--vpp-resize",
                     "algo=nvvfx-superres,superres-mode=0",
-                    "--output-res", f"{target_width}x{target_height}"
+                    "--output-res", f"{output_res_w}x{output_res_h}"
                 ])
-            else:
-                # Down-scaling or same scale => use simpler method (e.g., bilinear)
-                if (target_width < input_width) or (target_height < input_height):
-                    command.extend([
-                        "--vpp-resize",
-                        "algo=bilinear",
-                        "--output-res", f"{target_width}x{target_height}"
-                    ])
+            elif output_res_w < current_crop_w or output_res_h < current_crop_h:
+                # Down-scaling => use simpler method (e.g., bilinear)
+                 command.extend([
+                    "--vpp-resize",
+                    "algo=bilinear", # or spline36 for potentially better quality downscale
+                    "--output-res", f"{output_res_w}x{output_res_h}"
+                ])
+            # If dimensions are the same as cropped, no resize needed unless explicitly chosen
+            # The current logic correctly handles this by not adding resize if target is same as cropped.
+
     # Audio
     selected_tracks = settings["audio_tracks"]
     tracks_to_copy = []
@@ -722,6 +734,9 @@ def process_video(file_path, settings):
             command.extend(["--audio-codec", f"{track_number}?ac3"])
             command.extend(["--audio-bitrate", f"{track_number}?640"])
             command.extend(["--audio-stream", f"{track_number}?5.1"])
+            # --- ADDED LINE ---
+            command.extend(["--audio-samplerate", f"{track_number}?48000"])
+            # ------------------
     # Print the command
     quoted_command = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in command)
     print(f"\nProcessing: {file_path}")
