@@ -1,51 +1,99 @@
 import os
 import shutil
+import argparse
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Organizes files in the current directory into subfolders.",
+        formatter_class=argparse.RawTextHelpFormatter, # Allows for better formatting of the help message
+        epilog="""Example usage:
+  python your_script_name.py
+  python your_script_name.py -l 10
+  python your_script_name.py --limit 20"""
+    )
+    parser.add_argument(
+        "-l", "--limit",
+        type=int,
+        default=15,
+        help="Number of files per folder. Default is 15."
+    )
+    
+    # In a standard command-line execution, parse_args() will use sys.argv[1:]
+    # The error in the previous execution step was due to the environment
+    # passing its own arguments. This will work correctly when you run it.
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # This allows the help message to be displayed and then exits cleanly
+        # if -h or --help is used, or if there's an argument parsing error.
+        return
+
+
     # The folder from which the script is called (current working directory)
     cwd = os.getcwd()
     
-    # Gather all .mov, .mp4, .mkv files
-    # (case-insensitive check for extensions)
-    exts = (".mov", ".mp4", ".mkv")
-    all_files = os.listdir(cwd)
-    video_files = [
-        f for f in all_files
-        if os.path.isfile(os.path.join(cwd, f)) 
-        and f.lower().endswith(exts)
+    # Gather all files (excluding this script itself, if running from source)
+    # and any directories.
+    script_name = os.path.basename(__file__)
+    all_items = os.listdir(cwd)
+    files_to_process = [
+        f for f in all_items
+        if os.path.isfile(os.path.join(cwd, f)) and f != script_name
     ]
     
-    # Sort them if you want consistent ordering (optional)
-    video_files.sort()
+    # Sort them for consistent ordering
+    files_to_process.sort()
     
-    # Start the folder index at -1 so the first check moves it to 0
-    dirN = -1
-    
-    # We'll move through the list of video_files in chunks of 15
-    idx = 0
-    limit = 15  # number of files per folder
+    if not files_to_process:
+        print(f"No files found to process in the current directory (excluding '{script_name}').")
+        return
 
-    # While we still have videos to move
-    while idx < len(video_files):
+    # Start the folder index at -1 so the first check moves it to 0
+    dir_n = -1
+    
+    idx = 0
+    limit = args.limit
+
+    if limit <= 0:
+        print("Error: The limit for files per folder must be a positive integer.")
+        parser.print_help() # Show help if the limit is invalid
+        return
+
+    print(f"Processing {len(files_to_process)} files with a limit of {limit} files per folder.")
+
+    # While we still have files to move
+    while idx < len(files_to_process):
         # Find the next numeric directory name that does not exist
-        dirN += 1
-        while os.path.exists(str(dirN)):
-            dirN += 1
+        dir_n += 1
+        while os.path.exists(str(dir_n)):
+            dir_n += 1
         
         # Create the new folder
-        os.mkdir(str(dirN))
+        try:
+            os.mkdir(str(dir_n))
+            print(f"Created folder: {dir_n}")
+        except OSError as e:
+            print(f"Error creating folder {dir_n}: {e}")
+            print("Stopping script due to folder creation error.")
+            return # Stop if folder creation fails
         
         # Slice the next `limit` files
-        chunk = video_files[idx : idx + limit]
+        chunk = files_to_process[idx : idx + limit]
         idx += limit
         
         # Move those files into the newly created folder
         for filename in chunk:
             src_path = os.path.join(cwd, filename)
-            dst_path = os.path.join(cwd, str(dirN), filename)
-            shutil.move(src_path, dst_path)
+            dst_path = os.path.join(cwd, str(dir_n), filename)
+            try:
+                shutil.move(src_path, dst_path)
+                print(f"Moved: {filename} -> {dir_n}/{filename}")
+            except Exception as e:
+                print(f"Error moving {filename} to {dir_n}/: {e}")
+                # Decide if you want to stop or continue if a single file move fails
+                # For now, it will print the error and continue with other files/folders
     
-    print("Task Done!")
+    print("\nTask Done!")
 
 if __name__ == "__main__":
     main()
