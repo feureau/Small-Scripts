@@ -241,7 +241,8 @@ def execute_file_processing(intro_trim_seconds, outtro_trim_seconds, qvbr_value_
         command_parts_list.extend(hdr_metadata_list) # Add these only if TrueHDR is on
 
         command_parts_list.extend([
-            "--audio-codec", "ac3", "--audio-bitrate", "640",
+            #"--audio-copy",
+            "--audio-codec", "pcm_s24be", "--audio-bitrate", "640", "--audio-samplerate", "48000",
             "--chapter-copy", "--key-on-chapter", "--metadata", "copy",
             "-i", f'"{clean_file_path}"', 
             "-o", f'"{final_output_full_path}"'
