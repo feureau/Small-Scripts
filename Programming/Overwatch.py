@@ -8,7 +8,7 @@ import glob
 
 # --- CONFIGURATION ---
 INITIAL_CWD = os.getcwd() 
-OUTPUT_SUBFOLDER_NAME = "Processed_Overwatch_Videos_AV1"
+OUTPUT_SUBFOLDER_NAME = "Processed_Overwatch_Videos"
 VIDEO_EXTENSIONS = [
     '.mp4', '.mkv', '.mov', '.avi', '.flv', '.wmv', 
     '.webm', '.mpg', '.mpeg', '.ts', '.vob'
@@ -205,11 +205,11 @@ def execute_file_processing(intro_trim_seconds, outtro_trim_seconds, qvbr_value_
         
         # Determine suffix based on upscale and TrueHDR (which implies HDR output)
         if perform_upscale:
-            output_suffix = "_4K_HDR_AV1" if apply_truehdr_and_hdr_metadata else "_4K_AV1"
+            output_suffix = "_4K_HDR" if apply_truehdr_and_hdr_metadata else "_4K"
         else:
-            output_suffix = "_HDR_AV1" if apply_truehdr_and_hdr_metadata else "_AV1"
+            output_suffix = "_HDR" if apply_truehdr_and_hdr_metadata else "_hevc"
             
-        processed_filename = f"{os.path.splitext(original_filename)[0]}{output_suffix}.mkv"
+        processed_filename = f"{os.path.splitext(original_filename)[0]}{output_suffix}.mp4"
         final_output_full_path = os.path.join(output_main_directory, processed_filename)
 
         if os.path.exists(final_output_full_path):
@@ -230,8 +230,8 @@ def execute_file_processing(intro_trim_seconds, outtro_trim_seconds, qvbr_value_
             trim_options_str,
             upscale_options_str, 
             truehdr_filter_str, # Will be empty if not applied
-            "--codec", "av1", 
-            "--profile", "main", 
+            "--codec", "hevc", 
+            "--profile", "main10", 
             "--qvbr", str(qvbr_value_int), 
             "--preset", "p7", "--output-depth", "10",
             "--multipass", "2pass-full",
@@ -242,7 +242,7 @@ def execute_file_processing(intro_trim_seconds, outtro_trim_seconds, qvbr_value_
 
         command_parts_list.extend([
             #"--audio-copy",
-            "--audio-codec", "pcm_s24be", "--audio-bitrate", "640", "--audio-samplerate", "48000",
+            "--audio-codec", "pcm_s16le", "--audio-bitrate", "640", "--audio-samplerate", "48000",
             "--chapter-copy", "--key-on-chapter", "--metadata", "copy",
             "-i", f'"{clean_file_path}"', 
             "-o", f'"{final_output_full_path}"'
