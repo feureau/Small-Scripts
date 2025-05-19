@@ -608,7 +608,7 @@ def process_video(file_path, settings):
     file_name = os.path.basename(file_path)
     output_subdir = os.path.join(input_dir, "processed_videos")
     os.makedirs(output_subdir, exist_ok=True)
-    output_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_AV1.mkv")
+    output_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + ".mp4")
     log_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_encoding.log")
     input_height, input_width = get_video_resolution(file_path)
     if input_height is None or input_width is None:

@@ -409,7 +409,7 @@ class SchedulerApp:
             # 2. Paginate through playlistItems
             next_page_token = None
             video_count = 0
-            max_videos_to_scan = 1000 # Safety limit for very large channels
+            max_videos_to_scan = 100 # Safety limit for very large channels
             
             while video_count < max_videos_to_scan:
                 playlist_items_request = self.service.playlistItems().list(

@@ -209,7 +209,7 @@ def generate_timeline_data(srt_file_path, output_file_path):
                 cleaned_text = re.sub(r'<[^>]+>', '', cleaned_text) # Remove HTML tags
 
                 # Filter: Keep \w (alphanumeric + underscore, UNICODE) and \s (whitespace, UNICODE)
-                marker_label = re.sub(r'[^\w\s]+', '', cleaned_text, re.UNICODE)
+                marker_label = re.sub(r'[^\w\s\'\,]+', '', cleaned_text, re.UNICODE) #add more stuff to inside the angle brackets to add more allowed characters.
                 marker_label = re.sub(r'\s+', ' ', marker_label).strip() # Normalize whitespace
                 marker_label = marker_label.replace('|', '_') # Replace pipe AFTER filtering
 
