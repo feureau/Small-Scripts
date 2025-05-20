@@ -22,13 +22,13 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 # --- Constants ---
 SCOPES = [
-    "https://www.googleapis.com/auth/youtube",       # Corrected
-    "https://www.googleapis.com/auth/youtube.force-ssl" # Corrected
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.force-ssl"
 ]
 TOKEN_FILE = "token.json"
 LOG_FILE = "ytscheduler.log"
-OAUTH_PORT = 0 # Port for the local OAuth server. 0 means pick an available ephemeral port.
-API_TIMEOUT_SECONDS = 60 # Timeout in seconds for YouTube API calls (currently used for token refresh)
+OAUTH_PORT = 0
+API_TIMEOUT_SECONDS = 60
 
 CATEGORY_MAP = {
     "Film & Animation": "1", "Autos & Vehicles": "2", "Music": "10",
@@ -41,16 +41,14 @@ LANGUAGES = {"English": "en", "Spanish": "es", "French": "fr", "German": "de", "
 
 # --- Logger ---
 logger = logging.getLogger("ytscheduler")
-logger.setLevel(logging.DEBUG) # Process DEBUG messages and above (for publishAt debugging)
+logger.setLevel(logging.INFO) # Set to DEBUG to see detailed API responses
 
-# Console Handler for immediate feedback
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG) # For publishAt debugging
+console_handler.setLevel(logging.INFO) # Match logger level or set explicitly
 console_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
 if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
     logger.addHandler(console_handler)
 
-# Global reference to file handler for easier management in on_exit
 file_log_handler_global = None
 
 # --- Token revocation ---
@@ -60,47 +58,40 @@ def revoke_token():
         try:
             with open(TOKEN_FILE, 'r') as f:
                 token_data = json.load(f)
-
             if 'refresh_token' in token_data and token_data['refresh_token']:
                 revoke_params = {'token': token_data['refresh_token']}
                 response = requests.post(
                     'https://oauth2.googleapis.com/revoke',
                     params=revoke_params,
                     headers={'content-type': 'application/x-www-form-urlencoded'},
-                    timeout=10 # Timeout for the revoke request
+                    timeout=10
                 )
                 if response.status_code == 200:
-                    logger.info(f"Refresh token revoked successfully from server (token: ...{token_data['refresh_token'][-6:]}).")
+                    logger.info(f"Refresh token revoked successfully (token: ...{token_data['refresh_token'][-6:]}).")
                 else:
-                    logger.warning(f"Failed to revoke refresh token from server. Status: {response.status_code}, Response: {response.text}")
+                    logger.warning(f"Failed to revoke refresh token. Status: {response.status_code}, Response: {response.text}")
             else:
-                logger.info("No refresh_token found in token.json to revoke from server.")
-        except FileNotFoundError:
-            logger.info("Token file not found for revocation (already deleted or never existed).")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during token revocation: {e}")
-        except Exception as e:
-            logger.error(f"Error during token data loading or server-side revocation: {e}", exc_info=True)
+                logger.info("No refresh_token found to revoke from server.")
+        except FileNotFoundError: logger.info("Token file not found for revocation.")
+        except requests.exceptions.RequestException as e: logger.error(f"Network error during token revocation: {e}")
+        except Exception as e: logger.error(f"Error during token data or server-side revocation: {e}", exc_info=True)
         finally:
             try:
                 if os.path.exists(TOKEN_FILE):
                     os.remove(TOKEN_FILE)
                     logger.info(f"Local token file '{TOKEN_FILE}' deleted.")
-            except OSError as e:
-                logger.error(f"Error deleting local token file '{TOKEN_FILE}': {e}", exc_info=True)
-    else:
-        logger.info("No local token file to revoke or delete.")
+            except OSError as e: logger.error(f"Error deleting local token file '{TOKEN_FILE}': {e}", exc_info=True)
+    else: logger.info("No local token file to revoke or delete.")
 
 def setup_revocation_on_exit():
     atexit.register(revoke_token)
     def on_sig(signum, frame):
         signal_name = signal.Signals(signum).name if hasattr(signal, 'Signals') and isinstance(signum, signal.Signals) else signum
         logger.info(f"Signal {signal_name} received, attempting token revocation before exit.")
-        sys.exit(1) # Ensure sys.exit is called to trigger atexit handlers
+        sys.exit(1)
     if hasattr(signal, 'SIGINT'): signal.signal(signal.SIGINT, on_sig)
     if hasattr(signal, 'SIGTERM'): signal.signal(signal.SIGTERM, on_sig)
     if os.name == 'nt' and hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, on_sig)
-
 
 # --- OAuth Authentication ---
 def get_authenticated_service(secrets_path, app_root_window=None):
@@ -110,53 +101,49 @@ def get_authenticated_service(secrets_path, app_root_window=None):
             creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
             logger.info("Loaded credentials from token.json")
         except Exception as e:
-            logger.warning(f"Failed to load token from file: {e}. Will attempt re-authentication.", exc_info=True)
+            logger.warning(f"Failed to load token: {e}. Re-authenticating.", exc_info=True)
             creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             logger.info("Refreshing expired credentials...")
             try:
-                request_session_with_timeout = Request(timeout=API_TIMEOUT_SECONDS)
-                creds.refresh(request_session_with_timeout)
-                logger.info("Credentials refreshed successfully.")
+                creds.refresh(Request(timeout=API_TIMEOUT_SECONDS))
+                logger.info("Credentials refreshed.")
             except Exception as e:
-                logger.error(f"Failed to refresh credentials: {e}. Proceeding to full auth.", exc_info=True)
+                logger.error(f"Failed to refresh: {e}. Full auth.", exc_info=True)
                 creds = None
-
         if not creds:
-            logger.info("No valid credentials found or refresh failed. Starting new OAuth flow.")
+            logger.info("No valid creds. Starting OAuth flow.")
             if not secrets_path or not Path(secrets_path).exists():
-                logger.error("Client secrets file path not provided or file does not exist.")
-                parent_win = app_root_window if app_root_window and app_root_window.winfo_exists() else None
-                if parent_win:
-                    messagebox.showerror("Authentication Error", "Client secrets file path not provided or file does not exist. Please select it first.", parent=parent_win)
-                else:
-                    print("ERROR: Client secrets file path not provided or file does not exist.")
-                raise FileNotFoundError("Client secrets file is required for new authentication.")
+                err_msg = "Client secrets file missing."
+                logger.error(err_msg)
+                if app_root_window and app_root_window.winfo_exists():
+                    messagebox.showerror("Auth Error", err_msg, parent=app_root_window)
+                raise FileNotFoundError(err_msg)
 
+            # Attempt 1: Local server with automatic browser opening
             flow_attempt1 = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
             try:
-                logger.info(f"Attempt 1: Authentication via local server (port={OAUTH_PORT}, auto browser open)...")
+                logger.info(f"Attempt 1: Auth via local server (port={OAUTH_PORT}, auto browser)...")
                 creds = flow_attempt1.run_local_server(
                     port=OAUTH_PORT, open_browser=True,
-                    authorization_prompt_message="Awaiting authorization in your browser...\nYour browser should open to Google's sign-in page.\nIf it doesn't, please copy the URL printed in the console/terminal and open it manually.\n{url}",
-                    success_message="Authentication successful! You can close this browser tab and return to the application.",
+                    authorization_prompt_message="Awaiting auth in browser...\nIf it doesn't open, copy URL from console: {url}",
+                    success_message="Auth successful! You can close this tab.",
                     timeout_seconds=900
                 )
-                logger.info("Attempt 1: Local server auth (auto browser) successful, credentials obtained.")
-            except (MismatchingStateError, TimeoutError) as e_specific_attempt1:
+                logger.info("Attempt 1: Auth successful.")
+            except (MismatchingStateError, TimeoutError, ConnectionRefusedError) as e_specific_attempt1:
                  logger.error(f"Attempt 1: Local server auth (auto browser) failed with {type(e_specific_attempt1).__name__}: {e_specific_attempt1}.", exc_info=True)
-            except Exception as e_local_server_auto:
+            except Exception as e_local_server_auto: # Catch other unexpected errors
                 logger.error(f"Attempt 1: Local server auth (auto browser) failed. Type: {type(e_local_server_auto).__name__}, Error: {e_local_server_auto}.", exc_info=True)
 
             if not (creds and creds.valid):
-                logger.info("Attempt 1 failed or produced invalid credentials.")
+                logger.info("Attempt 1 failed. Trying Attempt 2 (manual browser, local server)...")
                 flow_attempt2 = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
                 try:
-                    logger.info(f"Attempt 2: Authentication via local server (port={OAUTH_PORT}, manual browser open)...")
                     auth_url_manual_server, _ = flow_attempt2.authorization_url()
-                    instructions_manual_server = (
+                    instructions = (
                         "AUTHENTICATION REQUIRED (Attempt 2 of 3):\n\n"
                         "The application will now start a local server and wait for you to authorize.\n\n"
                         f"1. Please copy the URL below and paste it into your web browser:\n\n{auth_url_manual_server}\n\n"
@@ -166,140 +153,101 @@ def get_authenticated_service(secrets_path, app_root_window=None):
                         "Click 'OK' to start the local server and proceed with the steps above."
                     )
                     parent_win = app_root_window if app_root_window and app_root_window.winfo_exists() else None
-                    if parent_win:
-                         messagebox.showinfo("Manual Authentication - Local Server Method", instructions_manual_server, parent=parent_win)
-                    else:
-                        print(instructions_manual_server.replace("\n\n", "\n"))
-
-                    creds = flow_attempt2.run_local_server(
-                        port=OAUTH_PORT, open_browser=False,
-                        timeout_seconds=900,
-                        success_message="Authentication successful! You can close this browser tab and return to the application."
-                    )
-                    logger.info("Attempt 2: Local server auth (manual browser) successful, credentials obtained.")
-                except (MismatchingStateError, TimeoutError) as e_specific_attempt2:
+                    if parent_win: messagebox.showinfo("Manual Auth - Local Server", instructions, parent=parent_win)
+                    else: print(instructions.replace("\n\n", "\n"))
+                    
+                    creds = flow_attempt2.run_local_server(port=OAUTH_PORT, open_browser=False, timeout_seconds=900, success_message="Auth successful! You can close this tab.")
+                    logger.info("Attempt 2: Auth successful.")
+                except (MismatchingStateError, TimeoutError, ConnectionRefusedError) as e_specific_attempt2:
                     logger.error(f"Attempt 2: Local server auth (manual browser) failed with {type(e_specific_attempt2).__name__}: {e_specific_attempt2}.", exc_info=True)
                 except Exception as e_local_server_manual:
                     logger.error(f"Attempt 2: Local server auth (manual browser) failed. Type: {type(e_local_server_manual).__name__}, Error: {e_local_server_manual}.", exc_info=True)
 
             if not (creds and creds.valid):
-                logger.info("Attempts 1 and 2 failed or produced invalid credentials.")
+                logger.info("Attempts 1 & 2 failed. Trying Attempt 3 (fully manual code)...")
                 flow_attempt3 = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
                 try:
-                    logger.info("Attempt 3: Fully manual code exchange flow...")
                     auth_url_fully_manual, _ = flow_attempt3.authorization_url()
+                    port_msg = 'A_DYNAMIC_PORT' if OAUTH_PORT == 0 else OAUTH_PORT
                     instructions_part1 = (
                         "AUTHENTICATION REQUIRED (Attempt 3 of 3 - Fully Manual):\n\n"
-                        "STEP 1 of 2: Authorize in Browser\n\n"
+                        "STEP 1: Authorize in Browser\n"
                         f"1. Please open this URL in your browser:\n\n{auth_url_fully_manual}\n\n"
                         "2. Authorize the application.\n\n"
                         "3. Your browser will be redirected to a URL. The address bar will show something like:\n"
-                        f"   'http://localhost:{'A_DYNAMIC_PORT' if OAUTH_PORT == 0 else OAUTH_PORT}/?code=AUTH_CODE_HERE&state=...'\n"
+                        f"   'http://localhost:{port_msg}/?code=AUTH_CODE_HERE&state=...'\n"
                         f"   (The port will be dynamically assigned if OAUTH_PORT is 0, otherwise it's {OAUTH_PORT})\n\n"
-                        "4. From that redirected URL in your browser's address bar, carefully copy THE ENTIRE 'code' VALUE.\n"
-                        "   (It's the string of characters immediately after 'code=' and usually before the next '&' symbol, if any).\n\n"
+                        "4. From that redirected URL, carefully copy THE ENTIRE 'code' VALUE.\n\n"
                         "Click 'OK' here ONLY AFTER you have COPIED the authorization code."
                     )
                     auth_dialog_parent = app_root_window if app_root_window and app_root_window.winfo_exists() else None
-                    if auth_dialog_parent:
-                        messagebox.showinfo("Manual Authentication - Step 1: Get Code", instructions_part1, parent=auth_dialog_parent)
+                    if auth_dialog_parent: messagebox.showinfo("Manual Auth - Step 1", instructions_part1, parent=auth_dialog_parent)
                     else:
-                        print("--------------------------------------------------------------------")
                         print(instructions_part1.replace("\n\n", "\n"))
-                        input("Press Enter after you have copied the code and are ready to paste it...")
+                        input("Press Enter after copying the code...")
+                    
+                    auth_code = simpledialog.askstring("Manual Auth - Step 2", "Paste the 'code' copied from browser:", parent=auth_dialog_parent)
 
-                    auth_code = simpledialog.askstring(
-                        "Manual Authentication - Step 2: Paste Code",
-                        "Please paste the 'code' you copied from your browser's address bar in the previous step:",
-                        parent=auth_dialog_parent
-                    )
-
-                    if auth_code:
-                        auth_code = auth_code.strip()
-                        if not auth_code:
-                            logger.warning("Attempt 3: Manual authentication cancelled (empty code entered).")
-                            raise Exception("Manual authentication failed: Empty code entered.")
-                        flow_attempt3.fetch_token(code=auth_code)
+                    if auth_code and auth_code.strip():
+                        flow_attempt3.fetch_token(code=auth_code.strip())
                         creds = flow_attempt3.credentials
-                        logger.info("Attempt 3: Successfully authenticated using manual code exchange.")
+                        logger.info("Attempt 3: Auth successful.")
                     else:
-                        logger.warning("Attempt 3: Manual authentication cancelled by user (dialog closed or cancel pressed).")
-                        raise Exception("Manual authentication cancelled by user.")
+                        raise Exception("Manual auth failed: Empty or no code entered.")
                 except Exception as e_fetch_token:
-                    final_error_msg_manual = f"Attempt 3: Manual code exchange failed: {e_fetch_token}"
-                    logger.error(final_error_msg_manual, exc_info=True)
-                    parent_for_final_error = app_root_window if app_root_window and app_root_window.winfo_exists() else None
-                    if "cancelled by user" not in str(e_fetch_token).lower() and "empty code entered" not in str(e_fetch_token).lower():
-                        if parent_for_final_error:
-                            messagebox.showerror("Authentication Failed", final_error_msg_manual, parent=parent_for_final_error)
-                        else:
-                            print(f"ERROR: {final_error_msg_manual}")
-                    raise Exception(f"All authentication methods failed. Last error: {e_fetch_token}") from e_fetch_token
-
+                    final_error_msg = f"Attempt 3: Manual code exchange failed: {e_fetch_token}"
+                    logger.error(final_error_msg, exc_info=True)
+                    parent_for_err = app_root_window if app_root_window and app_root_window.winfo_exists() else None
+                    if "cancelled" not in str(e_fetch_token).lower() and "empty code" not in str(e_fetch_token).lower():
+                        if parent_for_err: messagebox.showerror("Auth Failed", final_error_msg, parent=parent_for_err)
+                        else: print(f"ERROR: {final_error_msg}")
+                    raise Exception(f"All auth methods failed. Last error: {e_fetch_token}") from e_fetch_token
+            
             if creds and creds.valid:
                 with open(TOKEN_FILE, 'w') as f: f.write(creds.to_json())
                 logger.info(f"Credentials obtained and saved to {TOKEN_FILE}")
             else:
-                logger.error("All authentication attempts failed or resulted in invalid credentials.")
-                raise Exception("Failed to obtain valid credentials after all authentication attempts.")
-
+                raise Exception("Failed to obtain valid credentials after all attempts.")
+                
     if creds and creds.valid:
         return build('youtube', 'v3', credentials=creds, cache_discovery=False)
     else:
-        logger.error("CRITICAL: Attempting to build service without valid credentials.")
-        raise Exception("Failed to build YouTube service due to missing or invalid credentials after authentication process.")
-
-
-# --- Helpers ---
-def sanitize_description(desc: str) -> str:
-    desc = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', desc)
-    return desc[:4999]
-
-def sanitize_tags(raw_tags):
-    clean = []; current_length = 0
-    for t in raw_tags:
-        tag = str(t).strip()
-        if not tag: continue
-        tag = re.sub(r'[\x00-\x1F\x7F\"]', '', tag); tag = tag[:75]
-        if current_length + len(tag) + (1 if clean else 0) > 480:
-            logger.warning(f"Tag '{tag}' truncated or skipped as total tag length exceeds limit."); break
-        if tag: clean.append(tag); current_length += len(tag) + (1 if len(clean) > 1 else 0)
-    return clean
+        raise Exception("Failed to build YouTube service: No valid credentials.")
 
 # --- VideoData model ---
 class VideoData:
-    def __init__(self, video_id, title, current_snippet, current_status):
-        self.video_id = video_id; self.original_title = title
-        self.current_snippet = current_snippet if current_snippet else {} # From playlistItem.snippet
-        self.current_status = current_status if current_status else {} # From playlistItem.status
+    def __init__(self, video_id, video_title, video_snippet, video_status, video_content_details=None, video_recording_details=None):
+        self.video_id = video_id
+        self.original_title = video_title # This is the title from video.snippet.title
+        
+        # Data from videos().list response
+        self.video_snippet = video_snippet if video_snippet else {}
+        self.video_status = video_status if video_status else {}
+        self.video_content_details = video_content_details if video_content_details else {}
+        self.video_recording_details = video_recording_details if video_recording_details else {}
 
-        # Initialize with data primarily from playlistItem
-        self.title_to_set = title # From playlistItem.snippet.title
-        self.description_to_set = self.current_snippet.get('description', '') # From playlistItem.snippet.description
-
-        # These are NOT in playlistItem.snippet or playlistItem.status. They are video-specific.
-        # They will be default/empty unless populated by a videos().list call (not done by default for performance).
-        self.tags_to_set = [] # Tags for a video
-        self.categoryId_to_set = CATEGORY_MAP['Entertainment'] # Default category
-        self.videoLanguage_to_set = None # e.g., 'en'
-        self.defaultLanguage_to_set = None # e.g., 'en' for title/desc
-        self.recordingDate_to_set = None # ISO 8601 string
-
-        # These are NOT in playlistItem.status. They are video-specific status/details.
-        self.madeForKids_to_set = False # Default
-        self.embeddable_to_set = True # Default
-        self.publicStatsViewable_to_set = True # Default
-
-        # This is for the *new* schedule being applied by this script
-        self.publishAt_to_set = None
-        # This is the current privacy from playlistItem.status
-        self.privacyStatus_to_set = self.current_status.get('privacyStatus', 'private')
-
+        # Fields to be set for update, initialized from the comprehensive video details
+        self.title_to_set = self.video_snippet.get('title', self.original_title)
+        self.description_to_set = self.video_snippet.get('description', '')
+        self.tags_to_set = self.video_snippet.get('tags', [])
+        self.categoryId_to_set = self.video_snippet.get('categoryId', CATEGORY_MAP['Entertainment'])
+        self.videoLanguage_to_set = self.video_snippet.get('defaultAudioLanguage')
+        self.defaultLanguage_to_set = self.video_snippet.get('defaultLanguage')
+        self.recordingDate_to_set = self.video_recording_details.get('recordingDate')
+        
+        self.madeForKids_to_set = self.video_status.get('selfDeclaredMadeForKids', False)
+        self.embeddable_to_set = self.video_status.get('embeddable', True)
+        self.publicStatsViewable_to_set = self.video_status.get('publicStatsViewable', True)
+        
+        # For new scheduling action
+        self.publishAt_to_set_new = None 
+        # This will reflect the privacy status we intend to set during an update.
+        # Initialized with current status from video_status.
+        self.privacyStatus_to_set = self.video_status.get('privacyStatus', 'private')
 
     def __str__(self):
-        # Display current actual publishAt from playlistItem.status if available
-        current_pub_at = self.current_status.get('publishAt', 'Not Set')
-        return f"ID: {self.video_id}, Title: {self.original_title}, CurrentPublishAt: {current_pub_at}, Privacy: {self.current_status.get('privacyStatus')}"
+        current_pub_at = self.video_status.get('publishAt', 'Not Set') # From actual video.status
+        return f"ID: {self.video_id}, Title: {self.title_to_set}, ActualPublishAt: {current_pub_at}, ActualPrivacy: {self.video_status.get('privacyStatus')}"
 
 # --- Main GUI app ---
 class SchedulerApp:
@@ -309,10 +257,9 @@ class SchedulerApp:
 
         global file_log_handler_global
         try:
-            if os.path.exists(LOG_FILE):
-                os.remove(LOG_FILE)
+            if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
             file_log_handler_global = logging.FileHandler(LOG_FILE, encoding='utf-8')
-            file_log_handler_global.setLevel(logging.DEBUG) # For publishAt debugging
+            file_log_handler_global.setLevel(logger.level)
             file_log_handler_global.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
             logger.addHandler(file_log_handler_global)
             logger.info("Application started and file logger initialized.")
@@ -321,11 +268,11 @@ class SchedulerApp:
             file_log_handler_global = None
 
         self.root = tk.Tk(); setup_revocation_on_exit()
-        self.save_log_var = tk.BooleanVar(master=self.root, value=False) # Default to NOT saving log
+        self.save_log_var = tk.BooleanVar(master=self.root, value=False)
         self.root.title('YouTube Video Scheduler'); self.build_gui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit); self.root.mainloop()
 
-    def build_gui(self):
+    def build_gui(self): # (GUI code remains largely the same as your last correct version)
         frm = ttk.Frame(self.root, padding=10); frm.pack(fill=tk.BOTH, expand=True)
         cred_frm = ttk.LabelFrame(frm, text="Authentication", padding=5); cred_frm.pack(fill=tk.X, pady=(0,5))
         self.select_cred_button = ttk.Button(cred_frm, text='Select client_secrets.json & Authenticate', command=self.select_credentials_and_auth)
@@ -393,7 +340,6 @@ class SchedulerApp:
         auth_dep_state = tk.NORMAL if authenticated and self.service else tk.DISABLED
         self.load_all_button.config(state=auth_dep_state)
         self.schedule_button.config(state=auth_dep_state)
-
         list_dep_state = tk.NORMAL if authenticated and self.service and self.all_channel_videos else tk.DISABLED
         for btn in [self.filter_all_button, self.filter_private_button, self.filter_unlisted_button, self.filter_public_button, self.select_all_button, self.deselect_all_button]:
             btn.config(state=list_dep_state)
@@ -402,22 +348,31 @@ class SchedulerApp:
         for item in self.tree.get_children(): self.tree.delete(item)
         for vd in videos_to_display:
             pub_at_disp = "Not Scheduled"
-            # vd.current_status is from playlistItem.status
-            if vd.current_status.get('publishAt') and vd.current_status['publishAt'] is not None:
+            # Use video_status from the full video object (from videos().list)
+            publish_at_val = vd.video_status.get('publishAt')
+            if publish_at_val:
                 try:
-                    pub_at_disp = datetime.fromisoformat(vd.current_status['publishAt'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S UTC')
+                    pub_at_disp = datetime.fromisoformat(publish_at_val.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S UTC')
                 except ValueError:
-                    pub_at_disp = vd.current_status['publishAt'] 
-            self.tree.insert('', tk.END, values=(vd.video_id, vd.original_title, vd.current_status.get('privacyStatus', 'N/A'), pub_at_disp))
+                    pub_at_disp = publish_at_val
+            
+            privacy_status_val = vd.video_status.get('privacyStatus', 'N/A')
+            
+            self.tree.insert('', tk.END, values=(
+                vd.video_id,
+                vd.video_snippet.get('title', vd.original_title), # original_title is a fallback
+                privacy_status_val,
+                pub_at_disp
+            ))
         self.enable_video_management_buttons(self.service is not None)
-
 
     def apply_filter_to_treeview(self, privacy_filter="all"):
         if not self.service: messagebox.showwarning("Not Authenticated", "Please authenticate first.", parent=self.root); return
         if not self.all_channel_videos: messagebox.showinfo("No Videos Loaded", "Please load videos first.", parent=self.root); return
         logger.info(f"Applying filter: {privacy_filter}")
         self.current_filter_applied = privacy_filter
-        filtered_list = [vd for vd in self.all_channel_videos if privacy_filter == "all" or vd.current_status.get('privacyStatus') == privacy_filter]
+        # Filter based on the video's actual status from video_status
+        filtered_list = [vd for vd in self.all_channel_videos if privacy_filter == "all" or vd.video_status.get('privacyStatus') == privacy_filter]
         self._populate_treeview(filtered_list)
         if not filtered_list and privacy_filter != "all": messagebox.showinfo("Filter Result", f"No videos found for filter: '{privacy_filter}'.", parent=self.root)
 
@@ -443,8 +398,8 @@ class SchedulerApp:
             except Exception as e:
                 logger.error(f"Authentication failed after selecting credentials: {e}", exc_info=True)
                 err_msg_lower = str(e).lower()
-                if "invalid_scope" in err_msg_lower: # Specific check for scope error
-                     messagebox.showerror("Authentication Failed", f"OAuth Scope Error: {e}\nPlease ensure your client_secrets.json is configured correctly and the API has necessary permissions.", parent=self.root)
+                if "invalid_scope" in err_msg_lower:
+                     messagebox.showerror("Authentication Failed", f"OAuth Scope Error: {e}\nPlease ensure client_secrets.json & API permissions are correct. SCOPES in script might be malformed.", parent=self.root)
                 elif "cancelled" not in err_msg_lower and \
                    "empty code" not in err_msg_lower and \
                    "all authentication methods failed" not in err_msg_lower and \
@@ -453,64 +408,98 @@ class SchedulerApp:
                 self.service = None; self.update_auth_status(False, "Authentication failed.")
 
     def fetch_all_videos_from_api(self):
-        if not self.service: logger.error("Service not initialized."); messagebox.showerror("Error", "Not authenticated.", parent=self.root); return []
-        logger.info("Fetching videos from playlistItems endpoint..."); all_videos_data = []
-        load_progress_win = tk.Toplevel(self.root)
+        if not self.service:
+            logger.error("Service not initialized.")
+            messagebox.showerror("Error", "Not authenticated.", parent=self.root)
+            return []
+
+        logger.info("Fetching video IDs from uploads playlist...")
+        all_video_data_objects = []
+        load_progress_win = tk.Toplevel(self.root) # Create progress window earlier
+        load_progress_win.title("Loading Videos"); load_progress_win.geometry("400x100"); load_progress_win.resizable(False, False); load_progress_win.grab_set(); load_progress_win.transient(self.root)
+        prog_label_text = tk.StringVar(value="Initializing..."); ttk.Label(load_progress_win, textvariable=prog_label_text).pack(pady=5)
+        prog_bar = ttk.Progressbar(load_progress_win, orient="horizontal", length=350, mode="indeterminate"); prog_bar.pack(pady=5); prog_bar.start(10)
+        self.root.update_idletasks()
+
         try:
+            prog_label_text.set("Fetching channel details...")
+            load_progress_win.update_idletasks()
             ch_resp = self.service.channels().list(part="contentDetails", mine=True).execute()
             if not ch_resp.get("items"): raise Exception("Could not determine channel ID.")
             uploads_id = ch_resp["items"][0]["contentDetails"]["relatedPlaylists"].get("uploads")
             if not uploads_id: raise Exception("Could not find uploads playlist ID.")
             logger.info(f"Uploads playlist ID: {uploads_id}")
-            next_page_token = None; vid_count = 0; max_vids = 500
-            load_progress_win.title("Loading Videos"); load_progress_win.geometry("350x100"); load_progress_win.resizable(False, False); load_progress_win.grab_set(); load_progress_win.transient(self.root)
-            ttk.Label(load_progress_win, text="Fetching video list...").pack(pady=5)
-            prog_bar = ttk.Progressbar(load_progress_win, orient="horizontal", length=300, mode="indeterminate"); prog_bar.pack(pady=5); prog_bar.start(10)
-            self.root.update_idletasks()
+
+            video_ids = []
+            next_page_token = None
+            max_playlist_items_to_fetch = 500 # Limit initial scan of playlistItems
+            
+            prog_label_text.set(f"Fetching video IDs from playlist '{uploads_id[:15]}...' (max {max_playlist_items_to_fetch})...")
+            load_progress_win.update_idletasks()
+
             while True:
-                # Using playlistItems.list to get videos from the uploads playlist
-                req = self.service.playlistItems().list(
+                playlist_req = self.service.playlistItems().list(
                     playlistId=uploads_id,
-                    part="snippet,status,contentDetails", # contentDetails for videoId, snippet for title/desc, status for privacy/publishAt
+                    part="contentDetails,snippet", # Snippet for initial title if video fetch fails
                     maxResults=50,
                     pageToken=next_page_token
                 )
-                resp = req.execute()
-                logger.debug(f"API Response for playlistItems page: {json.dumps(resp, indent=2)}")
+                playlist_resp = playlist_req.execute()
+                logger.debug(f"PlaylistItems API Response page: {json.dumps(playlist_resp, indent=2, ensure_ascii=False)}")
 
-                for item in resp.get("items", []):
-                    vid_count += 1
-                    if item.get("snippet", {}).get("resourceId", {}).get("kind") == "youtube#video":
-                        vid_id = item["snippet"]["resourceId"]["videoId"]
-                        playlist_item_snippet = item["snippet"] # Snippet of the playlistItem (title, description, thumbnails, videoId)
-                        playlist_item_status = item.get("status", {}) # Status of the playlistItem (privacyStatus, publishAt)
-
-                        logger.debug(f"Processing Video ID: {vid_id}, Title from playlistItem: '{playlist_item_snippet.get('title', 'N/A')}'")
-                        logger.debug(f"Full playlistItem for {vid_id}: {json.dumps(item, indent=2)}")
-                        logger.debug(f"Status object for {vid_id} (from playlistItem.status): {json.dumps(playlist_item_status, indent=2)}")
-                        
-                        if 'publishAt' in playlist_item_status and playlist_item_status['publishAt']:
-                            logger.debug(f"Found 'publishAt' in playlistItem.status for {vid_id}: {playlist_item_status['publishAt']}")
-                        else:
-                            logger.debug(f"No 'publishAt' or 'publishAt' is empty/None in playlistItem.status for {vid_id}. Keys: {list(playlist_item_status.keys())}")
-                        
-                        if not playlist_item_status.get("privacyStatus"):
-                            logger.warning(f"Video {vid_id} ('{playlist_item_snippet.get('title','NT')}') from playlistItem has no privacyStatus, skipping.")
-                            continue
-                        
-                        # VideoData is initialized with playlistItem's snippet and status
-                        all_videos_data.append(VideoData(vid_id, playlist_item_snippet.get("title", "No Title"), playlist_item_snippet, playlist_item_status))
-                next_page_token = resp.get("nextPageToken")
-                if not next_page_token or (max_vids > 0 and vid_count >= max_vids): break
+                for item in playlist_resp.get("items", []):
+                    if item.get("contentDetails") and item["contentDetails"].get("videoId"):
+                        video_ids.append(item["contentDetails"]["videoId"])
+                
+                next_page_token = playlist_resp.get("nextPageToken")
+                if not next_page_token or (max_playlist_items_to_fetch > 0 and len(video_ids) >= max_playlist_items_to_fetch):
+                    if max_playlist_items_to_fetch > 0 and len(video_ids) > max_playlist_items_to_fetch:
+                        video_ids = video_ids[:max_playlist_items_to_fetch]
+                    break
+                prog_label_text.set(f"Fetched {len(video_ids)} video IDs so far...")
                 load_progress_win.update_idletasks()
-            if load_progress_win.winfo_exists(): prog_bar.stop(); load_progress_win.destroy()
-            logger.info(f"Fetched {len(all_videos_data)} video items from playlistItems.")
-            if not all_videos_data and vid_count == 0: messagebox.showinfo("No Videos", "No videos found in your uploads playlist.", parent=self.root)
-            if max_vids > 0 and vid_count >= max_vids and next_page_token: messagebox.showwarning("Scan Limit", f"Loaded the first {max_vids} videos from your channel.", parent=self.root)
+            
+            logger.info(f"Found {len(video_ids)} video IDs from playlistItems.")
+            if not video_ids:
+                messagebox.showinfo("No Videos", "No video IDs found in your uploads playlist.", parent=self.root)
+                return []
+
+            # Fetch full details for these video IDs in batches of 50
+            prog_bar.config(mode="determinate", maximum=len(video_ids), value=0)
+            prog_bar.stop() # Stop indeterminate
+            
+            for i in range(0, len(video_ids), 50):
+                batch_ids = video_ids[i:i+50]
+                prog_label_text.set(f"Fetching details for videos {i+1}-{min(i+50, len(video_ids))} of {len(video_ids)}...")
+                load_progress_win.update_idletasks()
+
+                videos_req = self.service.videos().list(
+                    id=",".join(batch_ids),
+                    part="snippet,status,contentDetails,recordingDetails"
+                )
+                videos_resp = videos_req.execute()
+                logger.debug(f"Videos API Response for batch: {json.dumps(videos_resp, indent=2, ensure_ascii=False)}")
+
+                for video_item in videos_resp.get("items", []):
+                    vid_id = video_item["id"]
+                    vid_snippet = video_item.get("snippet", {})
+                    vid_status = video_item.get("status", {})
+                    vid_content_details = video_item.get("contentDetails", {})
+                    vid_recording_details = video_item.get("recordingDetails", {})
+                    
+                    # Use video title from video.snippet as primary
+                    title = vid_snippet.get("title", "No Title")
+                    
+                    all_video_data_objects.append(VideoData(vid_id, title, vid_snippet, vid_status, vid_content_details, vid_recording_details))
+                    prog_bar['value'] += 1
+                    load_progress_win.update_idletasks()
+            
+            logger.info(f"Fetched full details for {len(all_video_data_objects)} videos.")
+            if max_playlist_items_to_fetch > 0 and len(video_ids) >= max_playlist_items_to_fetch and next_page_token:
+                 messagebox.showwarning("Scan Limit", f"Processed the first {max_playlist_items_to_fetch} videos found in playlist.", parent=self.root)
+
+
         except Exception as e:
-            if 'load_progress_win' in locals() and load_progress_win.winfo_exists():
-                if 'prog_bar' in locals(): prog_bar.stop()
-                load_progress_win.destroy()
             logger.error(f"Error fetching videos: {e}", exc_info=True)
             err_msg = f"Failed to fetch videos: {e}"; specific_handled = False
             if "quotaExceeded" in str(e).lower(): err_msg = f"API Quota Error: {e}"; specific_handled=True
@@ -519,41 +508,43 @@ class SchedulerApp:
                  try:
                      content = json.loads(e.content.decode())
                      if any("domain Policy" in err.get("reason","") for err in content.get("error",{}).get("errors",[])):
-                         err_msg = "API Error: Forbidden by domain policy. This action may be restricted by your Google Workspace administrator."
+                         err_msg = "API Error: Forbidden by domain policy. Action restricted by Workspace admin?"
                  except: pass
             messagebox.showerror("API Error", err_msg, parent=self.root)
             return []
-        return all_videos_data
+        finally:
+            if load_progress_win.winfo_exists():
+                prog_bar.stop()
+                load_progress_win.destroy()
+        
+        return all_video_data_objects
 
     def gui_load_all_videos(self):
-        if not self.service: messagebox.showerror('Error', 'Not authenticated. Please select credentials and authenticate first.', parent=self.root); self.update_auth_status(False, "Auth required."); return
+        if not self.service: messagebox.showerror('Error', 'Not authenticated.', parent=self.root); self.update_auth_status(False, "Auth required."); return
         self.all_channel_videos = self.fetch_all_videos_from_api()
         self.current_filter_applied = "all"; self._populate_treeview(self.all_channel_videos)
         if self.all_channel_videos: messagebox.showinfo("Videos Loaded", f"Loaded {len(self.all_channel_videos)} videos.", parent=self.root)
 
     def process_scheduling_gui(self):
         sel_items = self.tree.selection()
-        if not sel_items: messagebox.showwarning("No Selection", "No videos selected from the list.", parent=self.root); return
+        if not sel_items: messagebox.showwarning("No Selection", "No videos selected.", parent=self.root); return
         
         vids_to_sched = []
         for item_id_in_tree in sel_items:
             video_id_from_tree = self.tree.item(item_id_in_tree)['values'][0]
             found_vd = next((vd for vd in self.all_channel_videos if vd.video_id == video_id_from_tree), None)
-            if found_vd:
-                vids_to_sched.append(found_vd)
-            else:
-                logger.warning(f"Video ID {video_id_from_tree} from tree selection not found in all_channel_videos list. Skipping.")
-
-        if not vids_to_sched: messagebox.showerror("Error", "Selected videos not found in internal list. Please reload the video list.", parent=self.root); return
+            if found_vd: vids_to_sched.append(found_vd)
+            else: logger.warning(f"Video ID {video_id_from_tree} from tree selection not found. Skipping.")
         
+        if not vids_to_sched: messagebox.showerror("Error", "Selected videos not found. Reload list.", parent=self.root); return
         logger.info(f"Processing {len(vids_to_sched)} videos for scheduling.")
-        if not self.service: messagebox.showerror("Auth Error", "Authentication lost or service unavailable. Please re-authenticate.", parent=self.root); self.update_auth_status(False, "Auth required."); return
+        if not self.service: messagebox.showerror("Auth Error", "Auth lost. Re-authenticate.", parent=self.root); self.update_auth_status(False, "Auth required."); return
 
-        title_base = self.title_ent.get().strip()
-        desc_base = sanitize_description(self.desc_txt.get('1.0','end-1c').strip())
-        tags_str = self.tags_ent.get()
+        title_base_new = self.title_ent.get().strip()
+        desc_base_new = sanitize_description(self.desc_txt.get('1.0','end-1c').strip())
+        tags_str_new = self.tags_ent.get()
         tags_list_new = []
-        if tags_str.strip(): tags_list_new = sanitize_tags([t.strip() for t in tags_str.split(',') if t.strip()])
+        if tags_str_new.strip(): tags_list_new = sanitize_tags([t.strip() for t in tags_str_new.split(',') if t.strip()])
         
         cat_choice = self.cat_cb.get()
         mfd_choice = self.made_for_kids_cb.get()
@@ -561,106 +552,92 @@ class SchedulerApp:
         try:
             start_str = self.start_ent.get(); local_dt = datetime.strptime(start_str, '%Y-%m-%d %H:%M')
             try: local_tz = datetime.now().astimezone().tzinfo
-            except Exception: local_tz = timezone(timedelta(seconds=-time.timezone if (hasattr(time, "daylight") and time.daylight == 0) else -time.altzone))
+            except Exception: local_tz = timezone(timedelta(seconds=-time.timezone if (hasattr(time, "daylight") and time.daylight == 0) else -time.altzone)) # type: ignore
             if local_tz is None:
-                logger.warning("Could not determine local timezone automatically, using system UTC offset.")
                 offset_seconds_obj = datetime.now(timezone.utc).astimezone().utcoffset()
-                if offset_seconds_obj: local_tz = timezone(offset_seconds_obj)
-                else: local_tz = timezone.utc
-
+                local_tz = timezone(offset_seconds_obj) if offset_seconds_obj else timezone.utc
             start_utc = local_dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
-            if start_utc < datetime.now(timezone.utc) + timedelta(minutes=15): messagebox.showerror("Error", "First publish time must be at least 15 minutes in the future.", parent=self.root); return
-            logger.info(f"First video scheduled for (UTC): {start_utc.isoformat()}")
-        except ValueError: messagebox.showerror("Error", "Invalid start date/time format. Please use YYYY-MM-DD HH:MM.", parent=self.root); return
+            if start_utc < datetime.now(timezone.utc) + timedelta(minutes=15): messagebox.showerror("Error", "First publish must be >= 15 mins in future.", parent=self.root); return
+            logger.info(f"First video UTC: {start_utc.isoformat()}")
+        except ValueError: messagebox.showerror("Error", "Invalid start date/time (YYYY-MM-DD HH:MM).", parent=self.root); return
         try:
             h = int(self.interval_hour_var.get()); m = int(self.interval_minute_var.get())
-            if h < 0 or m < 0: raise ValueError("Interval components cannot be negative.")
+            if h < 0 or m < 0: raise ValueError("Negative interval.")
             delta = timedelta(hours=h, minutes=m)
             if delta < timedelta(minutes=15) and len(vids_to_sched) > 1:
-                 if not messagebox.askyesno("Warning", f"The scheduling interval ({h}h {m}m) is less than 15 minutes. YouTube may enforce a minimum interval. Continue?", parent=self.root): return
-            if delta <= timedelta(0) and len(vids_to_sched) > 1:
-                logger.warning("Interval was zero or negative for multiple videos. Defaulting to 15 minutes.")
-                delta = timedelta(minutes=15)
-        except ValueError as e: messagebox.showerror("Error", f"Invalid interval specified: {e}", parent=self.root); return
+                 if not messagebox.askyesno("Warning", f"Interval ({h}h {m}m) < 15 mins. Continue?", parent=self.root): return
+            if delta <= timedelta(0) and len(vids_to_sched) > 1: delta = timedelta(minutes=15)
+        except ValueError as e: messagebox.showerror("Error", f"Invalid interval: {e}", parent=self.root); return
 
         curr_pub_utc = start_utc
         for i, vd_obj in enumerate(vids_to_sched):
-            # Apply new metadata or keep original from VideoData object's initial state
-            vd_obj.title_to_set = title_base if title_base else vd_obj.original_title
-            vd_obj.description_to_set = desc_base if desc_base else vd_obj.current_snippet.get('description', '')
+            vd_obj.title_to_set = title_base_new if title_base_new else vd_obj.video_snippet.get('title', vd_obj.original_title)
+            vd_obj.description_to_set = desc_base_new if desc_base_new else vd_obj.video_snippet.get('description', '')
             
-            if tags_str.strip(): vd_obj.tags_to_set = tags_list_new
-            # else: vd_obj.tags_to_set remains as initialized (empty list by default in VideoData)
+            if tags_str_new.strip(): vd_obj.tags_to_set = tags_list_new
+            else: vd_obj.tags_to_set = vd_obj.video_snippet.get('tags', []) # Keep original tags if new tags field is empty
 
             if cat_choice != '(Keep Original)': vd_obj.categoryId_to_set = CATEGORY_MAP.get(cat_choice, vd_obj.categoryId_to_set)
-            # else: vd_obj.categoryId_to_set remains as initialized
+            # else: categoryId_to_set remains as initialized from video_snippet or default
 
             if mfd_choice != '(Keep Original)': vd_obj.madeForKids_to_set = (mfd_choice == 'Yes')
-            # else: vd_obj.madeForKids_to_set remains as initialized (default False in VideoData)
-
-            # Forcing privacy to private for scheduling, then YouTube makes it public at publishAt
-            vd_obj.privacyStatus_to_set = 'private'
-            vd_obj.publishAt_to_set = curr_pub_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # else: madeForKids_to_set remains as initialized from video_status or default
             
-            logger.info(f"Video '{vd_obj.original_title}' ({vd_obj.video_id}) will be scheduled for: {vd_obj.publishAt_to_set} with title '{vd_obj.title_to_set}'")
+            vd_obj.privacyStatus_to_set = 'private' 
+            vd_obj.publishAt_to_set_new = curr_pub_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            
+            logger.info(f"Video '{vd_obj.original_title}' ({vd_obj.video_id}) to schedule for: {vd_obj.publishAt_to_set_new} with title '{vd_obj.title_to_set}'")
             if i < len(vids_to_sched) - 1:
                 curr_pub_utc += delta
                 if curr_pub_utc < datetime.now(timezone.utc) + timedelta(minutes=2):
-                    logger.warning(f"Calculated next publish time for video {i+2} was too soon. Adjusting.")
                     curr_pub_utc = datetime.now(timezone.utc) + timedelta(minutes=2)
         self.update_videos_on_youtube(vids_to_sched)
 
     def update_videos_on_youtube(self, videos_to_update):
-        if not self.service: messagebox.showerror("Error", "YouTube service unavailable. Please re-authenticate.", parent=self.root); self.update_auth_status(False, "Auth required."); return
-        total_processed_or_attempted = len(videos_to_update); succ = 0; fail = 0
+        if not self.service: messagebox.showerror("Error", "YouTube service unavailable.", parent=self.root); self.update_auth_status(False, "Auth required."); return
+        total_processed = len(videos_to_update); succ = 0; fail = 0
         prog_win = tk.Toplevel(self.root); prog_win.title("Scheduling Progress"); prog_win.geometry("450x130"); prog_win.resizable(False, False); prog_win.grab_set(); prog_win.transient(self.root)
         ttk.Label(prog_win, text="Updating videos on YouTube...").pack(pady=5)
-        prog_bar = ttk.Progressbar(prog_win, orient="horizontal", length=350, mode="determinate", maximum=total_processed_or_attempted); prog_bar.pack(pady=5)
+        prog_bar = ttk.Progressbar(prog_win, orient="horizontal", length=350, mode="determinate", maximum=total_processed); prog_bar.pack(pady=5)
         prog_label = ttk.Label(prog_win, text="Preparing...", wraplength=400, justify=tk.LEFT); prog_label.pack(pady=5, fill=tk.X, padx=10)
 
         for i, vd_obj in enumerate(videos_to_update):
-            prog_label.config(text=f"({i+1}/{total_processed_or_attempted}) Processing: {vd_obj.title_to_set[:50]}...")
+            prog_label.config(text=f"({i+1}/{total_processed}) Processing: {vd_obj.title_to_set[:50]}...")
             prog_bar['value'] = i; prog_win.update_idletasks()
             
-            # Construct snippet part for video update
-            # Note: playlistItem.snippet is NOT the same as video.snippet
-            # We are using values prepared in vd_obj (title_to_set, description_to_set, etc.)
-            snip_body = {
-                'title': vd_obj.title_to_set,
-                'description': vd_obj.description_to_set,
-                'tags': vd_obj.tags_to_set, # Will be empty list if not set by user
-                'categoryId': vd_obj.categoryId_to_set # Will be default if not set by user
-            }
-            # Optional: Language settings if they were ever populated/set
+            snip_body = {'title': vd_obj.title_to_set, 'description': vd_obj.description_to_set, 'tags': vd_obj.tags_to_set, 'categoryId': vd_obj.categoryId_to_set}
             if vd_obj.defaultLanguage_to_set: snip_body['defaultLanguage'] = vd_obj.defaultLanguage_to_set
             if vd_obj.videoLanguage_to_set: snip_body['defaultAudioLanguage'] = vd_obj.videoLanguage_to_set
-            # Optional: Recording date if ever populated/set
-            if vd_obj.recordingDate_to_set:
-                snip_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
+            if vd_obj.recordingDate_to_set: snip_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
 
-            # Construct status part for video update
-            stat_body = {
-                'privacyStatus': vd_obj.privacyStatus_to_set, # Should be 'private' for scheduling
-                'publishAt': vd_obj.publishAt_to_set,
-                'selfDeclaredMadeForKids': vd_obj.madeForKids_to_set, # From user choice or VideoData default
-                'embeddable': vd_obj.embeddable_to_set, # From VideoData default (True)
-                'publicStatsViewable': vd_obj.publicStatsViewable_to_set # From VideoData default (True)
-            }
+            stat_body = {'privacyStatus': vd_obj.privacyStatus_to_set, 'publishAt': vd_obj.publishAt_to_set_new, 
+                         'selfDeclaredMadeForKids': vd_obj.madeForKids_to_set, 'embeddable': vd_obj.embeddable_to_set, 
+                         'publicStatsViewable': vd_obj.publicStatsViewable_to_set}
             update_body = {'id': vd_obj.video_id, 'snippet': snip_body, 'status': stat_body}
-            logger.info(f"Updating video {vd_obj.video_id}: {json.dumps(update_body, indent=2)}")
+            if vd_obj.recordingDate_to_set: # recordingDetails is part of snippet, but only send if it exists.
+                update_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
+
+            logger.info(f"Updating video {vd_obj.video_id}: {json.dumps(update_body, indent=2, ensure_ascii=False)}")
 
             vid_succ = False
             for attempt in range(1, 3):
                 try:
-                    req = self.service.videos().update(part='snippet,status', body=update_body); resp = req.execute()
+                    # When updating, 'part' should include all parts being modified in the body
+                    parts_to_update = "snippet,status"
+                    if 'recordingDetails' in update_body: # Though snippet usually covers this if present in snip_body
+                        if 'recordingDetails' not in parts_to_update: parts_to_update += ",recordingDetails"
+                    
+                    req = self.service.videos().update(part=parts_to_update, body=update_body)
+                    resp = req.execute()
                     logger.info(f"Attempt {attempt}: Successfully updated video {resp['id']}.")
-                    logger.debug(f"API response from videos().update: {json.dumps(resp, indent=2)}")
+                    logger.debug(f"API response from videos().update: {json.dumps(resp, indent=2, ensure_ascii=False)}")
                     
                     # Update local VideoData object with the response from the update
-                    # The response from videos().update contains the full video snippet and status
-                    vd_obj.current_snippet = resp.get('snippet', vd_obj.current_snippet) # Now holds actual video snippet
-                    vd_obj.current_status = resp.get('status', vd_obj.current_status) # Now holds actual video status
-                    vd_obj.original_title = vd_obj.title_to_set # Reflects the title that was set
+                    vd_obj.video_snippet = resp.get('snippet', vd_obj.video_snippet)
+                    vd_obj.video_status = resp.get('status', vd_obj.video_status)
+                    vd_obj.video_recording_details = resp.get('recordingDetails', vd_obj.video_recording_details)
+                    vd_obj.original_title = vd_obj.title_to_set 
+                    
                     vid_succ = True; break
                 except Exception as e:
                     logger.error(f"Attempt {attempt} failed for video {vd_obj.video_id} ('{vd_obj.title_to_set}'): {e}", exc_info=True)
@@ -668,108 +645,77 @@ class SchedulerApp:
                     if hasattr(e, 'content'):
                         try: err_details = json.loads(e.content.decode()).get("error", {}).get("message", str(e))
                         except: pass
-                    prog_label.config(text=f"({i+1}/{total_processed_or_attempted}) Error (Attempt {attempt}): {vd_obj.title_to_set[:30]}... {err_details[:60]}")
+                    prog_label.config(text=f"({i+1}/{total_processed}) Error (Att {attempt}): {vd_obj.title_to_set[:30]}... {err_details[:60]}")
                     prog_win.update_idletasks()
                     if attempt < 2:
-                        if not messagebox.askretrycancel("Update Error", f"Failed to update: {vd_obj.title_to_set}\nError: {err_details}\n\nDo you want to retry this video?", parent=prog_win):
-                            if not messagebox.askyesno("Skip Video", "Retry was cancelled for this video.\nSkip this video and continue with the rest?", parent=prog_win):
-                                logger.info("User cancelled remaining updates."); fail += (total_processed_or_attempted - i)
+                        if not messagebox.askretrycancel("Update Error", f"Failed: {vd_obj.title_to_set}\nError: {err_details}\n\nRetry?", parent=prog_win):
+                            if not messagebox.askyesno("Skip", "Skip this video and continue?", parent=prog_win):
+                                logger.info("User cancelled remaining updates."); fail += (total_processed - i)
                                 if prog_win.winfo_exists(): prog_win.destroy()
-                                messagebox.showinfo("Updates Cancelled", f"Video updates cancelled by user.\nSucceeded: {succ}, Failed/Skipped: {fail}", parent=self.root)
-                                if succ > 0:
-                                    logger.info("Refreshing treeview from local data after cancellation with some successes.")
-                                    self.apply_filter_to_treeview(self.current_filter_applied)
+                                messagebox.showinfo("Cancelled", f"Updates cancelled.\nSucceeded: {succ}, Failed/Skipped: {fail}", parent=self.root)
+                                if succ > 0: self.apply_filter_to_treeview(self.current_filter_applied)
                                 return
-                            else:
-                                logger.info(f"User skipped video {vd_obj.video_id} after failed attempt.")
-                                break
-                    else:
-                        messagebox.showerror("Retry Failed", f"Retry also failed for: {vd_obj.title_to_set}\nError: {err_details}\nSkipping this video.", parent=prog_win)
+                            else: break 
+                    else: messagebox.showerror("Retry Failed", f"Retry failed: {vd_obj.title_to_set}\nError: {err_details}\nSkipping.", parent=prog_win)
             if vid_succ: succ += 1
             else: fail += 1
             prog_bar['value'] = i + 1; prog_win.update_idletasks()
-
+        
         if prog_win.winfo_exists(): prog_win.destroy()
-
         base_summary = f"Scheduling process complete.\nSuccessfully updated: {succ}\nFailed/Skipped: {fail}"
         logger.info(base_summary.replace("\n", " "))
-
-        if total_processed_or_attempted > 0:
-            full_summary = f"{base_summary}\n\nThe list below has been updated based on these actions." \
-                           "\nTo perform a full refresh from YouTube, please use the 'Load/Refresh My Videos' button."
+        if total_processed > 0:
+            full_summary = f"{base_summary}\n\nThe list reflects these actions." \
+                           "\nFor a full refresh from YouTube, use 'Load/Refresh My Videos'."
             messagebox.showinfo("Process Complete", full_summary, parent=self.root)
-            logger.info("Refreshing treeview from (potentially updated) local data. Not fetching from API.")
-            self.apply_filter_to_treeview(self.current_filter_applied) # This will use updated vd_obj.current_status
+            logger.info("Refreshing treeview from local data.")
+            self.apply_filter_to_treeview(self.current_filter_applied)
         else:
             messagebox.showinfo("Process Complete", base_summary, parent=self.root)
 
-
     def on_exit(self):
         logger.info("Application exiting...")
-        global file_log_handler_global, console_handler
-
+        global file_log_handler_global
         if not self.save_log_var.get() and file_log_handler_global:
-            logger.info(f"Log saving to '{LOG_FILE}' is disabled. Removing log file.")
-            logger.removeHandler(file_log_handler_global)
+            logger.info(f"Log saving to '{LOG_FILE}' disabled. Removing log file.")
+            if file_log_handler_global in logger.handlers: logger.removeHandler(file_log_handler_global)
             file_log_handler_global.close()
             file_log_handler_global = None
             try:
-                if os.path.exists(LOG_FILE):
-                    os.remove(LOG_FILE)
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Log file '{LOG_FILE}' deleted.")
-            except OSError as e:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARNING] Could not delete log file '{LOG_FILE}': {e}")
+                if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Log file '{LOG_FILE}' deleted.")
+            except OSError as e: print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARNING] Could not delete '{LOG_FILE}': {e}")
         elif file_log_handler_global:
             logger.info(f"Log data will be saved to {LOG_FILE}.")
-            file_log_handler_global.flush()
-            file_log_handler_global.close()
-            logger.removeHandler(file_log_handler_global)
+            file_log_handler_global.flush(); file_log_handler_global.close()
+            if file_log_handler_global in logger.handlers: logger.removeHandler(file_log_handler_global)
             file_log_handler_global = None
 
         if self.root and self.root.winfo_exists():
-            try:
-                self.root.destroy()
-                logger.info("Tkinter root destroyed.")
-            except tk.TclError as e:
-                logger.warning(f"Error destroying Tkinter root (may already be gone): {e}", exc_info=True)
-            except Exception as e:
-                logger.error(f"Unexpected error destroying Tkinter root: {e}", exc_info=True)
-
-        for handler in list(logger.handlers):
-            try:
-                handler.close()
-                logger.removeHandler(handler)
-            except Exception as e:
-                print(f"Error closing/removing handler during final exit: {e}")
-
-        logger.info("Exit procedure finished.")
-        if console_handler:
-             # Check if console_handler is still in logger.handlers before trying to flush/close again
-            if not any(h is console_handler for h in logger.handlers): # Check if it was removed
-                 pass # Already removed and closed
-            else:
-                try:
-                    console_handler.flush()
-                    # console_handler.close() # Typically not closed for sys.stdout
-                    # logger.removeHandler(console_handler) # Optional, as app is exiting
-                except Exception as e:
-                    print(f"Error flushing console_handler: {e}")
-
+            try: self.root.destroy(); logger.info("Tkinter root destroyed.")
+            except Exception as e: logger.error(f"Error destroying Tkinter root: {e}", exc_info=True)
+        
+        # Clean up any remaining handlers from the root logger
+        # (console_handler should be the only one left if file_log_handler_global was handled)
+        active_handlers = list(logger.handlers) 
+        for handler in active_handlers:
+            try: handler.close(); logger.removeHandler(handler)
+            except Exception as e: print(f"Error closing/removing handler {handler} during final exit: {e}")
+        
+        logger.info("Exit procedure finished.") # This might only go to a default console if all handlers removed
 
 if __name__ == '__main__':
     try:
         app = SchedulerApp()
     except Exception as e:
-        print(f"FATAL ERROR during application startup: {e}", file=sys.stderr)
-        # BasicConfig for last-ditch logging if primary logger setup failed
+        # Fallback logging if primary setup failed
         logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG, filemode='a',
                             format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         logging.critical(f"Fatal error during application startup: {e}", exc_info=True)
         try:
-            root_for_error = tk.Tk()
-            root_for_error.withdraw()
-            messagebox.showerror("Fatal Error", f"Application failed to start: {e}\nCheck {LOG_FILE} for details if created.", parent=root_for_error)
-            root_for_error.destroy()
+            root_error = tk.Tk(); root_error.withdraw()
+            messagebox.showerror("Fatal Error", f"Application failed to start: {e}\nCheck {LOG_FILE}.", parent=root_error)
+            root_error.destroy()
         except tk.TclError:
-            print(f"FATAL ERROR (GUI could not display): Application failed to start: {e}\nCheck {LOG_FILE} for details.", file=sys.stderr)
+            print(f"FATAL ERROR (GUI FAILED): {e}\nCheck {LOG_FILE}.", file=sys.stderr)
         sys.exit(1)
