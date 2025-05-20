@@ -625,7 +625,7 @@ def process_video(file_path, settings):
         "--metadata", "copy",
         "--chapter-copy",
         "--key-on-chapter",
-        "--sub-copy",
+        #"--sub-copy",
         "--bframes","4",
         "--tf-level","4",
 #        "--split-enc","auto",
