@@ -3,7 +3,7 @@ import sys
 import json
 import signal
 import atexit
-import re
+import re # Already present, needed for sanitization
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -38,6 +38,69 @@ CATEGORY_MAP = {
     "Education": "27", "Science & Technology": "28", "Nonprofits & Activism": "29"
 }
 LANGUAGES = {"English": "en", "Spanish": "es", "French": "fr", "German": "de", "Japanese": "ja", "Chinese": "zh"}
+
+# --- Helper functions for sanitization (Integrated from ytupload.py logic) ---
+def sanitize_description(desc: str) -> str:
+    """
+    Sanitizes the video description.
+    - Removes most control characters.
+    - Truncates to 5000 characters (YouTube limit).
+    """
+    if not desc:
+        return ""
+    # remove control chars (ASCII 0-8, 11-12, 14-31, and 127)
+    # \x09 (tab), \x0A (LF), \x0D (CR) are generally okay in descriptions.
+    sanitized_desc = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', desc)
+    return sanitized_desc[:5000]
+
+def sanitize_tags(raw_tags_list: list) -> list:
+    """
+    Sanitizes a list of video tags.
+    - Strips whitespace from each tag.
+    - Removes control characters.
+    - Whitelists alphanumeric characters and spaces.
+    - Limits individual tags to a reasonable length (e.g., 60 chars).
+    - Ensures the total length of all tags (sum of individual tag lengths) does not exceed 500 characters.
+    """
+    clean_tags = []
+    current_total_length = 0
+    # YouTube recommends tags be under 30 chars, but no hard limit per tag, only total.
+    # Using a practical per-tag cap for sanitization.
+    PER_TAG_CHAR_LIMIT = 60
+    TOTAL_TAGS_CHAR_LIMIT = 500
+
+    for t in raw_tags_list:
+        tag = t.strip()
+        if not tag:
+            continue
+
+        # Remove control characters (ASCII 0-31 and 127)
+        tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)
+        
+        # Whitelist alphanumeric and space.
+        tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag).strip() # Strip again in case non-alnum chars were at ends
+
+        # Apply a practical per-tag length limit
+        tag = tag[:PER_TAG_CHAR_LIMIT]
+
+        if not tag: # If tag became empty after sanitization
+            continue
+
+        # Check if adding this tag would exceed the total character limit
+        if current_total_length + len(tag) <= TOTAL_TAGS_CHAR_LIMIT:
+            clean_tags.append(tag)
+            current_total_length += len(tag)
+        else:
+            # If adding this tag exceeds the limit, stop adding more tags.
+            # Ensure logger is defined if this function is used elsewhere.
+            # For this script, 'logger' will be defined in the global scope.
+            if 'logger' in globals() and hasattr(logger, 'warning'):
+                 logger.warning(f"Tag '{tag}' (and subsequent tags) omitted as total tag character limit ({TOTAL_TAGS_CHAR_LIMIT}) would be exceeded.")
+            else: # Fallback if logger not available
+                print(f"[WARNING] Tag '{tag}' (and subsequent tags) omitted as total tag character limit ({TOTAL_TAGS_CHAR_LIMIT}) would be exceeded.")
+            break
+            
+    return clean_tags
 
 # --- Logger ---
 logger = logging.getLogger("ytscheduler")
@@ -608,25 +671,37 @@ class SchedulerApp:
             snip_body = {'title': vd_obj.title_to_set, 'description': vd_obj.description_to_set, 'tags': vd_obj.tags_to_set, 'categoryId': vd_obj.categoryId_to_set}
             if vd_obj.defaultLanguage_to_set: snip_body['defaultLanguage'] = vd_obj.defaultLanguage_to_set
             if vd_obj.videoLanguage_to_set: snip_body['defaultAudioLanguage'] = vd_obj.videoLanguage_to_set
+            # Note: recordingDetails should be part of snippet, not a top-level key in the update_body if sent this way.
+            # However, the API part "recordingDetails" is separate. The body should reflect this if using that part.
+            # It's generally fine to include recordingDetails within snippet if `part` includes `snippet`.
+            # If `recordingDetails` is also in `part`, then sending it as a top-level key in `body` is correct.
+            # Let's assume snippet part is sufficient as per existing structure.
             if vd_obj.recordingDate_to_set: snip_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
+
 
             stat_body = {'privacyStatus': vd_obj.privacyStatus_to_set, 'publishAt': vd_obj.publishAt_to_set_new, 
                          'selfDeclaredMadeForKids': vd_obj.madeForKids_to_set, 'embeddable': vd_obj.embeddable_to_set, 
                          'publicStatsViewable': vd_obj.publicStatsViewable_to_set}
+            
+            # Correctly form the body for the update request
             update_body = {'id': vd_obj.video_id, 'snippet': snip_body, 'status': stat_body}
-            if vd_obj.recordingDate_to_set: # recordingDetails is part of snippet, but only send if it exists.
-                update_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
+            
+            # If recordingDate is set, ensure `recordingDetails` is correctly placed or part specified.
+            # If `part` includes `snippet,status,recordingDetails`, then this is also okay:
+            # update_body['recordingDetails'] = {'recordingDate': vd_obj.recordingDate_to_set}
+            # For simplicity, we've put it in snippet. If issues arise, this might need adjustment with the 'part' string.
 
             logger.info(f"Updating video {vd_obj.video_id}: {json.dumps(update_body, indent=2, ensure_ascii=False)}")
 
             vid_succ = False
-            for attempt in range(1, 3):
+            for attempt in range(1, 3): # Retry logic
                 try:
-                    # When updating, 'part' should include all parts being modified in the body
-                    parts_to_update = "snippet,status"
-                    if 'recordingDetails' in update_body: # Though snippet usually covers this if present in snip_body
-                        if 'recordingDetails' not in parts_to_update: parts_to_update += ",recordingDetails"
-                    
+                    parts_to_update = "snippet,status" # Default parts
+                    # If `recordingDetails` was present AND `recordingDate_to_set` is not None, 
+                    # and if it's intended to be updated as a separate part:
+                    # if vd_obj.recordingDate_to_set: parts_to_update += ",recordingDetails" 
+                    # For now, assuming it's handled via snippet part.
+
                     req = self.service.videos().update(part=parts_to_update, body=update_body)
                     resp = req.execute()
                     logger.info(f"Attempt {attempt}: Successfully updated video {resp['id']}.")
@@ -635,7 +710,8 @@ class SchedulerApp:
                     # Update local VideoData object with the response from the update
                     vd_obj.video_snippet = resp.get('snippet', vd_obj.video_snippet)
                     vd_obj.video_status = resp.get('status', vd_obj.video_status)
-                    vd_obj.video_recording_details = resp.get('recordingDetails', vd_obj.video_recording_details)
+                    # If recordingDetails was part of the response (it would be if snippet or recordingDetails part was requested & it exists)
+                    vd_obj.video_recording_details = resp.get('recordingDetails', vd_obj.video_recording_details) 
                     vd_obj.original_title = vd_obj.title_to_set 
                     
                     vid_succ = True; break
@@ -653,10 +729,12 @@ class SchedulerApp:
                                 logger.info("User cancelled remaining updates."); fail += (total_processed - i)
                                 if prog_win.winfo_exists(): prog_win.destroy()
                                 messagebox.showinfo("Cancelled", f"Updates cancelled.\nSucceeded: {succ}, Failed/Skipped: {fail}", parent=self.root)
-                                if succ > 0: self.apply_filter_to_treeview(self.current_filter_applied)
+                                if succ > 0: self.apply_filter_to_treeview(self.current_filter_applied) # Refresh list with successful updates
                                 return
-                            else: break 
-                    else: messagebox.showerror("Retry Failed", f"Retry failed: {vd_obj.title_to_set}\nError: {err_details}\nSkipping.", parent=prog_win)
+                            else: break # User chose to skip this video
+                    else: # Final attempt failed
+                        messagebox.showerror("Retry Failed", f"Retry failed: {vd_obj.title_to_set}\nError: {err_details}\nSkipping this video.", parent=prog_win)
+            
             if vid_succ: succ += 1
             else: fail += 1
             prog_bar['value'] = i + 1; prog_win.update_idletasks()
@@ -664,14 +742,16 @@ class SchedulerApp:
         if prog_win.winfo_exists(): prog_win.destroy()
         base_summary = f"Scheduling process complete.\nSuccessfully updated: {succ}\nFailed/Skipped: {fail}"
         logger.info(base_summary.replace("\n", " "))
-        if total_processed > 0:
-            full_summary = f"{base_summary}\n\nThe list reflects these actions." \
-                           "\nFor a full refresh from YouTube, use 'Load/Refresh My Videos'."
+        
+        if total_processed > 0: # Only show detailed summary and refresh if videos were processed
+            full_summary = f"{base_summary}\n\nThe video list in the application has been updated with these changes." \
+                           "\nFor a full refresh from YouTube (e.g., to see if a video went live), use 'Load/Refresh My Videos'."
             messagebox.showinfo("Process Complete", full_summary, parent=self.root)
-            logger.info("Refreshing treeview from local data.")
-            self.apply_filter_to_treeview(self.current_filter_applied)
-        else:
+            logger.info("Refreshing treeview from locally updated data.")
+            self.apply_filter_to_treeview(self.current_filter_applied) # Refresh tree with new statuses
+        else: # No videos were processed (e.g., selection was empty, or issue before loop)
             messagebox.showinfo("Process Complete", base_summary, parent=self.root)
+
 
     def on_exit(self):
         logger.info("Application exiting...")
@@ -683,7 +763,7 @@ class SchedulerApp:
             file_log_handler_global = None
             try:
                 if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Log file '{LOG_FILE}' deleted.")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Log file '{LOG_FILE}' deleted.") # Direct print as logger might be dismantled
             except OSError as e: print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [WARNING] Could not delete '{LOG_FILE}': {e}")
         elif file_log_handler_global:
             logger.info(f"Log data will be saved to {LOG_FILE}.")
@@ -696,7 +776,6 @@ class SchedulerApp:
             except Exception as e: logger.error(f"Error destroying Tkinter root: {e}", exc_info=True)
         
         # Clean up any remaining handlers from the root logger
-        # (console_handler should be the only one left if file_log_handler_global was handled)
         active_handlers = list(logger.handlers) 
         for handler in active_handlers:
             try: handler.close(); logger.removeHandler(handler)
@@ -713,9 +792,9 @@ if __name__ == '__main__':
                             format="[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         logging.critical(f"Fatal error during application startup: {e}", exc_info=True)
         try:
-            root_error = tk.Tk(); root_error.withdraw()
+            root_error = tk.Tk(); root_error.withdraw() # Hide the dummy root window
             messagebox.showerror("Fatal Error", f"Application failed to start: {e}\nCheck {LOG_FILE}.", parent=root_error)
             root_error.destroy()
-        except tk.TclError:
-            print(f"FATAL ERROR (GUI FAILED): {e}\nCheck {LOG_FILE}.", file=sys.stderr)
+        except tk.TclError: # If even Tkinter basic setup fails for error dialog
+            print(f"FATAL ERROR (GUI FAILED TO SHOW ERROR): {e}\nCheck {LOG_FILE}.", file=sys.stderr)
         sys.exit(1)

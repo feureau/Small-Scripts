@@ -810,7 +810,7 @@ class VideoProcessorApp:
             "--colorprim", "bt709" if eight_bit else "auto",
             "--colormatrix", "bt709" if eight_bit else "auto",
             "--lookahead", "32", "--aq-temporal", "--multipass", "2pass-full",
-            "--bframes", "4", "--tf-level", "4", "--split-enc", "forced_4",
+            "--bframes", "4", "--tf-level", "4", "--split-enc", "forced_4", "--parallel", "3",
             "--log-level", "info", "--output", output_file, "-i", file_path
         ]
         if eight_bit and os.path.exists(self.lut_file):
