@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\WSL Here]
+@="Open WSL Here"
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\WSL Here\command]
+@="wsl ~ -d Ubuntu -e sh -c 'cd \"$(wslpath \"%V\")\"; exec bash'"

@@ -346,13 +346,14 @@ class VideoProcessorApp:
             self.on_file_select(None)
 
     def update_file_list(self, files):
-        for file in files:
-            if file not in self.file_list:
-                self.file_list.append(file)
-                self.file_listbox.insert(tk.END, file)
-                self.subtitles_by_file[file] = []
-                self.detect_subtitle_tracks(file)
-                self.file_options[file] = {
+        for file_path in files: # Renamed 'file' to 'file_path' for clarity with debug
+            print(f"DEBUG: Received file_path by update_file_list: '{file_path}'") # <<< ADDED DEBUG
+            if file_path not in self.file_list:
+                self.file_list.append(file_path)
+                self.file_listbox.insert(tk.END, file_path)
+                self.subtitles_by_file[file_path] = []
+                self.detect_subtitle_tracks(file_path)
+                self.file_options[file_path] = {
                     "resolution": self.resolution_var.get(),
                     "upscale_algo": self.upscale_algo_var.get(),
                     "eight_bit": self.eight_bit_var.get(),
@@ -757,6 +758,7 @@ class VideoProcessorApp:
         return ret
 
     def build_nvenc_command_and_run(self, file_path, output_file, ass_burn=None):
+        print(f"DEBUG: file_path at start of build_nvenc_command_and_run: '{file_path}'") # <<< ADDED DEBUG
         file_options = self.file_options.get(file_path, {})
         resolution = file_options.get("resolution", self.resolution_var.get())
         upscale_algo = file_options.get("upscale_algo", self.upscale_algo_var.get())
@@ -773,6 +775,7 @@ class VideoProcessorApp:
             output_dir = os.path.join(os.path.dirname(file_path), resolution)
             os.makedirs(output_dir, exist_ok=True)
             base_name, ext = os.path.splitext(os.path.basename(file_path))
+            print(f"DEBUG: base_name: '{base_name}', ext: '{ext}'") # <<< ADDED DEBUG
             if eight_bit:
                 temp_name = f"{base_name}_8bit_temp{ext}"
             else:
@@ -845,6 +848,7 @@ class VideoProcessorApp:
             output_dir = os.path.join(os.path.dirname(file_path),
                                       self.file_options[file_path].get("resolution", "4k"))
             base_name, ext = os.path.splitext(os.path.basename(file_path))
+            print(f"DEBUG (encode_single_pass for subtitles): base_name: '{base_name}', ext: '{ext}'") # <<< ADDED DEBUG for completeness
             for sub in self.subtitles_by_file[file_path]:
                 if sub["type"] == "embedded":
                     ass_path = os.path.join(output_dir, f"{base_name}_track{sub['track_id']}.ass")
@@ -863,6 +867,7 @@ class VideoProcessorApp:
                                    fruc_fps_target, generate_log, eight_bit, convert_to_hdr, convert_hdr):
         resolution = self.file_options.get(file_path, {}).get("resolution", self.resolution_var.get())
         base_name, ext = os.path.splitext(os.path.basename(file_path))
+        print(f"DEBUG (encode_with_embedded_sub): base_name: '{base_name}', ext: '{ext}'") # <<< ADDED DEBUG for completeness
         output_dir = os.path.join(os.path.dirname(file_path), resolution)
         os.makedirs(output_dir, exist_ok=True)
         eight_bit_option = self.file_options.get(file_path, {}).get("eight_bit", self.eight_bit_var.get())
@@ -887,9 +892,11 @@ class VideoProcessorApp:
                                  fruc_fps_target, generate_log, eight_bit, convert_to_hdr, convert_hdr):
         resolution = self.file_options.get(file_path, {}).get("resolution", self.resolution_var.get())
         base_name, ext = os.path.splitext(os.path.basename(file_path))
+        print(f"DEBUG (encode_with_external_srt): base_name: '{base_name}', ext: '{ext}'") # <<< ADDED DEBUG for completeness
         output_dir = os.path.join(os.path.dirname(file_path), resolution)
         os.makedirs(output_dir, exist_ok=True)
         srt_base = os.path.splitext(os.path.basename(srt_file))[0]
+        print(f"DEBUG (encode_with_external_srt): srt_base: '{srt_base}'") # <<< ADDED DEBUG for srt_base
         eight_bit_option = self.file_options.get(file_path, {}).get("eight_bit", self.eight_bit_var.get())
         if eight_bit_option:
             output_file = os.path.join(output_dir, f"{base_name}_srt_{srt_base}_8bit{ext}")
@@ -915,10 +922,12 @@ class VideoProcessorApp:
 
         # STRIP OFF '_temp' TO GET FINAL FILENAME
         base, ext = os.path.splitext(output_file)
+        print(f"DEBUG (apply_hdr_settings): base before _temp strip: '{base}', ext: '{ext}'") # <<< ADDED DEBUG
         if base.endswith("_temp"):
             final_base = base[:-5]
         else:
             final_base = base
+        print(f"DEBUG (apply_hdr_settings): final_base after _temp strip: '{final_base}'") # <<< ADDED DEBUG
         merged_output = final_base + ext
 
         cube_file = self.lut_file
