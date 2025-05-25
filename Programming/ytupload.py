@@ -73,6 +73,7 @@ def setup_revocation_on_exit():
     signal.signal(signal.SIGINT, on_sig)
 
 # --- OAuth Authentication with retry and fallback ---
+# --- OAuth Authentication with retry and fallback ---
 def get_authenticated_service(secrets_path):
     from oauthlib.oauth2.rfc6749.errors import MismatchingStateError
     creds = None
@@ -80,21 +81,33 @@ def get_authenticated_service(secrets_path):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                logger.info("Refreshing expired token.")
+                creds.refresh(Request())
+            except Exception as refresh_err:
+                logger.warning(f"Token refresh failed: {refresh_err}. Will attempt new auth flow.")
+                creds = None # Force new auth flow
+        
+        if not creds or not creds.valid: # Check again if refresh failed or wasn't attempted
             flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
             try:
+                logger.info("Attempting OAuth local server flow on a dynamic port.")
                 creds = flow.run_local_server(
-                    port=OAUTH_PORT,
+                    port=0,  # Let the system pick an available port
                     open_browser=True,
-                    timeout=300
+                    timeout=900 # 15 minutes timeout for the whole process
                 )
             except MismatchingStateError:
+                logger.warning("OAuth MismatchingStateError during local server flow, falling back to console.")
                 creds = flow.run_console()
-            except Exception:
+            except Exception as e: # Catching other exceptions that might occur
+                logger.error(f"OAuth local server flow failed: {e}. Falling back to console.")
                 creds = flow.run_console()
+        
         with open(TOKEN_FILE, 'w') as f:
             f.write(creds.to_json())
+            logger.info(f"Token saved to {TOKEN_FILE}")
+            
     return build('youtube', 'v3', credentials=creds)
 
 # --- Helpers ---
