@@ -4,7 +4,7 @@ import subprocess
 import argparse
 import glob
 import shutil  # For checking tool availability
-import re      # For regex operations to remove leading number and dash
+import re      # For regex operations
 from typing import List
 
 # --- Constants ---
@@ -14,28 +14,65 @@ DEFAULT_OUTPUT_FOLDER = "HDR"
 
 # --- Function Definitions ---
 
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitizes a filename by:
+    1. Removing leading number and dash (e.g., '01-').
+    2. Replacing illegal/problematic characters (except apostrophe) with an underscore.
+    3. Removing leading/trailing whitespace and underscores.
+    4. Collapsing multiple consecutive underscores into one.
+    5. Providing a default name if the name becomes empty.
+    """
+    # 1. Remove leading number and dash
+    sanitized_name = re.sub(r'^\d+-', '', filename)
+
+    # 2. Define characters that are problematic in filenames (excluding apostrophe)
+    #    Common problematic characters for Windows: \ / : * ? " < > |
+    #    Forward slash / is also problematic on Unix-like systems.
+    #    We will replace them with an underscore.
+    #    Apostrophe (') is explicitly NOT in this list.
+    problematic_chars_regex = r'[\\/:*?"<>|]' # Note: No apostrophe here
+    sanitized_name = re.sub(problematic_chars_regex, '_', sanitized_name)
+
+    # 3. Optional: Remove leading/trailing whitespace and underscores that might result from replacement
+    sanitized_name = sanitized_name.strip(' _') # Strip leading/trailing space and underscore
+
+    # 4. Optional: Collapse multiple consecutive underscores into one
+    sanitized_name = re.sub(r'_+', '_', sanitized_name)
+
+    # 5. Optional: If the name becomes empty after sanitization (e.g., input was just "---" or ":*:"),
+    #    provide a default name to avoid errors.
+    if not sanitized_name:
+        sanitized_name = "sanitized_default_output" # Or any other default you prefer
+        
+    return sanitized_name
+
+
 def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: bool, rotation: int, mkvmerge_path: str, ffmpeg_path: str) -> bool:
     """
     Process a single file with HDR metadata, optional LUT embedding, and optional rotation.
     Uses mkvmerge for HDR/LUT and ffmpeg for rotation.
     """
     mkv_success = False
-    rotation_applied = (rotation == 0)  # Consider rotation successful if 0 (not needed)
+    # rotation_applied = (rotation == 0) # This variable wasn't actually used for the return value
 
     try:
         if not os.path.isfile(input_file):
             print(f"Error: Input file not found: {input_file}")
             return False
 
-        # Get base name from input file, remove any leading number and dash (e.g., '01-')
-        base_name = os.path.splitext(os.path.basename(input_file))[0]
-        base_name = re.sub(r'^\d+-', '', base_name)
-        # Do not add any suffix; simply use the base name with .mkv extension.
-        output_filename = f"{base_name}.mkv"
+        # Get base name from input file (without extension)
+        original_base_name = os.path.splitext(os.path.basename(input_file))[0]
+        
+        # Sanitize the base name
+        sanitized_base_name = sanitize_filename(original_base_name)
+
+        # Use the sanitized base name for the output file.
+        output_filename = f"{sanitized_base_name}.mkv"
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, output_filename)
         # Define a name for the intermediate file *after* mkvmerge succeeds
-        intermediate_path = output_path + ".intermediate"
+        intermediate_path = output_path + ".intermediate" # Used for rotation step
 
         # --- Step 1: mkvmerge processing ---
         mkvmerge_command = [
@@ -107,7 +144,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         except OSError as rename_err:
             print(f"Error: Could not rename file for rotation step: {rename_err}")
             print(f"Warning: Skipping rotation for {output_path}. File remains as created by mkvmerge.")
-            return mkv_success
+            return mkv_success # mkvmerge was successful, but rotation skipped
 
         print(f"Applying rotation ({rotation} degrees) using ffmpeg...")
         try:
@@ -140,7 +177,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
                 print(f"Removed intermediate file: {intermediate_path}")
             except OSError as rm_err:
                 print(f"Warning: Could not remove intermediate file {intermediate_path}: {rm_err}")
-            rotation_applied = True
+            # rotation_applied = True # Not strictly needed for return value
 
         except subprocess.CalledProcessError as e:
             print(f"Error applying rotation using ffmpeg (intermediate input: {intermediate_path}):")
@@ -149,7 +186,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             stderr_decoded = e.stderr if isinstance(e.stderr, str) else e.stderr.decode('utf-8', errors='replace')
             print(f"Error output:\n{stderr_decoded}")
             print(f"Warning: Rotation failed.")
-            rotation_applied = False
+            # rotation_applied = False # Not strictly needed for return value
             # Attempt to restore the original mkvmerge output
             try:
                 if os.path.exists(output_path):  # Delete potentially incomplete ffmpeg output
@@ -162,16 +199,16 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         except Exception as e:
             print(f"Unexpected error during ffmpeg rotation of {intermediate_path}: {str(e)}")
             print(f"Warning: Rotation failed.")
-            rotation_applied = False
+            # rotation_applied = False # Not strictly needed for return value
             try:
-                if os.path.exists(output_path): 
+                if os.path.exists(output_path):
                     os.remove(output_path)
                 os.rename(intermediate_path, output_path)
                 print(f"Restored original (non-rotated) file: {output_path}")
             except OSError as restore_err:
                 print(f"CRITICAL WARNING: Could not restore original file from {intermediate_path}: {restore_err}")
 
-    return mkv_success
+    return mkv_success # Returns True if mkvmerge step was successful, regardless of rotation success
 
 
 def find_video_files(paths: List[str]) -> List[str]:
@@ -233,7 +270,7 @@ def main():
              "If flag is present without a value (-r), defaults to 90.\n"
              "If flag is absent, defaults to 0 (no rotation)."
     )
-    # Optionally, you can remove the --output-dir argument as the output folder is now fixed.
+    # Output folder is fixed to "HDR", so --output-dir is not needed.
     # parser.add_argument(
     #     "-o", "--output-dir",
     #     help="Custom output directory"
@@ -260,8 +297,9 @@ def main():
         args.rotate = rotation_angle
     except ValueError:
         parser.error(f"argument -r/--rotate: invalid integer value: '{args.rotate}'")
-    except TypeError:
+    except TypeError: # Should not happen with argparse nargs='?' and default=0, but good practice
         parser.error(f"argument -r/--rotate: unexpected value type processing '{args.rotate}'")
+
 
     # --- Verify Tool Paths ---
     mkvmerge_exe = shutil.which(args.mkvmerge_path)
@@ -270,24 +308,27 @@ def main():
         print("Please install MKVToolNix or specify the correct path with --mkvmerge-path")
         return
     else:
-        args.mkvmerge_path = mkvmerge_exe
+        args.mkvmerge_path = mkvmerge_exe # Use the full path found by shutil.which
         print(f"Using mkvmerge: {args.mkvmerge_path}")
 
-    ffmpeg_exe = None
+    ffmpeg_exe = None # Will store the full path if found and needed
     if args.rotate != 0:  # Only check for ffmpeg if rotation is actually needed
-        ffmpeg_exe = shutil.which(args.ffmpeg_path)
-        if not ffmpeg_exe:
+        ffmpeg_exe_check = shutil.which(args.ffmpeg_path)
+        if not ffmpeg_exe_check:
              print(f"Error: Rotation ({args.rotate} deg) requested, but ffmpeg not found using path '{args.ffmpeg_path}'.")
              print("Please install ffmpeg, specify the correct path with --ffmpeg-path, or use --rotate 0.")
              return
         else:
-             args.ffmpeg_path = ffmpeg_exe
+             args.ffmpeg_path = ffmpeg_exe_check # Use the full path
+             ffmpeg_exe = args.ffmpeg_path # Assign to ffmpeg_exe for passing to process_file
              print(f"Using ffmpeg: {args.ffmpeg_path}")
+    else: # If rotation is 0, ffmpeg_path is not strictly needed by process_file
+        args.ffmpeg_path = None # Ensure it's None if not used
 
     # --- Find Input Files ---
     if not args.inputs:
         print("No input paths provided. Searching current directory and subdirectories...")
-        args.inputs = ['.']
+        args.inputs = ['.'] # Default to current directory and subdirs
 
     video_files = find_video_files(args.inputs)
     if not video_files:
@@ -295,13 +336,15 @@ def main():
         return
 
     # --- Force Output Directory to "HDR" ---
-    output_dir_abs = os.path.abspath(os.path.join(os.getcwd(), "HDR"))
+    # Ensure the output directory is relative to the script's current working directory, not necessarily where the script file is.
+    output_dir_abs = os.path.abspath(os.path.join(os.getcwd(), DEFAULT_OUTPUT_FOLDER))
+
     print(f"\nFound {len(video_files)} video file(s) to process.")
     print(f"Output directory: {output_dir_abs}")
     print(f"Processing mode: {'HDR with LUT' if args.embed_lut else 'HDR only'}")
-    if args.rotate != 0 and ffmpeg_exe:
+    if args.rotate != 0 and ffmpeg_exe: # Check ffmpeg_exe which confirms it was found
         print(f"Rotation requested: {args.rotate} degrees (using ffmpeg)")
-    elif args.rotate != 0 and not ffmpeg_exe:
+    elif args.rotate != 0 and not ffmpeg_exe: # Rotation requested but ffmpeg was not found
          print(f"Rotation requested ({args.rotate}) but ffmpeg not found/validated. Rotation will be skipped.")
     else:
         print("Rotation: None")
@@ -309,16 +352,16 @@ def main():
     # --- Process Files ---
     success_count = 0
     total_files = len(video_files)
-    for i, file in enumerate(video_files, 1):
+    for i, file_path in enumerate(video_files, 1):
         print(f"\n--- Processing file {i}/{total_files} ---")
-        if process_file(file, output_dir_abs, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe):
+        if process_file(file_path, output_dir_abs, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe): # Pass ffmpeg_exe
             success_count += 1
         print("-" * 40)
 
     print("\nProcessing complete!")
     print(f"Successfully processed (mkvmerge step): {success_count}/{total_files}")
     if success_count < total_files:
-        print("Some files failed during the mkvmerge step. Check error messages above.")
+        print("Some files may have failed during mkvmerge or rotation steps. Check error messages above.")
 
 if __name__ == "__main__":
     main()
