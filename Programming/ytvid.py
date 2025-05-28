@@ -806,14 +806,14 @@ class VideoProcessorApp:
                                   convert_to_hdr, convert_hdr, ass_burn,
                                   resize_algo, target_res, do_resize):
         cmd = [
-            "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value),
-            "--preset", "p1", "--output-depth", "8" if eight_bit else "10",
-            "--audio-copy", "--sub-copy", "--chapter-copy", "--key-on-chapter",
+            "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value), "--max-bitrate", "100000",
+            "--preset", "p4", "--output-depth", "8" if eight_bit else "10",
+            "--audio-copy", "--sub-copy", "--chapter-copy", #"--key-on-chapter",
             "--transfer", "bt709" if eight_bit else "auto",
             "--colorprim", "bt709" if eight_bit else "auto",
             "--colormatrix", "bt709" if eight_bit else "auto",
             "--lookahead", "32", "--aq-temporal", "--multipass", "2pass-full",
-            "--bframes", "4", "--tf-level", "4", "--split-enc", "forced_4", "--parallel", "3",
+            "--bframes", "4", "--tf-level", "4", "--split-enc", "forced_4", "--parallel", "2",
             "--log-level", "info", "--output", output_file, "-i", file_path
         ]
         if eight_bit and os.path.exists(self.lut_file):
@@ -1003,15 +1003,70 @@ class VideoProcessorApp:
             )
         print("Processing Complete.")
 
+
 if __name__ == "__main__":
     import glob
     from tkinterdnd2 import TkinterDnD
+
+    # 'os' and 'sys' are already imported at the top of the file.
+
     expanded_files = []
-    for arg in sys.argv[1:]:
-        if '*' in arg or '?' in arg:
-            expanded_files.extend(glob.glob(arg, recursive=False))
-        else:
-            expanded_files.append(arg)
+
+    # Check if any command-line arguments were provided
+    if len(sys.argv) > 1:
+        # If arguments are provided, process them as before.
+        # This part remains consistent with the original script's handling of CLI arguments.
+        print("[INFO] Processing files from command-line arguments...")
+        for arg in sys.argv[1:]:
+            if '*' in arg or '?' in arg:
+                # glob.glob can return relative paths if the pattern is relative.
+                # These are added to expanded_files as they are.
+                glob_matches = glob.glob(arg, recursive=False)
+                if not glob_matches:
+                    print(f"[WARN] No files matched by pattern: {arg}")
+                expanded_files.extend(glob_matches)
+            else:
+                # Direct file paths from arguments are added as they are (can be relative or absolute).
+                expanded_files.append(arg)
+
+        if not expanded_files:
+            # This message is shown if CLI arguments were given but resulted in no files.
+            # Crucially, it does NOT fall back to scanning the current directory in this case.
+            print("[INFO] No valid files found based on the provided command-line arguments.")
+
+    else:
+        # No command-line arguments were provided, so scan the current directory.
+        current_dir = os.getcwd()  # Gets the current working directory.
+        # Define a list of common video file extensions to look for.
+        video_extensions = [
+            '.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv',
+            '.mpg', '.mpeg', '.vob', '.ts', '.m2ts', '.mts', '.asf',
+            '.divx', '.f4v', '.m4v'
+        ]
+        print(
+            f"[INFO] No files provided via command line. Scanning current directory: {current_dir} for video files...")
+
+        files_from_cwd = []
+        for filename in os.listdir(current_dir):
+            # Construct the full path to the file.
+            # os.path.join will correctly create the path.
+            # Since os.getcwd() returns an absolute path, file_path will also be absolute.
+            file_path = os.path.join(current_dir, filename)
+
+            # Check if it's a file (not a directory) and if its extension is in our list.
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(filename)  # Get the file extension.
+                if ext.lower() in video_extensions:  # Case-insensitive check.
+                    print(f"[INFO] Found video file in CWD: {filename}")
+                    files_from_cwd.append(file_path)  # Add the full path.
+
+        # Sort the list of files found in the CWD alphabetically for a consistent order.
+        expanded_files.extend(sorted(files_from_cwd))
+
+        if not expanded_files:  # If the scan of the current directory also found no video files.
+            print("[INFO] No video files found in the current directory.")
+
+    # Initialize and run the Tkinter application with the (potentially empty) list of files.
     root = TkinterDnD.Tk()
     app = VideoProcessorApp(root, expanded_files)
     root.mainloop()

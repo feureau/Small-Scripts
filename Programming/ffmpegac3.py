@@ -126,7 +126,7 @@ def main():
     for file in files:
         print(f"Processing: {file}")
         base, _ = os.path.splitext(file)
-        output_file = base + ".mov"
+        output_file = base + ".mp4"
         
         # Build the ffmpeg command:
         # - Copy first video stream.
