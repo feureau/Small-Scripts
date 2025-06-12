@@ -5,6 +5,7 @@ from pathlib import Path
 from ebooklib import epub, ITEM_DOCUMENT # <-- MODIFIED IMPORT
 from bs4 import BeautifulSoup
 import sys
+import glob # <--- IMPORT GLOB
 
 def extract_text_from_html(html_content):
     """Extracts plain text from HTML content."""
@@ -104,7 +105,7 @@ def main():
         description="Convert EPUB files to TXT format.",
         formatter_class=argparse.RawTextHelpFormatter # For better help text formatting
     )
-    parser.add_argument("epub_files", nargs='+', help="Path(s) to one or more EPUB file(s) to convert.")
+    parser.add_argument("epub_files", nargs='+', help="Path(s) to one or more EPUB file(s) or glob pattern(s) to convert.") # MODIFIED HELP
     parser.add_argument(
         "-o", "--output-dir",
         help="Directory to save the TXT files.\n"
@@ -136,7 +137,45 @@ def main():
     success_count = 0
     failure_count = 0
 
-    for epub_file_path_str in args.epub_files:
+    # --- START OF MODIFICATION for wildcard handling ---
+    actual_epub_files_to_process = []
+    for path_or_pattern in args.epub_files:
+        # glob.glob expands the pattern.
+        # If path_or_pattern is a literal filename that exists, glob returns [filename].
+        # If path_or_pattern is a literal filename that doesn't exist, glob returns [].
+        # If path_or_pattern is a pattern, glob returns matched files or [].
+        expanded_paths = glob.glob(path_or_pattern)
+        
+        if not expanded_paths:
+            # If glob found nothing, it could be:
+            # 1. A pattern that matched no files (e.g., "*.nonexistent")
+            # 2. A literal filename that doesn't exist (e.g., "myfile.epub" when it's not there)
+            
+            # Check if the input string itself looks like a pattern
+            # A simple check for common wildcard characters
+            is_likely_pattern = any(char in path_or_pattern for char in ['*', '?', '[', ']'])
+
+            if is_likely_pattern:
+                # It was a pattern, but it matched no files.
+                print(f"Warning: The pattern '{path_or_pattern}' did not match any files.", file=sys.stderr)
+            else:
+                # It was likely a literal filename that doesn't exist.
+                # Add it to the list so the existing error handling below catches it.
+                actual_epub_files_to_process.append(path_or_pattern)
+        else:
+            actual_epub_files_to_process.extend(expanded_paths)
+    
+    if not actual_epub_files_to_process and args.epub_files:
+        # This can happen if all inputs were patterns that matched nothing,
+        # or if args.epub_files contained only non-existent literal files
+        # that didn't look like patterns (though the latter is less likely
+        # to result in an empty list here due to the 'else' branch above).
+        # More accurately, this hits if ALL input patterns resolved to nothing.
+        print("Info: No EPUB files found to process based on the input arguments.", file=sys.stderr)
+    # --- END OF MODIFICATION ---
+
+
+    for epub_file_path_str in actual_epub_files_to_process: # MODIFIED: iterate over expanded list
         epub_file_path = Path(epub_file_path_str).resolve() # Resolve to absolute path for clarity
 
         if not epub_file_path.exists():
@@ -147,7 +186,6 @@ def main():
             print(f"Error: EPUB path '{epub_file_path}' is not a file.", file=sys.stderr)
             failure_count += 1
             continue
-
 
         if epub_file_path.suffix.lower() != '.epub':
             print(f"Warning: File '{epub_file_path}' does not have an .epub extension. Attempting to process anyway.", file=sys.stderr)
