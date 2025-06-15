@@ -179,6 +179,9 @@ class VideoProcessorApp:
         self.upscale_ngxvsr_button = tk.Radiobutton(self.resolution_options_frame, text="ngx-vsr",
                                                    variable=self.upscale_algo_var, value="ngx-vsr", command=self.apply_gui_options_to_selected_files)
         self.upscale_ngxvsr_button.grid(row=1, column=2, sticky=tk.W)
+        self.upscale_lanczos_button = tk.Radiobutton(self.resolution_options_frame, text="lanczos",
+                                                    variable=self.upscale_algo_var, value="lanczos", command=self.apply_gui_options_to_selected_files)
+        self.upscale_lanczos_button.grid(row=1, column=3, sticky=tk.W)
 
         # --- Options Panel Layout ---
         tk.Label(self.options_frame, text="Convert to 8 bit:").grid(row=1, column=0, sticky=tk.W)
@@ -806,14 +809,14 @@ class VideoProcessorApp:
                                   convert_to_hdr, convert_hdr, ass_burn,
                                   resize_algo, target_res, do_resize):
         cmd = [
-            "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value), "--max-bitrate", "100000",
-            "--preset", "p4", "--output-depth", "8" if eight_bit else "10",
+            "NVEncC64", "--avhw", "--codec", "av1", "--qvbr", str(qvbr_value), "--max-bitrate", "1000000",
+            "--preset", "p1", "--output-depth", "8" if eight_bit else "10",
             "--audio-copy", "--sub-copy", "--chapter-copy", #"--key-on-chapter",
             "--transfer", "bt709" if eight_bit else "auto",
             "--colorprim", "bt709" if eight_bit else "auto",
             "--colormatrix", "bt709" if eight_bit else "auto",
-            "--lookahead", "32", "--aq-temporal", "--multipass", "2pass-full",
-            "--bframes", "4", "--tf-level", "4", "--split-enc", "forced_4", "--parallel", "2",
+            "--lookahead", "8", "--multipass", "none", #"--aq-temporal",
+            "--bframes", "4", "--tf-level", "4", #"--split-enc", "forced_4", "--parallel", "2",
             "--log-level", "info", "--output", output_file, "-i", file_path
         ]
         if eight_bit and os.path.exists(self.lut_file):
