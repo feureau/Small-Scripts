@@ -209,11 +209,11 @@ class UploaderApp:
         self.start_ent.grid(row=0, column=1, sticky='w')
         ttk.Label(sched, text='Interval Hours').grid(row=1, column=0)
         self.interval_hour = ttk.Spinbox(sched, from_=0, to=168, width=5)
-        self.interval_hour.set(1)
+        self.interval_hour.set(0)
         self.interval_hour.grid(row=1, column=1, sticky='w')
         ttk.Label(sched, text='Interval Minutes').grid(row=2, column=0)
         self.interval_minute = ttk.Spinbox(sched, from_=0, to=59, width=5)
-        self.interval_minute.set(0)
+        self.interval_minute.set(144)
         self.interval_minute.grid(row=2, column=1, sticky='w')
 
         # Metadata Defaults

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import sys # Required for flushing output
 import subprocess
 import argparse
 import glob
@@ -59,7 +60,6 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         sanitized_base_name = sanitize_filename(original_base_name)
 
         output_filename = f"{sanitized_base_name}.mkv"
-        # The output_dir is now calculated per-file and passed in
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, output_filename)
         intermediate_path = output_path + ".intermediate"
@@ -91,39 +91,67 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
                 ])
         mkvmerge_command.append(input_file)
 
-        # <-- CHANGE START: Improved print statement for clarity -->
         print(f"Processing (mkvmerge): '{os.path.basename(input_file)}' -> '{output_path}'")
-        # <-- CHANGE END -->
-        
-        result_mkv = subprocess.run(
+
+        # <-- CHANGE START: Use subprocess.Popen for real-time output -->
+        # We use Popen to read stdout line-by-line for live progress updates.
+        process = subprocess.Popen(
             mkvmerge_command,
-            capture_output=True,
-            text=True,
-            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,  # Decode output as text
             encoding='utf-8',
-            errors='replace'
+            errors='replace',
+            bufsize=1  # Line-buffered
         )
 
-        if result_mkv.stderr:
-             print(f"mkvmerge Warnings/Errors:\n{result_mkv.stderr}")
+        other_output_lines = []
+        for line in process.stdout:
+            line = line.strip()
+            if line.startswith('Progress:'):
+                # Use carriage return '\r' to overwrite the line.
+                # end='' prevents a newline. flush=True ensures it's written immediately.
+                print(f"\r{line}", end="", flush=True)
+            else:
+                # Store other lines to print later.
+                other_output_lines.append(line)
+        
+        # After the loop, print a newline to move past the progress bar.
+        print()
 
-        print(f"Successfully created base MKV: {output_path}")
-        mkv_success = True
+        # Wait for the process to terminate and get the stderr content and exit code.
+        stderr_output = process.stderr.read()
+        process.wait()
+        
+        if process.returncode != 0:
+            print(f"Error processing {input_file} with mkvmerge:")
+            print(f"Command failed: {' '.join(mkvmerge_command)}")
+            print(f"Exit code: {process.returncode}")
 
-    except subprocess.CalledProcessError as e:
-        print(f"Error processing {input_file} with mkvmerge:")
-        print(f"Command failed: {' '.join(e.cmd)}")
-        print(f"Exit code: {e.returncode}")
-        stderr_decoded = e.stderr if isinstance(e.stderr, str) else e.stderr.decode('utf-8', errors='replace')
-        print(f"Error output:\n{stderr_decoded}")
-        if os.path.exists(output_path):
-            try:
-                os.remove(output_path)
-            except OSError as rm_err:
-                print(f"Warning: Could not remove incomplete output file {output_path}: {rm_err}")
-        return False
+            if other_output_lines:
+                print(f"--- mkvmerge Standard Output ---\n" + "\n".join(other_output_lines))
+            
+            if stderr_output.strip():
+                print(f"--- mkvmerge Standard Error ---\n{stderr_output.strip()}")
+
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError as rm_err:
+                    print(f"Warning: Could not remove incomplete output file {output_path}: {rm_err}")
+            return False
+        else:
+            if stderr_output.strip():
+                print(f"mkvmerge Warnings:\n{stderr_output.strip()}")
+            print(f"Successfully created base MKV: {output_path}")
+            mkv_success = True
+        # <-- CHANGE END -->
+
     except Exception as e:
         print(f"Unexpected error during mkvmerge processing of {input_file}: {str(e)}")
+        # Clean up traceback for a cleaner user error message if Popen fails to start
+        if isinstance(e, FileNotFoundError):
+             print(f"Error: Could not find the mkvmerge executable at the specified path.")
         return False
 
     # --- Step 2: ffmpeg rotation (only if mkvmerge succeeded and rotation requested) ---
@@ -139,7 +167,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         print(f"Applying rotation ({rotation} degrees) using ffmpeg...")
         try:
             ffmpeg_command = [
-                ffmpeg_path,
+                ffmpeg_path, "-y", # Overwrite output without asking
                 "-i", intermediate_path,
                 "-map", "0",
                 "-c", "copy",
@@ -170,8 +198,15 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
             print(f"Error applying rotation using ffmpeg (intermediate input: {intermediate_path}):")
             print(f"Command failed: {' '.join(e.cmd)}")
             print(f"Exit code: {e.returncode}")
-            stderr_decoded = e.stderr if isinstance(e.stderr, str) else e.stderr.decode('utf-8', errors='replace')
-            print(f"Error output:\n{stderr_decoded}")
+            
+            stdout_output = e.stdout if e.stdout else ""
+            stderr_output = e.stderr if e.stderr else ""
+
+            if stdout_output.strip():
+                print(f"--- ffmpeg Standard Output ---\n{stdout_output.strip()}")
+            if stderr_output.strip():
+                print(f"--- ffmpeg Standard Error ---\n{stderr_output.strip()}")
+            
             print(f"Warning: Rotation failed.")
             try:
                 if os.path.exists(output_path):
@@ -223,7 +258,6 @@ def main():
                     "Creates an 'HDR' subfolder within each source file's directory for the output.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    # ... (rest of parser arguments are unchanged)
     parser.add_argument(
         "inputs",
         nargs="*",
@@ -310,12 +344,9 @@ def main():
         print("No video files found matching the specified inputs.")
         return
 
-    # <-- CHANGE START: Removed the old fixed output directory logic -->
-    # The output directory will now be determined on a per-file basis inside the loop.
     print(f"\nFound {len(video_files)} video file(s) to process.")
     print(f"Outputting to an '{DEFAULT_OUTPUT_FOLDER}' subfolder within each source directory.")
     print(f"Processing mode: {'HDR with LUT' if args.embed_lut else 'HDR only'}")
-    # <-- CHANGE END -->
     
     if args.rotate != 0 and ffmpeg_exe:
         print(f"Rotation requested: {args.rotate} degrees (using ffmpeg)")
@@ -330,14 +361,9 @@ def main():
     for i, file_path in enumerate(video_files, 1):
         print(f"\n--- Processing file {i}/{total_files} ---")
 
-        # <-- CHANGE START: Per-file output directory calculation -->
-        # Get the directory where the source file is located.
         source_directory = os.path.dirname(file_path)
-        # Create the path for the 'HDR' subfolder within that source directory.
         output_dir_for_file = os.path.join(source_directory, DEFAULT_OUTPUT_FOLDER)
-        # <-- CHANGE END -->
         
-        # Pass the dynamically determined output directory to the processing function
         if process_file(file_path, output_dir_for_file, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe):
             success_count += 1
         print("-" * 40)
