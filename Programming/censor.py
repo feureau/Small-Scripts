@@ -11,7 +11,7 @@ import glob
 import torch
 import argparse
 import subprocess
-import shutil # --- NEW ---: Needed for deleting the temp directory
+import shutil
 
 import whisper
 from profanity_check import predict_prob
@@ -58,27 +58,43 @@ def merge_intervals(intervals):
             merged.append((current_start, current_end))
     return merged
 
-# --- MODIFIED ---: Added 'temp_dir' to pass our central temp path
 def process_video(processing_path, original_path, model, args, output_dir, temp_dir):
     try:
         print(f"\nProcessing: {os.path.basename(original_path)}")
-        result = model.transcribe(processing_path, fp16=torch.cuda.is_available(), word_timestamps=True)
+        
+        # --- MODIFIED ---: Only request word timestamps if needed
+        use_word_timestamps = args.censor_level == 'word'
+        print(f"Transcribing with {'word-level' if use_word_timestamps else 'segment-level'} timestamps...")
+        result = model.transcribe(processing_path, fp16=torch.cuda.is_available(), word_timestamps=use_word_timestamps)
 
         segments_to_cut = []
         
-        print("  Checking for profanity (word-level)...")
-        for segment in result['segments']:
-            text = segment['text'].strip()
-            if not text: continue
-            
-            prob = predict_prob([text])[0]
-            if prob >= args.threshold:
-                for word_data in segment.get('words', []):
-                    clean_word = word_data['word'].lower().strip('.,!?-')
-                    if clean_word in PROFANE_WORDS:
-                        print(f"  CENSOR WORD: '{word_data['word']}' in segment '{text}'")
-                        segments_to_cut.append((word_data['start'], word_data['end']))
+        # --- MODIFIED ---: Conditional logic based on censorship level
+        if args.censor_level == 'word':
+            print("  Checking for profanity (word-level)...")
+            for segment in result['segments']:
+                text = segment['text'].strip()
+                if not text: continue
+                
+                prob = predict_prob([text])[0]
+                if prob >= args.threshold:
+                    for word_data in segment.get('words', []):
+                        clean_word = word_data['word'].lower().strip('.,!?-')
+                        if clean_word in PROFANE_WORDS:
+                            print(f"  CENSOR WORD: '{word_data['word']}'")
+                            segments_to_cut.append((word_data['start'], word_data['end']))
+        else: # Censor level is 'sentence'
+            print("  Checking for profanity (sentence-level)...")
+            for segment in result['segments']:
+                text = segment['text'].strip()
+                if not text: continue
+                
+                prob = predict_prob([text])[0]
+                if prob >= args.threshold:
+                    print(f"  CENSOR SENTENCE: '{text}' (score: {prob:.2f})")
+                    segments_to_cut.append((segment['start'], segment['end']))
 
+        # Silence cutting logic remains the same and works with both modes
         if args.cut_silence:
             print(f"  Checking for silent sections longer than {args.min_silence_duration}s...")
             last_speech_end = 0.0
@@ -119,7 +135,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         output_path = os.path.join(output_dir, f"{base_name}_edited.mp4")
         
         print(f"  Exporting edited video...")
-        # --- MODIFIED ---: Direct MoviePy's temp file to our central temp folder
         temp_audio_path = os.path.join(temp_dir, "temp-audio.m4a")
         final_clip.write_videofile(
             output_path,
@@ -152,37 +167,52 @@ def main():
         description="A script to find and remove profanity and/or silent sections from video files.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    # ... (all other arguments are the same)
     parser.add_argument("input_files", nargs="*", help="Video files to process. Supports wildcards (e.g., *.mp4).")
     parser.add_argument('--no-clean', dest='clean', action='store_false', help="Disable the FFmpeg pre-cleaning step.")
     parser.add_argument('--model', default='base', choices=['tiny', 'base', 'small', 'medium', 'large'], help="The Whisper model to use. (Default: base)")
     parser.add_argument('--threshold', type=float, default=0.8, help="Profanity probability threshold. (Default: 0.8)")
-    parser.add_argument('--no-silence', dest='cut_silence', action='store_false', help="Disable the default behavior of cutting silent sections.")
-    parser.add_argument('--min-silence-duration', type=float, default=1.0, help="Minimum duration (in seconds) of silence to cut. (Default: 1.0)")
-    # --- NEW ---
-    parser.add_argument(
-        '--temp-cache',
-        action='store_true',
-        help="Store the Whisper model cache in the temporary folder.\n(WARNING: This will re-download the model on every run!)"
+    
+    # --- MODIFIED ---: Added mutually exclusive group for censor level
+    censor_group = parser.add_mutually_exclusive_group()
+    censor_group.add_argument(
+        '-w', '--word',
+        dest='censor_level',
+        action='store_const',
+        const='word',
+        help="Censor on a word-by-word basis (Default)."
+    )
+    censor_group.add_argument(
+        '-s', '--sentence',
+        dest='censor_level',
+        action='store_const',
+        const='sentence',
+        help="Censor the entire sentence containing a profane word."
     )
 
-    parser.set_defaults(clean=True, cut_silence=True, temp_cache=False)
+    parser.add_argument('--no-silence', dest='cut_silence', action='store_false', help="Disable the default behavior of cutting silent sections.")
+    parser.add_argument('--min-silence-duration', type=float, default=1.0, help="Minimum duration (in seconds) of silence to cut. (Default: 1.0)")
+    parser.add_argument('--temp-cache', action='store_true', help="Store the Whisper model cache in the temporary folder.\n(WARNING: This will re-download the model on every run!)")
+
+    # --- MODIFIED ---: Set all defaults in one place for clarity
+    parser.set_defaults(
+        clean=True, 
+        cut_silence=True, 
+        temp_cache=False,
+        censor_level='word' # Default censorship level
+    )
     args = parser.parse_args()
 
     INPUT_DIR = os.getcwd()
     OUTPUT_DIR = os.path.join(INPUT_DIR, "edited_output")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # --- MODIFIED ---: Centralized temporary directory management
     TEMP_DIR = os.path.join(INPUT_DIR, "script_temp")
     if os.path.exists(TEMP_DIR):
-        print(f"Warning: Found existing temp directory. Removing: {TEMP_DIR}")
         shutil.rmtree(TEMP_DIR)
     os.makedirs(TEMP_DIR, exist_ok=True)
     print(f"Temporary files will be stored in: {TEMP_DIR}")
 
     try:
-        # --- MODIFIED ---: Logic for Whisper cache location
         whisper_cache_path = None
         if args.temp_cache:
             whisper_cache_path = os.path.join(TEMP_DIR, "whisper_cache")
@@ -217,7 +247,6 @@ def main():
         print("\nProcessing complete.")
 
     finally:
-        # --- NEW ---: This block runs always, ensuring cleanup
         if os.path.exists(TEMP_DIR):
             print(f"Cleaning up temporary directory: {TEMP_DIR}")
             shutil.rmtree(TEMP_DIR)
