@@ -1,3 +1,117 @@
+"""
+================================
+Batch HDR to SDR Video Converter
+================================
+
+Description:
+------------
+This script provides a powerful command-line interface to batch convert HDR (High
+Dynamic Range) video files to SDR (Standard Dynamic Range). It is designed for
+a professional post-production workflow where a specific 3D Look-Up Table (LUT)
+is required for the color and tone mapping transformation.
+
+The script leverages GPU acceleration for both decoding and encoding to achieve
+maximum performance, offloading the most intensive tasks from the CPU.
+
+Features:
+---------
+- Dual-Engine Support: Choose between two powerful conversion engines:
+    - NVEncC: A highly optimized, command-line tool for NVIDIA encoders. (Default)
+    - FFmpeg: The universal standard for video manipulation.
+- Full GPU Acceleration: Utilizes NVIDIA's NVENC for encoding and CUDA for
+  decoding (av1_cuvid), ensuring a fast, efficient pipeline.
+- Flexible Input: Process videos in multiple ways:
+    - A single video file.
+    - Multiple specific video files.
+    - An entire folder of videos.
+    - A glob pattern (e.g., "*.mkv").
+- Lossless Audio: Copies all audio tracks directly from the source to the
+  destination without re-encoding, preserving full audio quality.
+- Optimized & Correct: The parameters used for both engines have been carefully
+  researched and tested to correctly apply the specified LUT according to the
+  LUT author's own instructions (e.g., using tetrahedral interpolation).
+- Robust File Handling: Includes a 'staging' system for the LUT file when using
+  NVEncC to prevent command-line path and quoting issues.
+
+Requirements:
+-------------
+1. Python 3.x
+2. FFmpeg: A recent 'full' build (from gyan.dev or similar) must be installed
+   and accessible via the system's PATH environment variable.
+3. NVEncC: A recent version must be installed and accessible via the system's
+   PATH environment variable.
+4. NVIDIA GPU: A modern NVIDIA graphics card (RTX series recommended for full
+   AV1 decoding support).
+5. NVIDIA Graphics Driver: A recent version of the driver.
+6. The specific .cube LUT file referenced in the script.
+
+Configuration:
+--------------
+The `LUT_FILE_PATH` variable at the top of the script must be set to the correct
+location of your '.cube' LUT file.
+
+================================
+HOW TO USE - EXAMPLES
+================================
+
+Open a command prompt (cmd.exe) or PowerShell in a folder containing your videos.
+
+--- Basic Usage (using the default NVEncC engine) ---
+
+# Convert all .mkv files in the current folder (.)
+> python your_script_name.py .
+
+# Convert a single specific video file
+> python your_script_name.py "My HDR Video.mkv"
+
+# Convert multiple specific video files
+> python your_script_name.py "video1.mkv" "D:\folder 2\video2.mov"
+
+# Convert all .mp4 files in the current folder
+> python your_script_name.py . --ext mp4
+
+--- Using the FFmpeg Engine ---
+
+# Convert all .mkv files in the current folder using FFmpeg
+> python your_script_name.py . -f
+
+# Convert a single file using FFmpeg
+> python your_script_name.py "My HDR Video.mkv" --ffmpeg
+
+--- Advanced Usage ---
+
+# Use a glob pattern to select files
+> python your_script_name.py *.mkv
+
+# Specify a custom suffix for the output files
+> python your_script_name.py . --suffix _SDR_Final
+
+================================
+COMMAND-LINE ARGUMENTS
+================================
+
+- `input_paths`
+  (Required) One or more positional arguments specifying the input.
+  Can be a file path, a folder path, or a glob pattern.
+
+- `-f`, `--ffmpeg`
+  (Optional) Use the FFmpeg engine for conversion.
+
+- `-n`, `--nvencc`
+  (Optional) Use the NVEncC engine for conversion. This is the default
+  behavior if neither -f nor -n is specified.
+
+- `--ext <extension>`
+  (Optional) The file extension to search for when a folder is provided
+  as an input path. Default is "mkv".
+
+- `--suffix <text>`
+  (Optional) A custom text suffix to add to the output filenames before the
+  extension. If not provided, it defaults to "_SDR_NVENCC" or "_SDR_FFMPEG"
+  depending on the engine used.
+
+"""
+
 import argparse
 import glob
 import os
