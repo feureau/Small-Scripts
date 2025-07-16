@@ -9,14 +9,17 @@ import torch
 import argparse
 import subprocess
 import shutil
+import logging
+import datetime  # Added for timestamp formatting
 
 from faster_whisper import WhisperModel
 from profanity_check import predict_prob
 from moviepy import VideoFileClip, concatenate_videoclips
 
+# This list contains the specific words to be censored.
+# You can add or remove words here. They should be lowercase.
 PROFANE_WORDS = {
     "fuck", "fucking", "shit", "bitch", "cunt", "asshole", "motherfucker"
-    # Add any other words you want to censor here
 }
 
 def clean_video(input_path, temp_dir):
@@ -55,65 +58,137 @@ def merge_intervals(intervals):
             merged.append((current_start, current_end))
     return merged
 
+def setup_logger(name, log_file, level=logging.INFO):
+    """Function to setup a logger for a specific video's log file."""
+    handler = logging.FileHandler(log_file, mode='w')
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    logger.addHandler(handler)
+    return logger
+
+# --- NEW FUNCTION: Format seconds into SRT timestamp ---
+def format_srt_timestamp(seconds):
+    """Converts seconds (float) to an SRT timestamp string 'HH:MM:SS,ms'."""
+    td = datetime.timedelta(seconds=seconds)
+    total_seconds = int(td.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    milliseconds = td.microseconds // 1000
+    return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
+
+# --- NEW FUNCTION: Generate and save an SRT file ---
+def generate_srt_file(segments, output_path):
+    """Generates an SRT subtitle file from a list of Whisper segments."""
+    with open(output_path, 'w', encoding='utf-8') as srt_file:
+        for i, segment in enumerate(segments, 1):
+            start_time = format_srt_timestamp(segment.start)
+            end_time = format_srt_timestamp(segment.end)
+            text = segment.text.strip()
+            
+            srt_file.write(f"{i}\n")
+            srt_file.write(f"{start_time} --> {end_time}\n")
+            srt_file.write(f"{text}\n\n")
+
 def process_video(processing_path, original_path, model, args, output_dir, temp_dir):
     """Processes a single video file for censorship and silence removal."""
+    
+    base_name = os.path.splitext(os.path.basename(original_path))[0]
+    log_path = os.path.join(output_dir, f"{base_name}.log")
+    logger = setup_logger(base_name, log_path)
+
     try:
         print(f"\nProcessing: {os.path.basename(original_path)}")
+        logger.info(f"--- Starting processing for {original_path} ---")
         
-        # --- FASTER-WHISPER IMPLEMENTATION ---
-        print("Transcribing with faster-whisper...")
+        print("Transcribing with faster-whisper (this may take a while)...")
         segments_iterator, info = model.transcribe(processing_path, word_timestamps=True)
         
-        # Convert the iterator to a list so we can process it multiple times
-        result_segments = list(segments_iterator)
-        print(f"  Detected language '{info.language}' with probability {info.language_probability:.2f}")
+        lang_info = f"Detected language '{info.language}' with probability {info.language_probability:.2f}"
+        print(f"  {lang_info}")
+        logger.info(lang_info)
+        
+        print("--- Real-Time Transcription ---")
+        logger.info("--- Real-Time Transcription ---")
 
+        result_segments = []
+        for segment in segments_iterator:
+            line = f"[{segment.start:0>7.2f}s -> {segment.end:0>7.2f}s] {segment.text.strip()}"
+            print(line)
+            logger.info(line)
+            result_segments.append(segment)
+
+        print("--- Transcription Complete ---")
+        logger.info("--- Transcription Complete ---")
+
+        # --- MODIFICATION: Save the generated transcription as an SRT file ---
+        srt_path = os.path.join(output_dir, f"{base_name}.srt")
+        generate_srt_file(result_segments, srt_path)
+        srt_saved_msg = f"Saved transcription to: {srt_path}"
+        print(f"  {srt_saved_msg}")
+        logger.info(srt_saved_msg)
+        # --- END MODIFICATION ---
+        
         segments_to_cut = []
 
-        # CENSORSHIP LOGIC
+        # --- CORRECTED AND SIMPLIFIED CENSORSHIP LOGIC ---
         if args.censor_level == 'word':
             print("  Checking for profanity (word-level)...")
+            logger.info("Checking for profanity (word-level)...")
             for segment in result_segments:
-                text = segment.text.strip()
-                if not text: continue
-                prob = predict_prob([text])[0]
-                if prob >= args.threshold:
-                    # Note: faster-whisper gives a generator for words, so we loop through it
-                    for word in segment.words:
-                        clean_word = word.word.lower().strip('.,!?-')
-                        if clean_word in PROFANE_WORDS:
-                            print(f"  CENSOR WORD: '{word.word}'")
-                            segments_to_cut.append((word.start, word.end))
-        else: # Sentence-level censoring
+                for word in segment.words:
+                    # More robust cleaning: strip whitespace first, then convert to lower, then strip punctuation.
+                    clean_word = word.word.strip().lower().strip('.,!?-')
+                    
+                    # Direct check: if the cleaned word is in our list, censor it.
+                    if clean_word in PROFANE_WORDS:
+                        log_msg = f"CENSOR WORD: '{word.word}' at [{word.start:.2f}s -> {word.end:.2f}s]"
+                        print(f"  {log_msg}")
+                        logger.info(log_msg)
+                        segments_to_cut.append((word.start, word.end))
+
+        else: # Sentence-level (this logic uses the context check and remains the same)
             print("  Checking for profanity (sentence-level)...")
+            logger.info("Checking for profanity (sentence-level)...")
             for segment in result_segments:
                 text = segment.text.strip()
                 if not text: continue
                 prob = predict_prob([text])[0]
                 if prob >= args.threshold:
-                    print(f"  CENSOR SENTENCE: '{text}' (score: {prob:.2f})")
+                    log_msg = f"CENSOR SENTENCE: '{text}' (score: {prob:.2f}) at [{segment.start:.2f}s -> {segment.end:.2f}s]"
+                    print(f"  {log_msg}")
+                    logger.info(log_msg)
                     segments_to_cut.append((segment.start, segment.end))
 
         # SILENCE CUTTING LOGIC
         if args.cut_silence:
             print(f"  Checking for silent sections longer than {args.min_silence_duration}s...")
+            logger.info(f"Checking for silent sections longer than {args.min_silence_duration}s...")
             last_speech_end = 0.0
             for segment in result_segments:
                 silence_duration = segment.start - last_speech_end
                 if silence_duration >= args.min_silence_duration:
-                    print(f"  SILENCE: Cutting from {last_speech_end:.2f}s to {segment.start:.2f}s")
+                    log_msg = f"CUT SILENCE: from {last_speech_end:.2f}s to {segment.start:.2f}s"
+                    print(f"  {log_msg}")
+                    logger.info(log_msg)
                     segments_to_cut.append((last_speech_end, segment.start))
                 last_speech_end = segment.end
         else:
             print("  Silence cutting is disabled.")
+            logger.info("Silence cutting is disabled.")
         
-        # VIDEO CUTTING LOGIC
         if not segments_to_cut:
-            print("  No segments to cut. Skipping video.")
+            print("  No segments to cut. Skipping video editing.")
+            logger.info("No segments to cut. Skipping video editing.")
             return
             
         merged_cuts = merge_intervals(segments_to_cut)
-        print(f"  Original cut segments: {len(segments_to_cut)}, Merged cut segments: {len(merged_cuts)}")
+        log_msg = f"Found {len(segments_to_cut)} segments to cut. Merged into {len(merged_cuts)} distinct cuts."
+        print(f"  {log_msg}")
+        logger.info(log_msg)
 
         video = VideoFileClip(processing_path)
         keep_segments = []
@@ -125,6 +200,7 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
 
         if not keep_segments:
             print("  Skipped: entire video was flagged for cutting.")
+            logger.warning("Entire video was flagged for cutting. No output file generated.")
             video.close()
             return
             
@@ -137,17 +213,23 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         final_clip.write_videofile(
             output_path, codec="av1_nvenc", audio_codec="aac", temp_audiofile=temp_audio_path,
             remove_temp=True, threads=4,
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-gpu", "0", "-preset", "fast", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-gpu", "0", "-preset", "p1", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
         )
-        print(f"  Saved: {output_path}")
+        saved_msg = f"Saved: {output_path}"
+        print(f"  {saved_msg}")
+        logger.info(saved_msg)
 
     except Exception as e:
-        print(f"\n--- An error occurred while processing {os.path.basename(original_path)} ---")
-        print(f"  ERROR: {e}")
+        error_msg = f"An error occurred while processing {os.path.basename(original_path)}: {e}"
+        print(f"\n--- {error_msg} ---")
+        if 'logger' in locals():
+            logger.error(error_msg, exc_info=True)
         print("------------------------------------------------------------------")
     finally:
         if 'final_clip' in locals() and final_clip: final_clip.close()
         if 'video' in locals() and video: video.close()
+        if 'logger' in locals():
+            logging.shutdown()
 
 def main():
     parser = argparse.ArgumentParser(
@@ -157,7 +239,7 @@ def main():
     parser.add_argument("input_files", nargs="*", help="Video files to process. Supports wildcards (e.g., *.mp4).")
     parser.add_argument('--no-clean', dest='clean', action='store_false', help="Disable the FFmpeg pre-cleaning step.")
     parser.add_argument('--model', default='base', choices=['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3'], help="The Whisper model to use. (Default: base)")
-    parser.add_argument('--threshold', type=float, default=0.8, help="Profanity probability threshold. (Default: 0.8)")
+    parser.add_argument('--threshold', type=float, default=0.8, help="Profanity probability threshold (for sentence-level only). (Default: 0.8)")
     
     censor_group = parser.add_mutually_exclusive_group()
     censor_group.add_argument('-w', '--word', dest='censor_level', action='store_const', const='word', help="Censor on a word-by-word basis (Default).")
@@ -179,7 +261,6 @@ def main():
     print(f"Temporary files will be stored in: {TEMP_DIR}")
 
     try:
-        # Load the faster-whisper model
         print(f"Loading faster-whisper model '{args.model}'...")
         model = WhisperModel(args.model, device="cuda", compute_type="float16")
         

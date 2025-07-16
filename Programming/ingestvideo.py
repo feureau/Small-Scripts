@@ -619,7 +619,7 @@ def process_video(file_path, settings):
         "NVEncC64",
         "--codec", "av1",
         "--qvbr", settings["qvbr"],
-        "--preset", "p4",
+        "--preset", "p7",
         "--output-depth", "10",
         "--gop-len", settings["gop_len"],
         "--metadata", "copy",
