@@ -335,7 +335,7 @@ class SchedulerApp:
         self.root.title('YouTube Video Scheduler'); self.build_gui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit); self.root.mainloop()
 
-    def build_gui(self): # (GUI code remains largely the same as your last correct version)
+    def build_gui(self):
         frm = ttk.Frame(self.root, padding=10); frm.pack(fill=tk.BOTH, expand=True)
         cred_frm = ttk.LabelFrame(frm, text="Authentication", padding=5); cred_frm.pack(fill=tk.X, pady=(0,5))
         self.select_cred_button = ttk.Button(cred_frm, text='Select client_secrets.json & Authenticate', command=self.select_credentials_and_auth)
@@ -359,6 +359,9 @@ class SchedulerApp:
         self.tree.heading('publish_at', text='Scheduled At (UTC)'); self.tree.column('publish_at', width=180, anchor='w')
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview); hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set); self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); vsb.pack(side=tk.RIGHT, fill=tk.Y); hsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Bind the selection event to the new handler method
+        self.tree.bind('<<TreeviewSelect>>', self.on_video_select)
 
         select_buttons_frame = ttk.Frame(frm); select_buttons_frame.pack(fill=tk.X, pady=(2,5))
         self.select_all_button = ttk.Button(select_buttons_frame, text='Select All Visible', command=self.select_all_visible_videos, state=tk.DISABLED); self.select_all_button.pack(side=tk.LEFT, padx=2)
@@ -445,6 +448,56 @@ class SchedulerApp:
 
     def deselect_all_videos(self):
         if self.tree.selection(): logger.info(f"Deselected {len(self.tree.selection())} videos."); self.tree.selection_remove(self.tree.selection())
+
+    def on_video_select(self, event):
+        """
+        Called when a video selection changes. If a single video is selected,
+        it searches for a matching .txt file in the working directory and populates
+        the description box with its content.
+        """
+        selected_items = self.tree.selection()
+
+        # Only proceed if exactly one video is selected
+        if len(selected_items) != 1:
+            self.desc_txt.delete('1.0', tk.END) # Clear description if 0 or >1 selected
+            return
+
+        item_id = selected_items[0]
+        try:
+            # Column '1' corresponds to the 'title' column we defined
+            video_title = self.tree.item(item_id, 'values')[1]
+        except IndexError:
+            logger.warning("Could not retrieve video title from selected tree item.")
+            return
+
+        working_dir = Path.cwd()
+        found_match = False
+
+        # Normalize the video title by replacing spaces with underscores for matching
+        normalized_video_title = video_title.replace(' ', '_')
+
+        for txt_file in working_dir.glob('*.txt'):
+            # Check if the text file's name (without .txt) starts with the *normalized* video title.
+            if txt_file.stem.startswith(normalized_video_title):
+                logger.info(f"Found matching description file '{txt_file.name}' for video '{video_title}'.")
+                try:
+                    description_content = txt_file.read_text(encoding='utf-8')
+                    # Update the description text widget
+                    self.desc_txt.delete('1.0', tk.END)
+                    self.desc_txt.insert('1.0', description_content)
+                    found_match = True
+                    break # Stop searching after the first match
+                except Exception as e:
+                    logger.error(f"Failed to read description file '{txt_file.name}': {e}")
+                    messagebox.showerror("File Read Error", f"Could not read the file:\n{txt_file.name}\n\nError: {e}", parent=self.root)
+                    # Clear the box to avoid confusion with old data
+                    self.desc_txt.delete('1.0', tk.END)
+                    found_match = True # Mark as handled to prevent clearing again below
+                    break
+        
+        if not found_match:
+            # If the loop completes and no matching file was found, clear the description box.
+            self.desc_txt.delete('1.0', tk.END)
 
     def select_credentials_and_auth(self):
         path = filedialog.askopenfilename(title='Select client_secrets.json', filetypes=[('JSON files', '*.json')], parent=self.root)

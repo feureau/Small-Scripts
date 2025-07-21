@@ -1,24 +1,107 @@
 #!/usr/bin/env python3
 """
-transcribe_only_xxl.py - Transcription script using Faster Whisper XXL
----------------------------------------------------
-- Saves the output (e.g., SRT) in the same directory as the video file with a unique timestamp.
-- Uses Faster Whisper XXL's CLI.
-- Includes robust error handling and logging.
-- Supports optional speaker diarization using pyannote_v3.1 (GPU required) when the -d flag is passed.
-- Implements options for model selection, task, language (auto-detect by default), output directory,
-  sentence splitting, audio processing enhancements, and output format selection.
-- When no output flag is passed, it defaults to SRT.
-- Use --srt to output SRT, --text to output plain text (UTF-8, without timestamps), or both.
-- Expects your Hugging Face token to be set in the environment variable HF_TOKEN.
-- Streams transcribed output continuously as it is produced.
-Python 3.7 or higher is required.
-python>=3.7
+================================================================================================
+transcribe.py - Advanced Transcription and Diarization with Faster Whisper XXL
+================================================================================================
 
-External CLI and libraries:
-faster-whisper       # Provides the faster-whisper-xxl CLI used for transcription.
-torch                # Required for running Whisper models (and used by faster-whisper).
-pyannote.audio       # Required for diarization when using the -d flag.
+DESCRIPTION:
+This script provides a powerful command-line interface (CLI) wrapper for the `faster-whisper-xxl`
+transcription tool. It is designed to automate and enhance the process of transcribing audio
+and video files by offering a rich set of features, robust error handling, and flexible
+output options. It can process individual files, entire directories, or file patterns,
+and it streams the transcription progress directly to the console in real-time.
+
+------------------------------------------------------------------------------------------------
+CORE FEATURES:
+------------------------------------------------------------------------------------------------
+- High-Quality Transcription: Utilizes the `faster-whisper` library with large models
+  (e.g., `large-v2`, `large-v3`) for accurate and efficient transcription.
+- Speaker Diarization: Integrates `pyannote.audio` (v3.1) to identify and label different
+  speakers in the audio. This requires a GPU and a Hugging Face token.
+- Flexible Input: Accepts individual media files, directories, or wildcard patterns
+  (e.g., `*.mp4`). An interactive file/folder picker is available if no input is given.
+- Multiple Output Formats: Can generate subtitle files (.srt) with timestamps and/or
+  plain text files (.txt) without timestamps.
+- Customizable Output: Saves output files with a unique timestamp to prevent overwriting.
+  Users can also specify a custom output directory.
+- Real-Time Logging: Streams the live output from the transcription process to the console.
+- Advanced Audio Processing: Includes options to enable audio filters for noise reduction
+  (`ff_rnndn_xiph`) and speech normalization (`ff_speechnorm`) to improve accuracy.
+- Granular Subtitle Formatting: Provides precise control over subtitles, including sentence
+  splitting, maximum number of lines, maximum characters per line (`-w`, `--width`), and gap between sentences.
+
+------------------------------------------------------------------------------------------------
+PREREQUISITES:
+------------------------------------------------------------------------------------------------
+1. Python: Version 3.7 or higher.
+2. Libraries: `faster-whisper`, `torch`, and `pyannote.audio`.
+3. Hugging Face Token: A Hugging Face token is REQUIRED for speaker diarization. It must
+   be set as an environment variable named `HF_TOKEN`.
+
+------------------------------------------------------------------------------------------------
+INSTALLATION & SETUP:
+------------------------------------------------------------------------------------------------
+1. Install Python: Ensure you have Python 3.7+ installed.
+
+2. Create a Virtual Environment (Recommended):
+   python3 -m venv whisper_env
+   source whisper_env/bin/activate  # On Windows, use: whisper_env\\Scripts\\activate
+
+3. Install Required Libraries:
+   pip install faster-whisper torch pyannote.audio
+
+4. Set Hugging Face Token:
+   You need a Hugging Face account and an access token with 'read' permissions.
+   - Go to https://huggingface.co/settings/tokens to get your token.
+   - Set it as an environment variable.
+     - On Linux/macOS (add to your .bashrc or .zshrc for permanence):
+       export HF_TOKEN="your_token_here"
+     - On Windows (Command Prompt):
+       set HF_TOKEN="your_token_here"
+     - On Windows (PowerShell):
+       $env:HF_TOKEN="your_token_here"
+
+------------------------------------------------------------------------------------------------
+USAGE:
+------------------------------------------------------------------------------------------------
+Run the script from your terminal.
+
+Syntax:
+  python3 transcribe.py [options] [file_or_directory_paths...]
+
+Examples:
+  # 1. Transcribe a single video file with default settings (outputs an SRT file).
+  python3 transcribe.py my_video.mp4
+
+  # 2. Transcribe with speaker diarization, specifying English language and the large-v3 model.
+  python3 transcribe.py -d -l en -m large-v3 my_video.mp4
+
+  # 3. Transcribe an entire folder and output both SRT and plain text files.
+  python3 transcribe.py --srt --text /path/to/my/media_folder/
+
+  # 4. Transcribe a file and limit each subtitle line to 21 characters.
+  python3 transcribe.py -w 21 my_video.mp4
+  #    or using the long flag:
+  python3 transcribe.py --width 21 my_video.mp4
+
+  # 5. Translate a file to English and output only a plain text file.
+  python3 transcribe.py --task translate --text my_foreign_video.mkv
+
+  # 6. Run without file arguments to open an interactive file/folder selection prompt.
+  python3 transcribe.py
+
+------------------------------------------------------------------------------------------------
+WORKFLOW:
+------------------------------------------------------------------------------------------------
+1. The script parses command-line arguments to set transcription parameters.
+2. It collects all media files from the provided paths (or interactive prompt).
+3. For each file, it builds and executes a command for the `faster-whisper-xxl` CLI tool.
+4. It always generates an SRT file as an intermediate step. This file is renamed with a
+   unique timestamp (e.g., `my_video_20250720_170500.srt`).
+5. If plain text output (`--text`) is requested, the SRT is converted to a .txt file.
+6. If SRT output was NOT explicitly requested (`--srt`), the intermediate SRT file is
+   deleted to keep the output directory clean, leaving only the .txt file.
+
 """
 
 import sys
@@ -41,6 +124,7 @@ DEFAULT_SENTENCE = True              # Sentence splitting enabled by default
 DEFAULT_MAX_COMMA = 2                # Maximum comma count before splitting a sentence
 DEFAULT_MAX_GAP = 0.1                # Maximum gap (in seconds) between sentences
 DEFAULT_MAX_LINE_COUNT = 1           # One line per subtitle
+DEFAULT_MAX_LINE_LENGTH = 21         # Maximum characters per line
 DEFAULT_FF_RNNDN_XIPH = True         # Audio processing flag enabled by default
 DEFAULT_FF_SPEECHNORM = True         # Audio processing flag enabled by default
 
@@ -121,6 +205,7 @@ def run_whisper_xxl_transcription(
     max_comma: int,
     max_gap: float,
     max_line_count: int,
+    max_line_length: int,
     ff_rnndn_xiph: bool,
     ff_speechnorm: bool,
     produce_srt: bool
@@ -174,6 +259,7 @@ def run_whisper_xxl_transcription(
         "--max_comma", str(max_comma),
         "--max_gap", str(max_gap),
         "--max_line_count", str(max_line_count),
+        "--max_line_width", str(max_line_length),
     ])
 
     # Audio processing flags
@@ -184,6 +270,10 @@ def run_whisper_xxl_transcription(
 
     # Diarization support
     if enable_diarization:
+        if not HF_TOKEN:
+            print("❌ Error: Diarization requires the HF_TOKEN environment variable to be set.")
+            print("Please get a token from https://huggingface.co/settings/tokens and set the variable.")
+            return ""
         command.extend(["--diarize", ENABLE_DIARIZATION_METHOD])
     
     print(f"\n🔥 Transcribing: {os.path.basename(file_path)}")
@@ -246,95 +336,74 @@ def convert_srt_to_plaintext(srt_path: str) -> str:
             plaintext_lines.append(line)
     return "\n".join(plaintext_lines)
 
-def print_help_message():
-    """Print the help message detailing the script usage and options."""
-    default_lang = DEFAULT_LANGUAGE if DEFAULT_LANGUAGE is not None else "Auto-detect"
-    help_text = f"""
-Usage: transcribe_only_xxl.py [options] [files or directories]
-
-Options:
-  -h, --help                Show this help message and exit.
-  -d, --diarization         Enable diarization using {ENABLE_DIARIZATION_METHOD} (GPU required). (Default: Disabled)
-  -l, --lang LANGUAGE       Specify language code for transcription (e.g., "en", "es"). 
-                            Default: {default_lang}
-  -m, --model MODEL         Specify model size (e.g., "large-v2", "large-v3"). (Default: {DEFAULT_MODEL})
-  --task TASK               Specify task: transcribe or translate. (Default: {DEFAULT_TASK})
-  -o, --output_dir DIRECTORY
-                            Specify output directory. (Default: same as input file's directory)
-  --srt                     Output SRT file. (Default if no output flag is provided)
-  --text                    Output plaintext file (UTF-8, without timestamps).
-  --sentence                Enable sentence splitting. (Default: Enabled)
-  --no-sentence             Disable sentence splitting.
-  -c, --max_comma COUNT     Maximum number of commas before splitting a sentence. (Default: {DEFAULT_MAX_COMMA})
-  -g, --max_gap GAP         Maximum gap in seconds between sentences. (Default: {DEFAULT_MAX_GAP})
-  -n, --max_line_count COUNT
-                            Maximum number of lines per subtitle. (Default: {DEFAULT_MAX_LINE_COUNT})
-  -x, --ff_rnndn_xiph       Enable ff_rnndn_xiph audio processing flag. (Default: Enabled)
-  -X, --no-ff_rnndn_xiph    Disable ff_rnndn_xiph.
-  -p, --ff_speechnorm       Enable ff_speechnorm audio processing flag. (Default: Enabled)
-  -P, --no-ff_speechnorm    Disable ff_speechnorm.
-
-Examples:
-  python3 transcribe_only_xxl.py myvideo.mp4
-  python3 transcribe_only_xxl.py --diarization --lang en --model large-v3 myvideo.mp4
-  python3 transcribe_only_xxl.py --text myvideo.mp4
-  python3 transcribe_only_xxl.py --srt --text /path/to/directory
-    """
-    print(help_text)
-
 # ------------------ MAIN EXECUTION ------------------ #
 def main():
-    parser = argparse.ArgumentParser(add_help=False)
-    # Help flag
-    parser.add_argument("-h", "--help", action="store_true", help="Show help message and exit")
-    # Diarization flag
-    parser.add_argument("-d", "--diarization", action="store_true", help="Enable diarization using pyannote_v3.1 (GPU required)")
-    # Language override with short flag -l
-    parser.add_argument("-l", "--lang", type=str, default=DEFAULT_LANGUAGE, help="Specify language code for transcription. Default is auto-detect.")
-    # Model selection with short flag -m
-    parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL, help=f"Specify model size (e.g., 'large-v2', 'large-v3'). (Default: {DEFAULT_MODEL})")
-    # Task specification with --task (note: not to be confused with --text output flag)
-    parser.add_argument("--task", type=str, default=DEFAULT_TASK, help=f"Specify task: transcribe or translate. (Default: {DEFAULT_TASK})")
-    # Output directory override with short flag -o
-    parser.add_argument("-o", "--output_dir", type=str, default=None, help="Specify output directory. (Default: same as input file's directory)")
-    # New output format flags: --srt and --text
-    parser.add_argument("-s", "--srt", action="store_true", help="Output SRT file.")
-    parser.add_argument("-t", "--text", action="store_true", help="Output plaintext file (without timestamps).")
-    # Sentence splitting: use long flags to avoid conflict with --srt flag
-    parser.add_argument("--sentence", dest="sentence", action="store_true", help="Enable sentence splitting. (Default: Enabled)")
+    # Use ArgumentDefaultsHelpFormatter to show default values in help message
+    parser = argparse.ArgumentParser(
+        prog="transcribe.py",
+        description="Advanced Transcription and Diarization with Faster Whisper XXL.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog="""
+Examples:
+  # Transcribe a single video file (outputs SRT by default)
+  python3 %(prog)s my_video.mp4
+
+  # Transcribe with speaker diarization and specify English language
+  python3 %(prog)s -d -l en my_video.mp4
+
+  # Transcribe a folder and get both SRT and plain text files
+  python3 %(prog)s --srt --text /path/to/media/
+
+  # Transcribe and limit subtitle lines to 21 characters
+  python3 %(prog)s -w 21 my_video.mp4
+"""
+    )
+    
+    # --- Input/Output Arguments ---
+    parser.add_argument("files", nargs="*", help="One or more media files, directories, or wildcard patterns to transcribe.")
+    parser.add_argument("-o", "--output_dir", type=str, default=None, help="Directory to save output files. (Default: same as input file's directory)")
+    parser.add_argument("--srt", action="store_true", help="Generate an SRT subtitle file.")
+    parser.add_argument("--text", action="store_true", help="Generate a plain text file.")
+
+    # --- Transcription Model and Task Arguments ---
+    parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL, help="Whisper model to use (e.g., 'large-v2', 'large-v3').")
+    parser.add_argument("-l", "--lang", type=str, default=DEFAULT_LANGUAGE, help="Language code for transcription (e.g., 'en', 'es'). Default is auto-detect.")
+    parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"], help="Task to perform: transcribe or translate to English.")
+    
+    # --- Diarization ---
+    parser.add_argument("-d", "--diarization", action="store_true", default=DEFAULT_ENABLE_DIARIZATION, help=f"Enable speaker diarization using {ENABLE_DIARIZATION_METHOD} (GPU and HF_TOKEN required).")
+
+    # --- Subtitle Formatting Arguments ---
+    parser.add_argument("--sentence", dest="sentence", action="store_true", help="Enable sentence splitting (recommended).")
     parser.add_argument("--no-sentence", dest="sentence", action="store_false", help="Disable sentence splitting.")
     parser.set_defaults(sentence=DEFAULT_SENTENCE)
-    # Sentence splitting parameters with short flags -c, -g, -n
-    parser.add_argument("-c", "--max_comma", type=int, default=DEFAULT_MAX_COMMA, help=f"Maximum number of commas before splitting a sentence. (Default: {DEFAULT_MAX_COMMA})")
-    parser.add_argument("-g", "--max_gap", type=float, default=DEFAULT_MAX_GAP, help=f"Maximum gap in seconds between sentences. (Default: {DEFAULT_MAX_GAP})")
-    parser.add_argument("-n", "--max_line_count", type=int, default=DEFAULT_MAX_LINE_COUNT, help=f"Maximum number of lines per subtitle. (Default: {DEFAULT_MAX_LINE_COUNT})")
-    # Audio processing flags with short flags -x/-X and -p/-P
-    parser.add_argument("-x", "--ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_true", help="Enable ff_rnndn_xiph audio processing flag. (Default: Enabled)")
-    parser.add_argument("-X", "--no-ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_false", help="Disable ff_rnndn_xiph.")
+    parser.add_argument("-c", "--max_comma", type=int, default=DEFAULT_MAX_COMMA, help="Max commas before forcing a sentence split.")
+    parser.add_argument("-g", "--max_gap", type=float, default=DEFAULT_MAX_GAP, help="Max gap (in seconds) between words before forcing a sentence split.")
+    parser.add_argument("-n", "--max_line_count", type=int, default=DEFAULT_MAX_LINE_COUNT, help="Maximum number of lines per subtitle block.")
+    # **UPDATED**: Changed flags to -w and --width for consistency
+    parser.add_argument("-w", "--width", dest="max_line_length", type=int, default=DEFAULT_MAX_LINE_LENGTH, help="Maximum number of characters per subtitle line.")
+    
+    # --- Audio Processing Arguments ---
+    parser.add_argument("--ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_true", help="Enable rnndn-based noise reduction filter.")
+    parser.add_argument("--no-ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_false", help="Disable rnndn-based noise reduction filter.")
     parser.set_defaults(ff_rnndn_xiph=DEFAULT_FF_RNNDN_XIPH)
-    parser.add_argument("-p", "--ff_speechnorm", dest="ff_speechnorm", action="store_true", help="Enable ff_speechnorm audio processing flag. (Default: Enabled)")
-    parser.add_argument("-P", "--no-ff_speechnorm", dest="ff_speechnorm", action="store_false", help="Disable ff_speechnorm.")
+    parser.add_argument("--ff_speechnorm", dest="ff_speechnorm", action="store_true", help="Enable speechnorm-based audio normalization filter.")
+    parser.add_argument("--no-ff_speechnorm", dest="ff_speechnorm", action="store_false", help="Disable speechnorm-based audio normalization filter.")
     parser.set_defaults(ff_speechnorm=DEFAULT_FF_SPEECHNORM)
-    # Positional arguments for files and directories
-    parser.add_argument("files", nargs="*", help="Media files or directories to transcribe")
-    args = parser.parse_args()
 
-    if args.help:
-        print_help_message()
-        sys.exit(0)
+    args = parser.parse_args()
 
     files = get_files_from_args(args.files) if args.files else prompt_user_for_files_or_folder()
     if not files:
-        print("No files selected. Exiting.")
+        print("No media files selected or found. Exiting.")
         sys.exit(0)
 
-    # Determine output flags:
-    # Default is to output SRT if neither flag is provided.
+    # If neither --srt nor --text is specified, default to producing an SRT file.
     produce_srt = args.srt or (not args.srt and not args.text)
     produce_text = args.text
 
     for file_path in files:
-        # Run transcription (always generates SRT)
+        # Run transcription, which always generates an SRT file initially.
         srt_path = run_whisper_xxl_transcription(
             file_path=file_path,
             enable_diarization=args.diarization,
@@ -346,12 +415,13 @@ def main():
             max_comma=args.max_comma,
             max_gap=args.max_gap,
             max_line_count=args.max_line_count,
+            max_line_length=args.max_line_length,
             ff_rnndn_xiph=args.ff_rnndn_xiph,
             ff_speechnorm=args.ff_speechnorm,
             produce_srt=produce_srt
         )
         if not srt_path:
-            print(f"⚠️ Skipping file due to transcription failure: {file_path}")
+            print(f"⚠️ Skipping file due to transcription failure: {os.path.basename(file_path)}")
             continue
 
         # If plain text output is requested, convert the SRT file.
@@ -366,15 +436,15 @@ def main():
             except Exception as e:
                 print(f"❌ Failed to write plain text file: {e}")
         
-        # If SRT output is not requested (i.e. only plain text was desired), remove the SRT file.
-        if not produce_srt:
+        # If SRT output is not requested, remove the intermediate SRT file.
+        if not produce_srt and os.path.exists(srt_path):
             try:
                 os.remove(srt_path)
-                print(f"ℹ️ Intermediate SRT file removed as only plain text was requested.")
+                print(f"ℹ️ Intermediate SRT file removed: {os.path.basename(srt_path)}")
             except Exception as e:
                 print(f"❌ Could not remove intermediate SRT file: {e}")
 
-    print("\n✅ All processing completed successfully!")
+    print("\n✅ All processing completed!")
 
 if __name__ == "__main__":
     main()

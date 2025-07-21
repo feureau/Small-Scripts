@@ -69,7 +69,15 @@ def convert_media_to_audio(input_file_path, output_dir_path, target_formats, mp3
 
         try:
             # Execute ffmpeg command
-            process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=False)
+            # MODIFICATION: Added 'encoding' and 'errors' parameters to prevent UnicodeDecodeError
+            # from special characters in FFmpeg's console output.
+            process = subprocess.run(
+                ffmpeg_cmd,
+                capture_output=True,
+                check=False,
+                encoding='utf-8',
+                errors='ignore'
+            )
             if process.returncode == 0:
                 print(f"  Successfully converted to {output_file_path}")
             else:

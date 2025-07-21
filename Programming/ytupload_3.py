@@ -73,7 +73,6 @@ def setup_revocation_on_exit():
     signal.signal(signal.SIGINT, on_sig)
 
 # --- OAuth Authentication with retry and fallback ---
-# --- OAuth Authentication with retry and fallback ---
 def get_authenticated_service(secrets_path):
     from oauthlib.oauth2.rfc6749.errors import MismatchingStateError
     creds = None
@@ -124,37 +123,55 @@ def sanitize_description(desc: str) -> str:
 
 def sanitize_tags(raw_tags):
     clean = []
+    total_len = 0
     for t in raw_tags:
         tag = t.strip()
         if not tag:
             continue
-        # remove control chars
         tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)
-        # whitelist alphanumeric and space
         tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)
-        # per‑tag cap
         tag = tag[:30]
         if not tag:
             continue
-        # test if adding this tag would exceed 500 chars including commas
-        candidate = clean + [tag]
-        joined = ",".join(candidate)
-        if len(joined) > 500:
+        if total_len + len(tag) > 500:
             break
         clean.append(tag)
+        total_len += len(tag)
     return clean
 
 # --- VideoEntry model ---
 class VideoEntry:
     def __init__(self, filepath):
         p = Path(filepath)
+
+        # --- MODIFICATION: Find and load description from .txt file ---
+        self.description = ''
+        self.description_source = "None"  # Default value for GUI display
+        try:
+            # Normalize original filename stem (replace space with underscore) for matching
+            normalized_stem = p.stem.replace(' ', '_')
+            # Search for .txt file starting with the normalized stem in the same directory
+            for txt_file in p.parent.glob(f"{normalized_stem}*.txt"):
+                logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'.")
+                self.description = txt_file.read_text(encoding='utf-8')
+                self.description_source = txt_file.name # Store the found filename for the GUI
+                break # Found the first match, stop looking
+        except Exception as e:
+            logger.error(f"Error reading description file for '{p.name}': {e}")
+        # --- END MODIFICATION ---
+
         clean = sanitize_filename(p.name)
         new_path = p.with_name(f"{clean}{p.suffix}")
         if p.name != new_path.name:
-            os.rename(p, new_path)
+            try:
+                os.rename(p, new_path)
+            except OSError as e:
+                logger.error(f"Could not rename file {p.name} to {new_path.name}: {e}")
+                new_path = p # If rename fails, use original path
+
         self.filepath = str(new_path)
         self.title = sanitize_filename(new_path.stem)
-        self.description = ''
+        # self.description is now pre-populated if a file was found
         self.tags = []
         self.categoryId = CATEGORY_MAP['Entertainment']
         self.videoLanguage = 'en'
@@ -176,10 +193,12 @@ class UploaderApp:
         except: pass
         # auto-scan videos
         self.video_entries = []
+        logger.info("Scanning for video files...")
         for pat in VIDEO_PATTERNS:
             for f in glob.glob(pat):
                 if f not in [v.filepath for v in self.video_entries]:
                     self.video_entries.append(VideoEntry(f))
+        logger.info(f"Found {len(self.video_entries)} videos to process.")
         # build GUI
         self.root = tk.Tk()
         self.save_log_var = tk.BooleanVar(master=self.root, value=False)
@@ -194,50 +213,62 @@ class UploaderApp:
         ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials)\
             .pack(fill=tk.X, pady=(0,5))
 
-        self.tree = ttk.Treeview(frm, columns=('file','title'), show='headings')
+        # --- MODIFICATION: Add 'desc_source' column to Treeview ---
+        self.tree = ttk.Treeview(frm, columns=('file','title', 'desc_source'), show='headings')
         self.tree.heading('file', text='File')
+        self.tree.column('file', width=250)
         self.tree.heading('title', text='Title')
+        self.tree.column('title', width=250)
+        self.tree.heading('desc_source', text='Description Source')
+        self.tree.column('desc_source', width=250)
+        # --- END MODIFICATION ---
+
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
         self.refresh_tree()
 
         # Schedule & Interval
         sched = ttk.LabelFrame(frm, text='Schedule & Interval', padding=10)
         sched.pack(fill=tk.X, pady=5)
-        ttk.Label(sched, text='First Publish (YYYY-MM-DD HH:MM)').grid(row=0, column=0)
+        ttk.Label(sched, text='First Publish (YYYY-MM-DD HH:MM)').grid(row=0, column=0, sticky='w')
         self.start_ent = ttk.Entry(sched)
         self.start_ent.insert(0, datetime.now().astimezone().strftime('%Y-%m-%d %H:%M'))
-        self.start_ent.grid(row=0, column=1, sticky='w')
-        ttk.Label(sched, text='Interval Hours').grid(row=1, column=0)
+        self.start_ent.grid(row=0, column=1, sticky='ew')
+        ttk.Label(sched, text='Interval Hours').grid(row=1, column=0, sticky='w')
         self.interval_hour = ttk.Spinbox(sched, from_=0, to=168, width=5)
         self.interval_hour.set(0)
         self.interval_hour.grid(row=1, column=1, sticky='w')
-        ttk.Label(sched, text='Interval Minutes').grid(row=2, column=0)
+        ttk.Label(sched, text='Interval Minutes').grid(row=2, column=0, sticky='w')
         self.interval_minute = ttk.Spinbox(sched, from_=0, to=59, width=5)
         self.interval_minute.set(120)
         self.interval_minute.grid(row=2, column=1, sticky='w')
+        sched.columnconfigure(1, weight=1)
 
         # Metadata Defaults
         meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
         meta.pack(fill=tk.X, pady=5)
-        ttk.Label(meta, text='Description').grid(row=0, column=0)
+        
+        # --- MODIFICATION: Update label for clarity ---
+        ttk.Label(meta, text='Description (override)').grid(row=0, column=0, sticky='nw')
+        # --- END MODIFICATION ---
+
         self.desc_txt = tk.Text(meta, height=3)
         self.desc_txt.grid(row=0, column=1, sticky='ew')
-        ttk.Label(meta, text='Tags').grid(row=1, column=0)
+        ttk.Label(meta, text='Tags').grid(row=1, column=0, sticky='w')
         self.tags_ent = ttk.Entry(meta)
         self.tags_ent.grid(row=1, column=1, sticky='ew')
-        ttk.Label(meta, text='Category').grid(row=2, column=0)
-        self.cat_cb = ttk.Combobox(meta, values=list(CATEGORY_MAP.keys()))
+        ttk.Label(meta, text='Category').grid(row=2, column=0, sticky='w')
+        self.cat_cb = ttk.Combobox(meta, values=list(CATEGORY_MAP.keys()), state="readonly")
         self.cat_cb.set('Entertainment')
         self.cat_cb.grid(row=2, column=1, sticky='ew')
-        ttk.Label(meta, text='Video Lang').grid(row=3, column=0)
-        self.vlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()))
+        ttk.Label(meta, text='Video Lang').grid(row=3, column=0, sticky='w')
+        self.vlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()), state="readonly")
         self.vlang_cb.set('English')
         self.vlang_cb.grid(row=3, column=1, sticky='ew')
-        ttk.Label(meta, text='Default Lang').grid(row=4, column=0)
-        self.dlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()))
+        ttk.Label(meta, text='Default Lang').grid(row=4, column=0, sticky='w')
+        self.dlang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()), state="readonly")
         self.dlang_cb.set('English')
         self.dlang_cb.grid(row=4, column=1, sticky='ew')
-        ttk.Label(meta, text='Recording Date (UTC)').grid(row=5, column=0)
+        ttk.Label(meta, text='Recording Date (UTC)').grid(row=5, column=0, sticky='w')
         self.rec_ent = ttk.Entry(meta)
         self.rec_ent.insert(0, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
         self.rec_ent.grid(row=5, column=1, sticky='ew')
@@ -249,9 +280,10 @@ class UploaderApp:
         ttk.Checkbutton(meta, text='Embeddable', variable=self.embed_var).grid(row=8, column=0, sticky='w')
         self.stats_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(meta, text='Public Stats Visible', variable=self.stats_var).grid(row=9, column=0, sticky='w')
-        ttk.Label(meta, text='Playlist ID').grid(row=10, column=0)
+        ttk.Label(meta, text='Playlist ID').grid(row=10, column=0, sticky='w')
         self.playlist_ent = ttk.Entry(meta)
         self.playlist_ent.grid(row=10, column=1, sticky='ew')
+        meta.columnconfigure(1, weight=1)
 
         btn_frm = ttk.Frame(frm)
         btn_frm.pack(fill=tk.X, pady=5)
@@ -264,8 +296,10 @@ class UploaderApp:
     def refresh_tree(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
+        # --- MODIFICATION: Add description_source to the values tuple ---
         for e in self.video_entries:
-            self.tree.insert('', tk.END, values=(Path(e.filepath).name, e.title))
+            self.tree.insert('', tk.END, values=(Path(e.filepath).name, e.title, e.description_source))
+        # --- END MODIFICATION ---
 
     def select_credentials(self):
         path = filedialog.askopenfilename(title='Select credentials JSON', filetypes=[('JSON','*.json')])
@@ -275,7 +309,7 @@ class UploaderApp:
 
     def save_settings(self):
         cfg = {
-            'description': self.desc_txt.get('1.0','end'),
+            'description': self.desc_txt.get('1.0','end-1c'),
             'tags': self.tags_ent.get(),
             'category': self.cat_cb.get(),
             'videoLang': self.vlang_cb.get(),
@@ -294,7 +328,7 @@ class UploaderApp:
         path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')])
         if path:
             with open(path,'w') as out:
-                json.dump(cfg,out)
+                json.dump(cfg,out, indent=2)
             messagebox.showinfo('Saved','Settings saved')
 
     def load_settings(self):
@@ -324,9 +358,9 @@ class UploaderApp:
             messagebox.showerror('Error','No credentials selected')
             return
 
-        # Read and sanitize GUI values
-        raw_desc = self.desc_txt.get('1.0','end').rstrip('\n')
-        desc = sanitize_description(raw_desc)
+        # --- MODIFICATION: Get override description text ---
+        desc_override = self.desc_txt.get('1.0','end-1c').strip()
+        
         raw_tags = [t.strip() for t in self.tags_ent.get().split(',')]
         tags = sanitize_tags(raw_tags)
 
@@ -347,6 +381,7 @@ class UploaderApp:
             service = get_authenticated_service(self.client_secrets)
         except Exception as auth_ex:
             messagebox.showerror('Auth Error', f'Authentication failed: {auth_ex}')
+            logger.error(f"Authentication failed: {auth_ex}", exc_info=True)
             return
 
         # Close GUI immediately
@@ -365,7 +400,13 @@ class UploaderApp:
             utc_dt = datetime.now(timezone.utc)
 
         for i, e in enumerate(self.video_entries):
-            e.description = desc
+            # --- MODIFICATION: Apply description override logic ---
+            # If the user typed text in the main description box, use it.
+            # Otherwise, the description loaded from the .txt file (or empty) will be used.
+            if desc_override:
+                e.description = desc_override
+            # --- END MODIFICATION ---
+
             e.tags = tags
             e.categoryId = cat
             e.videoLanguage = vlang
@@ -383,43 +424,27 @@ class UploaderApp:
 
     def upload_all(self, service):
         for e in self.video_entries:
-            media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
+            try:
+                media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
+            except FileNotFoundError:
+                print(f"ERROR: File not found, skipping: {e.filepath}", flush=True)
+                logger.error(f"File not found, skipping: {e.filepath}")
+                continue
 
-            # --- Sanitize description ---
-            raw_desc = (e.description or '').rstrip('\n')
-            desc = ''
-            if raw_desc.strip():
-                desc = re.sub(r'[\x00-\x1F\x7F]', '', raw_desc)[:5000]
-
-            # --- Sanitize tags ---
-            clean_tags = []
-            total_len = 0
-            for t in (e.tags or []):
-                tag = t.strip()
-                if not tag:
-                    continue
-                tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)  # drop control chars
-                tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)  # keep only alnum+space
-                tag = tag[:30]  # per-tag cap
-                if not tag:
-                    continue
-                if total_len + len(tag) > 500:  # total cap
-                    break
-                clean_tags.append(tag)
-                total_len += len(tag)
-
-            # --- Build snippet & status ---
+            desc = sanitize_description(e.description)
+            clean_tags = sanitize_tags(e.tags or [])
+            
             snippet = {'title': e.title}
             if desc:
                 snippet['description'] = desc
             if clean_tags:
                 snippet['tags'] = clean_tags
-            snippet.update({
-                'categoryId': e.categoryId,
-                'defaultLanguage': e.defaultLanguage,
-                'defaultAudioLanguage': e.videoLanguage,
-                'recordingDetails': {'recordingDate': e.recordingDate}
-            })
+            
+            snippet['categoryId'] = e.categoryId
+            snippet['defaultLanguage'] = e.defaultLanguage
+            snippet['defaultAudioLanguage'] = e.videoLanguage
+            if e.recordingDate:
+                snippet['recordingDetails'] = {'recordingDate': e.recordingDate}
 
             status = {
                 'privacyStatus': 'private',
@@ -441,6 +466,7 @@ class UploaderApp:
                 )
 
             print(f"Uploading {Path(e.filepath).name}", flush=True)
+            logger.info(f"Uploading {e.filepath} with title '{e.title}'")
 
             req = do_insert(body, e.notifySubscribers)
 
@@ -452,26 +478,37 @@ class UploaderApp:
                     if progress:
                         print(f"  {int(progress.progress() * 100)}%", flush=True)
             except Exception as upload_ex:
+                print(f"  ERROR during upload: {upload_ex}", flush=True)
+                logger.error(f"Upload failed for {e.filepath}: {upload_ex}", exc_info=True)
                 # If tags are invalid, retry without them
                 if 'invalidTags' in str(upload_ex):
                     print("  Warning: tags rejected by API, retrying without tags...", flush=True)
+                    logger.warning(f"Retrying {e.filepath} without tags due to API rejection.")
                     snippet.pop('tags', None)
                     body['snippet'] = snippet
                     req = do_insert(body, e.notifySubscribers)
                     progress, resp = None, None
-                    while resp is None:
-                        progress, resp = req.next_chunk()
-                        if progress:
-                            print(f"  {int(progress.progress() * 100)}%", flush=True)
+                    try:
+                        while resp is None:
+                            progress, resp = req.next_chunk()
+                            if progress:
+                                print(f"  {int(progress.progress() * 100)}%", flush=True)
+                    except Exception as retry_ex:
+                        print(f"  ERROR on retry, skipping file: {retry_ex}", flush=True)
+                        logger.error(f"Retry failed for {e.filepath}: {retry_ex}", exc_info=True)
+                        continue # Skip to next video
                 else:
                     # re-raise any other errors
-                    raise
+                    continue # Skip to next video
+            
+            if not resp:
+                print(f"  Upload of {e.filepath} failed and was skipped.", flush=True)
+                continue
 
             vid = resp['id']
             print(f"Done: https://youtu.be/{vid}", flush=True)
             logger.info(f"Uploaded {e.filepath} → {vid}")
 
-            # Playlist insertion (unchanged)...
             if e.playlistId:
                 try:
                     service.playlistItems().insert(
@@ -488,9 +525,11 @@ class UploaderApp:
                     logger.error(f"Playlist error for {vid}: {ex}")
 
         # After all uploads
+        print("\nBatch upload process complete.", flush=True)
         if self.save_log_var.get():
-            with open(LOG_FILE, 'w') as f:
+            with open(LOG_FILE, 'w', encoding='utf-8') as f:
                 f.write("\n".join(log_records))
+            print(f"Log file saved to {LOG_FILE}", flush=True)
         revoke_token()
 
 
