@@ -1,5 +1,5 @@
 # NOTE: Required Python packages (install with pip)
-# pip install moviepy scikit-learn alt-profanity-check faster-whisper
+# pip install moviepy scikit-learn alt-profanity-check faster-whisper ffmpeg-python
 # NOTE: You must also install PyTorch with CUDA support separately if not already done.
 
 import sys
@@ -7,14 +7,15 @@ import os
 import glob
 import torch
 import argparse
-import subprocess
 import shutil
 import logging
 import datetime
+import ffmpeg
+import json ### --- MODIFICATION --- ###
+from collections import namedtuple ### --- MODIFICATION --- ###
 
 from faster_whisper import WhisperModel
 from profanity_check import predict_prob
-# --- CORRECTED IMPORT for modern MoviePy versions ---
 from moviepy import VideoFileClip, concatenate_videoclips
 
 
@@ -24,31 +25,72 @@ PROFANE_WORDS = {
     "fuck", "fucking", "shit", "bitch", "cunt", "asshole", "motherfucker"
 }
 
+# --- FINAL CORRECTED FUNCTION ---
 def clean_video(input_path, temp_dir):
-    """Creates a clean, standardized copy of the video to prevent processing errors."""
-    print(f"  Cleaning '{os.path.basename(input_path)}'...")
+    """Creates a clean, standardized copy of the video using ffmpeg-python."""
+    print(f"  Cleaning '{os.path.basename(input_path)}' with ffmpeg-python...")
     output_path = os.path.join(temp_dir, os.path.basename(input_path))
-    
-    command = [
-        "ffmpeg", "-i", input_path, "-y",
-        "-map", "0:v:0", "-map", "0:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=7",
-        "-map_metadata", "-1",
-        "-map_chapters", "-1",
-        "-dn",
-        output_path
-    ]
+
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        stream = ffmpeg.input(input_path)
+        video_stream = stream['v:0']
+        audio_stream = stream['a:0']
+        processed_audio = audio_stream.filter('loudnorm', I=-16, TP=-1.5, LRA=7)
+
+        ffmpeg.output(
+            video_stream,
+            processed_audio,
+            output_path,
+            **{'c:v': 'copy'},
+            **{'c:a': 'aac'},
+            dn=None,
+            map_metadata=-1,
+            map_chapters=-1
+        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+
         print(f"  Successfully cleaned. Using temporary file for processing.")
         return output_path
-    except FileNotFoundError:
-        print("FATAL: 'ffmpeg' not found. Please ensure it's installed and in your system's PATH.")
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"FFmpeg failed during cleaning with stderr:\n{e.stderr}")
+
+    except ffmpeg.Error as e:
+        print("FATAL: ffmpeg-python failed during cleaning.")
+        raise RuntimeError(f"FFmpeg failed with stderr:\n{e.stderr.decode('utf-8')}")
+# --- END OF CORRECTED FUNCTION ---
+
+### --- MODIFICATION START --- ###
+# Helper functions and objects for caching transcription data.
+
+# We need a simple object to reconstruct the data when loading from cache
+Word = namedtuple('Word', ['start', 'end', 'word'])
+Segment = namedtuple('Segment', ['start', 'end', 'text', 'words'])
+
+def save_transcription_cache(data, cache_path):
+    """Saves the detailed transcription data to a JSON file."""
+    serializable_data = []
+    for segment in data:
+        # Convert segment and word objects to dictionaries for JSON serialization
+        seg_dict = {
+            'start': segment.start,
+            'end': segment.end,
+            'text': segment.text,
+            'words': [{'start': w.start, 'end': w.end, 'word': w.word} for w in segment.words] if hasattr(segment, 'words') and segment.words else []
+        }
+        serializable_data.append(seg_dict)
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(serializable_data, f, indent=2)
+
+def load_transcription_cache(cache_path):
+    """Loads and reconstructs transcription data from a JSON file."""
+    with open(cache_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    reconstructed_segments = []
+    for seg_dict in data:
+        # Reconstruct the Word and Segment objects from the dictionaries
+        words = [Word(w['start'], w['end'], w['word']) for w in seg_dict['words']]
+        reconstructed_segments.append(Segment(seg_dict['start'], seg_dict['end'], seg_dict['text'], words))
+    return reconstructed_segments
+### --- MODIFICATION END --- ###
+
 
 def merge_intervals(intervals):
     """Merges overlapping or adjacent time intervals into a single block."""
@@ -96,6 +138,7 @@ def generate_srt_file(segments, output_path):
             srt_file.write(f"{start_time} --> {end_time}\n")
             srt_file.write(f"{text}\n\n")
 
+### --- MODIFICATION START: Updated process_video function --- ###
 def process_video(processing_path, original_path, model, args, output_dir, temp_dir):
     """Processes a single video file for censorship and silence removal."""
     
@@ -103,26 +146,44 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
     log_path = os.path.join(output_dir, f"{base_name}.log")
     logger = setup_logger(base_name, log_path)
 
+    # Define the path for our new transcription cache file
+    transcription_cache_path = os.path.join(temp_dir, f"{base_name}_transcription.json")
+
     try:
         print(f"\nProcessing: {os.path.basename(original_path)}")
         logger.info(f"--- Starting processing for {original_path} ---")
         
-        print("Transcribing with faster-whisper (this may take a while)...")
-        segments_iterator, info = model.transcribe(processing_path, word_timestamps=True)
-        
-        lang_info = f"Detected language '{info.language}' with probability {info.language_probability:.2f}"
-        print(f"  {lang_info}")
-        logger.info(lang_info)
-        
-        print("--- Real-Time Transcription ---")
-        logger.info("--- Real-Time Transcription ---")
-
         result_segments = []
-        for segment in segments_iterator:
+        # Check for cache before transcribing
+        if os.path.exists(transcription_cache_path):
+            print("  Found existing transcription cache. Loading from file...")
+            logger.info("Loading transcription from cache.")
+            result_segments = load_transcription_cache(transcription_cache_path)
+            print("  Successfully loaded transcription from cache.")
+        else:
+            print("  Transcribing with faster-whisper (this may take a while)...")
+            logger.info("No cache found. Starting new transcription.")
+            segments_iterator, info = model.transcribe(processing_path, word_timestamps=True)
+            
+            lang_info = f"Detected language '{info.language}' with probability {info.language_probability:.2f}"
+            print(f"  {lang_info}")
+            logger.info(lang_info)
+            
+            # Convert iterator to a list so we can save and reuse it
+            result_segments = list(segments_iterator)
+
+            print("  Saving transcription to cache for future runs...")
+            save_transcription_cache(result_segments, transcription_cache_path)
+            logger.info(f"Saved transcription cache to {transcription_cache_path}")
+
+        print("--- Real-Time Transcription Log ---")
+        logger.info("--- Real-Time Transcription Log ---")
+
+        # Now we just log the text from our loaded/generated segments
+        for segment in result_segments:
             line = f"[{segment.start:0>7.2f}s -> {segment.end:0>7.2f}s] {segment.text.strip()}"
             print(line)
             logger.info(line)
-            result_segments.append(segment)
 
         print("--- Transcription Complete ---")
         logger.info("--- Transcription Complete ---")
@@ -210,9 +271,9 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         keep_segments = []
         last_end = 0.0
         for start, end in merged_cuts:
-            if last_end < start: keep_segments.append(video.subclip(last_end, start))
+            if last_end < start: keep_segments.append(video.subclipped(last_end, start))
             last_end = end
-        if last_end < video.duration: keep_segments.append(video.subclip(last_end, video.duration))
+        if last_end < video.duration: keep_segments.append(video.subclipped(last_end, video.duration))
 
         if not keep_segments:
             print("  Skipped: entire video was flagged for cutting.")
@@ -227,7 +288,7 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         print(f"  Exporting edited video...")
         temp_audio_path = os.path.join(temp_dir, "temp-audio.m4a")
         final_clip.write_videofile(
-            output_path, codec="av1_nvenc", audio_codec="aac", temp_audiofile=temp_audio_path,
+            output_path, codec="h265_nvenc", audio_codec="aac", temp_audiofile=temp_audio_path,
             remove_temp=True, threads=4,
             ffmpeg_params=["-pix_fmt", "yuv420p", "-gpu", "0", "-preset", "p1", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
         )
@@ -246,6 +307,8 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         if 'video' in locals() and 'close' in dir(video): video.close()
         if 'logger' in locals():
             logging.shutdown()
+### --- MODIFICATION END --- ###
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -265,7 +328,6 @@ def main():
     parser.add_argument('--no-silence', dest='cut_silence', action='store_false', help="Disable the default behavior of cutting silent sections.")
     parser.add_argument('--min-silence-duration', type=float, default=1.0, help="Minimum duration (in seconds) of silence to cut. (Default: 1.0)")
     
-    # --- MODIFIED DEFAULTS: 'hybrid' is now the default censorship level ---
     parser.set_defaults(clean=True, cut_silence=True, censor_level='hybrid')
     args = parser.parse_args()
 
@@ -274,7 +336,8 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     TEMP_DIR = os.path.join(INPUT_DIR, "script_temp")
-    if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR)
+    # We no longer delete the temp dir at the start. 
+    # It will be deleted only at the very end of a successful run.
     os.makedirs(TEMP_DIR, exist_ok=True)
     print(f"Temporary files will be stored in: {TEMP_DIR}")
 
@@ -291,17 +354,29 @@ def main():
             print("No video files found to process. Exiting.")
             sys.exit()
 
+        ### --- MODIFICATION START: Updated main processing loop --- ###
         for path in video_files:
             if not os.path.exists(path):
                 print(f"\nWarning: File not found, skipping: {path}")
                 continue
+
+            # Check if the final output file already exists. If so, skip.
+            base_name = os.path.splitext(os.path.basename(path))[0]
+            expected_output_path = os.path.join(OUTPUT_DIR, f"{base_name}_edited.mp4")
+
+            if os.path.exists(expected_output_path):
+                print(f"\nOutput file already exists for '{os.path.basename(path)}'. Skipping.")
+                continue
             
             processing_path = clean_video(path, TEMP_DIR) if args.clean else path
             process_video(processing_path, path, model, args, OUTPUT_DIR, TEMP_DIR)
+        ### --- MODIFICATION END --- ###
 
         print("\nProcessing complete.")
 
     finally:
+        # The temporary directory is now cleaned up only after all videos are processed.
+        # This preserves the cache between individual video processing steps.
         if os.path.exists(TEMP_DIR):
             print(f"Cleaning up temporary directory: {TEMP_DIR}")
             shutil.rmtree(TEMP_DIR)

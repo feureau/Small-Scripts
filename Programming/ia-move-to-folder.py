@@ -47,17 +47,6 @@ Syntax:
     as possible and is VERY LIKELY to cause errors on items with many
     files. The presence of this flag overrides any value set by -l/--limit.
 
-== EXAMPLES ==
-  
-  # Example 1: Move all root files into 'scans' with default 2-sec delay
-  python ia-move-runner.py my-cool-item-01 scans
-  
-  # Example 2: Move files into a folder with spaces, using a 5-second delay
-  python ia-move-runner.py -l 5 my-book-project "Chapter 1 Scans"
-
-  # Example 3: Move files with no delay (fast, but risky)
-  python ia-move-runner.py --nolimit my-item-with-few-files "quick-sort"
-
 == REQUIREMENTS ==
   - Python 3.x
   
@@ -97,7 +86,7 @@ def main():
     args = sys.argv[1:]
     
     # Defaults
-    delay_seconds = 1.0
+    delay_seconds = 0.20 # Default in seconds as a safe starting point
     no_limit_flag = False
     
     positional_args = []
@@ -203,9 +192,22 @@ def main():
             
         except subprocess.CalledProcessError as e:
             # This error is triggered by check=True if 'ia move' fails.
-            # We print the error message that 'ia' itself provided.
+            error_details = e.stderr.strip()
             print(f"  > ERROR: The 'ia move' command failed.")
-            print(f"    Details: {e.stderr.strip()}")
+            print(f"    Details: {error_details}")
+
+            # *** NEW: Check for the specific rate-limiting error message ***
+            if "bucket_tasks_queued exceeds bucket_limit amount" in error_details:
+                print("\n" + ("-" * 50))
+                print("FATAL: Rate limit error detected from Internet Archive.")
+                print("The server is rejecting requests because they are being sent too quickly.")
+                print("The script will now terminate to avoid further errors.")
+                print("\nRECOMMENDATION:")
+                print("Re-run the script with a delay using the '-l' or '--limit' flag.")
+                print(f'  Example: python {sys.argv[0]} -l 2 "{IDENTIFIER}" "{DEST_FOLDER}"')
+                print("-" * 50)
+                sys.exit(1) # Exit the script immediately
+
             failure_count += 1
         except FileNotFoundError:
             # This error happens if the 'ia' command itself cannot be found.
