@@ -11,8 +11,53 @@ import shutil
 import logging
 import datetime
 import ffmpeg
-import json ### --- MODIFICATION --- ###
-from collections import namedtuple ### --- MODIFICATION --- ###
+import json
+from collections import namedtuple
+
+# --- ADVANCED MOVIEPY PATCH FOR CUDA DECODING ---
+# This block intercepts moviepy's internal FFmpeg call to force hardware acceleration.
+# It should be placed after the imports at the top of the script.
+try:
+    import moviepy.video.io.ffmpeg_reader as ffmpeg_reader
+    from moviepy.config import get_setting
+
+    # Store the original function so we can call it
+    original_ffmpeg_reader_init = ffmpeg_reader.FFMPEG_VideoReader.__init__
+
+    def patched_ffmpeg_reader_init(self, filename, *args, **kwargs):
+        """A patched version of the FFMPEG_VideoReader init function."""
+        
+        # Get the original command that moviepy would have used
+        original_ffmpeg_reader_init(self, filename, *args, **kwargs)
+        
+        # The command is stored in self.proc.args
+        ffmpeg_command = self.proc.args
+        
+        # Inject the CUDA hardware acceleration flags into the command.
+        hw_flags = ['-hwaccel', 'cuda']
+        
+        # Find the position of the ffmpeg executable
+        try:
+            ffmpeg_exe_pos = ffmpeg_command.index(get_setting("FFMPEG_BINARY"))
+            # Insert the flags right after the executable name
+            for i, flag in enumerate(hw_flags):
+                ffmpeg_command.insert(ffmpeg_exe_pos + 1 + i, flag)
+        except ValueError:
+            # If the binary isn't found, fall back to inserting at the start
+            ffmpeg_command.insert(1, '-hwaccel')
+            ffmpeg_command.insert(2, 'cuda')
+            
+        # Overwrite the process arguments with our modified command
+        self.proc.args = ffmpeg_command
+
+    # Apply the patch by replacing the original function with our new one
+    ffmpeg_reader.FFMPEG_VideoReader.__init__ = patched_ffmpeg_reader_init
+
+    print("--- MoviePy has been patched for CUDA hardware decoding ---")
+except ImportError:
+    print("--- Warning: MoviePy not found. Skipping CUDA decoding patch. ---")
+# --- END OF PATCH ---
+
 
 from faster_whisper import WhisperModel
 from profanity_check import predict_prob
@@ -25,14 +70,16 @@ PROFANE_WORDS = {
     "fuck", "fucking", "shit", "bitch", "cunt", "asshole", "motherfucker"
 }
 
-# --- FINAL CORRECTED FUNCTION ---
+# --- FINAL MODIFIED FUNCTION ---
 def clean_video(input_path, temp_dir):
-    """Creates a clean, standardized copy of the video using ffmpeg-python."""
-    print(f"  Cleaning '{os.path.basename(input_path)}' with ffmpeg-python...")
+    """Creates a clean, standardized copy of the video using ffmpeg-python with CUDA decoding."""
+    print(f"  Cleaning '{os.path.basename(input_path)}' with ffmpeg-python (CUDA decoding enabled)...")
     output_path = os.path.join(temp_dir, os.path.basename(input_path))
 
     try:
-        stream = ffmpeg.input(input_path)
+        # Use CUDA for hardware-accelerated decoding
+        stream = ffmpeg.input(input_path, **{'hwaccel': 'cuda'})
+        
         video_stream = stream['v:0']
         audio_stream = stream['a:0']
         processed_audio = audio_stream.filter('loudnorm', I=-16, TP=-1.5, LRA=7)
@@ -41,7 +88,7 @@ def clean_video(input_path, temp_dir):
             video_stream,
             processed_audio,
             output_path,
-            **{'c:v': 'copy'},
+            **{'c:v': 'copy'}, # Copy the video stream as-is since we only changed audio
             **{'c:a': 'aac'},
             dn=None,
             map_metadata=-1,
@@ -54,12 +101,9 @@ def clean_video(input_path, temp_dir):
     except ffmpeg.Error as e:
         print("FATAL: ffmpeg-python failed during cleaning.")
         raise RuntimeError(f"FFmpeg failed with stderr:\n{e.stderr.decode('utf-8')}")
-# --- END OF CORRECTED FUNCTION ---
+# --- END OF MODIFIED FUNCTION ---
 
-### --- MODIFICATION START --- ###
 # Helper functions and objects for caching transcription data.
-
-# We need a simple object to reconstruct the data when loading from cache
 Word = namedtuple('Word', ['start', 'end', 'word'])
 Segment = namedtuple('Segment', ['start', 'end', 'text', 'words'])
 
@@ -67,7 +111,6 @@ def save_transcription_cache(data, cache_path):
     """Saves the detailed transcription data to a JSON file."""
     serializable_data = []
     for segment in data:
-        # Convert segment and word objects to dictionaries for JSON serialization
         seg_dict = {
             'start': segment.start,
             'end': segment.end,
@@ -85,11 +128,9 @@ def load_transcription_cache(cache_path):
     
     reconstructed_segments = []
     for seg_dict in data:
-        # Reconstruct the Word and Segment objects from the dictionaries
         words = [Word(w['start'], w['end'], w['word']) for w in seg_dict['words']]
         reconstructed_segments.append(Segment(seg_dict['start'], seg_dict['end'], seg_dict['text'], words))
     return reconstructed_segments
-### --- MODIFICATION END --- ###
 
 
 def merge_intervals(intervals):
@@ -138,7 +179,6 @@ def generate_srt_file(segments, output_path):
             srt_file.write(f"{start_time} --> {end_time}\n")
             srt_file.write(f"{text}\n\n")
 
-### --- MODIFICATION START: Updated process_video function --- ###
 def process_video(processing_path, original_path, model, args, output_dir, temp_dir):
     """Processes a single video file for censorship and silence removal."""
     
@@ -146,7 +186,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
     log_path = os.path.join(output_dir, f"{base_name}.log")
     logger = setup_logger(base_name, log_path)
 
-    # Define the path for our new transcription cache file
     transcription_cache_path = os.path.join(temp_dir, f"{base_name}_transcription.json")
 
     try:
@@ -154,7 +193,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         logger.info(f"--- Starting processing for {original_path} ---")
         
         result_segments = []
-        # Check for cache before transcribing
         if os.path.exists(transcription_cache_path):
             print("  Found existing transcription cache. Loading from file...")
             logger.info("Loading transcription from cache.")
@@ -169,7 +207,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
             print(f"  {lang_info}")
             logger.info(lang_info)
             
-            # Convert iterator to a list so we can save and reuse it
             result_segments = list(segments_iterator)
 
             print("  Saving transcription to cache for future runs...")
@@ -179,7 +216,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         print("--- Real-Time Transcription Log ---")
         logger.info("--- Real-Time Transcription Log ---")
 
-        # Now we just log the text from our loaded/generated segments
         for segment in result_segments:
             line = f"[{segment.start:0>7.2f}s -> {segment.end:0>7.2f}s] {segment.text.strip()}"
             print(line)
@@ -267,7 +303,9 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         print(f"  {log_msg}")
         logger.info(log_msg)
 
+        # This will now use CUDA decoding automatically thanks to the patch
         video = VideoFileClip(processing_path)
+        
         keep_segments = []
         last_end = 0.0
         for start, end in merged_cuts:
@@ -285,12 +323,14 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         base_name = os.path.splitext(os.path.basename(original_path))[0]
         output_path = os.path.join(output_dir, f"{base_name}_edited.mp4")
         
-        print(f"  Exporting edited video...")
+        print(f"  Exporting edited video (CUDA encoding enabled)...")
         temp_audio_path = os.path.join(temp_dir, "temp-audio.m4a")
+        
+        # This part correctly uses the GPU for ENCODING
         final_clip.write_videofile(
-            output_path, codec="h265_nvenc", audio_codec="aac", temp_audiofile=temp_audio_path,
+            output_path, codec="hevc_nvenc", audio_codec="aac", temp_audiofile=temp_audio_path,
             remove_temp=True, threads=4,
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-gpu", "0", "-preset", "p1", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-preset", "p1", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
         )
         saved_msg = f"Saved: {output_path}"
         print(f"  {saved_msg}")
@@ -307,7 +347,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         if 'video' in locals() and 'close' in dir(video): video.close()
         if 'logger' in locals():
             logging.shutdown()
-### --- MODIFICATION END --- ###
 
 
 def main():
@@ -336,8 +375,6 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     TEMP_DIR = os.path.join(INPUT_DIR, "script_temp")
-    # We no longer delete the temp dir at the start. 
-    # It will be deleted only at the very end of a successful run.
     os.makedirs(TEMP_DIR, exist_ok=True)
     print(f"Temporary files will be stored in: {TEMP_DIR}")
 
@@ -354,13 +391,11 @@ def main():
             print("No video files found to process. Exiting.")
             sys.exit()
 
-        ### --- MODIFICATION START: Updated main processing loop --- ###
         for path in video_files:
             if not os.path.exists(path):
                 print(f"\nWarning: File not found, skipping: {path}")
                 continue
 
-            # Check if the final output file already exists. If so, skip.
             base_name = os.path.splitext(os.path.basename(path))[0]
             expected_output_path = os.path.join(OUTPUT_DIR, f"{base_name}_edited.mp4")
 
@@ -370,13 +405,10 @@ def main():
             
             processing_path = clean_video(path, TEMP_DIR) if args.clean else path
             process_video(processing_path, path, model, args, OUTPUT_DIR, TEMP_DIR)
-        ### --- MODIFICATION END --- ###
 
         print("\nProcessing complete.")
 
     finally:
-        # The temporary directory is now cleaned up only after all videos are processed.
-        # This preserves the cache between individual video processing steps.
         if os.path.exists(TEMP_DIR):
             print(f"Cleaning up temporary directory: {TEMP_DIR}")
             shutil.rmtree(TEMP_DIR)
