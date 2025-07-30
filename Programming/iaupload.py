@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr//bin/env python3
 """
 iaupload.py
 
@@ -18,6 +18,14 @@ checks if the item exists, and then creates or updates it.
 import sys
 from pathlib import Path
 import internetarchive as ia
+
+# --- NEW HELPER FUNCTION [MODIFIED] ---
+def normalize_path(path_str):
+    """
+    Converts a path string to a consistent, comparable format by making it
+    lowercase, ensuring forward slashes, and replacing spaces with underscores.
+    """
+    return path_str.lower().replace('\\', '/').replace(' ', '_')
 
 def main():
     cwd = Path.cwd()
@@ -42,18 +50,26 @@ def main():
     item = ia.get_item(IDENT)
     to_upload = []
 
+    # --- COMPARISON LOGIC [MODIFIED] ---
     if item.exists:
         print("Item exists. Comparing local and remote files for UPDATE mode.")
-        remote_names = {f['name'] for f in item.files}
+        
+        # Create a set of NORMALIZED remote file paths for robust comparison.
+        # This handles differences in case, path separators ('/' vs '\'), and spaces vs underscores.
+        normalized_remote_names = {normalize_path(f['name']) for f in item.files}
+        print(f"Found {len(normalized_remote_names)} remote files (after normalization).")
+
+        # Add a local file to the upload list ONLY if its normalized path
+        # is not found in the set of normalized remote paths.
         to_upload = [
             str(p.relative_to(cwd).as_posix()) for p in all_local_files
-            if str(p.relative_to(cwd).as_posix()) not in remote_names
+            if normalize_path(str(p.relative_to(cwd).as_posix())) not in normalized_remote_names
         ]
     else:
         print("Item does not exist. Preparing for CREATE mode.")
         to_upload = [str(p.relative_to(cwd).as_posix()) for p in all_local_files]
 
-    # --- MODIFIED UPLOAD LOGIC: Loop and upload one file at a time ---
+    # --- UPLOAD LOGIC (Unchanged) ---
     if to_upload:
         print(f"\nStarting upload of {len(to_upload)} file(s) to '{IDENT}'.\n")
         

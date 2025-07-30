@@ -93,33 +93,26 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
 
         print(f"Processing (mkvmerge): '{os.path.basename(input_file)}' -> '{output_path}'")
 
-        # <-- CHANGE START: Use subprocess.Popen for real-time output -->
-        # We use Popen to read stdout line-by-line for live progress updates.
         process = subprocess.Popen(
             mkvmerge_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,  # Decode output as text
+            text=True,
             encoding='utf-8',
             errors='replace',
-            bufsize=1  # Line-buffered
+            bufsize=1
         )
 
         other_output_lines = []
         for line in process.stdout:
             line = line.strip()
             if line.startswith('Progress:'):
-                # Use carriage return '\r' to overwrite the line.
-                # end='' prevents a newline. flush=True ensures it's written immediately.
                 print(f"\r{line}", end="", flush=True)
             else:
-                # Store other lines to print later.
                 other_output_lines.append(line)
         
-        # After the loop, print a newline to move past the progress bar.
         print()
 
-        # Wait for the process to terminate and get the stderr content and exit code.
         stderr_output = process.stderr.read()
         process.wait()
         
@@ -145,11 +138,9 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
                 print(f"mkvmerge Warnings:\n{stderr_output.strip()}")
             print(f"Successfully created base MKV: {output_path}")
             mkv_success = True
-        # <-- CHANGE END -->
 
     except Exception as e:
         print(f"Unexpected error during mkvmerge processing of {input_file}: {str(e)}")
-        # Clean up traceback for a cleaner user error message if Popen fails to start
         if isinstance(e, FileNotFoundError):
              print(f"Error: Could not find the mkvmerge executable at the specified path.")
         return False
@@ -167,7 +158,7 @@ def process_file(input_file: str, output_dir: str, lut_path: str, embed_lut: boo
         print(f"Applying rotation ({rotation} degrees) using ffmpeg...")
         try:
             ffmpeg_command = [
-                ffmpeg_path, "-y", # Overwrite output without asking
+                ffmpeg_path, "-y",
                 "-i", intermediate_path,
                 "-map", "0",
                 "-c", "copy",
@@ -296,6 +287,24 @@ def main():
         default="ffmpeg",
         help="Path to ffmpeg executable (default: check system PATH). Required if rotation is applied."
     )
+
+    # --- ADDED: Mutually exclusive group for delete/keep ---
+    source_file_group = parser.add_mutually_exclusive_group()
+    source_file_group.add_argument(
+        '-d', '--delete',
+        action='store_true',
+        dest='delete_source',
+        help="Delete the original source file after successful processing. (This is the default action)"
+    )
+    source_file_group.add_argument(
+        '-k', '--keep',
+        action='store_false',
+        dest='delete_source',
+        help="Keep the original source file after successful processing."
+    )
+    parser.set_defaults(delete_source=True)
+    # --- END ADDED ---
+
     args = parser.parse_args()
 
     # --- Manually Validate Rotation Argument ---
@@ -355,6 +364,13 @@ def main():
     else:
         print("Rotation: None")
 
+    # --- MODIFIED: Added source file action ---
+    if args.delete_source:
+        print("Source files will be DELETED after successful processing.")
+    else:
+        print("Source files will be KEPT after successful processing.")
+    # --- END MODIFIED ---
+
     # --- Process Files ---
     success_count = 0
     total_files = len(video_files)
@@ -364,8 +380,23 @@ def main():
         source_directory = os.path.dirname(file_path)
         output_dir_for_file = os.path.join(source_directory, DEFAULT_OUTPUT_FOLDER)
         
-        if process_file(file_path, output_dir_for_file, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe):
+        # --- MODIFIED: Handle source file deletion/keeping ---
+        is_success = process_file(file_path, output_dir_for_file, args.lut, args.embed_lut, args.rotate, args.mkvmerge_path, ffmpeg_exe)
+        
+        if is_success:
             success_count += 1
+            print(f"Successfully processed: '{os.path.basename(file_path)}'")
+            if args.delete_source:
+                try:
+                    os.remove(file_path)
+                    print(f"Deleted original source file: {file_path}")
+                except OSError as e:
+                    print(f"Warning: Could not delete source file {file_path}: {e}")
+            else:
+                print(f"Keeping original source file as requested: {file_path}")
+        else:
+            print(f"Failed to process: '{os.path.basename(file_path)}'. Original file will be kept.")
+        # --- END MODIFIED ---
         print("-" * 40)
 
     print("\nProcessing complete!")
