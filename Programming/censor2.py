@@ -1,7 +1,96 @@
-# NOTE: Required Python packages (install with pip)
-# pip install moviepy scikit-learn alt-profanity-check faster-whisper ffmpeg-python
-# NOTE: You must also install PyTorch with CUDA support separately if not already done.
-# NOTE: For best results, ensure your FFmpeg build includes the 'aac' audio encoder.
+# ==================================================================================================
+#
+#                               VIDEO CENSORSHIP & EDITING SCRIPT
+#
+# ==================================================================================================
+#
+# OVERVIEW:
+# This script is a powerful command-line tool for automatically editing video files. It uses
+# AI-powered transcription (via faster-whisper) to detect and remove sections containing
+# profanity and/or long periods of silence.
+#
+# It is highly optimized for speed, leveraging an NVIDIA GPU (CUDA) for transcription and
+# hardware-accelerated encoding. The script's default mode is a lossless, stream-copy-based
+# workflow that is extremely fast and preserves original video/audio quality.
+#
+#
+# --- FEATURES ---
+#
+#   - MULTIPLE EDITING MODES:
+#     - Default Lossless Mode: Extremely fast. Cuts video on keyframes without re-encoding.
+#       Audio is also copied without modification. Zero quality loss.
+#     - Optional Frame-Accurate Mode (`-p`): Slower, but allows for precise, frame-perfect
+#       cuts. This requires a full re-encode of the video stream.
+#
+#   - MODULAR AUDIO PROCESSING:
+#     - Audio Normalization (`--loudnorm`): Enabled by default to create consistent volume.
+#       This can be disabled with the `--no-loudnorm` flag.
+#
+#   - ADVANCED CENSORSHIP LEVELS:
+#     - Hybrid (Default): Uses sentence context to identify profanity, then precisely cuts
+#       only the profane words within that sentence.
+#     - Word: Cuts only the specific words found in the `PROFANE_WORDS` list.
+#     - Sentence: Cuts the entire sentence segment if it's flagged as profane.
+#
+#   - AUTOMATIC SILENCE REMOVAL:
+#     - Can detect and remove silent sections longer than a specified duration.
+#
+#   - PERFORMANCE & USABILITY:
+#     - Transcription Caching: Saves transcription results to avoid re-transcribing on
+#       subsequent runs with different settings.
+#     - SRT Subtitle Generation: Automatically creates a `.srt` subtitle file for each video.
+#     - Detailed Logging: Generates a `.log` file for each video, detailing every step
+#       and decision made during processing.
+#     - Robust Cleanup: Manages and removes all temporary files automatically.
+#
+#
+# --- DEPENDENCIES ---
+#
+#   - PYTHON PACKAGES (install with pip):
+#     `pip install moviepy scikit-learn alt-profanity-check faster-whisper ffmpeg-python`
+#
+#   - EXTERNAL SOFTWARE:
+#     1. PyTorch with CUDA: You must install PyTorch with CUDA support separately from
+#        the official PyTorch website (https://pytorch.org/get-started/locally/) to enable
+#        GPU acceleration for transcription.
+#     2. FFmpeg: A recent, full build of FFmpeg is required and must be in your system's PATH.
+#        For best results, ensure your build includes the 'aac' audio encoder.
+#
+#
+# --- MOVIEPY VERSION COMPATIBILITY ---
+#
+# This script is designed to be compatible with both stable and development versions of MoviePy.
+#
+# - MoviePy v2.0.0+ (from GitHub): Recent development versions have refactored the package
+#   structure, moving main classes like `VideoFileClip` to the top-level `moviepy` package.
+#
+# - MoviePy v1.x (from PyPI): Stable versions use the `moviepy.editor` submodule as the
+#   standard entry point for these classes.
+#
+# The script handles this by first attempting to import from the new top-level package (`from moviepy
+# import ...`). If that fails with an `ImportError`, it falls back to the stable `moviepy.editor`
+# path. This ensures maximum compatibility regardless of which version is installed.
+#
+#
+# --- COMMAND-LINE USAGE EXAMPLES ---
+#
+# 1. NORMALIZED AUDIO (DEFAULT) & FAST VIDEO EDITING:
+#    `python your_script_name.py my_video.mp4`
+#
+# 2. DISABLING LOUDNESS NORMALIZATION: For the absolute fastest performance (lossless audio).
+#    `python your_script_name.py my_video.mp4 --no-loudnorm`
+#
+# 3. FRAME-PERFECT VIDEO EDITING: Slower, re-encodes video for precision. Audio is normalized by default.
+#    `python your_script_name.py my_video.mp4 -p`
+#    (or `python your_script_name.py my_video.mp4 --frame-accurate`)
+#
+# 4. HIGHEST PRECISION & NO AUDIO CHANGE: Re-encodes video, but keeps original audio.
+#    `python your_script_name.py my_video.mp4 -p --no-loudnorm`
+#
+# 5. CENSOR ONLY SPECIFIC WORDS and disable silence cutting:
+#    `python your_script_name.py my_video.mp4 -w --no-silence`
+#
+# ==================================================================================================
 
 import sys
 import os
@@ -16,7 +105,6 @@ import json
 from collections import namedtuple
 
 # Force UTF-8 for stdout/stderr if needed (especially on Windows)
-# This helps with printing/logging filenames or metadata containing emojis
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 if sys.stderr.encoding != 'utf-8':
@@ -25,41 +113,28 @@ if sys.stderr.encoding != 'utf-8':
 # Set environment variable for UTF-8 (can help subprocesses like ffmpeg)
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-
-# --- ADVANCED MOVIEPY PATCH FOR CUDA DECODING ---
-# This block intercepts moviepy's internal FFmpeg call to force hardware acceleration.
-# It should be placed after the imports at the top of the script.
-try:
-    import moviepy.video.io.ffmpeg_reader as ffmpeg_reader
-    from moviepy.config import get_setting
-
-    original_ffmpeg_reader_init = ffmpeg_reader.FFMPEG_VideoReader.__init__
-
-    def patched_ffmpeg_reader_init(self, filename, *args, **kwargs):
-        """A patched version of the FFMPEG_VideoReader init function."""
-        original_ffmpeg_reader_init(self, filename, *args, **kwargs)
-        ffmpeg_command = self.proc.args
-        hw_flags = ['-hwaccel', 'cuda']
-        try:
-            ffmpeg_exe_pos = ffmpeg_command.index(get_setting("FFMPEG_BINARY"))
-            for i, flag in enumerate(hw_flags):
-                ffmpeg_command.insert(ffmpeg_exe_pos + 1 + i, flag)
-        except ValueError:
-            ffmpeg_command.insert(1, '-hwaccel')
-            ffmpeg_command.insert(2, 'cuda')
-        self.proc.args = ffmpeg_command
-
-    ffmpeg_reader.FFMPEG_VideoReader.__init__ = patched_ffmpeg_reader_init
-    print("--- MoviePy has been patched for CUDA hardware decoding ---")
-except ImportError:
-    print("--- Warning: MoviePy not found. Skipping CUDA decoding patch. ---")
-# --- END OF PATCH ---
-
-
+# --- Library Imports ---
 from faster_whisper import WhisperModel
 from profanity_check import predict_prob
-from moviepy.video.io.VideoFileClip import VideoFileClip
-from moviepy.video.compositing.concatenate import concatenate_videoclips
+
+# =========================================================================
+# --- UNIVERSAL MOVIEPY IMPORT ---
+# Tries the new, simplified v2.0 import first, then falls back to the
+# stable v1.x 'editor' module for maximum compatibility.
+# =========================================================================
+try:
+    # Path for bleeding-edge v2.0.0+ (imports from top-level)
+    from moviepy import VideoFileClip, concatenate_videoclips
+    print("--- Successfully imported from MoviePy v2.0.0+ structure. ---")
+except ImportError:
+    try:
+        # Fallback path for stable versions from PyPI (v1.0+)
+        from moviepy.editor import VideoFileClip, concatenate_videoclips
+        print("--- Imported from stable 'moviepy.editor' module. ---")
+    except ImportError:
+        print("FATAL: MoviePy library not found or installation is corrupt.", file=sys.stderr)
+        print("Please ensure MoviePy is installed correctly ('pip install moviepy').", file=sys.stderr)
+        sys.exit(1)
 
 
 # This list contains the specific words to be censored.
@@ -68,7 +143,7 @@ PROFANE_WORDS = {
 }
 
 # =================================================================================
-# --- NEW HELPER FUNCTIONS FOR LOSSLESS WORKFLOW ---
+# --- HELPER FUNCTIONS FOR LOSSLESS WORKFLOW ---
 # =================================================================================
 
 def lossless_extract_segment(input_path, output_path, start_time, end_time, logger):
@@ -76,7 +151,7 @@ def lossless_extract_segment(input_path, output_path, start_time, end_time, logg
     logger.info(f"Losslessly extracting segment from {start_time:.2f}s to {end_time:.2f}s.")
     try:
         ffmpeg.input(input_path, ss=start_time, to=end_time).output(
-            output_path, **{'c': 'copy'}
+            output_path, c='copy', hide_banner=None, loglevel='error'
         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
         return True
     except ffmpeg.Error as e:
@@ -89,15 +164,12 @@ def lossless_concatenate_segments(clip_paths, final_output_path, temp_dir, logge
     concat_list_path = os.path.join(temp_dir, "concat_list.txt")
     
     try:
-        # Create the concat file list needed by FFmpeg
         with open(concat_list_path, 'w', encoding='utf-8') as f:
             for path in clip_paths:
-                # FFmpeg's concat demuxer requires 'file' keyword and single quotes for safety
                 f.write(f"file '{os.path.abspath(path)}'\n")
 
-        # Use the concat demuxer to join the files
         ffmpeg.input(concat_list_path, f='concat', safe=0).output(
-            final_output_path, **{'c': 'copy'}
+            final_output_path, c='copy', hide_banner=None, loglevel='error'
         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
         return True
     except ffmpeg.Error as e:
@@ -105,22 +177,22 @@ def lossless_concatenate_segments(clip_paths, final_output_path, temp_dir, logge
         return False
 
 # =================================================================================
-# --- MODIFIED/EXISTING FUNCTIONS ---
+# --- CORE FUNCTIONS ---
 # =================================================================================
 
 def clean_video(input_path, temp_dir, args):
-    """Creates a clean copy of the video. Behavior depends on --loudnorm flag."""
+    """Creates a clean copy of the video. Behavior depends on --no-loudnorm flag."""
     output_path = os.path.join(temp_dir, f"cleaned_{os.path.basename(input_path)}")
     
     stream = ffmpeg.input(input_path)
     video_stream = stream['v:0']
     audio_stream = stream['a:0']
 
-    ffmpeg_output_args = {'c:v': 'copy', 'dn': None, 'map_metadata': -1, 'map_chapters': -1}
+    ffmpeg_output_args = {'c:v': 'copy', 'dn': None, 'map_metadata': -1, 'map_chapters': -1, 'hide_banner': None, 'loglevel': 'error'}
 
     if args.loudnorm:
         print(f"  Cleaning '{os.path.basename(input_path)}' with audio normalization (re-encoding audio)...")
-        processed_audio = audio_stream.filter('loudnorm', I=-16, TP=-1.5, LRA=7)
+        processed_audio = audio_stream.filter('loudnorm', i=-16, tp=-1.5, lra=7)
         ffmpeg_output_args['c:a'] = 'aac' # Re-encode audio
     else:
         print(f"  Creating fast, lossless copy of '{os.path.basename(input_path)}' (no audio change)...")
@@ -128,16 +200,11 @@ def clean_video(input_path, temp_dir, args):
         ffmpeg_output_args['c:a'] = 'copy' # Copy audio as-is
 
     try:
-        ffmpeg.output(
-            video_stream,
-            processed_audio,
-            output_path,
-            **ffmpeg_output_args
-        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+        ffmpeg.output(video_stream, processed_audio, output_path, **ffmpeg_output_args).overwrite_output().run(capture_stdout=True, capture_stderr=True)
         print("  Successfully created temporary file for processing.")
         return output_path
     except ffmpeg.Error as e:
-        print("FATAL: ffmpeg-python failed during cleaning/copying.")
+        print("FATAL: ffmpeg-python failed during cleaning/copying.", file=sys.stderr)
         raise RuntimeError(f"FFmpeg failed with stderr:\n{e.stderr.decode('utf-8')}")
 
 Word = namedtuple('Word', ['start', 'end', 'word'])
@@ -193,7 +260,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
     base_name = os.path.splitext(os.path.basename(original_path))[0]
     log_path = os.path.join(output_dir, f"{base_name}.log")
     logger = setup_logger(base_name, log_path)
-
     transcription_cache_path = os.path.join(temp_dir, f"{base_name}_transcription.json")
     
     final_clip = None
@@ -203,7 +269,6 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         print(f"\nProcessing: {os.path.basename(original_path)}")
         logger.info(f"--- Starting processing for {original_path} ---")
         
-        # --- Transcription (same for both modes) ---
         if os.path.exists(transcription_cache_path):
             print("  Found existing transcription cache. Loading from file...")
             result_segments = load_transcription_cache(transcription_cache_path)
@@ -220,37 +285,30 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         generate_srt_file(result_segments, srt_path)
         print(f"  Saved transcription to: {srt_path}")
 
-        # --- Profanity & Silence Detection (same for both modes) ---
         segments_to_cut = []
-        # (This entire logic block is unchanged)
         if args.censor_level == 'word':
             for seg in result_segments:
                 if not hasattr(seg, 'words'): continue
                 for word in seg.words:
-                    if word.word.strip().lower().strip('.,!?-') in PROFANE_WORDS:
-                        segments_to_cut.append((word.start, word.end))
+                    if word.word.strip().lower().strip('.,!?-') in PROFANE_WORDS: segments_to_cut.append((word.start, word.end))
         elif args.censor_level == 'hybrid':
             for seg in result_segments:
                 if not seg.text.strip() or not hasattr(seg, 'words'): continue
                 if predict_prob([seg.text.strip()])[0] >= args.threshold:
                     for word in seg.words:
-                        if word.word.strip().lower().strip('.,!?-') in PROFANE_WORDS:
-                            segments_to_cut.append((word.start, word.end))
-        else: # 'sentence'
+                        if word.word.strip().lower().strip('.,!?-') in PROFANE_WORDS: segments_to_cut.append((word.start, word.end))
+        else:
             for seg in result_segments:
-                if seg.text.strip() and predict_prob([seg.text.strip()])[0] >= args.threshold:
-                    segments_to_cut.append((seg.start, seg.end))
+                if seg.text.strip() and predict_prob([seg.text.strip()])[0] >= args.threshold: segments_to_cut.append((seg.start, seg.end))
 
         if args.cut_silence:
             last_speech_end = 0.0
             for segment in result_segments:
-                if segment.start - last_speech_end >= args.min_silence_duration:
-                    segments_to_cut.append((last_speech_end, segment.start))
+                if segment.start - last_speech_end >= args.min_silence_duration: segments_to_cut.append((last_speech_end, segment.start))
                 last_speech_end = segment.end
         
         if not segments_to_cut:
             print("  No segments to cut. Copying original file to output.")
-            logger.info("No segments to cut. Copying to output.")
             shutil.copy(processing_path, os.path.join(output_dir, f"{base_name}_edited.mp4"))
             return
             
@@ -258,66 +316,53 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         logger.info(f"Found {len(segments_to_cut)} segments to cut. Merged into {len(merged_cuts)} distinct cuts.")
         print(f"  Found {len(merged_cuts)} distinct time intervals to remove.")
         
-        # =========================================================================
-        # --- NEW: CHOOSE EDITING METHOD BASED ON --frame-accurate FLAG ---
-        # =========================================================================
-
         if args.frame_accurate:
-            # --- PATH A: ORIGINAL FRAME-ACCURATE RE-ENCODING METHOD ---
             print("  Using frame-accurate mode. This will re-encode the entire video.")
             logger.info("Using frame-accurate (re-encoding) mode.")
-
             video = VideoFileClip(processing_path)
-            
-            keep_segments = []
+            keep_clips = []
             last_end = 0.0
             for start, end in merged_cuts:
-                if last_end < start: keep_segments.append(video.subclipped(last_end, start))
+                if last_end < start: keep_clips.append(video.subclip(last_end, start))
                 last_end = end
-            if last_end < video.duration: keep_segments.append(video.subclipped(last_end, video.duration))
+            if last_end < video.duration: keep_clips.append(video.subclip(last_end, video.duration))
 
-            if not keep_segments:
+            if not keep_clips:
                 print("  Skipped: entire video was flagged for cutting."); logger.warning("Entire video flagged for cutting.")
                 return
                 
-            final_clip = concatenate_videoclips(keep_segments)
+            final_clip = concatenate_videoclips(keep_clips)
             output_path = os.path.join(output_dir, f"{base_name}_edited.mp4")
             
             print("  Exporting edited video (CUDA encoding enabled)...")
             final_clip.write_videofile(
                 output_path, codec="hevc_nvenc", audio_codec="aac", audio_bitrate="192k",
-                temp_audiofile=os.path.join(temp_dir, "temp-audio.m4a"),
+                temp_audiofile=os.path.join(temp_dir, f"{base_name}_temp_audio.m4a"),
                 threads=4, ffmpeg_params=["-pix_fmt", "yuv420p", "-preset", "p1", "-rc", "vbr", "-cq", "28", "-b:v", "0"]
             )
             print(f"  Saved: {output_path}"); logger.info(f"Saved: {output_path}")
-
         else:
-            # --- PATH B: NEW DEFAULT LOSSLESS METHOD ---
             print("  Using default lossless mode. This will be fast and not re-encode video/audio.")
             logger.info("Using default lossless (stream copy) mode.")
-            
-            # Determine the segments to *keep*
-            keep_segments_times = []
+            keep_times = []
             last_end = 0.0
             video_duration = float(ffmpeg.probe(processing_path)['format']['duration'])
-
             for start, end in merged_cuts:
-                if last_end < start: keep_segments_times.append((last_end, start))
+                if last_end < start: keep_times.append((last_end, start))
                 last_end = end
-            if last_end < video_duration: keep_segments_times.append((last_end, video_duration))
+            if last_end < video_duration: keep_times.append((last_end, video_duration))
 
-            if not keep_segments_times:
+            if not keep_times:
                 print("  Skipped: entire video was flagged for cutting."); logger.warning("Entire video flagged for cutting.")
                 return
 
             temp_clips = []
-            for i, (start, end) in enumerate(keep_segments_times):
+            for i, (start, end) in enumerate(keep_times):
                 clip_path = os.path.join(temp_dir, f"{base_name}_clip_{i}.mp4")
-                if lossless_extract_segment(processing_path, clip_path, start, end, logger):
-                    temp_clips.append(clip_path)
+                if lossless_extract_segment(processing_path, clip_path, start, end, logger): temp_clips.append(clip_path)
             
             if not temp_clips:
-                print("  Error: Failed to extract any video segments for lossless processing."); logger.error("Failed to extract any clips in lossless mode.")
+                print("  Error: Failed to extract any video segments for lossless processing.", file=sys.stderr); logger.error("Failed to extract clips in lossless mode.")
                 return
 
             output_path = os.path.join(output_dir, f"{base_name}_edited.mp4")
@@ -327,44 +372,43 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
             else:
                 print(f"  Joining {len(temp_clips)} clips losslessly...")
                 lossless_concatenate_segments(temp_clips, output_path, temp_dir, logger)
-
             print(f"  Saved: {output_path}"); logger.info(f"Saved: {output_path}")
-
     except Exception as e:
-        error_msg = f"An error occurred while processing {os.path.basename(original_path)}: {e}"
-        print(f"\n--- {error_msg} ---")
-        if 'logger' in locals(): logger.error(error_msg, exc_info=True)
+        print(f"\n--- FATAL ERROR processing {os.path.basename(original_path)}: {e} ---", file=sys.stderr)
+        if 'logger' in locals(): logger.error(f"FATAL ERROR", exc_info=True)
     finally:
         if final_clip: final_clip.close()
         if video: video.close()
         if 'logger' in locals(): logging.shutdown()
 
-
 def main():
+    # Use our extensive docstring as the help text for the script
     parser = argparse.ArgumentParser(
-        description="A script to find and remove profanity and/or silent sections from video files.",
+        description=__doc__,
         formatter_class=argparse.RawTextHelpFormatter
     )
-    # --- MODIFIED ARGUMENTS ---
     parser.add_argument("input_files", nargs="*", help="Video files/wildcards to process (e.g., *.mp4). If empty, searches current dir.")
-    parser.add_argument('--model', default='base', choices=['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'], help="The Whisper model to use (default: base).")
+    parser.add_argument('--model', default='base', choices=['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'], help="Whisper model (default: base).")
     parser.add_argument('--threshold', type=float, default=0.8, help="Profanity probability threshold (default: 0.8).")
     
-    # Censorship level arguments
     censor_group = parser.add_mutually_exclusive_group()
-    censor_group.add_argument('-w', '--word', dest='censor_level', action='store_const', const='word', help="Censor only specific words from the list.")
-    censor_group.add_argument('-s', '--sentence', dest='censor_level', action='store_const', const='sentence', help="Censor the entire sentence containing profanity.")
-    censor_group.add_argument('-hy', '--hybrid', dest='censor_level', action='store_const', const='hybrid', help="Use sentence context to find and censor specific words (Default).")
+    censor_group.add_argument('-w', '--word', dest='censor_level', action='store_const', const='word', help="Censor specific words only.")
+    censor_group.add_argument('-s', '--sentence', dest='censor_level', action='store_const', const='sentence', help="Censor the entire profane sentence.")
+    censor_group.add_argument('-hy', '--hybrid', dest='censor_level', action='store_const', const='hybrid', help="Use sentence context to find and censor words (Default).")
     
-    # Silence cutting arguments
-    parser.add_argument('--no-silence', dest='cut_silence', action='store_false', help="Disable the default behavior of cutting silent sections.")
-    parser.add_argument('--min-silence-duration', type=float, default=1.0, help="Minimum duration in seconds of silence to cut (default: 1.0).")
+    parser.add_argument('--no-silence', dest='cut_silence', action='store_false', help="Disable cutting silent sections.")
+    parser.add_argument('--min-silence-duration', type=float, default=1.0, help="Minimum duration of silence to cut (secs, default: 1.0).")
     
-    # New independent processing flags
-    parser.add_argument('-p', '--frame-accurate', action='store_true', help="Use frame-perfect but slow re-encoding mode instead of the default fast/lossless mode.")
-    parser.add_argument('--loudnorm', action='store_true', help="Normalize audio loudness. This forces audio to be re-encoded.")
+    parser.add_argument('-p', '--frame-accurate', action='store_true', help="Use frame-perfect but slow re-encoding mode.")
+    
+    # --- MODIFIED: Loudnorm is now opt-out ---
+    parser.add_argument('--no-loudnorm', dest='loudnorm', action='store_false', help="Disable the default audio loudness normalization.")
+    
+    parser.add_argument('--no-clean', dest='clean', action='store_false', help="Disable the initial video cleaning/copying step.")
 
-    parser.set_defaults(cut_silence=True, censor_level='hybrid', frame_accurate=False, loudnorm=False)
+    # --- MODIFIED: loudnorm default is now True ---
+    parser.set_defaults(cut_silence=True, censor_level='hybrid', frame_accurate=False, loudnorm=True, clean=True)
+    
     args = parser.parse_args()
 
     INPUT_DIR = os.getcwd()
@@ -387,22 +431,96 @@ def main():
         if not video_files: print("No video files found. Exiting."); sys.exit()
 
         for path in video_files:
-            if not os.path.exists(path):
-                print(f"\nWarning: File not found, skipping: {path}"); continue
+            if not os.path.exists(path): print(f"\nWarning: File not found, skipping: {path}"); continue
             
             base_name = os.path.splitext(os.path.basename(path))[0]
             if os.path.exists(os.path.join(OUTPUT_DIR, f"{base_name}_edited.mp4")):
                 print(f"\nOutput file already exists for '{os.path.basename(path)}'. Skipping."); continue
             
-            processing_path = clean_video(path, TEMP_DIR, args)
+            processing_path = clean_video(path, TEMP_DIR, args) if args.clean else path
             process_video(processing_path, path, model, args, OUTPUT_DIR, TEMP_DIR)
 
         print("\nAll processing complete.")
-
+    except Exception as e:
+        print(f"\n--- A CRITICAL ERROR OCCURRED: {e} ---", file=sys.stderr)
     finally:
         if os.path.exists(TEMP_DIR):
             print(f"Cleaning up temporary directory: {TEMP_DIR}")
             shutil.rmtree(TEMP_DIR)
 
 if __name__ == "__main__":
+    # Add our extensive docstring to the script's help message
+    __doc__ = """
+==================================================================================================
+
+                              VIDEO CENSORSHIP & EDITING SCRIPT
+
+==================================================================================================
+
+OVERVIEW:
+This script is a powerful command-line tool for automatically editing video files. It uses
+AI-powered transcription (via faster-whisper) to detect and remove sections containing
+profanity and/or long periods of silence.
+
+It is highly optimized for speed, leveraging an NVIDIA GPU (CUDA) for transcription and
+hardware-accelerated encoding. The script's default mode is a lossless, stream-copy-based
+workflow that is extremely fast and preserves original video/audio quality.
+
+
+--- FEATURES ---
+
+  - MULTIPLE EDITING MODES:
+    - Default Lossless Mode: Extremely fast. Cuts video on keyframes without re-encoding.
+    - Optional Frame-Accurate Mode (`-p`): Slower, but allows for precise, frame-perfect
+      cuts. This requires a full re-encode of the video stream.
+
+  - MODULAR AUDIO PROCESSING:
+    - Audio Normalization (`--loudnorm`): Enabled by default to create consistent volume.
+      This can be disabled with the `--no-loudnorm` flag.
+
+  - ADVANCED CENSORSHIP LEVELS:
+    - Hybrid (Default): Uses sentence context to identify profanity, then precisely cuts
+      only the profane words within that sentence.
+    - Word: Cuts only the specific words found in the `PROFANE_WORDS` list.
+    - Sentence: Cuts the entire sentence segment if it's flagged as profane.
+
+  - AUTOMATIC SILENCE REMOVAL:
+    - Can detect and remove silent sections longer than a specified duration.
+
+  - PERFORMANCE & USABILITY:
+    - Transcription Caching: Saves transcription results to avoid re-transcribing on
+      subsequent runs with different settings.
+    - SRT Subtitle Generation: Automatically creates a `.srt` subtitle file for each video.
+    - Detailed Logging: Generates a `.log` file for each video, detailing every step
+      and decision made during processing.
+    - Robust Cleanup: Manages and removes all temporary files automatically.
+
+
+--- DEPENDENCIES ---
+
+  - PYTHON PACKAGES (install with pip):
+    `pip install moviepy scikit-learn alt-profanity-check faster-whisper ffmpeg-python`
+
+  - EXTERNAL SOFTWARE:
+    1. PyTorch with CUDA: You must install PyTorch with CUDA support separately from
+       the official PyTorch website (https://pytorch.org/get-started/locally/) to enable
+       GPU acceleration for transcription.
+    2. FFmpeg: A recent, full build of FFmpeg is required and must be in your system's PATH.
+       For best results, ensure your build includes the 'aac' audio encoder.
+
+
+--- MOVIEPY VERSION COMPATIBILITY ---
+
+This script is designed to be compatible with both stable and development versions of MoviePy.
+
+- MoviePy v2.0.0+ (from GitHub): Recent development versions have refactored the package
+  structure, moving main classes like `VideoFileClip` to the top-level `moviepy` package.
+
+- MoviePy v1.x (from PyPI): Stable versions use the `moviepy.editor` submodule as the
+  standard entry point for these classes.
+
+The script handles this by first attempting to import from the new top-level package (`from moviepy
+import ...`). If that fails with an `ImportError`, it falls back to the stable `moviepy.editor`
+path. This ensures maximum compatibility regardless of which version is installed.
+"""
     main()
