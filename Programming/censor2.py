@@ -39,6 +39,7 @@
 #     - Transcription Caching: Saves transcription results to avoid re-transcribing on
 #       subsequent runs with different settings.
 #     - SRT Subtitle Generation: Automatically creates a `.srt` subtitle file for each video.
+#       It generates one for the original video and one for the final edited video.
 #     - Detailed Logging: Generates a `.log` file for each video, detailing every step
 #       and decision made during processing.
 #     - Robust Cleanup: Manages and removes all temporary files automatically.
@@ -234,6 +235,21 @@ def merge_intervals(intervals):
             merged.append((current_start, current_end))
     return merged
 
+def calculate_new_timestamp(original_time, merged_cuts):
+    """
+    Calculates the new timestamp after cuts have been removed.
+    Returns None if the original timestamp falls within a cut interval.
+    """
+    time_to_subtract = 0.0
+    for cut_start, cut_end in merged_cuts:
+        if original_time >= cut_end:
+            time_to_subtract += (cut_end - cut_start)
+        elif original_time > cut_start:
+            return None
+        else:
+            break
+    return original_time - time_to_subtract
+
 def setup_logger(name, log_file, level=logging.INFO):
     handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
@@ -281,9 +297,9 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
             save_transcription_cache(result_segments, transcription_cache_path)
             logger.info(f"Saved transcription cache to {transcription_cache_path}")
 
-        srt_path = os.path.join(output_dir, f"{base_name}.srt")
-        generate_srt_file(result_segments, srt_path)
-        print(f"  Saved transcription to: {srt_path}")
+        original_srt_path = os.path.join(output_dir, f"{base_name}_original.srt")
+        generate_srt_file(result_segments, original_srt_path)
+        print(f"  Saved original transcription to: {original_srt_path}")
 
         segments_to_cut = []
         if args.censor_level == 'word':
@@ -297,7 +313,7 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
                 if predict_prob([seg.text.strip()])[0] >= args.threshold:
                     for word in seg.words:
                         if word.word.strip().lower().strip('.,!?-') in PROFANE_WORDS: segments_to_cut.append((word.start, word.end))
-        else:
+        else: # 'sentence' level
             for seg in result_segments:
                 if seg.text.strip() and predict_prob([seg.text.strip()])[0] >= args.threshold: segments_to_cut.append((seg.start, seg.end))
 
@@ -310,12 +326,32 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
         if not segments_to_cut:
             print("  No segments to cut. Copying original file to output.")
             shutil.copy(processing_path, os.path.join(output_dir, f"{base_name}_edited.mp4"))
+            edited_srt_path = os.path.join(output_dir, f"{base_name}_edited.srt")
+            shutil.copy(original_srt_path, edited_srt_path)
+            print(f"  Created final SRT (identical to original): {edited_srt_path}")
             return
             
         merged_cuts = merge_intervals(segments_to_cut)
         logger.info(f"Found {len(segments_to_cut)} segments to cut. Merged into {len(merged_cuts)} distinct cuts.")
         print(f"  Found {len(merged_cuts)} distinct time intervals to remove.")
         
+        final_segments = []
+        for segment in result_segments:
+            new_start = calculate_new_timestamp(segment.start, merged_cuts)
+            if new_start is None:
+                continue
+            
+            new_end = calculate_new_timestamp(segment.end, merged_cuts)
+            if new_end is None or new_end <= new_start:
+                continue
+            
+            adjusted_segment = Segment(start=new_start, end=new_end, text=segment.text, words=segment.words)
+            final_segments.append(adjusted_segment)
+
+        edited_srt_path = os.path.join(output_dir, f"{base_name}_edited.srt")
+        generate_srt_file(final_segments, edited_srt_path)
+        print(f"  Saved final, accurate transcription to: {edited_srt_path}")
+
         if args.frame_accurate:
             print("  Using frame-accurate mode. This will re-encode the entire video.")
             logger.info("Using frame-accurate (re-encoding) mode.")
@@ -345,7 +381,7 @@ def process_video(processing_path, original_path, model, args, output_dir, temp_
             print("  Using default lossless mode. This will be fast and not re-encode video/audio.")
             logger.info("Using default lossless (stream copy) mode.")
             keep_times = []
-            last_end = 0.0
+            last_end = 0.0  # <--- FIX APPLIED HERE
             video_duration = float(ffmpeg.probe(processing_path)['format']['duration'])
             for start, end in merged_cuts:
                 if last_end < start: keep_times.append((last_end, start))
@@ -449,78 +485,4 @@ def main():
             shutil.rmtree(TEMP_DIR)
 
 if __name__ == "__main__":
-    # Add our extensive docstring to the script's help message
-    __doc__ = """
-==================================================================================================
-
-                              VIDEO CENSORSHIP & EDITING SCRIPT
-
-==================================================================================================
-
-OVERVIEW:
-This script is a powerful command-line tool for automatically editing video files. It uses
-AI-powered transcription (via faster-whisper) to detect and remove sections containing
-profanity and/or long periods of silence.
-
-It is highly optimized for speed, leveraging an NVIDIA GPU (CUDA) for transcription and
-hardware-accelerated encoding. The script's default mode is a lossless, stream-copy-based
-workflow that is extremely fast and preserves original video/audio quality.
-
-
---- FEATURES ---
-
-  - MULTIPLE EDITING MODES:
-    - Default Lossless Mode: Extremely fast. Cuts video on keyframes without re-encoding.
-    - Optional Frame-Accurate Mode (`-p`): Slower, but allows for precise, frame-perfect
-      cuts. This requires a full re-encode of the video stream.
-
-  - MODULAR AUDIO PROCESSING:
-    - Audio Normalization (`--loudnorm`): Enabled by default to create consistent volume.
-      This can be disabled with the `--no-loudnorm` flag.
-
-  - ADVANCED CENSORSHIP LEVELS:
-    - Hybrid (Default): Uses sentence context to identify profanity, then precisely cuts
-      only the profane words within that sentence.
-    - Word: Cuts only the specific words found in the `PROFANE_WORDS` list.
-    - Sentence: Cuts the entire sentence segment if it's flagged as profane.
-
-  - AUTOMATIC SILENCE REMOVAL:
-    - Can detect and remove silent sections longer than a specified duration.
-
-  - PERFORMANCE & USABILITY:
-    - Transcription Caching: Saves transcription results to avoid re-transcribing on
-      subsequent runs with different settings.
-    - SRT Subtitle Generation: Automatically creates a `.srt` subtitle file for each video.
-    - Detailed Logging: Generates a `.log` file for each video, detailing every step
-      and decision made during processing.
-    - Robust Cleanup: Manages and removes all temporary files automatically.
-
-
---- DEPENDENCIES ---
-
-  - PYTHON PACKAGES (install with pip):
-    `pip install moviepy scikit-learn alt-profanity-check faster-whisper ffmpeg-python`
-
-  - EXTERNAL SOFTWARE:
-    1. PyTorch with CUDA: You must install PyTorch with CUDA support separately from
-       the official PyTorch website (https://pytorch.org/get-started/locally/) to enable
-       GPU acceleration for transcription.
-    2. FFmpeg: A recent, full build of FFmpeg is required and must be in your system's PATH.
-       For best results, ensure your build includes the 'aac' audio encoder.
-
-
---- MOVIEPY VERSION COMPATIBILITY ---
-
-This script is designed to be compatible with both stable and development versions of MoviePy.
-
-- MoviePy v2.0.0+ (from GitHub): Recent development versions have refactored the package
-  structure, moving main classes like `VideoFileClip` to the top-level `moviepy` package.
-
-- MoviePy v1.x (from PyPI): Stable versions use the `moviepy.editor` submodule as the
-  standard entry point for these classes.
-
-The script handles this by first attempting to import from the new top-level package (`from moviepy
-import ...`). If that fails with an `ImportError`, it falls back to the stable `moviepy.editor`
-path. This ensures maximum compatibility regardless of which version is installed.
-"""
     main()

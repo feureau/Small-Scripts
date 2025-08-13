@@ -822,9 +822,9 @@ if __name__ == "__main__":
     all_audio_streams = run_ffprobe_for_audio_streams(first_file)
     # Decide default QVBR
     if first_h >= 4320 or first_w >= 7680:
-        default_qvbr = "44"
+        default_qvbr = "40"
     elif first_h >= 2160 or first_w >= 3840:
-        default_qvbr = "33"
+        default_qvbr = "30"
     else:
         default_qvbr = "22"
     # Launch GUI
