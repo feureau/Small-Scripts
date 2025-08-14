@@ -1,3 +1,108 @@
+"""
+===========================
+PDF Merger and Converter
+===========================
+
+Author: [Your Name or Alias Here]
+Version: 1.0
+Date: [Date of Creation or Last Update]
+
+Description:
+------------
+A versatile command-line utility to convert and merge multiple image and document
+files into a single PDF. It is designed to be flexible and robust, handling
+various file formats and providing options for image manipulation and file ordering.
+
+The script can operate in two modes for document conversion:
+1.  **Pure-Python Mode (Default):** Uses a suite of Python libraries (ReportLab,
+    python-docx, markdown) to convert documents. This mode is convenient as it
+    doesn't require any external software, but it has limitations (e.g., it
+    only extracts plain text from DOCX files, ignoring formatting).
+2.  **Pandoc Mode:** Uses the external Pandoc universal document converter, which
+    provides much higher fidelity conversions, preserving most of the formatting
+    from DOCX and Markdown files.
+
+Features:
+---------
+-   **Broad File Support:** Converts and merges a wide range of file types.
+    -   Images: JPG, JPEG, PNG, GIF, BMP, TIF, TIFF
+    -   Documents: DOCX, Markdown (.md), Plain Text (.txt)
+-   **Image Processing:** On-the-fly image manipulation before PDF conversion.
+    -   Rotate images by 90, 180, or 270 degrees.
+    -   Resize images to specific dimensions.
+    -   Convert images to grayscale.
+    -   Set a custom DPI for image resolution in the PDF.
+-   **Flexible File Ordering:** Sort input files by name (alphabetical, default)
+    or by modification date.
+-   **Dual Document Conversion Engines:** Choose between a dependency-free
+    pure-Python engine or the more powerful Pandoc engine.
+-   **Robust Error Handling:** Skips individual files that fail to convert and
+    reports the error, allowing the script to merge all other successful files.
+-   **Automatic Cleanup:** Creates and manages temporary files, ensuring they are
+    deleted after the process is complete, even if errors occur.
+-   **Smart Output Naming:** Defaults to a sensible output filename ('output.pdf'
+    for multiple files, or '[input_name].pdf' if only one file is processed).
+
+Dependencies:
+-------------
+This script requires several Python libraries to function.
+
+**Core Dependencies (Always Required):**
+-   `Pillow`: For all image processing and conversion. (pip install Pillow)
+-   `PyPDF2`: For the final merging of PDF files. (pip install PyPDF2)
+
+**Optional Dependencies (for Pure-Python Document Conversion):**
+These are required if you want to convert DOCX, MD, or TXT files *without*
+using the --pandoc flag.
+-   `reportlab`: The PDF generation engine. (pip install reportlab)
+-   `python-docx`: To read text content from .docx files. (pip install python-docx)
+-   `markdown`: To handle .md files. (pip install markdown)
+
+    To install all optional dependencies at once:
+    `pip install reportlab python-docx markdown`
+
+**External Software (for Pandoc Mode):**
+-   **Pandoc:** A universal document converter. Must be installed separately on your
+    system and accessible in the system's PATH. This is required to use the
+    `--pandoc` flag.
+-   **pypandoc:** The Python wrapper for Pandoc. (pip install pypandoc)
+
+Usage:
+------
+The script is run from the command line.
+
+**Basic Syntax:**
+`python pdfmaker.py "glob_pattern" [options]`
+
+**Arguments:**
+-   `pattern`: (Required) The file pattern to find input files. Use quotes if the
+               pattern contains spaces or wildcards (*).
+-   `-o, --output`: Specify the output PDF filename.
+-   `-P, --pandoc`: Use Pandoc for document conversion.
+-   `--order`: Sort files by 'name' or 'date'.
+-   `-v, --verbose`: Print detailed step-by-step information.
+
+Examples:
+---------
+1.  **Merge all JPEG images in the current folder:**
+    `python pdfmaker.py "*.jpg" -o photos.pdf`
+
+2.  **Create a report from a DOCX file and all PNG images, sorted by date:**
+    `python pdfmaker.py "report.*" --order date -o final_report.pdf`
+    (This would match files like `report.docx`, `report_fig1.png`, etc.)
+
+3.  **Convert a text file using Pandoc for better formatting:**
+    `python pdfmaker.py "my_document.txt" --pandoc`
+
+4.  **Merge all TIFF scans, rotating them 90 degrees and making them grayscale:**
+    `python pdfmaker.py "scans/*.tif" -r 90 -g -o compiled_scans.pdf`
+
+5.  **Merge all files, showing detailed verbose output:**
+    `python pdfmaker.py "*.*" -v`
+
+"""
+
+
 import sys
 import glob
 import argparse
