@@ -1,3 +1,128 @@
+"""
+================================================================================
+                        YouTube Batch Uploader Script
+================================================================================
+
+This script provides a Graphical User Interface (GUI) for batch uploading
+videos to YouTube. It is designed to streamline the process of uploading multiple
+videos by allowing users to set metadata and scheduling options for an entire
+batch at once.
+
+--------------------------------------------------------------------------------
+                            Core Features
+--------------------------------------------------------------------------------
+- **Batch Processing:** Automatically scans the current directory for video files
+  (*.mp4, *.mkv, *.avi) to be uploaded.
+- **Graphical User Interface (GUI):** Built with tkinter for an easy-to-use
+  interface to manage all settings.
+- **Automatic Description Loading:** For each video (e.g., "My Awesome Video.mp4"),
+  the script will automatically look for a corresponding text file
+  (e.g., "My Awesome Video.txt" or "My Awesome Video_details.txt") in the
+  same directory and use its content as the video description.
+- **Bulk Metadata Configuration:** Set default metadata for all videos, including
+  a description override, tags, category, video language, and more.
+- **Upload Scheduling:** Specify a start time for the first video and a fixed
+  interval (in hours and minutes) between subsequent video publications.
+- **Secure OAuth 2.0 Authentication:** Securely authenticates with the user's
+  Google account using the official Google API libraries. It creates a `token.json`
+  file for persistent logins and securely revokes the token upon exit.
+- **Title Sanitization:** Video titles are automatically generated from the
+  filenames. Characters disallowed by the YouTube API (< and >) are removed
+  from the title to prevent upload errors. The original filenames are NOT changed.
+- **Save/Load Settings:** All metadata and schedule settings can be saved to a
+  JSON file and loaded later, perfect for recurring upload tasks.
+- **Logging:** The script logs all major actions (authentication, uploads, errors).
+  The user can opt to save this log to a `ytupload.log` file upon completion.
+
+--------------------------------------------------------------------------------
+                                 Setup
+--------------------------------------------------------------------------------
+1.  **Install Python:** Ensure you have Python 3.6 or newer installed.
+
+2.  **Install Required Libraries:** Open your terminal or command prompt and run:
+    pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib requests
+
+3.  **Enable YouTube Data API & Get Credentials:**
+    a. Go to the Google Cloud Console: https://console.cloud.google.com/
+    b. Create a new project (or select an existing one).
+    c. In the navigation menu, go to "APIs & Services" -> "Library".
+    d. Search for "YouTube Data API v3" and click "Enable".
+    e. Go to "APIs & Services" -> "Credentials".
+    f. Click "+ CREATE CREDENTIALS" and select "OAuth client ID".
+    g. If prompted, configure the "OAuth consent screen". For "User Type",
+       select "External" and fill in the required app name, user support email,
+       and developer contact information. You do not need to submit for verification
+       for personal use.
+    h. For "Application type", select "Desktop app".
+    i. Give it a name (e.g., "YouTube Uploader Script") and click "Create".
+    j. A window will pop up with your credentials. Click "DOWNLOAD JSON".
+    k. Rename the downloaded file if you wish (e.g., `client_secrets.json`).
+       This is the file you will select in the application.
+
+--------------------------------------------------------------------------------
+                               How to Use
+--------------------------------------------------------------------------------
+1.  Place this script in the same folder as the video files you want to upload.
+2.  Optionally, for each video, create a `.txt` file with the exact same name
+    (e.g., for `video1.mp4`, create `video1.txt`) to pre-fill the description.
+3.  Run the script from your terminal: `python your_script_name.py`
+4.  The GUI will appear.
+5.  Click "Select Credentials JSON" and choose the JSON file you downloaded
+    from the Google Cloud Console.
+6.  The list will populate with the videos found in the folder.
+7.  Fill in the "Schedule & Interval" and "Metadata Defaults" sections as needed.
+8.  Click "Process & Upload".
+9.  The GUI will close. A web browser window will open, asking you to log in to
+    your Google account and grant the script permission.
+10. Once you grant permission, the upload process will begin in your terminal.
+    Progress for each video will be displayed there.
+
+--------------------------------------------------------------------------------
+                           Script Breakdown
+--------------------------------------------------------------------------------
+- **Constants:** Defines global settings like API scopes, filenames for token/log,
+  and mappings for YouTube categories and languages.
+- **Logger:** Sets up an in-memory logger to capture events. This avoids writing
+  to disk continuously and allows for saving the complete log at the end.
+- **Token Revocation (`revoke_token`, `setup_revocation_on_exit`):** Ensures that
+  the authentication token is revoked when the script exits, either normally or
+  unexpectedly (e.g., Ctrl+C). This is a crucial security measure.
+- **OAuth Authentication (`get_authenticated_service`):** Handles the entire user
+  authentication flow. It first tries to use a saved `token.json`. If the token is
+  expired, it attempts to refresh it. If no valid token exists, it initiates a
+  new user authorization flow using a local web server for a seamless experience,
+  with a fallback to a console-based flow if needed.
+- **Helper Functions (`sanitize_*`):**
+  - `sanitize_filename`: Cleans a video's filename to create a valid YouTube title.
+  - `sanitize_description`: Ensures the description is within API limits and
+    removes invalid characters.
+  - `sanitize_tags`: Cleans and formats tags to meet YouTube's length and
+    character requirements.
+- **`VideoEntry` Class:** The data model for a single video. When created, it:
+  a. Stores the original file path.
+  b. Creates a sanitized title for YouTube.
+  c. Automatically searches for and loads a corresponding `.txt` file for the
+     description.
+  d. Initializes all other metadata to default values.
+- **`UploaderApp` Class (The GUI):**
+  - `__init__`: The constructor that scans for videos and launches the GUI.
+  - `build_gui`: Assembles all the tkinter widgets (buttons, labels, text boxes)
+    that form the user interface.
+  - `refresh_tree`: Populates the list view with the discovered video files and
+    their default metadata.
+  - `select_credentials`, `save_settings`, `load_settings`: Handle user
+    interactions for managing credentials and configuration files.
+  - `process_upload`: The main action function. It reads all settings from the GUI,
+    authenticates, calculates the publication time for each video based on the
+    start time and interval, and then closes the GUI to start the upload process.
+  - `upload_all`: Iterates through each `VideoEntry` object and performs the
+    upload using the `googleapiclient`. It builds the API request body
+    (`snippet` and `status`), uses a resumable media upload for reliability,
+    prints progress to the console, and adds the video to a playlist if specified.
+- **Main Execution Block (`if __name__ == '__main__':`):** The entry point of the
+  script that creates an instance of the `UploaderApp` and starts the application.
+"""
+
 import os
 import sys
 import json
@@ -111,9 +236,16 @@ def get_authenticated_service(secrets_path):
 
 # --- Helpers ---
 def sanitize_filename(name):
+    """
+    Sanitizes a string to be used as a YouTube title by removing
+    characters disallowed by the YouTube API (< and >).
+    Also truncates the title to YouTube's 100-character limit.
+    """
     stem = Path(name).stem
-    s = re.sub(r"[^A-Za-z0-9 ]+", "", stem)
-    return re.sub(r"\s+", " ", s).strip()
+    # Only remove the characters explicitly disallowed by the YouTube API in titles.
+    s = re.sub(r"[<>]+", "", stem)
+    # Titles are also limited to 100 characters.
+    return s.strip()[:100]
 
 def sanitize_description(desc: str) -> str:
     # remove control chars
@@ -144,14 +276,13 @@ class VideoEntry:
     def __init__(self, filepath):
         p = Path(filepath)
 
-        # --- MODIFICATION: Find and load description from .txt file ---
+        # --- Description Loading ---
         self.description = ''
         self.description_source = "None"  # Default value for GUI display
         try:
-            # Normalize original filename stem (replace space with underscore) for matching
-            normalized_stem = p.stem.replace(' ', '_')
-            # Search for .txt file starting with the normalized stem in the same directory
-            for txt_file in p.parent.glob(f"{normalized_stem}*.txt"):
+            # MODIFICATION: Use the original filename stem for a more intuitive match.
+            # This will now correctly find a file like "My Video.txt" for "My Video.mp4".
+            for txt_file in p.parent.glob(f"{p.stem}*.txt"):
                 logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'.")
                 self.description = txt_file.read_text(encoding='utf-8')
                 self.description_source = txt_file.name # Store the found filename for the GUI
@@ -160,17 +291,11 @@ class VideoEntry:
             logger.error(f"Error reading description file for '{p.name}': {e}")
         # --- END MODIFICATION ---
 
-        clean = sanitize_filename(p.name)
-        new_path = p.with_name(f"{clean}{p.suffix}")
-        if p.name != new_path.name:
-            try:
-                os.rename(p, new_path)
-            except OSError as e:
-                logger.error(f"Could not rename file {p.name} to {new_path.name}: {e}")
-                new_path = p # If rename fails, use original path
+        # The original file is NO LONGER renamed.
+        # The filepath remains the original, and only the title is sanitized for the API.
+        self.filepath = str(p)
+        self.title = sanitize_filename(p.name) # Sanitize the name only for the title property
 
-        self.filepath = str(new_path)
-        self.title = sanitize_filename(new_path.stem)
         # self.description is now pre-populated if a file was found
         self.tags = []
         self.categoryId = CATEGORY_MAP['Entertainment']
@@ -213,7 +338,6 @@ class UploaderApp:
         ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials)\
             .pack(fill=tk.X, pady=(0,5))
 
-        # --- MODIFICATION: Add 'desc_source' column to Treeview ---
         self.tree = ttk.Treeview(frm, columns=('file','title', 'desc_source'), show='headings')
         self.tree.heading('file', text='File')
         self.tree.column('file', width=250)
@@ -221,7 +345,6 @@ class UploaderApp:
         self.tree.column('title', width=250)
         self.tree.heading('desc_source', text='Description Source')
         self.tree.column('desc_source', width=250)
-        # --- END MODIFICATION ---
 
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
         self.refresh_tree()
@@ -247,9 +370,7 @@ class UploaderApp:
         meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
         meta.pack(fill=tk.X, pady=5)
         
-        # --- MODIFICATION: Update label for clarity ---
         ttk.Label(meta, text='Description (override)').grid(row=0, column=0, sticky='nw')
-        # --- END MODIFICATION ---
 
         self.desc_txt = tk.Text(meta, height=3)
         self.desc_txt.grid(row=0, column=1, sticky='ew')
@@ -296,10 +417,8 @@ class UploaderApp:
     def refresh_tree(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        # --- MODIFICATION: Add description_source to the values tuple ---
         for e in self.video_entries:
             self.tree.insert('', tk.END, values=(Path(e.filepath).name, e.title, e.description_source))
-        # --- END MODIFICATION ---
 
     def select_credentials(self):
         path = filedialog.askopenfilename(title='Select credentials JSON', filetypes=[('JSON','*.json')])
@@ -358,7 +477,6 @@ class UploaderApp:
             messagebox.showerror('Error','No credentials selected')
             return
 
-        # --- MODIFICATION: Get override description text ---
         desc_override = self.desc_txt.get('1.0','end-1c').strip()
         
         raw_tags = [t.strip() for t in self.tags_ent.get().split(',')]
@@ -400,12 +518,8 @@ class UploaderApp:
             utc_dt = datetime.now(timezone.utc)
 
         for i, e in enumerate(self.video_entries):
-            # --- MODIFICATION: Apply description override logic ---
-            # If the user typed text in the main description box, use it.
-            # Otherwise, the description loaded from the .txt file (or empty) will be used.
             if desc_override:
                 e.description = desc_override
-            # --- END MODIFICATION ---
 
             e.tags = tags
             e.categoryId = cat

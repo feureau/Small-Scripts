@@ -22,7 +22,7 @@ CORE FEATURES:
   (e.g., `*.mp4`). An interactive file/folder picker is available if no input is given.
 - Multiple Output Formats: Can generate subtitle files (.srt) with timestamps and/or
   plain text files (.txt) without timestamps.
-- Customizable Output: Saves output files with a unique timestamp to prevent overwriting.
+- Customizable Output: Saves output files with a filename matching the input file.
   Users can also specify a custom output directory.
 - Real-Time Logging: Streams the live output from the transcription process to the console.
 - Advanced Audio Processing: Includes options to enable audio filters for noise reduction
@@ -96,8 +96,8 @@ WORKFLOW:
 1. The script parses command-line arguments to set transcription parameters.
 2. It collects all media files from the provided paths (or interactive prompt).
 3. For each file, it builds and executes a command for the `faster-whisper-xxl` CLI tool.
-4. It always generates an SRT file as an intermediate step. This file is renamed with a
-   unique timestamp (e.g., `my_video_20250720_170500.srt`).
+4. It always generates an SRT file as an intermediate step. The output filename will
+   match the input filename (e.g., `my_video.mp4` becomes `my_video.srt`).
 5. If plain text output (`--text`) is requested, the SRT is converted to a .txt file.
 6. If SRT output was NOT explicitly requested (`--srt`), the intermediate SRT file is
    deleted to keep the output directory clean, leaving only the .txt file.
@@ -214,7 +214,7 @@ def run_whisper_xxl_transcription(
     Runs the Faster Whisper XXL CLI with specified flags on the given file.
     Streams the output continuously to the console.
     Saves the output file in the specified output directory (or the file's directory if not provided)
-    with a unique timestamp.
+    with a filename matching the input file.
     
     Returns the full path to the generated SRT file if successful, or an empty string if failure.
     
@@ -226,14 +226,17 @@ def run_whisper_xxl_transcription(
     # Determine output directory: user-specified or the file's directory.
     file_directory = output_dir if output_dir else os.path.dirname(file_path)
     base_name = os.path.splitext(os.path.basename(file_path))[0]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # We always generate SRT as intermediate output.
-    output_filename = f"{base_name}_{timestamp}.srt"
+    # The output filename will now match the input filename.
+    output_filename = f"{base_name}.srt"
     output_path = os.path.join(file_directory, output_filename)
+
+    # Warn the user if the output file already exists and will be overwritten.
+    if os.path.exists(output_path):
+        print(f"⚠️ Warning: The output file '{output_filename}' already exists and will be overwritten.")
 
     # Status update based on requested output.
     if produce_srt:
-        print(f"📂 Expected output file will be renamed to: {output_filename}")
+        print(f"📂 Expected output file: {output_filename}")
     else:
         print("📂 Transcription will generate an intermediate SRT file which will be converted to plain text output.")
 
@@ -296,21 +299,24 @@ def run_whisper_xxl_transcription(
                 break
             if line:
                 print(line, end="")
+        
         return_code = process.poll()
-        if return_code != 0:
-            print(f"\n❌ Error: Process returned non-zero exit code {return_code}")
-            return ""
         
-        # Rename the output file if it exists (default output is base_name.srt)
-        expected_output = os.path.join(file_directory, f"{base_name}.srt")
-        if os.path.exists(expected_output):
-            os.rename(expected_output, output_path)
-            print(f"\n✅ Output file renamed to: {os.path.basename(output_path)}")
+        # New robust success check: the primary condition for success is that the output file exists.
+        if os.path.exists(output_path):
+            print(f"\n✅ Output file created: {os.path.basename(output_path)}")
+            # If the file exists but the exit code was non-zero, print a warning but continue.
+            if return_code != 0:
+                print(f"⚠️ Warning: The transcription process finished with a non-zero exit code ({return_code}).")
+                print("   This might indicate an internal error, but the output file was generated successfully.")
+            return output_path
         else:
-            print(f"\n❌ Expected output file not found: {expected_output}")
+            # If the output file does not exist, it's a genuine failure.
+            print(f"\n❌ Error: Expected output file not found: {output_path}")
+            if return_code != 0:
+                 print(f"   The process returned non-zero exit code {return_code}")
             return ""
-        
-        return output_path
+
     except FileNotFoundError:
         print("❌ Faster Whisper XXL CLI not found. Please ensure it is installed and in your PATH.")
         sys.exit(1)
