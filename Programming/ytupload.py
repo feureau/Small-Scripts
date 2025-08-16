@@ -31,28 +31,6 @@ batch at once.
 - **Save/Load Settings:** All settings can be saved to a JSON file and loaded later.
 - **Logging:** Logs all major actions and can be saved to a `ytupload.log` file.
 
---------------------------------------------------------------------------------
-                                 Setup
---------------------------------------------------------------------------------
-1.  **Install Python:** Ensure you have Python 3.6 or newer installed.
-2.  **Install Required Libraries:**
-    pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib requests
-3.  **Enable YouTube Data API & Get Credentials:** Follow the original script's
-    instructions to get your `client_secrets.json` file from the Google Cloud Console.
-
---------------------------------------------------------------------------------
-                               How to Use
---------------------------------------------------------------------------------
-1.  Place this script in the same folder as your video files.
-2.  Optionally, create `.txt` files for descriptions and `.srt` (or other supported
-    formats) for subtitles, matching the video filenames exactly.
-3.  Run the script: `python your_script_name.py`
-4.  The GUI will appear, showing detected videos, descriptions, and subtitles.
-5.  Select your credentials JSON file.
-6.  Fill in the metadata and schedule settings.
-7.  Click "Process & Upload".
-8.  Authorize the script via the browser window that opens.
-9.  The upload process will begin in your terminal.
 """
 
 import os
@@ -327,6 +305,13 @@ class UploaderApp:
         ttk.Label(meta, text='Playlist ID').grid(row=10, column=0, sticky='w')
         self.playlist_ent = ttk.Entry(meta)
         self.playlist_ent.grid(row=10, column=1, sticky='ew')
+        
+        ### MODIFICATION START ###
+        # Add a checkbox to control subtitle uploads, default to False (off).
+        self.upload_subs_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(meta, text='Upload Subtitles', variable=self.upload_subs_var).grid(row=11, column=0, sticky='w')
+        ### MODIFICATION END ###
+
         meta.columnconfigure(1, weight=1)
 
         btn_frm = ttk.Frame(frm)
@@ -359,7 +344,11 @@ class UploaderApp:
             'embeddable': self.embed_var.get(), 'publicStatsVisible': self.stats_var.get(),
             'playlistId': self.playlist_ent.get(), 'firstPublish': self.start_ent.get(),
             'intervalHours': self.interval_hour.get(), 'intervalMinutes': self.interval_minute.get(),
-            'saveLog': self.save_log_var.get()
+            'saveLog': self.save_log_var.get(),
+            ### MODIFICATION START ###
+            # Save the state of the subtitle checkbox.
+            'uploadSubtitles': self.upload_subs_var.get()
+            ### MODIFICATION END ###
         }
         path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')])
         if path:
@@ -385,6 +374,10 @@ class UploaderApp:
             self.interval_hour.set(cfg.get('intervalHours',1))
             self.interval_minute.set(cfg.get('intervalMinutes',0))
             self.save_log_var.set(cfg.get('saveLog',False))
+            ### MODIFICATION START ###
+            # Load the state of the subtitle checkbox, defaulting to False if not in file.
+            self.upload_subs_var.set(cfg.get('uploadSubtitles', False))
+            ### MODIFICATION END ###
             messagebox.showinfo('Loaded','Settings loaded')
 
     def process_upload(self):
@@ -403,6 +396,10 @@ class UploaderApp:
         playlist_id = self.playlist_ent.get().strip()
         base_time = self.start_ent.get()
         hrs = int(self.interval_hour.get()); mins = int(self.interval_minute.get())
+        ### MODIFICATION START ###
+        # Get the current state of the subtitle checkbox.
+        upload_subs_enabled = self.upload_subs_var.get()
+        ### MODIFICATION END ###
 
         try:
             service = get_authenticated_service(self.client_secrets)
@@ -430,9 +427,15 @@ class UploaderApp:
             delta = timedelta(hours=hrs, minutes=mins) * i
             e.publishAt = (utc_dt + delta).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        self.upload_all(service)
+        ### MODIFICATION START ###
+        # Pass the subtitle preference to the upload function.
+        self.upload_all(service, upload_subs_enabled)
+        ### MODIFICATION END ###
 
-    def upload_all(self, service):
+    ### MODIFICATION START ###
+    # Modify the function to accept the subtitle upload preference.
+    def upload_all(self, service, upload_subtitles_enabled):
+    ### MODIFICATION END ###
         for e in self.video_entries:
             try:
                 media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
@@ -494,7 +497,10 @@ class UploaderApp:
             logger.info(f"Uploaded {e.filepath} → {vid}")
 
             # --- SUBTITLE UPLOAD ---
-            if e.subtitle_path:
+            ### MODIFICATION START ###
+            # Check if a subtitle path exists AND if the user enabled subtitle uploads.
+            if e.subtitle_path and upload_subtitles_enabled:
+            ### MODIFICATION END ###
                 print(f"  Uploading subtitle file: {e.subtitle_source}", flush=True)
                 logger.info(f"Found subtitle for {vid}, attempting upload from {e.subtitle_path}")
                 try:
