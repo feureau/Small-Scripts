@@ -17,110 +17,42 @@ batch at once.
   interface to manage all settings.
 - **Automatic Description Loading:** For each video (e.g., "My Awesome Video.mp4"),
   the script will automatically look for a corresponding text file
-  (e.g., "My Awesome Video.txt" or "My Awesome Video_details.txt") in the
-  same directory and use its content as the video description.
+  (e.g., "My Awesome Video.txt") and use its content as the video description.
+- **Automatic Subtitle Loading:** For each video, the script will automatically
+  look for a corresponding subtitle file (*.srt, *.sbv, etc.) and upload it.
 - **Bulk Metadata Configuration:** Set default metadata for all videos, including
   a description override, tags, category, video language, and more.
 - **Upload Scheduling:** Specify a start time for the first video and a fixed
-  interval (in hours and minutes) between subsequent video publications.
+  interval between subsequent video publications.
 - **Secure OAuth 2.0 Authentication:** Securely authenticates with the user's
-  Google account using the official Google API libraries. It creates a `token.json`
-  file for persistent logins and securely revokes the token upon exit.
+  Google account using the official Google API libraries.
 - **Title Sanitization:** Video titles are automatically generated from the
-  filenames. Characters disallowed by the YouTube API (< and >) are removed
-  from the title to prevent upload errors. The original filenames are NOT changed.
-- **Save/Load Settings:** All metadata and schedule settings can be saved to a
-  JSON file and loaded later, perfect for recurring upload tasks.
-- **Logging:** The script logs all major actions (authentication, uploads, errors).
-  The user can opt to save this log to a `ytupload.log` file upon completion.
+  filenames. Characters disallowed by the YouTube API (< and >) are removed.
+- **Save/Load Settings:** All settings can be saved to a JSON file and loaded later.
+- **Logging:** Logs all major actions and can be saved to a `ytupload.log` file.
 
 --------------------------------------------------------------------------------
                                  Setup
 --------------------------------------------------------------------------------
 1.  **Install Python:** Ensure you have Python 3.6 or newer installed.
-
-2.  **Install Required Libraries:** Open your terminal or command prompt and run:
+2.  **Install Required Libraries:**
     pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib requests
-
-3.  **Enable YouTube Data API & Get Credentials:**
-    a. Go to the Google Cloud Console: https://console.cloud.google.com/
-    b. Create a new project (or select an existing one).
-    c. In the navigation menu, go to "APIs & Services" -> "Library".
-    d. Search for "YouTube Data API v3" and click "Enable".
-    e. Go to "APIs & Services" -> "Credentials".
-    f. Click "+ CREATE CREDENTIALS" and select "OAuth client ID".
-    g. If prompted, configure the "OAuth consent screen". For "User Type",
-       select "External" and fill in the required app name, user support email,
-       and developer contact information. You do not need to submit for verification
-       for personal use.
-    h. For "Application type", select "Desktop app".
-    i. Give it a name (e.g., "YouTube Uploader Script") and click "Create".
-    j. A window will pop up with your credentials. Click "DOWNLOAD JSON".
-    k. Rename the downloaded file if you wish (e.g., `client_secrets.json`).
-       This is the file you will select in the application.
+3.  **Enable YouTube Data API & Get Credentials:** Follow the original script's
+    instructions to get your `client_secrets.json` file from the Google Cloud Console.
 
 --------------------------------------------------------------------------------
                                How to Use
 --------------------------------------------------------------------------------
-1.  Place this script in the same folder as the video files you want to upload.
-2.  Optionally, for each video, create a `.txt` file with the exact same name
-    (e.g., for `video1.mp4`, create `video1.txt`) to pre-fill the description.
-3.  Run the script from your terminal: `python your_script_name.py`
-4.  The GUI will appear.
-5.  Click "Select Credentials JSON" and choose the JSON file you downloaded
-    from the Google Cloud Console.
-6.  The list will populate with the videos found in the folder.
-7.  Fill in the "Schedule & Interval" and "Metadata Defaults" sections as needed.
-8.  Click "Process & Upload".
-9.  The GUI will close. A web browser window will open, asking you to log in to
-    your Google account and grant the script permission.
-10. Once you grant permission, the upload process will begin in your terminal.
-    Progress for each video will be displayed there.
-
---------------------------------------------------------------------------------
-                           Script Breakdown
---------------------------------------------------------------------------------
-- **Constants:** Defines global settings like API scopes, filenames for token/log,
-  and mappings for YouTube categories and languages.
-- **Logger:** Sets up an in-memory logger to capture events. This avoids writing
-  to disk continuously and allows for saving the complete log at the end.
-- **Token Revocation (`revoke_token`, `setup_revocation_on_exit`):** Ensures that
-  the authentication token is revoked when the script exits, either normally or
-  unexpectedly (e.g., Ctrl+C). This is a crucial security measure.
-- **OAuth Authentication (`get_authenticated_service`):** Handles the entire user
-  authentication flow. It first tries to use a saved `token.json`. If the token is
-  expired, it attempts to refresh it. If no valid token exists, it initiates a
-  new user authorization flow using a local web server for a seamless experience,
-  with a fallback to a console-based flow if needed.
-- **Helper Functions (`sanitize_*`):**
-  - `sanitize_filename`: Cleans a video's filename to create a valid YouTube title.
-  - `sanitize_description`: Ensures the description is within API limits and
-    removes invalid characters.
-  - `sanitize_tags`: Cleans and formats tags to meet YouTube's length and
-    character requirements.
-- **`VideoEntry` Class:** The data model for a single video. When created, it:
-  a. Stores the original file path.
-  b. Creates a sanitized title for YouTube.
-  c. Automatically searches for and loads a corresponding `.txt` file for the
-     description.
-  d. Initializes all other metadata to default values.
-- **`UploaderApp` Class (The GUI):**
-  - `__init__`: The constructor that scans for videos and launches the GUI.
-  - `build_gui`: Assembles all the tkinter widgets (buttons, labels, text boxes)
-    that form the user interface.
-  - `refresh_tree`: Populates the list view with the discovered video files and
-    their default metadata.
-  - `select_credentials`, `save_settings`, `load_settings`: Handle user
-    interactions for managing credentials and configuration files.
-  - `process_upload`: The main action function. It reads all settings from the GUI,
-    authenticates, calculates the publication time for each video based on the
-    start time and interval, and then closes the GUI to start the upload process.
-  - `upload_all`: Iterates through each `VideoEntry` object and performs the
-    upload using the `googleapiclient`. It builds the API request body
-    (`snippet` and `status`), uses a resumable media upload for reliability,
-    prints progress to the console, and adds the video to a playlist if specified.
-- **Main Execution Block (`if __name__ == '__main__':`):** The entry point of the
-  script that creates an instance of the `UploaderApp` and starts the application.
+1.  Place this script in the same folder as your video files.
+2.  Optionally, create `.txt` files for descriptions and `.srt` (or other supported
+    formats) for subtitles, matching the video filenames exactly.
+3.  Run the script: `python your_script_name.py`
+4.  The GUI will appear, showing detected videos, descriptions, and subtitles.
+5.  Select your credentials JSON file.
+6.  Fill in the metadata and schedule settings.
+7.  Click "Process & Upload".
+8.  Authorize the script via the browser window that opens.
+9.  The upload process will begin in your terminal.
 """
 
 import os
@@ -148,12 +80,14 @@ from tkinter import ttk, filedialog, messagebox
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
-    "https://www.googleapis.com/auth/youtube"
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.force-ssl"
 ]
 TOKEN_FILE = "token.json"
 LOG_FILE = "ytupload.log"
 OAUTH_PORT = 8080
 VIDEO_PATTERNS = ["*.mp4", "*.mkv", "*.avi"]
+SUBTITLE_PATTERNS = ["*.srt", "*.sbv", "*.vtt", "*.scc", "*.ttml"]
 
 CATEGORY_MAP = {
     "Film & Animation": "1", "Autos & Vehicles": "2", "Music": "10",
@@ -210,21 +144,17 @@ def get_authenticated_service(secrets_path):
                 creds.refresh(Request())
             except Exception as refresh_err:
                 logger.warning(f"Token refresh failed: {refresh_err}. Will attempt new auth flow.")
-                creds = None # Force new auth flow
+                creds = None
         
-        if not creds or not creds.valid: # Check again if refresh failed or wasn't attempted
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
             try:
                 logger.info("Attempting OAuth local server flow on a dynamic port.")
-                creds = flow.run_local_server(
-                    port=0,  # Let the system pick an available port
-                    open_browser=True,
-                    timeout=900 # 15 minutes timeout for the whole process
-                )
+                creds = flow.run_local_server(port=0, open_browser=True, timeout=900)
             except MismatchingStateError:
                 logger.warning("OAuth MismatchingStateError during local server flow, falling back to console.")
                 creds = flow.run_console()
-            except Exception as e: # Catching other exceptions that might occur
+            except Exception as e:
                 logger.error(f"OAuth local server flow failed: {e}. Falling back to console.")
                 creds = flow.run_console()
         
@@ -236,21 +166,12 @@ def get_authenticated_service(secrets_path):
 
 # --- Helpers ---
 def sanitize_filename(name):
-    """
-    Sanitizes a string to be used as a YouTube title by removing
-    characters disallowed by the YouTube API (< and >).
-    Also truncates the title to YouTube's 100-character limit.
-    """
     stem = Path(name).stem
-    # Only remove the characters explicitly disallowed by the YouTube API in titles.
     s = re.sub(r"[<>]+", "", stem)
-    # Titles are also limited to 100 characters.
     return s.strip()[:100]
 
 def sanitize_description(desc: str) -> str:
-    # remove control chars
     desc = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', desc)
-    # truncate to 5000 chars
     return desc[:5000]
 
 def sanitize_tags(raw_tags):
@@ -258,15 +179,12 @@ def sanitize_tags(raw_tags):
     total_len = 0
     for t in raw_tags:
         tag = t.strip()
-        if not tag:
-            continue
+        if not tag: continue
         tag = re.sub(r'[\x00-\x1F\x7F]', '', tag)
         tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)
         tag = tag[:30]
-        if not tag:
-            continue
-        if total_len + len(tag) > 500:
-            break
+        if not tag: continue
+        if total_len + len(tag) > 500: break
         clean.append(tag)
         total_len += len(tag)
     return clean
@@ -278,25 +196,34 @@ class VideoEntry:
 
         # --- Description Loading ---
         self.description = ''
-        self.description_source = "None"  # Default value for GUI display
+        self.description_source = "None"
         try:
-            # MODIFICATION: Use the original filename stem for a more intuitive match.
-            # This will now correctly find a file like "My Video.txt" for "My Video.mp4".
             for txt_file in p.parent.glob(f"{p.stem}*.txt"):
                 logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'.")
                 self.description = txt_file.read_text(encoding='utf-8')
-                self.description_source = txt_file.name # Store the found filename for the GUI
-                break # Found the first match, stop looking
+                self.description_source = txt_file.name
+                break
         except Exception as e:
             logger.error(f"Error reading description file for '{p.name}': {e}")
-        # --- END MODIFICATION ---
 
-        # The original file is NO LONGER renamed.
-        # The filepath remains the original, and only the title is sanitized for the API.
+        # --- Subtitle Loading ---
+        self.subtitle_path = None
+        self.subtitle_source = "None"
+        try:
+            for pattern in SUBTITLE_PATTERNS:
+                # Use glob to find files like "My Video.srt" for "My Video.mp4"
+                found_subs = list(p.parent.glob(f"{p.stem}{pattern[1:]}"))
+                if found_subs:
+                    sub_file = found_subs[0]
+                    logger.info(f"Found matching subtitle file '{sub_file.name}' for video '{p.name}'.")
+                    self.subtitle_path = str(sub_file)
+                    self.subtitle_source = sub_file.name
+                    break # Stop after finding the first one
+        except Exception as e:
+            logger.error(f"Error searching for subtitle file for '{p.name}': {e}")
+
         self.filepath = str(p)
-        self.title = sanitize_filename(p.name) # Sanitize the name only for the title property
-
-        # self.description is now pre-populated if a file was found
+        self.title = sanitize_filename(p.name)
         self.tags = []
         self.categoryId = CATEGORY_MAP['Entertainment']
         self.videoLanguage = 'en'
@@ -316,7 +243,6 @@ class UploaderApp:
         self.client_secrets = None
         try: os.remove(LOG_FILE)
         except: pass
-        # auto-scan videos
         self.video_entries = []
         logger.info("Scanning for video files...")
         for pat in VIDEO_PATTERNS:
@@ -324,7 +250,6 @@ class UploaderApp:
                 if f not in [v.filepath for v in self.video_entries]:
                     self.video_entries.append(VideoEntry(f))
         logger.info(f"Found {len(self.video_entries)} videos to process.")
-        # build GUI
         self.root = tk.Tk()
         self.save_log_var = tk.BooleanVar(master=self.root, value=False)
         self.root.title('YouTube Batch Uploader')
@@ -335,17 +260,17 @@ class UploaderApp:
         frm = ttk.Frame(self.root, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials)\
-            .pack(fill=tk.X, pady=(0,5))
+        ttk.Button(frm, text='Select Credentials JSON', command=self.select_credentials).pack(fill=tk.X, pady=(0,5))
 
-        self.tree = ttk.Treeview(frm, columns=('file','title', 'desc_source'), show='headings')
+        self.tree = ttk.Treeview(frm, columns=('file', 'title', 'desc_source', 'subtitle'), show='headings')
         self.tree.heading('file', text='File')
         self.tree.column('file', width=250)
         self.tree.heading('title', text='Title')
-        self.tree.column('title', width=250)
+        self.tree.column('title', width=200)
         self.tree.heading('desc_source', text='Description Source')
-        self.tree.column('desc_source', width=250)
-
+        self.tree.column('desc_source', width=150)
+        self.tree.heading('subtitle', text='Subtitle Source')
+        self.tree.column('subtitle', width=150)
         self.tree.pack(fill=tk.BOTH, expand=True, pady=5)
         self.refresh_tree()
 
@@ -369,9 +294,7 @@ class UploaderApp:
         # Metadata Defaults
         meta = ttk.LabelFrame(frm, text='Metadata Defaults', padding=10)
         meta.pack(fill=tk.X, pady=5)
-        
         ttk.Label(meta, text='Description (override)').grid(row=0, column=0, sticky='nw')
-
         self.desc_txt = tk.Text(meta, height=3)
         self.desc_txt.grid(row=0, column=1, sticky='ew')
         ttk.Label(meta, text='Tags').grid(row=1, column=0, sticky='w')
@@ -418,7 +341,8 @@ class UploaderApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
         for e in self.video_entries:
-            self.tree.insert('', tk.END, values=(Path(e.filepath).name, e.title, e.description_source))
+            values = (Path(e.filepath).name, e.title, e.description_source, e.subtitle_source)
+            self.tree.insert('', tk.END, values=values)
 
     def select_credentials(self):
         path = filedialog.askopenfilename(title='Select credentials JSON', filetypes=[('JSON','*.json')])
@@ -428,33 +352,24 @@ class UploaderApp:
 
     def save_settings(self):
         cfg = {
-            'description': self.desc_txt.get('1.0','end-1c'),
-            'tags': self.tags_ent.get(),
-            'category': self.cat_cb.get(),
-            'videoLang': self.vlang_cb.get(),
-            'defaultLang': self.dlang_cb.get(),
-            'recordingDate': self.rec_ent.get(),
-            'notify': self.notify_var.get(),
-            'madeForKids': self.kids_var.get(),
-            'embeddable': self.embed_var.get(),
-            'publicStatsVisible': self.stats_var.get(),
-            'playlistId': self.playlist_ent.get(),
-            'firstPublish': self.start_ent.get(),
-            'intervalHours': self.interval_hour.get(),
-            'intervalMinutes': self.interval_minute.get(),
+            'description': self.desc_txt.get('1.0','end-1c'), 'tags': self.tags_ent.get(),
+            'category': self.cat_cb.get(), 'videoLang': self.vlang_cb.get(),
+            'defaultLang': self.dlang_cb.get(), 'recordingDate': self.rec_ent.get(),
+            'notify': self.notify_var.get(), 'madeForKids': self.kids_var.get(),
+            'embeddable': self.embed_var.get(), 'publicStatsVisible': self.stats_var.get(),
+            'playlistId': self.playlist_ent.get(), 'firstPublish': self.start_ent.get(),
+            'intervalHours': self.interval_hour.get(), 'intervalMinutes': self.interval_minute.get(),
             'saveLog': self.save_log_var.get()
         }
         path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')])
         if path:
-            with open(path,'w') as out:
-                json.dump(cfg,out, indent=2)
+            with open(path,'w') as out: json.dump(cfg,out, indent=2)
             messagebox.showinfo('Saved','Settings saved')
 
     def load_settings(self):
         path = filedialog.askopenfilename(filetypes=[('JSON','*.json')])
         if path:
-            with open(path) as inp:
-                cfg = json.load(inp)
+            with open(path) as inp: cfg = json.load(inp)
             self.desc_txt.delete('1.0','end'); self.desc_txt.insert('1.0',cfg.get('description',''))
             self.tags_ent.delete(0,tk.END); self.tags_ent.insert(0,cfg.get('tags',''))
             self.cat_cb.set(cfg.get('category','Entertainment'))
@@ -478,23 +393,17 @@ class UploaderApp:
             return
 
         desc_override = self.desc_txt.get('1.0','end-1c').strip()
-        
-        raw_tags = [t.strip() for t in self.tags_ent.get().split(',')]
-        tags = sanitize_tags(raw_tags)
-
+        tags = sanitize_tags([t.strip() for t in self.tags_ent.get().split(',')])
         cat = CATEGORY_MAP.get(self.cat_cb.get(), '24')
         vlang = LANGUAGES.get(self.vlang_cb.get(), 'en')
         dlang = LANGUAGES.get(self.dlang_cb.get(), 'en')
         rec = self.rec_ent.get().strip()
-        notify = self.notify_var.get()
-        kids = self.kids_var.get()
-        embed = self.embed_var.get()
-        stats = self.stats_var.get()
+        notify = self.notify_var.get(); kids = self.kids_var.get()
+        embed = self.embed_var.get(); stats = self.stats_var.get()
         playlist_id = self.playlist_ent.get().strip()
         base_time = self.start_ent.get()
         hrs = int(self.interval_hour.get()); mins = int(self.interval_minute.get())
 
-        # Authenticate
         try:
             service = get_authenticated_service(self.client_secrets)
         except Exception as auth_ex:
@@ -502,14 +411,9 @@ class UploaderApp:
             logger.error(f"Authentication failed: {auth_ex}", exc_info=True)
             return
 
-        # Close GUI immediately
-        try:
-            self.root.quit()
-            self.root.destroy()
-        except:
-            pass
+        try: self.root.quit(); self.root.destroy()
+        except: pass
 
-        # Compute publish times
         try:
             loc = datetime.strptime(base_time, '%Y-%m-%d %H:%M')
             loc_tz = datetime.now().astimezone().tzinfo
@@ -518,18 +422,10 @@ class UploaderApp:
             utc_dt = datetime.now(timezone.utc)
 
         for i, e in enumerate(self.video_entries):
-            if desc_override:
-                e.description = desc_override
-
-            e.tags = tags
-            e.categoryId = cat
-            e.videoLanguage = vlang
-            e.defaultLanguage = dlang
-            e.recordingDate = rec
-            e.notifySubscribers = notify
-            e.madeForKids = kids
-            e.embeddable = embed
-            e.publicStatsViewable = stats
+            if desc_override: e.description = desc_override
+            e.tags = tags; e.categoryId = cat; e.videoLanguage = vlang
+            e.defaultLanguage = dlang; e.recordingDate = rec; e.notifySubscribers = notify
+            e.madeForKids = kids; e.embeddable = embed; e.publicStatsViewable = stats
             e.playlistId = playlist_id
             delta = timedelta(hours=hrs, minutes=mins) * i
             e.publishAt = (utc_dt + delta).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -545,76 +441,50 @@ class UploaderApp:
                 logger.error(f"File not found, skipping: {e.filepath}")
                 continue
 
-            desc = sanitize_description(e.description)
-            clean_tags = sanitize_tags(e.tags or [])
+            snippet = {'title': e.title, 'categoryId': e.categoryId,
+                       'defaultLanguage': e.defaultLanguage, 'defaultAudioLanguage': e.videoLanguage}
+            if e.description: snippet['description'] = sanitize_description(e.description)
+            if e.tags: snippet['tags'] = e.tags
+            if e.recordingDate: snippet['recordingDetails'] = {'recordingDate': e.recordingDate}
             
-            snippet = {'title': e.title}
-            if desc:
-                snippet['description'] = desc
-            if clean_tags:
-                snippet['tags'] = clean_tags
+            status = {'privacyStatus': 'private', 'publishAt': e.publishAt,
+                      'selfDeclaredMadeForKids': e.madeForKids, 'license': 'youtube',
+                      'embeddable': e.embeddable, 'publicStatsViewable': e.publicStatsViewable}
             
-            snippet['categoryId'] = e.categoryId
-            snippet['defaultLanguage'] = e.defaultLanguage
-            snippet['defaultAudioLanguage'] = e.videoLanguage
-            if e.recordingDate:
-                snippet['recordingDetails'] = {'recordingDate': e.recordingDate}
-
-            status = {
-                'privacyStatus': 'private',
-                'publishAt': e.publishAt,
-                'selfDeclaredMadeForKids': e.madeForKids,
-                'license': 'youtube',
-                'embeddable': e.embeddable,
-                'publicStatsViewable': e.publicStatsViewable
-            }
-
             body = {'snippet': snippet, 'status': status}
 
             def do_insert(body, notify):
-                return service.videos().insert(
-                    part='snippet,status',
-                    body=body,
-                    media_body=media,
-                    notifySubscribers=notify
-                )
+                return service.videos().insert(part='snippet,status', body=body,
+                                               media_body=media, notifySubscribers=notify)
 
             print(f"Uploading {Path(e.filepath).name}", flush=True)
             logger.info(f"Uploading {e.filepath} with title '{e.title}'")
-
             req = do_insert(body, e.notifySubscribers)
-
-            progress = None
-            resp = None
+            progress, resp = None, None
             try:
                 while resp is None:
                     progress, resp = req.next_chunk()
-                    if progress:
-                        print(f"  {int(progress.progress() * 100)}%", flush=True)
+                    if progress: print(f"  {int(progress.progress() * 100)}%", flush=True)
             except Exception as upload_ex:
                 print(f"  ERROR during upload: {upload_ex}", flush=True)
                 logger.error(f"Upload failed for {e.filepath}: {upload_ex}", exc_info=True)
-                # If tags are invalid, retry without them
                 if 'invalidTags' in str(upload_ex):
-                    print("  Warning: tags rejected by API, retrying without tags...", flush=True)
-                    logger.warning(f"Retrying {e.filepath} without tags due to API rejection.")
+                    print("  Warning: tags rejected, retrying without them...", flush=True)
+                    logger.warning(f"Retrying {e.filepath} without tags.")
                     snippet.pop('tags', None)
                     body['snippet'] = snippet
                     req = do_insert(body, e.notifySubscribers)
-                    progress, resp = None, None
                     try:
                         while resp is None:
                             progress, resp = req.next_chunk()
-                            if progress:
-                                print(f"  {int(progress.progress() * 100)}%", flush=True)
+                            if progress: print(f"  {int(progress.progress() * 100)}%", flush=True)
                     except Exception as retry_ex:
                         print(f"  ERROR on retry, skipping file: {retry_ex}", flush=True)
                         logger.error(f"Retry failed for {e.filepath}: {retry_ex}", exc_info=True)
-                        continue # Skip to next video
+                        continue
                 else:
-                    # re-raise any other errors
-                    continue # Skip to next video
-            
+                    continue
+
             if not resp:
                 print(f"  Upload of {e.filepath} failed and was skipped.", flush=True)
                 continue
@@ -623,29 +493,44 @@ class UploaderApp:
             print(f"Done: https://youtu.be/{vid}", flush=True)
             logger.info(f"Uploaded {e.filepath} → {vid}")
 
+            # --- SUBTITLE UPLOAD ---
+            if e.subtitle_path:
+                print(f"  Uploading subtitle file: {e.subtitle_source}", flush=True)
+                logger.info(f"Found subtitle for {vid}, attempting upload from {e.subtitle_path}")
+                try:
+                    media_subtitle = MediaFileUpload(e.subtitle_path)
+                    request_body = {
+                        'snippet': {
+                            'videoId': vid, 'language': e.videoLanguage,
+                            'name': '', 'isDraft': False
+                        }
+                    }
+                    service.captions().insert(part='snippet', body=request_body,
+                                              media_body=media_subtitle).execute()
+                    print(f"  Successfully uploaded subtitle for video {vid}", flush=True)
+                    logger.info(f"Subtitle upload successful for video {vid}")
+                except Exception as sub_ex:
+                    print(f"  ERROR: Subtitle upload failed: {sub_ex}", flush=True)
+                    logger.error(f"Subtitle upload failed for video {vid}: {sub_ex}", exc_info=True)
+
             if e.playlistId:
                 try:
-                    service.playlistItems().insert(
-                        part='snippet',
-                        body={'snippet': {
-                            'playlistId': e.playlistId,
-                            'resourceId': {'kind': 'youtube#video', 'videoId': vid}
-                        }}
-                    ).execute()
+                    service.playlistItems().insert(part='snippet', body={'snippet': {
+                        'playlistId': e.playlistId,
+                        'resourceId': {'kind': 'youtube#video', 'videoId': vid}
+                    }}).execute()
                     print(f"  Added to playlist {e.playlistId}", flush=True)
                     logger.info(f"Added {vid} to playlist {e.playlistId}")
                 except Exception as ex:
                     print(f"  Playlist add failed: {ex}", flush=True)
                     logger.error(f"Playlist error for {vid}: {ex}")
 
-        # After all uploads
         print("\nBatch upload process complete.", flush=True)
         if self.save_log_var.get():
             with open(LOG_FILE, 'w', encoding='utf-8') as f:
                 f.write("\n".join(log_records))
             print(f"Log file saved to {LOG_FILE}", flush=True)
         revoke_token()
-
 
 if __name__ == '__main__':
     UploaderApp()
