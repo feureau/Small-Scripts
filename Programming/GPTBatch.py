@@ -1,8 +1,8 @@
-# --- START OF FILE GPTBatcher_Multimodal_Logged_v11.py ---
+# --- START OF FILE GPTBatcher_Multimodal_Logged_v12.py ---
 
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v11
+Multimodal AI Batch Processor (GPTBatcher) v12
 ================================================================================
 
 Purpose:
@@ -24,8 +24,8 @@ Key Features:
 - Comprehensive Logging: Generates a detailed .log file for every operation,
   capturing settings, timings, status, and any errors.
 - Interactive Quota Handling: If a Google API quota is hit, it pauses and
-  prompts the user to switch to an alternative model or quit, instead of
-  crashing.
+  prompts the user to switch to an alternative model or quit. The prompt now
+  marks any models that have previously hit their quota during the session.
 - Graceful Cancellation: Handles Ctrl+C (KeyboardInterrupt) to stop the batch
   cleanly without crashing and provides a final summary.
 - Natural File Sorting: Correctly sorts file lists with numbers (e.g.,
@@ -52,7 +52,7 @@ Setup:
 
 Usage:
 ------
-1. Run from the command line: `python GPTBatcher_Multimodal_Logged_v11.py`
+1. Run from the command line: `python GPTBatcher_Multimodal_Logged_v12.py`
 2. Command-line arguments can be used to pre-populate the GUI.
 3. The GUI will launch for configuration. Click "Process" to begin.
 4. If a quota limit is reached, follow the instructions in the console.
@@ -308,7 +308,7 @@ def get_api_key(force_gui=False):
     return api_key
 
 # --- GUI Implementation ---
-class AppGUI(tk.Tk):
+class AppGUI(tk.Tk): # (GUI class remains the same)
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
         self.title("Multimodal AI Batch Processor")
@@ -373,28 +373,15 @@ class AppGUI(tk.Tk):
     def browse_output_dir(self):
         directory = filedialog.askdirectory(initialdir=os.getcwd(), parent=self)
         if directory: self.output_dir_var.set(directory)
-
     def process(self):
-        # *** FIX IS HERE: Reverted to the explicit, correct way of gathering settings. ***
         self.settings = {
-            'files': list(self.files_var.get()),
-            'custom_prompt': self.prompt_text.get("1.0", tk.END).strip(),
-            'engine': self.engine_var.get(),
-            'model': self.model_var.get(),
-            'output_dir': self.output_dir_var.get(),
-            'suffix': self.suffix_var.get(),
-            'stream_output': self.stream_var.get(),
-            'api_key': self.api_key
+            'files': list(self.files_var.get()), 'custom_prompt': self.prompt_text.get("1.0", tk.END).strip(),
+            'engine': self.engine_var.get(), 'model': self.model_var.get(), 'output_dir': self.output_dir_var.get(),
+            'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key
         }
-        if not self.settings['files']:
-            tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self)
-            return
-        if not self.settings['model'] or self.settings['model'].startswith("Error:"):
-            tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self)
-            return
-        if self.settings['engine'] == 'google' and not self.settings['api_key']:
-            tkinter.messagebox.showwarning("Input Error", "Google engine requires an API Key.", parent=self)
-            return
+        if not self.settings['files']: tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self); return
+        if not self.settings['model'] or self.settings['model'].startswith("Error:"): tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self); return
+        if self.settings['engine'] == 'google' and not self.settings['api_key']: tkinter.messagebox.showwarning("Input Error", "Google engine requires an API Key.", parent=self); return
         self.destroy()
 
 # --- Main Execution ---
@@ -424,6 +411,7 @@ def main():
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
     processed_files, failed_files = 0, 0
     total_files = len(all_files)
+    exhausted_models = set() # *** CHANGE 1: Initialize the tracker ***
     print(f"\nStarting batch processing for {total_files} file(s)...")
 
     i = 0
@@ -443,31 +431,37 @@ def main():
             i += 1 # Move to next file on success or normal failure
 
         except QuotaExhaustedError:
-            print("\n" + "="*50); print(f"QUOTA LIMIT REACHED for model: {gui_settings['model']}"); print("="*50)
-            models, err = fetch_google_models(gui_settings['api_key'])
-            if err or not models or not any(m != gui_settings['model'] for m in models):
-                print("Could not fetch alternative models or none are available. Halting batch.")
-                failed_files += 1; break
+            failed_model = gui_settings['model']
+            exhausted_models.add(failed_model) # *** CHANGE 2: Update the tracker ***
+            print("\n" + "="*50); print(f"QUOTA LIMIT REACHED for model: {failed_model}"); print("="*50)
             
-            alt_models = [m for m in models if m != gui_settings['model']]
+            all_google_models, err = fetch_google_models(gui_settings['api_key'])
+            if err or not all_google_models:
+                print("Could not fetch alternative models. Halting batch.")
+                failed_files += 1; break
+
+            # *** CHANGE 3: Rework the prompt generation to mark exhausted models ***
             prompt = "Please choose an action:\n"
-            for idx, name in enumerate(alt_models): prompt += f"  [{idx + 1}] Switch to model: {name}\n"
-            prompt += f"  [{len(alt_models) + 1}] Quit the batch process\nYour choice: "
+            # Use the full list of models to build the selection menu
+            for idx, model_name in enumerate(all_google_models):
+                marker = " (Quota Reached)" if model_name in exhausted_models else ""
+                prompt += f"  [{idx + 1}] Switch to model: {model_name}{marker}\n"
+            prompt += f"  [{len(all_google_models) + 1}] Quit the batch process\nYour choice: "
             
             while True:
                 choice = input(prompt).strip()
                 try:
                     choice_num = int(choice)
-                    if 1 <= choice_num <= len(alt_models):
-                        new_model = alt_models[choice_num - 1]
+                    if 1 <= choice_num <= len(all_google_models):
+                        new_model = all_google_models[choice_num - 1]
                         print(f"Switching to model: {new_model}"); gui_settings['model'] = new_model
-                        break # Retry same file
-                    elif choice_num == len(alt_models) + 1:
+                        break # This will retry the same file (since 'i' is not incremented)
+                    elif choice_num == len(all_google_models) + 1:
                         print("Quitting batch process.")
-                        failed_files += 1; i = total_files; break # Quit
+                        failed_files += 1; i = total_files; break # Set i to exit the main while loop
                     else:
                         print("Invalid number. Please try again.")
-                except (ValueError, IndexError):
+                except ValueError:
                     print("Invalid choice. Please enter a number from the list.")
 
         except KeyboardInterrupt:
@@ -485,4 +479,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# --- END OF FILE GPTBatcher_Multimodal_Logged_v11.py ---
+# --- END OF FILE GPTBatcher_Multimodal_Logged_v12.py ---
