@@ -1,8 +1,8 @@
-# --- START OF FILE GPTBatcher_Multimodal_Logged_v12.py ---
+# --- START OF FILE GPTBatcher_Multimodal_Logged_v13.py ---
 
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v12
+Multimodal AI Batch Processor (GPTBatcher) v13
 ================================================================================
 
 Purpose:
@@ -21,49 +21,30 @@ Key Features:
   image files (.png, .jpg, .webp, etc.).
 - User-Friendly GUI: An intuitive interface for adding files, editing the
   prompt, selecting models, and configuring outputs.
-- Comprehensive Logging: Generates a detailed .log file for every operation,
-  capturing settings, timings, status, and any errors.
-- Interactive Quota Handling: If a Google API quota is hit, it pauses and
-  prompts the user to switch to an alternative model or quit. The prompt now
-  marks any models that have previously hit their quota during the session.
+- Comprehensive Logging: Generates a detailed .log file for every operation.
+- Interactive Quota Handling:
+    - Pauses on quota errors, allowing the user to switch models or quit.
+    - Marks previously exhausted models in the selection list.
+    - Does NOT write an output file when a quota error occurs.
+- Accurate Statistics:
+    - Files are only counted as "failed" if they are ultimately unsuccessful.
+    - A separate counter tracks how many times quota limits were reached.
 - Graceful Cancellation: Handles Ctrl+C (KeyboardInterrupt) to stop the batch
-  cleanly without crashing and provides a final summary.
-- Natural File Sorting: Correctly sorts file lists with numbers (e.g.,
-  'file-2.txt' before 'file-10.txt').
-- API Rate Limiting: Includes an automatic delay for the Google Gemini API to
-  prevent exceeding request quotas.
+  cleanly and provide a final summary.
+- Natural File Sorting: Correctly sorts file lists with numbers.
+- API Rate Limiting: Includes an automatic delay for the Google Gemini API.
 
 Dependencies:
 -------------
 You must install the required Python libraries before running:
 pip install google-generativeai requests
 
-Setup:
-------
-1. Google API Key:
-   - The script requires a Google API Key for the 'google' engine.
-   - **Recommended:** Set it as an environment variable named "GOOGLE_API_KEY".
-   - Alternatively, you can enter the key via the secure prompt in the GUI.
-
-2. Ollama (Optional):
-   - If you want to use local models, ensure Ollama is installed and running.
-   - The script will attempt to connect to the default URL (http://localhost:11434).
-   - You can change this URL in the "Customizable Variables" section below.
-
-Usage:
-------
-1. Run from the command line: `python GPTBatcher_Multimodal_Logged_v12.py`
-2. Command-line arguments can be used to pre-populate the GUI.
-3. The GUI will launch for configuration. Click "Process" to begin.
+Setup & Usage:
+--------------
+1. Configure your Google API Key (preferably via the GOOGLE_API_KEY env var).
+2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v13.py`
+3. Use the GUI to configure your batch job and click "Process".
 4. If a quota limit is reached, follow the instructions in the console.
-
-Output Structure:
------------------
-- By default, output files are saved next to the input files.
-- A "processing_logs" subfolder will be created in the same location to store
-  the detailed .log files.
-- If an "Output Dir" is specified, all raw outputs will be saved there, and a
-  "processing_logs" subfolder will be created inside it.
 
 --------------------------------------------------------------------------------
 """
@@ -218,7 +199,7 @@ def call_google_gemini_api(prompt_text, api_key, model_name, image_bytes=None, m
                 return f"Error: Prompt blocked by safety filter ({response.prompt_feedback.block_reason})."
             return "Error: No content generated (Reason unknown)."
     except ResourceExhausted:
-        print(f"FATAL ERROR: Google Gemini API Quota Exhausted for model {model_name}.", file=sys.stderr)
+        print(f"QUOTA ERROR: Google Gemini API Quota Exhausted for model {model_name}.", file=sys.stderr)
         raise QuotaExhaustedError(f"Quota exhausted for model {model_name}")
     except PermissionDenied: return "Error: Google API Permission Denied (Check Key)."
     except GoogleAPIError as e: return f"Error: Google API Call Failed - {e}"
@@ -275,6 +256,7 @@ def process_single_file(input_filepath, api_key, engine, user_prompt, model_name
     raw_path, log_path = determine_unique_output_paths(input_filepath, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
     log_data = {'input_filepath': input_filepath, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
     api_response = None
+    quota_error_occurred = False # *** CHANGE 1: Flag to control file output ***
     try:
         print(f"--- Reading file: {input_filepath} ---")
         content, mime, is_image, err = read_file_content(input_filepath)
@@ -286,12 +268,16 @@ def process_single_file(input_filepath, api_key, engine, user_prompt, model_name
         log_data['status'] = 'Success'
         return api_response, None
     except Exception as e:
+        if isinstance(e, QuotaExhaustedError):
+            quota_error_occurred = True # Set flag to prevent output file writing
         print(f"**ERROR during processing {input_filepath}: {e}**")
         log_data.update({'error_message': str(e), 'traceback_info': traceback.format_exc() if not isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)) else "N/A"})
         if isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)): raise
         return None, str(e)
     finally:
-        save_raw_api_response(api_response or f"[ERROR] {log_data.get('error_message')}", raw_path)
+        # *** CHANGE 2: Only save output file if it's not a quota error ***
+        if not quota_error_occurred:
+            save_raw_api_response(api_response or f"[ERROR] {log_data.get('error_message')}", raw_path)
         log_data.update({'end_time': datetime.datetime.now(), 'duration': (datetime.datetime.now() - start_time).total_seconds()})
         save_processing_log(log_data, log_path)
 
@@ -409,9 +395,11 @@ def main():
     if not all_files: print("Error: No valid input files specified."); return
 
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
-    processed_files, failed_files = 0, 0
+    
+    # *** CHANGE 3: Initialize all counters, including the new quota_hits ***
+    processed_files, failed_files, quota_hits = 0, 0, 0
     total_files = len(all_files)
-    exhausted_models = set() # *** CHANGE 1: Initialize the tracker ***
+    exhausted_models = set()
     print(f"\nStarting batch processing for {total_files} file(s)...")
 
     i = 0
@@ -426,23 +414,29 @@ def main():
             _, error_msg = process_single_file(filepath, gui_settings['api_key'], gui_settings['engine'],
                 gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
                 stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder)
-            if not error_msg: processed_files += 1
-            else: failed_files += 1
-            i += 1 # Move to next file on success or normal failure
+            
+            if not error_msg:
+                processed_files += 1
+            else:
+                # A non-quota, non-interrupt error occurred, so this file counts as failed.
+                failed_files += 1
+            
+            i += 1 # Move to the next file on success or normal failure
 
         except QuotaExhaustedError:
+            quota_hits += 1 # Increment the new counter
             failed_model = gui_settings['model']
-            exhausted_models.add(failed_model) # *** CHANGE 2: Update the tracker ***
+            exhausted_models.add(failed_model)
             print("\n" + "="*50); print(f"QUOTA LIMIT REACHED for model: {failed_model}"); print("="*50)
             
             all_google_models, err = fetch_google_models(gui_settings['api_key'])
             if err or not all_google_models:
-                print("Could not fetch alternative models. Halting batch.")
-                failed_files += 1; break
-
-            # *** CHANGE 3: Rework the prompt generation to mark exhausted models ***
+                print("Could not fetch alternative models. This file will be marked as failed.")
+                failed_files += 1 # The file is abandoned, so it's a failure
+                i += 1 # Move to the next file
+                continue
+            
             prompt = "Please choose an action:\n"
-            # Use the full list of models to build the selection menu
             for idx, model_name in enumerate(all_google_models):
                 marker = " (Quota Reached)" if model_name in exhausted_models else ""
                 prompt += f"  [{idx + 1}] Switch to model: {model_name}{marker}\n"
@@ -455,10 +449,13 @@ def main():
                     if 1 <= choice_num <= len(all_google_models):
                         new_model = all_google_models[choice_num - 1]
                         print(f"Switching to model: {new_model}"); gui_settings['model'] = new_model
-                        break # This will retry the same file (since 'i' is not incremented)
+                        # Do NOT increment 'i'. The outer loop will retry the current file.
+                        break
                     elif choice_num == len(all_google_models) + 1:
-                        print("Quitting batch process.")
-                        failed_files += 1; i = total_files; break # Set i to exit the main while loop
+                        print("Quitting batch process. This file will be marked as failed.")
+                        failed_files += 1 # The file is abandoned, so it's a failure
+                        i = total_files # This will cause the main while loop to terminate
+                        break
                     else:
                         print("Invalid number. Please try again.")
                 except ValueError:
@@ -466,17 +463,19 @@ def main():
 
         except KeyboardInterrupt:
             print("\n" + "="*50); print("CANCELLED: Batch processing was interrupted by the user."); print("="*50)
-            failed_files += 1; break
+            failed_files += 1 # The file being processed is abandoned, so it's a failure
+            break # Exit the main while loop
 
     print("\n=========================================")
     print("          Batch Processing Summary")
     print("=========================================")
     print(f"Total files attempted: {processed_files + failed_files}")
     print(f"Successfully processed: {processed_files}")
-    print(f"Failed: {failed_files}")
+    print(f"Failed (unrecoverable errors or cancelled): {failed_files}")
+    print(f"Quota limits reached: {quota_hits} time(s)") # New stat line
     print("=========================================")
 
 if __name__ == "__main__":
     main()
 
-# --- END OF FILE GPTBatcher_Multimodal_Logged_v12.py ---
+# --- END OF FILE GPTBatcher_Multimodal_Logged_v13.py ---
