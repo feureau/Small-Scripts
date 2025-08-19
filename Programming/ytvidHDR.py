@@ -112,8 +112,9 @@ class VideoProcessorApp:
         self.file_options = {}
         self.resolution_var = tk.StringVar(value="4k")
         self.upscale_algo_var = tk.StringVar(value="nvvfx-superres")
-        self.eight_bit_var = tk.BooleanVar(value=True) # <-- MODIFIED: Default to 8-bit SDR
-        self.hdr_var = tk.BooleanVar(value=False) # <-- MODIFIED: Default to NO HDR metadata
+        self.eight_bit_var = tk.BooleanVar(value=False)
+        # HDR Metadata is on by default for SDR videos
+        self.hdr_var = tk.BooleanVar(value=True)
         self.crop_var = tk.BooleanVar(value=False)
         self.qvbr_var = tk.StringVar(value="12")
         self.fruc_var = tk.BooleanVar(value=False)
@@ -271,7 +272,8 @@ class VideoProcessorApp:
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
         self.update_file_list(initial_files)
-        # <-- MODIFIED: Removed the loop that called self.auto_set_hdr(f)
+        for f in initial_files:
+            self.auto_set_hdr(f)
 
         if self.file_listbox.size() > 0:
             self.file_listbox.select_set(0)
@@ -331,7 +333,8 @@ class VideoProcessorApp:
     def add_files(self):
         files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4;*.mkv;*.avi"), ("All Files", "*.*")])
         self.update_file_list(files)
-        # <-- MODIFIED: Removed the loop that called self.auto_set_hdr(f)
+        for f in files:
+            self.auto_set_hdr(f)
         if self.file_listbox.size() > 0 and not self.file_listbox.curselection():
             self.file_listbox.select_set(0)
             self.on_file_select(None)
@@ -339,7 +342,8 @@ class VideoProcessorApp:
     def handle_file_drop(self, event):
         files = self.root.tk.splitlist(event.data)
         self.update_file_list(files)
-        # <-- MODIFIED: Removed the loop that called self.auto_set_hdr(f)
+        for f in files:
+            self.auto_set_hdr(f)
         if self.file_listbox.size() > 0 and not self.file_listbox.curselection():
             self.file_listbox.select_set(0)
             self.on_file_select(None)

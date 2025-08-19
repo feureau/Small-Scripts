@@ -1,8 +1,6 @@
-# --- START OF FILE GPTBatcher_Multimodal_Logged_v13.py ---
-
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v13
+Multimodal AI Batch Processor (GPTBatcher) v13_mod
 ================================================================================
 
 Purpose:
@@ -25,12 +23,15 @@ Key Features:
 - Interactive Quota Handling:
     - Pauses on quota errors, allowing the user to switch models or quit.
     - Marks previously exhausted models in the selection list.
-    - Does NOT write an output file when a quota error occurs.
 - Accurate Statistics:
     - Files are only counted as "failed" if they are ultimately unsuccessful.
     - A separate counter tracks how many times quota limits were reached.
+    - Provides a list of all failed files in the final summary.
 - Graceful Cancellation: Handles Ctrl+C (KeyboardInterrupt) to stop the batch
   cleanly and provide a final summary.
+- Failure Handling:
+    - Does NOT write an output file if processing fails for any reason.
+    - Copies the original source file to a "failed" subfolder upon failure.
 - Natural File Sorting: Correctly sorts file lists with numbers.
 - API Rate Limiting: Includes an automatic delay for the Google Gemini API.
 
@@ -42,7 +43,7 @@ pip install google-generativeai requests
 Setup & Usage:
 --------------
 1. Configure your Google API Key (preferably via the GOOGLE_API_KEY env var).
-2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v13.py`
+2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v13_mod.py`
 3. Use the GUI to configure your batch job and click "Process".
 4. If a quota limit is reached, follow the instructions in the console.
 
@@ -69,6 +70,7 @@ import base64 # For encoding images
 import mimetypes # For guessing image MIME types
 import traceback # For logging detailed exception info
 import re # For natural sorting
+import shutil # MODIFICATION: Added for copying failed files
 
 ################################################################################
 # --- Customizable Variables (Configuration) ---
@@ -111,6 +113,7 @@ REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 # 8. Output Subfolder Names
 DEFAULT_OUTPUT_SUBFOLDER_NAME = ""
 LOG_SUBFOLDER_NAME = "processing_logs"
+FAILED_SUBFOLDER_NAME = "failed" # MODIFICATION: Added for failed files
 
 ################################################################################
 # --- End of Customizable Variables ---
@@ -250,13 +253,26 @@ def save_processing_log(log_data, log_filepath):
         print(f"Processing log saved to: {log_filepath}")
     except Exception as e: print(f"**ERROR: Could not save processing log to {log_filepath}: {e}**")
 
+# MODIFICATION START: New function to copy failed files
+def copy_failed_file(filepath):
+    """Copies a failed file to a 'failed' subfolder in its source directory."""
+    try:
+        source_dir = os.path.dirname(os.path.abspath(filepath))
+        failed_dir = os.path.join(source_dir, FAILED_SUBFOLDER_NAME)
+        os.makedirs(failed_dir, exist_ok=True)
+        dest_path = os.path.join(failed_dir, os.path.basename(filepath))
+        shutil.copy2(filepath, dest_path)
+        print(f"Copied failed source file to: {dest_path}")
+    except Exception as e:
+        print(f"**ERROR: Could not copy failed file {filepath}: {e}**", file=sys.stderr)
+# MODIFICATION END
+
 # --- Core Processing ---
 def process_single_file(input_filepath, api_key, engine, user_prompt, model_name, **kwargs):
     start_time = datetime.datetime.now()
     raw_path, log_path = determine_unique_output_paths(input_filepath, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
     log_data = {'input_filepath': input_filepath, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
     api_response = None
-    quota_error_occurred = False # *** CHANGE 1: Flag to control file output ***
     try:
         print(f"--- Reading file: {input_filepath} ---")
         content, mime, is_image, err = read_file_content(input_filepath)
@@ -268,16 +284,15 @@ def process_single_file(input_filepath, api_key, engine, user_prompt, model_name
         log_data['status'] = 'Success'
         return api_response, None
     except Exception as e:
-        if isinstance(e, QuotaExhaustedError):
-            quota_error_occurred = True # Set flag to prevent output file writing
         print(f"**ERROR during processing {input_filepath}: {e}**")
         log_data.update({'error_message': str(e), 'traceback_info': traceback.format_exc() if not isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)) else "N/A"})
         if isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)): raise
         return None, str(e)
     finally:
-        # *** CHANGE 2: Only save output file if it's not a quota error ***
-        if not quota_error_occurred:
-            save_raw_api_response(api_response or f"[ERROR] {log_data.get('error_message')}", raw_path)
+        # MODIFICATION START: Only save the output file on success.
+        if log_data['status'] == 'Success':
+            save_raw_api_response(api_response, raw_path)
+        # MODIFICATION END
         log_data.update({'end_time': datetime.datetime.now(), 'duration': (datetime.datetime.now() - start_time).total_seconds()})
         save_processing_log(log_data, log_path)
 
@@ -396,8 +411,11 @@ def main():
 
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
     
-    # *** CHANGE 3: Initialize all counters, including the new quota_hits ***
-    processed_files, failed_files, quota_hits = 0, 0, 0
+    # MODIFICATION START: Use a list for failed files instead of a counter
+    processed_files, quota_hits = 0, 0
+    failed_file_list = []
+    # MODIFICATION END
+    
     total_files = len(all_files)
     exhausted_models = set()
     print(f"\nStarting batch processing for {total_files} file(s)...")
@@ -418,13 +436,15 @@ def main():
             if not error_msg:
                 processed_files += 1
             else:
-                # A non-quota, non-interrupt error occurred, so this file counts as failed.
-                failed_files += 1
+                # MODIFICATION START: A non-quota error occurred, mark as failed and copy
+                failed_file_list.append(filepath)
+                copy_failed_file(filepath)
+                # MODIFICATION END
             
             i += 1 # Move to the next file on success or normal failure
 
         except QuotaExhaustedError:
-            quota_hits += 1 # Increment the new counter
+            quota_hits += 1
             failed_model = gui_settings['model']
             exhausted_models.add(failed_model)
             print("\n" + "="*50); print(f"QUOTA LIMIT REACHED for model: {failed_model}"); print("="*50)
@@ -432,7 +452,10 @@ def main():
             all_google_models, err = fetch_google_models(gui_settings['api_key'])
             if err or not all_google_models:
                 print("Could not fetch alternative models. This file will be marked as failed.")
-                failed_files += 1 # The file is abandoned, so it's a failure
+                # MODIFICATION START: Mark as failed and copy
+                failed_file_list.append(filepath)
+                copy_failed_file(filepath)
+                # MODIFICATION END
                 i += 1 # Move to the next file
                 continue
             
@@ -449,12 +472,14 @@ def main():
                     if 1 <= choice_num <= len(all_google_models):
                         new_model = all_google_models[choice_num - 1]
                         print(f"Switching to model: {new_model}"); gui_settings['model'] = new_model
-                        # Do NOT increment 'i'. The outer loop will retry the current file.
                         break
                     elif choice_num == len(all_google_models) + 1:
                         print("Quitting batch process. This file will be marked as failed.")
-                        failed_files += 1 # The file is abandoned, so it's a failure
-                        i = total_files # This will cause the main while loop to terminate
+                        # MODIFICATION START: Mark as failed and copy
+                        failed_file_list.append(filepath)
+                        copy_failed_file(filepath)
+                        # MODIFICATION END
+                        i = total_files
                         break
                     else:
                         print("Invalid number. Please try again.")
@@ -463,19 +488,35 @@ def main():
 
         except KeyboardInterrupt:
             print("\n" + "="*50); print("CANCELLED: Batch processing was interrupted by the user."); print("="*50)
-            failed_files += 1 # The file being processed is abandoned, so it's a failure
+            # MODIFICATION START: Mark as failed and copy
+            failed_file_list.append(filepath)
+            copy_failed_file(filepath)
+            # MODIFICATION END
             break # Exit the main while loop
 
+    # MODIFICATION START: Update the entire summary section
+    failed_count = len(failed_file_list)
+    attempted_count = processed_files + failed_count
+    
     print("\n=========================================")
     print("          Batch Processing Summary")
     print("=========================================")
-    print(f"Total files attempted: {processed_files + failed_files}")
+    print(f"Total files attempted: {attempted_count}")
     print(f"Successfully processed: {processed_files}")
-    print(f"Failed (unrecoverable errors or cancelled): {failed_files}")
-    print(f"Quota limits reached: {quota_hits} time(s)") # New stat line
+    print(f"Failed (unrecoverable errors or cancelled): {failed_count}")
+    print(f"Quota limits reached: {quota_hits} time(s)")
+    
+    if failed_file_list:
+        print("\n--- List of Failed Files ---")
+        for f in failed_file_list:
+            print(f"  - {os.path.basename(f)}")
+        print("----------------------------")
+        print("(Originals of failed files have been copied to a 'failed' subfolder)")
+
     print("=========================================")
+    # MODIFICATION END
 
 if __name__ == "__main__":
     main()
 
-# --- END OF FILE GPTBatcher_Multimodal_Logged_v13.py ---
+# --- END OF FILE GPTBatcher_Multimodal_Logged_v13_mod.py ---
