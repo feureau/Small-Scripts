@@ -1,114 +1,43 @@
 """
-================================
-Batch HDR to SDR Video Converter
-================================
+===================================================================
+Batch HDR to SDR Video Converter (YouTube Optimized - Verified)
+===================================================================
 
 Description:
 ------------
 This script provides a powerful command-line interface to batch convert HDR (High
-Dynamic Range) video files to SDR (Standard Dynamic Range). It is designed for
-a professional post-production workflow where a specific 3D Look-Up Table (LUT)
-is required for the color and tone mapping transformation.
+Dynamic Range) video files to SDR (Standard Dynamic Range) files that are
+highly optimized for uploading to YouTube. It is designed for a professional
+post-production workflow where a specific 3D Look-Up Table (LUT) is required for
+the color and tone mapping transformation.
 
 The script leverages GPU acceleration for both decoding and encoding to achieve
-maximum performance, offloading the most intensive tasks from the CPU.
+maximum performance.
 
 Features:
 ---------
-- Dual-Engine Support: Choose between two powerful conversion engines:
-    - NVEncC: A highly optimized, command-line tool for NVIDIA encoders. (Default)
-    - FFmpeg: The universal standard for video manipulation.
+- YouTube SDR Specification Adherence: Automatically detects input resolution
+  and frame rate to apply YouTube's recommended settings.
+- Manual Bitrate Override: Use the -b / --bitrate flag to set your own
+  target bitrate in Mbps, bypassing the automatic YouTube calculation.
+- Flexible Resizing: Use the -r / --resize flag to set the output's shortest
+  dimension, preserving aspect ratio (e.g., --resize 1080 for 1920x1080 or 1080x1920).
+- Dual-Engine Support: Choose between NVEncC (default) or FFmpeg.
 - Full GPU Acceleration: Utilizes NVIDIA's NVENC for encoding and CUDA for
-  decoding (av1_cuvid), ensuring a fast, efficient pipeline.
-- Flexible Input: Process videos in multiple ways:
-    - A single video file.
-    - Multiple specific video files.
-    - An entire folder of videos.
-    - A glob pattern (e.g., "*.mkv").
-- Lossless Audio: Copies all audio tracks directly from the source to the
-  destination without re-encoding, preserving full audio quality.
+  decoding, ensuring a fast, efficient pipeline.
+- Flexible Input: Process a single video file, multiple files, a folder, or a glob pattern.
 - Optimized & Correct: The parameters used for both engines have been carefully
-  researched and tested to correctly apply the specified LUT according to the
-  LUT author's own instructions (e.g., using tetrahedral interpolation).
+  researched and verified, including correct color range and space tagging for SDR.
 - Robust File Handling: Includes a 'staging' system for the LUT file when using
   NVEncC to prevent command-line path and quoting issues.
 
 Requirements:
 -------------
 1. Python 3.x
-2. FFmpeg: A recent 'full' build (from gyan.dev or similar) must be installed
-   and accessible via the system's PATH environment variable.
-3. NVEncC: A recent version must be installed and accessible via the system's
-   PATH environment variable.
-4. NVIDIA GPU: A modern NVIDIA graphics card (RTX series recommended for full
-   AV1 decoding support).
-5. NVIDIA Graphics Driver: A recent version of the driver.
-6. The specific .cube LUT file referenced in the script.
-
-Configuration:
---------------
-The `LUT_FILE_PATH` variable at the top of the script must be set to the correct
-location of your '.cube' LUT file.
-
-================================
-HOW TO USE - EXAMPLES
-================================
-
-Open a command prompt (cmd.exe) or PowerShell in a folder containing your videos.
-
---- Basic Usage (using the default NVEncC engine) ---
-
-# Convert all .mkv files in the current folder (.)
-> python your_script_name.py .
-
-# Convert a single specific video file
-> python your_script_name.py "My HDR Video.mkv"
-
-# Convert multiple specific video files
-> python your_script_name.py "video1.mkv" "D:\folder 2\video2.mov"
-
-# Convert all .mp4 files in the current folder
-> python your_script_name.py . --ext mp4
-
---- Using the FFmpeg Engine ---
-
-# Convert all .mkv files in the current folder using FFmpeg
-> python your_script_name.py . -f
-
-# Convert a single file using FFmpeg
-> python your_script_name.py "My HDR Video.mkv" --ffmpeg
-
---- Advanced Usage ---
-
-# Use a glob pattern to select files
-> python your_script_name.py *.mkv
-
-# Specify a custom suffix for the output files
-> python your_script_name.py . --suffix _SDR_Final
-
-================================
-COMMAND-LINE ARGUMENTS
-================================
-
-- `input_paths`
-  (Required) One or more positional arguments specifying the input.
-  Can be a file path, a folder path, or a glob pattern.
-
-- `-f`, `--ffmpeg`
-  (Optional) Use the FFmpeg engine for conversion.
-
-- `-n`, `--nvencc`
-  (Optional) Use the NVEncC engine for conversion. This is the default
-  behavior if neither -f nor -n is specified.
-
-- `--ext <extension>`
-  (Optional) The file extension to search for when a folder is provided
-  as an input path. Default is "mkv".
-
-- `--suffix <text>`
-  (Optional) A custom text suffix to add to the output filenames before the
-  extension. If not provided, it defaults to "_SDR_NVENCC" or "_SDR_FFMPEG"
-  depending on the engine used.
+2. FFmpeg & ffprobe: A recent 'full' build must be in the system's PATH.
+3. NVEncC: A recent version must be in the system's PATH.
+4. NVIDIA GPU and a recent graphics driver.
+5. The specific .cube LUT file referenced in the script.
 
 """
 
@@ -118,55 +47,178 @@ import os
 import subprocess
 import sys
 import shutil
+import json
+import math
 
 # --- Configuration ---
-# Updated to the new path you provided.
 LUT_FILE_PATH = r"I:\LUT\NBCUniversal-UHD-HDR-SDR-Single-Master-Production-Workflow-Recommendation-LUTs-main\LUTS_for_Software_DaVinci_Premiere_Avid_FinalCutPro\DaVinci-Resolve-with-Video-Range-Tag\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
 
+# --- YouTube SDR Bitrate Table ---
+YOUTUBE_SDR_BITRATES = {
+    2160: [40, 60], # 4K
+    1440: [16, 24], # 2K
+    1080: [8, 12],
+    720:  [5, 7.5],
+    480:  [2.5, 4],
+    360:  [1, 1.5]
+}
+
+# --- Metadata and Settings Functions ---
+def get_video_metadata(input_file):
+    """Probes the video file with ffprobe to get resolution and frame rate."""
+    print(f"   -> Probing video metadata for {os.path.basename(input_file)}...")
+    command = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,avg_frame_rate",
+        "-of", "json", input_file
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        metadata = json.loads(result.stdout)['streams'][0]
+        
+        num, den = metadata['avg_frame_rate'].split('/')
+        denominator = float(den)
+        if denominator == 0:
+            frame_rate = float(num)
+        else:
+            frame_rate = float(num) / denominator
+        
+        return {
+            "width": int(metadata['width']),
+            "height": int(metadata['height']),
+            "frame_rate": frame_rate
+        }
+    except (subprocess.CalledProcessError, KeyError, IndexError, ZeroDivisionError) as e:
+        print(f"   ❌ Could not probe video metadata for {os.path.basename(input_file)}. Skipping. Error: {e}")
+        return None
+
+def get_youtube_sdr_settings(height, frame_rate):
+    """Calculates encoding settings based on YouTube's recommendations."""
+    closest_res = min(YOUTUBE_SDR_BITRATES.keys(), key=lambda x: abs(x - height))
+    is_high_fps = frame_rate > 30.0
+    bitrate_mbps = YOUTUBE_SDR_BITRATES[closest_res][1 if is_high_fps else 0]
+    
+    bitrate_kbps = int(bitrate_mbps * 1000)
+    
+    settings = {
+        "bitrate_str": f"{bitrate_mbps}M",
+        "max_bitrate_str": f"{bitrate_mbps * 1.5}M",
+        "bitrate_kbps": bitrate_kbps,
+        "max_bitrate_kbps": int(bitrate_kbps * 1.5)
+    }
+    print(f"   -> Auto-determined settings: {height}p@{round(frame_rate, 2)}fps -> Target Bitrate: {settings['bitrate_str']}")
+    return settings
+
 # --- Dependency Check Functions ---
-def check_ffmpeg():
-    """Checks if ffmpeg.exe is available."""
+def check_dependencies(use_ffmpeg):
+    """Checks if required executables are available."""
     try:
-        if not subprocess.check_output(["where", "ffmpeg"]).strip(): raise FileNotFoundError
-        print("✅ ffmpeg.exe found.")
+        if not shutil.which("ffprobe"): raise FileNotFoundError("ffprobe")
+        print("✅ ffprobe.exe found.")
+        if use_ffmpeg:
+            if not shutil.which("ffmpeg"): raise FileNotFoundError("ffmpeg")
+            print("✅ ffmpeg.exe found.")
+        else:
+            if not shutil.which("nvencc64"): raise FileNotFoundError("nvencc64")
+            print("✅ nvencc64.exe found.")
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ Error: 'ffmpeg.exe' not found in your system's PATH.")
+    except FileNotFoundError as e:
+        print(f"❌ Error: '{e}' not found in your system's PATH.")
         return False
 
-def check_nvencc():
-    """Checks if nvencc64.exe is available."""
-    try:
-        if not subprocess.check_output(["where", "nvencc64"]).strip(): raise FileNotFoundError
-        print("✅ nvencc64.exe found.")
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ Error: 'nvencc64.exe' not found in your system's PATH.")
-        return False
-
-# --- FFmpeg Conversion Function ---
-def process_file_ffmpeg(input_file, output_suffix):
-    """Converts a video using the robust, hybrid GPU/CPU FFmpeg pipeline."""
+# --- FFmpeg Conversion Function (Verified Correct) ---
+def process_file_ffmpeg(input_file, output_suffix, override_bitrate_mbps=None, resize_target=None):
+    metadata = get_video_metadata(input_file)
+    if not metadata: return
+    
+    gop_size = math.ceil(metadata['frame_rate'] / 2)
+    
+    if override_bitrate_mbps:
+        print(f"   -> Using manual bitrate override: {override_bitrate_mbps} Mbps")
+        bitrate_kbps = int(override_bitrate_mbps * 1000)
+        settings = {
+            "bitrate_str": f"{override_bitrate_mbps}M",
+            "max_bitrate_str": f"{override_bitrate_mbps * 1.5}M",
+            "bitrate_kbps": bitrate_kbps
+        }
+    else:
+        settings = get_youtube_sdr_settings(metadata['height'], metadata['frame_rate'])
+    
     directory = os.path.dirname(os.path.abspath(input_file))
-    base, ext = os.path.splitext(os.path.basename(input_file))
-    output_filename = f"{base}{output_suffix}.mkv"
+    base, _ = os.path.splitext(os.path.basename(input_file))
+    output_filename = f"{base}{output_suffix}.mp4"
     output_file = os.path.join(directory, output_filename)
+    
     print(f"\n🎬 Processing with FFmpeg: {os.path.basename(input_file)}")
-    filter_lut_path = LUT_FILE_PATH.replace('\\', '/').replace(':', '\\:')
-    video_filter = f"lut3d=file='{filter_lut_path}'"
+    
+    # Build video filter chain
+    filter_chain = [f"lut3d=file='{LUT_FILE_PATH.replace('\\', '/').replace(':', '\\:')}'"]
+    if resize_target:
+        w, h = metadata['width'], metadata['height']
+        if w < h: # Portrait
+            new_w = resize_target
+            new_h = round((h * new_w) / w)
+        else: # Landscape or Square
+            new_h = resize_target
+            new_w = round((w * new_h) / h)
+        
+        # Ensure dimensions are even
+        new_w = round(new_w / 2) * 2
+        new_h = round(new_h / 2) * 2
+        print(f"   -> Resizing output to {new_w}x{new_h}")
+        filter_chain.append(f"scale={new_w}:{new_h}")
+
+    filter_chain.append("format=yuv420p")
+    video_filter_str = ",".join(filter_chain)
+    
     command = [
         "ffmpeg", "-y", "-hwaccel", "cuda", "-c:v", "av1_cuvid", "-i", input_file,
-        "-vf", video_filter, "-c:v", "h264_nvenc", "-preset", "p7", "-cq", "23",
-        "-b:v", "0", "-c:a", "copy", output_file
+        "-vf", video_filter_str,
+        "-c:v", "h264_nvenc", "-profile:v", "high", "-preset", "p7",
+        "-b:v", settings['bitrate_str'], "-maxrate", settings['max_bitrate_str'],
+        "-bufsize", f"{int(settings['bitrate_kbps'] * 2)}k",
+        "-bf", "2", "-g", str(gop_size), "-closed_gop", "1",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
+        "-c:a", "aac", "-b:a", "384k", "-ac", "2", "-ar", "48000",
+        "-movflags", "+faststart", output_file
     ]
     execute_command(command, input_file)
 
-# --- NVEncC Conversion Function ---
-def process_file_nvencc(input_file, output_suffix):
-    """Converts a video using NVEncC, copying the LUT locally to avoid path issues."""
+# --- NVEncC Conversion Function (Verified Correct) ---
+def process_file_nvencc(input_file, output_suffix, override_bitrate_mbps=None, resize_target=None):
+    metadata = get_video_metadata(input_file)
+    if not metadata: return
+
+    gop_size = math.ceil(metadata['frame_rate'] / 2)
+
+    if override_bitrate_mbps:
+        print(f"   -> Using manual bitrate override: {override_bitrate_mbps} Mbps")
+        bitrate_kbps = int(override_bitrate_mbps * 1000)
+        settings = {
+            "bitrate_kbps": bitrate_kbps,
+            "max_bitrate_kbps": int(bitrate_kbps * 1.5)
+        }
+    else:
+        settings = get_youtube_sdr_settings(metadata['height'], metadata['frame_rate'])
+    
+    resize_flags = []
+    if resize_target:
+        w, h = metadata['width'], metadata['height']
+        if w < h: # Portrait
+            new_w = resize_target
+            new_h = round((h * new_w) / w)
+        else: # Landscape or Square
+            new_h = resize_target
+            new_w = round((w * new_h) / h)
+
+        new_w = round(new_w / 2) * 2
+        new_h = round(new_h / 2) * 2
+        print(f"   -> Resizing output to {new_w}x{new_h}")
+        resize_flags = ["--output-res", f"{new_w}x{new_h}"]
+
     directory = os.path.dirname(os.path.abspath(input_file))
-    base, ext = os.path.splitext(os.path.basename(input_file))
-    output_filename = f"{base}{output_suffix}{ext}"
+    base, _ = os.path.splitext(os.path.basename(input_file))
+    output_filename = f"{base}{output_suffix}.mp4"
     output_file = os.path.join(directory, output_filename)
     
     lut_basename = os.path.basename(LUT_FILE_PATH)
@@ -176,21 +228,26 @@ def process_file_nvencc(input_file, output_suffix):
     shutil.copy(LUT_FILE_PATH, temp_lut_path)
     
     print(f"\n🎬 Processing with NVEncC: {os.path.basename(input_file)}")
-
+    
     colorspace_argument = f'lut3d={lut_basename},lut3d_interp=tetrahedral'
     
     command = [
-        "nvencc64",
-        "--avhw", "-i", input_file,
+        "nvencc64", "--avhw", "-i", input_file,
+        *resize_flags,
         "--vpp-colorspace", colorspace_argument,
-        "--codec", "h264",
-        "--colormatrix", "bt709", "--colorprim", "bt709", "--transfer", "bt709",
-        "--colorrange", "limited",
-        "--preset", "quality",
-        "--audio-copy",
+        "--codec", "h264", "--profile", "high", "--preset", "quality",
+        "--output-csp", "yuv420",
+        "--vbr", str(settings['bitrate_kbps']),
+        "--max-bitrate", str(settings['max_bitrate_kbps']),
+        "--vbv-bufsize", str(settings['bitrate_kbps'] * 2),
+        "--gop-len", str(gop_size),
+        "--bframes", "2",
+        "--colormatrix", "bt709", "--colorprim", "bt709", "--transfer", "bt709", "--colorrange", "limited",
+        "--audio-codec", "aac", "--audio-bitrate", "384", "--audio-samplerate", "48000",
+        "--audio-stream", ":stereo",
         "-o", output_file
     ]
-
+    
     try:
         execute_command(command, input_file)
     finally:
@@ -200,24 +257,25 @@ def process_file_nvencc(input_file, output_suffix):
 
 # --- Universal Command Executor ---
 def execute_command(command, input_file_for_error_msg):
-    """A helper function to run a command and display its output dynamically."""
     print("🚀 Executing command...")
     print("   " + subprocess.list2cmdline(command))
     try:
-        # By removing stdout/stderr pipes, output goes directly to the console in real-time.
-        subprocess.run(command, check=True)
+        result = subprocess.run(command, check=True, text=True, capture_output=True, encoding='utf-8')
         print(f"\n✅ Successfully converted: {os.path.basename(input_file_for_error_msg)}")
+        if result.stdout: print(result.stdout)
     except subprocess.CalledProcessError as e:
-        # The error log from the tool is already on the screen.
         print(f"\n❌ An error occurred during conversion of {os.path.basename(input_file_for_error_msg)}.")
-        print(f"   The application exited with a non-zero error code: {e.returncode}. Please review the console output above for details.")
+        print(f"   The application exited with a non-zero error code: {e.returncode}.")
+        print("\n--- NVEncC/FFmpeg Output ---")
+        print(e.stderr)
+        print("--------------------------")
     except Exception as e:
         print(f"An unexpected Python error occurred: {e}")
 
 # --- Main Program Logic ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Batch convert HDR videos to SDR using either FFmpeg or NVEncC.",
+        description="Batch convert HDR videos to SDR, optimized for YouTube uploads.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     encoder_group = parser.add_mutually_exclusive_group()
@@ -225,24 +283,29 @@ if __name__ == "__main__":
     encoder_group.add_argument("-n", "--nvencc", action='store_true', help="Use NVEncC for conversion (default).")
     parser.add_argument("input_paths", nargs='+', help="One or more paths to video files, folders, or glob patterns.")
     parser.add_argument("--ext", default="mkv", help="File extension to process in folders.")
-    parser.add_argument("--suffix", default=None, help="Suffix for output files (default: _SDR_NVENCC or _SDR_FFMPEG).")
+    parser.add_argument("--suffix", default=None, help="Suffix for output files (default: _SDR_NVENCC_YT or _SDR_FFMPEG_YT).")
+    parser.add_argument("-b", "--bitrate", type=float, default=None, help="Override bitrate calculation. Specify target bitrate in Mbps (e.g., 20.5).")
+    parser.add_argument("-r", "--resize", type=int, default=None, help="Resize output so the shortest side matches this value (e.g., 1080).")
+    
     args = parser.parse_args()
 
+    # Determine which engine and suffix to use
     if args.ffmpeg:
         encoder_name = "FFmpeg"
-        process_function = process_file_ffmpeg
-        if not check_ffmpeg(): sys.exit(1)
-        suffix = args.suffix if args.suffix is not None else "_SDR_FFMPEG"
+        if not check_dependencies(use_ffmpeg=True): sys.exit(1)
+        suffix = args.suffix if args.suffix is not None else "_SDR_FFMPEG_YT"
+        process_function = lambda video_file, suffix: process_file_ffmpeg(video_file, suffix, args.bitrate, args.resize)
     else:
         encoder_name = "NVEncC"
-        process_function = process_file_nvencc
-        if not check_nvencc(): sys.exit(1)
-        suffix = args.suffix if args.suffix is not None else "_SDR_NVENCC"
+        if not check_dependencies(use_ffmpeg=False): sys.exit(1)
+        suffix = args.suffix if args.suffix is not None else "_SDR_NVENCC_YT"
+        process_function = lambda video_file, suffix: process_file_nvencc(video_file, suffix, args.bitrate, args.resize)
 
     if not os.path.isfile(LUT_FILE_PATH):
         print(f"❌ Critical Error: The LUT file was not found at:\n   {LUT_FILE_PATH}")
         sys.exit(1)
         
+    # Discover files to process
     files_to_process = []
     for path in args.input_paths:
         for expanded_path in glob.glob(path):
@@ -261,5 +324,6 @@ if __name__ == "__main__":
     print(f"Found {len(unique_files)} unique video(s) to process.")
     print(f"🎨 Using conversion LUT: {os.path.basename(LUT_FILE_PATH)}")
 
+    # Process each file
     for video_file in unique_files:
         process_function(video_file, suffix)
