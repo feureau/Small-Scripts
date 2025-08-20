@@ -259,11 +259,26 @@ class SchedulerApp:
         self.filter_menubutton.pack(side=tk.LEFT, padx=(0,10))
         self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0)
         self.filter_menubutton["menu"] = self.filter_menu
-        self.filter_vars = {"public": tk.BooleanVar(), "private": tk.BooleanVar(), "unlisted": tk.BooleanVar(), "has_schedule": tk.BooleanVar()}
-        for key, text in [("public","Public"), ("private","Private"), ("unlisted","Unlisted")]:
-            self.filter_menu.add_checkbutton(label=text, variable=self.filter_vars[key], command=self.apply_filters)
+        
+        self.filter_vars = {
+            "public": tk.BooleanVar(), "not_public": tk.BooleanVar(),
+            "private": tk.BooleanVar(), "not_private": tk.BooleanVar(),
+            "unlisted": tk.BooleanVar(), "not_unlisted": tk.BooleanVar(),
+            "has_schedule": tk.BooleanVar(),
+            "no_schedule": tk.BooleanVar()
+        }
+
+        self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters)
+        self.filter_menu.add_separator()
+        self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters)
+        self.filter_menu.add_separator()
+        self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters)
         self.filter_menu.add_separator()
         self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters)
         self.filter_menu.add_separator()
         self.filter_menu.add_command(label="Clear Filters", command=self.clear_filters)
 
@@ -304,10 +319,22 @@ class SchedulerApp:
         filtered_list = []
         for vd in self.all_channel_videos:
             is_match = True
-            if "public" in active_filters and vd.video_status.get('privacyStatus') != 'public': is_match = False
-            if is_match and "private" in active_filters and vd.video_status.get('privacyStatus') != 'private': is_match = False
-            if is_match and "unlisted" in active_filters and vd.video_status.get('privacyStatus') != 'unlisted': is_match = False
+            status = vd.video_status.get('privacyStatus')
+
+            # Inclusionary privacy filters
+            if "public" in active_filters and status != 'public': is_match = False
+            if is_match and "private" in active_filters and status != 'private': is_match = False
+            if is_match and "unlisted" in active_filters and status != 'unlisted': is_match = False
+
+            # Exclusionary privacy filters
+            if is_match and "not_public" in active_filters and status == 'public': is_match = False
+            if is_match and "not_private" in active_filters and status == 'private': is_match = False
+            if is_match and "not_unlisted" in active_filters and status == 'unlisted': is_match = False
+
+            # Schedule filters
             if is_match and "has_schedule" in active_filters and not vd.video_status.get('publishAt'): is_match = False
+            if is_match and "no_schedule" in active_filters and vd.video_status.get('publishAt'): is_match = False
+            
             if is_match: filtered_list.append(vd)
         
         self._populate_treeview(filtered_list)
@@ -502,14 +529,28 @@ def update_videos_on_youtube(service, processing_data):
             succ += 1
             curr_pub_utc += delta
 
+        except HttpError as e:
+            fail += 1
+            if e.resp.status == 403 and 'quotaExceeded' in str(e.content):
+                logger.error(f"Failed to process video '{vd_obj.original_title}' due to exhausted quota.")
+                logger.warning("!!! YouTube API Quota Exceeded. ABORTING all remaining operations. !!!")
+                break
+            else:
+                logger.error(f"Failed to process video {vd_obj.video_id} ('{vd_obj.original_title}'):", exc_info=True)
+
         except Exception as e:
             fail += 1
-            logger.error(f"Failed to process video {vd_obj.video_id} ('{vd_obj.original_title}'):", exc_info=True)
+            logger.error(f"An unexpected error occurred for video {vd_obj.video_id} ('{vd_obj.original_title}'):", exc_info=True)
+
+    total_videos = len(videos_to_update)
+    unprocessed = total_videos - (succ + fail)
 
     logger.info("-------------------------------------------------")
     logger.info("Processing complete.")
     logger.info(f"  Successfully processed: {succ}")
-    logger.info(f"  Failed or skipped: {fail}")
+    logger.info(f"  Failed: {fail}")
+    if unprocessed > 0:
+        logger.warning(f"  Unprocessed (due to early exit): {unprocessed}")
     logger.info("-------------------------------------------------")
 
 
