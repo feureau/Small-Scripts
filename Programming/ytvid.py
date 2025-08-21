@@ -404,7 +404,11 @@ class VideoProcessorApp:
         resolution_mode = options.get("resolution", self.resolution_var.get())
         output_format = options.get("output_format", self.output_format_var.get())
         folder_name = f"{resolution_mode}_{output_format.upper()}"
-        output_dir = os.path.join(os.path.dirname(file_path), folder_name)
+        
+        # <<< MODIFIED LINE >>>
+        # Create the output folder in the script's working directory.
+        output_dir = os.path.join(os.getcwd(), folder_name)
+        
         os.makedirs(output_dir, exist_ok=True)
         base_name, _ = os.path.splitext(os.path.basename(file_path))
         output_file = os.path.join(output_dir, f"{base_name}_temp.mp4")
@@ -437,7 +441,6 @@ class VideoProcessorApp:
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
         cmd.extend(["--vbr", str(int(bitrate_mbps * 1000)), "--gop-len", str(gop_len)])
         
-        # <-- MODIFIED: Final, correct audio logic using your proven syntax -->
         audio_streams = get_audio_stream_info(file_path)
         if len(audio_streams) > 0:
             cmd.extend(["--audio-codec", "aac", "--audio-samplerate", "48000"])
@@ -488,7 +491,11 @@ class VideoProcessorApp:
             resolution_mode = options.get("resolution", self.resolution_var.get())
             output_format = options.get("output_format", self.output_format_var.get())
             folder_name = f"{resolution_mode}_{output_format.upper()}"
-            output_dir = os.path.join(os.path.dirname(file_path), folder_name)
+
+            # <<< MODIFIED LINE >>>
+            # Place extracted subtitles in the script's working directory as well.
+            output_dir = os.path.join(os.getcwd(), folder_name)
+
             base_name, _ = os.path.splitext(os.path.basename(file_path))
             for sub in self.subtitles_by_file[file_path]:
                 if sub["type"] == "embedded":
@@ -511,7 +518,6 @@ class VideoProcessorApp:
         for file_path in self.file_list: self.encode_single_pass(file_path)
         print("Processing Complete.")
 
-    # ... (Rest of class methods collapsed for brevity)
     def run_nvenc_command(self, cmd):
         print("Running NVEnc command:"); print(" ".join(cmd))
         process = subprocess.Popen(cmd,stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True,encoding='utf-8',errors='replace',bufsize=1)
@@ -567,6 +573,7 @@ class VideoProcessorApp:
     def extract_embedded_subtitle_to_ass(self, input_file, output_ass, sub_track_id, final_width, final_height): pass
     def extract_subtitle_to_srt(self, input_file, output_srt, sub_track_id=None): pass
 
+# <<< MODIFIED MAIN EXECUTION BLOCK >>>
 if __name__ == "__main__":
     import glob
     from tkinterdnd2 import TkinterDnD
@@ -574,12 +581,22 @@ if __name__ == "__main__":
     root = TkinterDnD.Tk()
     initial_files = []
     if len(sys.argv) > 1:
-        for arg in sys.argv[1:]: initial_files.extend(glob.glob(arg))
+        for arg in sys.argv[1:]: 
+            initial_files.extend(glob.glob(arg))
     else:
+        # If no arguments are passed, recursively scan the current directory tree for videos.
         current_dir = os.getcwd()
         video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv']
-        print(f"Scanning current directory: {current_dir} for video files...")
-        files_from_cwd = [os.path.join(current_dir, f) for f in os.listdir(current_dir) if os.path.isfile(os.path.join(current_dir, f)) and os.path.splitext(f)[1].lower() in video_extensions]
+        print(f"Scanning directory tree starting from: {current_dir} for video files...")
+        
+        files_from_cwd = []
+        for dirpath, _, filenames in os.walk(current_dir):
+            for filename in filenames:
+                if os.path.splitext(filename)[1].lower() in video_extensions:
+                    full_path = os.path.join(dirpath, filename)
+                    files_from_cwd.append(full_path)
+        
         initial_files.extend(sorted(files_from_cwd))
+
     app = VideoProcessorApp(root, sorted(initial_files))
     root.mainloop()
