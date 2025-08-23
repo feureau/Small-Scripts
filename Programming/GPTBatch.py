@@ -1,6 +1,6 @@
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v13_mod
+Multimodal AI Batch Processor (GPTBatcher) v15_mod
 ================================================================================
 
 Purpose:
@@ -15,36 +15,33 @@ Key Features:
 -------------
 - Dual AI Engine Support: Seamlessly switch between Google's cloud API and a
   local Ollama instance.
-- Multimodal Input: Natively handles text files (.txt, .py, .md, etc.) and
-  image files (.png, .jpg, .webp, etc.).
+- Multimodal Input: Natively handles text files and image files.
+- Grouped Processing with Validation:
+    - Optionally send multiple files in a single API call.
+    - Real-time GUI validation checks if any proposed batch exceeds a safe
+      size limit (15 MB), preventing likely API failures.
 - User-Friendly GUI: An intuitive interface for adding files, editing the
   prompt, selecting models, and configuring outputs.
-- Comprehensive Logging: Generates a detailed .log file for every operation.
-- Interactive Quota Handling:
-    - Pauses on quota errors, allowing the user to switch models or quit.
-    - Marks previously exhausted models in the selection list.
-- Accurate Statistics:
-    - Files are only counted as "failed" if they are ultimately unsuccessful.
-    - A separate counter tracks how many times quota limits were reached.
-    - Provides a list of all failed files in the final summary.
-- Graceful Cancellation: Handles Ctrl+C (KeyboardInterrupt) to stop the batch
-  cleanly and provide a final summary.
-- Failure Handling:
-    - Does NOT write an output file if processing fails for any reason.
-    - Copies the original source file to a "failed" subfolder upon failure.
-- Natural File Sorting: Correctly sorts file lists with numbers.
+- Comprehensive Logging & Naming:
+    - Generates a detailed .log file for every operation.
+    - Output files for groups are named descriptively (e.g., file1_to_file4.txt).
+- Interactive Quota Handling: Pauses on quota errors, allowing the user to
+  switch models or quit.
+- Accurate Statistics & Failure Handling:
+    - Provides a detailed summary of successes and failures.
+    - Copies original source files to a "failed" subfolder upon any failure.
+- Graceful Cancellation: Handles Ctrl+C to stop the batch cleanly.
 - API Rate Limiting: Includes an automatic delay for the Google Gemini API.
 
 Dependencies:
 -------------
-You must install the required Python libraries before running:
 pip install google-generativeai requests
 
 Setup & Usage:
 --------------
 1. Configure your Google API Key (preferably via the GOOGLE_API_KEY env var).
-2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v13_mod.py`
-3. Use the GUI to configure your batch job and click "Process".
+2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v15_mod.py`
+3. If using grouping, the GUI will warn you if any batch is too large.
 4. If a quota limit is reached, follow the instructions in the console.
 
 --------------------------------------------------------------------------------
@@ -53,24 +50,24 @@ Setup & Usage:
 import os
 import sys
 import json
-import requests # Make sure to install: pip install requests
-import glob # For handling wildcard file paths
-import time # For rate limiting, timestamps
-import datetime # For timestamp formatting
-import google.generativeai as genai # For Google Gemini API
-from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, PermissionDenied # For handling Google API exceptions
-import argparse # For command-line argument parsing
+import requests
+import glob
+import time
+import datetime
+import google.generativeai as genai
+from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, PermissionDenied
+import argparse
 import tkinter as tk
 from tkinter import ttk
-from tkinter import scrolledtext # Import scrolledtext for the prompt box
+from tkinter import scrolledtext
 from tkinter import filedialog
 import tkinter.messagebox
-import tkinter.simpledialog # For API key input fallback
-import base64 # For encoding images
-import mimetypes # For guessing image MIME types
-import traceback # For logging detailed exception info
-import re # For natural sorting
-import shutil # MODIFICATION: Added for copying failed files
+import tkinter.simpledialog
+import base64
+import mimetypes
+import traceback
+import re
+import shutil
 
 ################################################################################
 # --- Customizable Variables (Configuration) ---
@@ -88,7 +85,7 @@ OLLAMA_GENERATE_ENDPOINT = f"{OLLAMA_API_URL}/api/generate"
 USER_PROMPT_TEMPLATE = """Analyze the provided content (text or image).
 
 If text is provided below: Summarize the key points, identify main topics, and suggest relevant keywords.
-If an image is provided: Describe the image in detail, including objects, scene, actions, and overall mood. Suggest relevant keywords or tags for the image.
+If one or more images are provided: Describe the image(s) in detail. If multiple, note any relationships or differences. Suggest relevant keywords or tags.
 
 Provide the output as plain text.
 """
@@ -113,34 +110,48 @@ REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 # 8. Output Subfolder Names
 DEFAULT_OUTPUT_SUBFOLDER_NAME = ""
 LOG_SUBFOLDER_NAME = "processing_logs"
-FAILED_SUBFOLDER_NAME = "failed" # MODIFICATION: Added for failed files
+FAILED_SUBFOLDER_NAME = "failed"
+
+# MODIFICATION START: Add batch size limit for validation
+# 9. Batch Size Limit
+# Google's payload limit is 20MB. Base64 encoding adds ~33%. 15MB is a safe limit for source files.
+MAX_BATCH_SIZE_MB = 15
+MAX_BATCH_SIZE_BYTES = MAX_BATCH_SIZE_MB * 1024 * 1024
+# MODIFICATION END
 
 ################################################################################
 # --- End of Customizable Variables ---
 ################################################################################
 
-# --- Custom Exception for Fatal Errors ---
 class QuotaExhaustedError(Exception):
-    """Custom exception raised when Google API quota is exhausted."""
     pass
 
-# Global variable for rate limiting
 last_request_time = None
 
-# --- Helper Functions ---
 def natural_sort_key(s):
-    """Creates a key for natural sorting (e.g., '2' before '10')."""
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
-# --- Model Fetching Functions ---
+# MODIFICATION START: New helper function for descriptive group naming
+def generate_group_base_name(filepaths_group):
+    """Generates a descriptive base name for a group of files."""
+    if not filepaths_group:
+        return "empty_group"
+    
+    base_names = [os.path.splitext(os.path.basename(fp))[0] for fp in filepaths_group]
+    
+    if len(base_names) == 1:
+        return base_names[0]
+    else:
+        return f"{base_names[0]}_to_{base_names[-1]}"
+# MODIFICATION END
+
 def fetch_google_models(api_key):
-    """Fetches available 'generateContent' models from Google Generative AI."""
     if not api_key: return [], "API key not available."
     try:
         print("Fetching Google AI models...")
         genai.configure(api_key=api_key)
         models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        models.sort(key=lambda x: (not ('pro' in x or 'flash' in x), x))
+        models.sort(key=lambda x: (not ('1.5' in x or 'pro' in x or 'flash' in x), x))
         print(f"Found and sorted Google models: {models}")
         return models, None
     except PermissionDenied: return [], "Google API Permission Denied. Check API key permissions."
@@ -148,7 +159,6 @@ def fetch_google_models(api_key):
     except Exception as e: return [], f"An unexpected error occurred: {e}"
 
 def fetch_ollama_models():
-    """Fetches available models from the Ollama API."""
     try:
         print(f"Fetching Ollama models from {OLLAMA_TAGS_ENDPOINT}...")
         response = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=10)
@@ -161,7 +171,6 @@ def fetch_ollama_models():
     except Exception as e: return [], f"An unexpected error occurred: {e}"
 
 def read_file_content(filepath):
-    """Reads file content, returning content, mime type, and is_image flag."""
     _, extension = os.path.splitext(filepath)
     ext = extension.lower()
     try:
@@ -173,13 +182,12 @@ def read_file_content(filepath):
         else: return None, None, False, f"Unsupported file extension '{ext}'"
     except Exception as e: return None, None, False, f"Error reading file {filepath}: {e}"
 
-# --- API Call Functions ---
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     if engine == "google": return call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
     elif engine == "ollama": return call_ollama_api(prompt_text, model_name, **kwargs)
     else: return f"Error: Unknown engine '{engine}'"
 
-def call_google_gemini_api(prompt_text, api_key, model_name, image_bytes=None, mime_type=None, stream_output=False):
+def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=None, stream_output=False):
     global last_request_time
     if not api_key: return "Error: Google API Key not configured."
     if not model_name: return "Error: No Google model selected."
@@ -191,9 +199,13 @@ def call_google_gemini_api(prompt_text, api_key, model_name, image_bytes=None, m
             print(f"Rate limit active. Sleeping for {sleep_duration:.2f} seconds...")
             time.sleep(sleep_duration)
         last_request_time = time.time()
+        
         payload = [prompt_text]
-        if image_bytes: payload.append({"inline_data": {"mime_type": mime_type, "data": image_bytes}})
-        print(f"Sending request to Google Gemini (Model: {model_name})")
+        if images_data_list:
+            for img_data in images_data_list:
+                payload.append({"inline_data": {"mime_type": img_data['mime_type'], "data": img_data['bytes']}})
+
+        print(f"Sending request to Google Gemini (Model: {model_name}) with {len(images_data_list or [])} image(s)...")
         response = model.generate_content(payload, stream=stream_output)
         if stream_output: return "".join(chunk.text for chunk in response).strip()
         else:
@@ -208,11 +220,13 @@ def call_google_gemini_api(prompt_text, api_key, model_name, image_bytes=None, m
     except GoogleAPIError as e: return f"Error: Google API Call Failed - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Google API issue - {e}"
 
-def call_ollama_api(prompt_text, model_name, image_bytes=None, **kwargs):
+def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
     payload = {"model": model_name, "prompt": prompt_text, "stream": False}
-    if image_bytes: payload["images"] = [base64.b64encode(image_bytes).decode('utf-8')]
+    if images_data_list:
+        payload["images"] = [base64.b64encode(img_data['bytes']).decode('utf-8') for img_data in images_data_list]
+    
     try:
-        print(f"Calling Ollama API ({model_name}) at {OLLAMA_GENERATE_ENDPOINT}")
+        print(f"Calling Ollama API ({model_name}) with {len(images_data_list or [])} image(s) at {OLLAMA_GENERATE_ENDPOINT}")
         response = requests.post(OLLAMA_GENERATE_ENDPOINT, json=payload, timeout=600)
         response.raise_for_status()
         data = response.json()
@@ -222,9 +236,8 @@ def call_ollama_api(prompt_text, model_name, image_bytes=None, **kwargs):
     except requests.exceptions.RequestException as e: return f"Error: Could not connect to Ollama API - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Ollama Call Failed - {e}"
 
-# --- Output & Logging Functions ---
-def determine_unique_output_paths(input_filepath, suffix, out_folder, log_folder):
-    base_name = os.path.splitext(os.path.basename(input_filepath))[0]
+# MODIFICATION START: Updated function to accept a base name instead of a full path
+def determine_unique_output_paths(base_name, suffix, out_folder, log_folder):
     out_base = f"{base_name}{suffix}"
     def find_unique(folder, base, ext):
         path = os.path.join(folder, f"{base}{ext}")
@@ -235,6 +248,7 @@ def determine_unique_output_paths(input_filepath, suffix, out_folder, log_folder
             if not os.path.exists(path): return path
             i += 1
     return find_unique(out_folder, out_base, RAW_OUTPUT_FILE_EXTENSION), find_unique(log_folder, out_base, LOG_FILE_EXTENSION)
+# MODIFICATION END
 
 def save_raw_api_response(text, filepath):
     try:
@@ -253,9 +267,7 @@ def save_processing_log(log_data, log_filepath):
         print(f"Processing log saved to: {log_filepath}")
     except Exception as e: print(f"**ERROR: Could not save processing log to {log_filepath}: {e}**")
 
-# MODIFICATION START: New function to copy failed files
 def copy_failed_file(filepath):
-    """Copies a failed file to a 'failed' subfolder in its source directory."""
     try:
         source_dir = os.path.dirname(os.path.abspath(filepath))
         failed_dir = os.path.join(source_dir, FAILED_SUBFOLDER_NAME)
@@ -265,38 +277,51 @@ def copy_failed_file(filepath):
         print(f"Copied failed source file to: {dest_path}")
     except Exception as e:
         print(f"**ERROR: Could not copy failed file {filepath}: {e}**", file=sys.stderr)
-# MODIFICATION END
 
-# --- Core Processing ---
-def process_single_file(input_filepath, api_key, engine, user_prompt, model_name, **kwargs):
+def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, **kwargs):
     start_time = datetime.datetime.now()
-    raw_path, log_path = determine_unique_output_paths(input_filepath, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
-    log_data = {'input_filepath': input_filepath, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
+    # MODIFICATION: Use the new naming function
+    base_name = generate_group_base_name(filepaths_group)
+    raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
+    
+    log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
     api_response = None
     try:
-        print(f"--- Reading file: {input_filepath} ---")
-        content, mime, is_image, err = read_file_content(input_filepath)
-        if err: raise ValueError(err)
-        prompt = user_prompt if is_image else f"{user_prompt}\n\n--- File Content Start ---\n{content}\n--- File Content End ---"
+        images_data = []
+        text_content_parts = []
+        prompt = user_prompt
+        
+        print(f"--- Reading {len(filepaths_group)} file(s) for this group ---")
+        for filepath in filepaths_group:
+            content, mime, is_image, err = read_file_content(filepath)
+            if err: raise ValueError(f"Error reading {filepath}: {err}")
+            
+            if is_image:
+                images_data.append({"bytes": content, "mime_type": mime})
+            else:
+                text_content_parts.append(f"\n\n--- File Content Start: {os.path.basename(filepath)} ---\n{content}\n--- File Content End ---")
+
+        if text_content_parts:
+            prompt += "".join(text_content_parts)
+
         log_data['prompt_sent'] = prompt
-        api_response = call_generative_ai_api(engine, prompt, api_key, model_name, image_bytes=content if is_image else None, mime_type=mime, stream_output=kwargs['stream_output'])
+        api_response = call_generative_ai_api(engine, prompt, api_key, model_name, images_data_list=images_data, stream_output=kwargs['stream_output'])
         if api_response and api_response.startswith("Error:"): raise Exception(api_response)
+        
         log_data['status'] = 'Success'
         return api_response, None
+        
     except Exception as e:
-        print(f"**ERROR during processing {input_filepath}: {e}**")
+        print(f"**ERROR during processing group starting with {os.path.basename(filepaths_group[0])}: {e}**")
         log_data.update({'error_message': str(e), 'traceback_info': traceback.format_exc() if not isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)) else "N/A"})
         if isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)): raise
         return None, str(e)
     finally:
-        # MODIFICATION START: Only save the output file on success.
         if log_data['status'] == 'Success':
             save_raw_api_response(api_response, raw_path)
-        # MODIFICATION END
         log_data.update({'end_time': datetime.datetime.now(), 'duration': (datetime.datetime.now() - start_time).total_seconds()})
         save_processing_log(log_data, log_path)
 
-# --- API Key Handling ---
 def get_api_key(force_gui=False):
     api_key = os.environ.get(API_KEY_ENV_VAR_NAME)
     if not api_key or force_gui:
@@ -308,8 +333,7 @@ def get_api_key(force_gui=False):
         else: print("ERROR: Google API Key not provided."); return None
     return api_key
 
-# --- GUI Implementation ---
-class AppGUI(tk.Tk): # (GUI class remains the same)
+class AppGUI(tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
         self.title("Multimodal AI Batch Processor")
@@ -322,9 +346,16 @@ class AppGUI(tk.Tk): # (GUI class remains the same)
         self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
         self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', False))
+        self.group_files_var = tk.BooleanVar(value=False)
+        self.group_size_var = tk.IntVar(value=3)
+        # MODIFICATION START: Add variable to track validation status
+        self.batch_size_warning = tk.BooleanVar(value=False)
+        # MODIFICATION END
         self.create_widgets()
         self.engine_var.trace_add("write", self.update_models)
         self.after(150, self.update_models)
+        self.after(200, self.validate_batch_sizes) # Initial check
+        
     def create_widgets(self):
         main_frame = ttk.Frame(self, padding="10"); main_frame.pack(fill=tk.BOTH, expand=True)
         api_frame = ttk.Frame(main_frame, padding="5"); api_frame.pack(fill=tk.X)
@@ -336,21 +367,87 @@ class AppGUI(tk.Tk): # (GUI class remains the same)
         btn_frame = ttk.Frame(files_frame); btn_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Button(btn_frame, text="Add Files...", command=self.add_files).pack(fill=tk.X)
         ttk.Button(btn_frame, text="Remove Sel.", command=self.remove_files).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_frame, text="Clear All", command=lambda: self.files_var.set([])).pack(fill=tk.X)
+        ttk.Button(btn_frame, text="Clear All", command=self.clear_files).pack(fill=tk.X)
         prompt_frame = ttk.LabelFrame(main_frame, text="User Prompt", padding="10"); prompt_frame.pack(fill=tk.X, pady=5)
         self.prompt_text = scrolledtext.ScrolledText(prompt_frame, wrap=tk.WORD, height=8); self.prompt_text.pack(fill=tk.X); self.prompt_text.insert(tk.INSERT, USER_PROMPT_TEMPLATE)
         options_frame = ttk.Frame(main_frame); options_frame.pack(fill=tk.X, pady=5)
         ttk.Label(options_frame, text="AI Engine:").grid(row=0, column=0, sticky=tk.W); ttk.Combobox(options_frame, textvariable=self.engine_var, values=['google', 'ollama'], state="readonly").grid(row=0, column=1, sticky=tk.EW)
         ttk.Label(options_frame, text="Model:").grid(row=1, column=0, sticky=tk.W); self.model_combo = ttk.Combobox(options_frame, textvariable=self.model_var, state="disabled"); self.model_combo.grid(row=1, column=1, sticky=tk.EW); options_frame.columnconfigure(1, weight=1)
+        
+        grouping_frame = ttk.LabelFrame(main_frame, text="Batch Grouping", padding="10")
+        grouping_frame.pack(fill=tk.X, pady=5)
+        self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_group_size_entry)
+        self.group_check.grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        ttk.Label(grouping_frame, text="Files per call:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        # MODIFICATION: Link spinbox command to validation
+        self.group_size_spinbox = ttk.Spinbox(grouping_frame, from_=2, to=100, textvariable=self.group_size_var, width=5, state="disabled", command=self.validate_batch_sizes)
+        self.group_size_spinbox.grid(row=1, column=1, sticky=tk.W)
+        # MODIFICATION START: Add the status label
+        self.group_status_label = ttk.Label(grouping_frame, text="")
+        self.group_status_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
+        # MODIFICATION END
+
         settings_frame = ttk.LabelFrame(main_frame, text="Output Settings", padding="10"); settings_frame.pack(fill=tk.X, pady=5)
         ttk.Label(settings_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W); ttk.Entry(settings_frame, textvariable=self.output_dir_var).grid(row=0, column=1, sticky=tk.EW); ttk.Button(settings_frame, text="Browse...", command=self.browse_output_dir).grid(row=0, column=2)
         ttk.Label(settings_frame, text="Output Suffix:").grid(row=1, column=0, sticky=tk.W); ttk.Entry(settings_frame, textvariable=self.suffix_var).grid(row=1, column=1, sticky=tk.W)
         ttk.Checkbutton(settings_frame, text="Stream Output (Google Only)", variable=self.stream_var).grid(row=2, column=1, sticky=tk.W); settings_frame.columnconfigure(1, weight=1)
-        ttk.Button(main_frame, text="Process Selected Files", command=self.process).pack(pady=10)
+        ttk.Button(main_frame, text="Process Files", command=self.process).pack(pady=10)
+
+    # MODIFICATION START: New validation function
+    def validate_batch_sizes(self, *args):
+        """Checks if any proposed batch exceeds the size limit and updates the GUI."""
+        if not self.group_files_var.get():
+            self.group_status_label.config(text="")
+            self.batch_size_warning.set(False)
+            return
+
+        filepaths = self.files_var.get()
+        if not filepaths:
+            self.group_status_label.config(text="")
+            self.batch_size_warning.set(False)
+            return
+
+        try:
+            group_size = self.group_size_var.get()
+            if group_size < 1: return
+        except tk.TclError:
+            return # Spinbox might be temporarily empty
+
+        try:
+            file_sizes = [os.path.getsize(f) for f in filepaths]
+        except FileNotFoundError:
+            self.group_status_label.config(text="⚠️ Error: One or more files not found.", foreground="red")
+            self.batch_size_warning.set(True)
+            return
+        
+        limit_exceeded = False
+        for i in range(0, len(file_sizes), group_size):
+            chunk = file_sizes[i:i + group_size]
+            current_batch_size = sum(chunk)
+            if current_batch_size > MAX_BATCH_SIZE_BYTES:
+                limit_exceeded = True
+                break
+        
+        if limit_exceeded:
+            msg = f"⚠️ Warning: At least one batch exceeds {MAX_BATCH_SIZE_MB} MB!"
+            self.group_status_label.config(text=msg, foreground="red")
+            self.batch_size_warning.set(True)
+        else:
+            msg = f"✓ All {len(file_sizes)//group_size + (1 if len(file_sizes)%group_size else 0)} batches are under {MAX_BATCH_SIZE_MB} MB."
+            self.group_status_label.config(text=msg, foreground="green")
+            self.batch_size_warning.set(False)
+    # MODIFICATION END
+
+    def toggle_group_size_entry(self):
+        state = "normal" if self.group_files_var.get() else "disabled"
+        self.group_size_spinbox.config(state=state)
+        self.validate_batch_sizes() # Validate when toggling
+        
     def prompt_for_api_key(self):
         new_key = get_api_key(force_gui=True)
         if new_key: self.api_key = new_key; self.api_status_label.config(text="API Key Status: Set (via prompt)"); self.update_models()
         else: self.api_status_label.config(text="API Key Status: NOT Set")
+        
     def update_models(self, *args):
         engine = self.engine_var.get(); self.model_combo.set('Fetching...'); self.model_combo.configure(state="disabled"); self.update_idletasks()
         models, error_msg = fetch_google_models(self.api_key) if engine == "google" else fetch_ollama_models()
@@ -360,32 +457,59 @@ class AppGUI(tk.Tk): # (GUI class remains the same)
             cmd_model = getattr(self.args, 'model', None)
             self.model_var.set(cmd_model if cmd_model in models else (models[0] if models else ""))
         else: self.model_combo.set("No models found"); self.model_var.set("")
+        
     def add_files(self):
         selected = filedialog.askopenfilenames(parent=self, title="Select Input Files", filetypes=[("Supported Files", " ".join(f"*{ext}" for ext in ALL_SUPPORTED_EXTENSIONS)), ("All Files", "*.*")])
         if selected:
             current = list(self.files_var.get()); new_files = [os.path.normpath(f) for f in selected if os.path.normpath(f) not in current]
-            if new_files: self.files_var.set(tuple(sorted(current + new_files, key=natural_sort_key)))
+            if new_files:
+                self.files_var.set(tuple(sorted(current + new_files, key=natural_sort_key)))
+                self.validate_batch_sizes() # Validate after adding
+                
     def remove_files(self):
         selected = self.file_listbox.curselection()
         if selected:
             current = list(self.files_var.get())
             for i in sorted(selected, reverse=True): current.pop(i)
             self.files_var.set(tuple(current))
+            self.validate_batch_sizes() # Validate after removing
+            
+    def clear_files(self):
+        self.files_var.set([])
+        self.validate_batch_sizes() # Validate after clearing
+
     def browse_output_dir(self):
         directory = filedialog.askdirectory(initialdir=os.getcwd(), parent=self)
         if directory: self.output_dir_var.set(directory)
+        
     def process(self):
+        # MODIFICATION START: Add final confirmation dialog on warning
+        if self.batch_size_warning.get():
+            proceed = tkinter.messagebox.askokcancel("Batch Size Warning",
+                f"One or more of your batches exceeds the recommended {MAX_BATCH_SIZE_MB} MB limit.\n\n"
+                "This may cause API errors.\n\n"
+                "Do you want to proceed anyway?",
+                icon='warning', parent=self)
+            if not proceed:
+                return
+        # MODIFICATION END
+
+        group_size = self.group_size_var.get() if self.group_files_var.get() else 1
+        if self.group_files_var.get() and group_size < 2:
+            tkinter.messagebox.showwarning("Input Error", "Files per call must be 2 or greater when grouping is enabled.", parent=self)
+            return
+
         self.settings = {
             'files': list(self.files_var.get()), 'custom_prompt': self.prompt_text.get("1.0", tk.END).strip(),
             'engine': self.engine_var.get(), 'model': self.model_var.get(), 'output_dir': self.output_dir_var.get(),
-            'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key
+            'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key,
+            'group_size': group_size
         }
         if not self.settings['files']: tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self); return
         if not self.settings['model'] or self.settings['model'].startswith("Error:"): tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self); return
         if self.settings['engine'] == 'google' and not self.settings['api_key']: tkinter.messagebox.showwarning("Input Error", "Google engine requires an API Key.", parent=self); return
         self.destroy()
 
-# --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser(description="Multimodal AI Batch Processor")
     parser.add_argument("files", nargs="*", help="Path(s) to input file(s). Supports wildcards.")
@@ -409,39 +533,51 @@ def main():
     all_files = sorted(list(set(gui_settings['files'])), key=natural_sort_key)
     if not all_files: print("Error: No valid input files specified."); return
 
+    group_size = gui_settings.get('group_size', 1)
+    def chunk_list(data, size):
+        for i in range(0, len(data), size):
+            yield data[i:i + size]
+    
+    file_groups = list(chunk_list(all_files, group_size))
+    total_groups = len(file_groups)
+
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
     
-    # MODIFICATION START: Use a list for failed files instead of a counter
     processed_files, quota_hits = 0, 0
     failed_file_list = []
-    # MODIFICATION END
     
-    total_files = len(all_files)
     exhausted_models = set()
-    print(f"\nStarting batch processing for {total_files} file(s)...")
+    print(f"\nStarting batch processing for {len(all_files)} file(s) in {total_groups} group(s)...")
 
     i = 0
-    while i < total_files:
-        filepath = all_files[i]
-        print(f"\n--- Processing file {i + 1}/{total_files} ({os.path.basename(filepath)}) ---")
-        out_folder = central_out_folder or os.path.dirname(os.path.abspath(filepath))
+    while i < total_groups:
+        group_of_filepaths = file_groups[i]
+        first_filepath = group_of_filepaths[0]
+        
+        # MODIFICATION START: Enhanced console logging for groups
+        print(f"\n--- Processing Group {i + 1}/{total_groups} ---")
+        for fp in group_of_filepaths:
+            print(f"  - {os.path.basename(fp)}")
+        # MODIFICATION END
+            
+        out_folder = central_out_folder or os.path.dirname(os.path.abspath(first_filepath))
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(log_folder, exist_ok=True)
 
         try:
-            _, error_msg = process_single_file(filepath, gui_settings['api_key'], gui_settings['engine'],
+            _, error_msg = process_file_group(group_of_filepaths, gui_settings['api_key'], gui_settings['engine'],
                 gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
                 stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder)
             
             if not error_msg:
-                processed_files += 1
+                processed_files += len(group_of_filepaths)
+                print(f"✓ SUCCESS: Group {i + 1}/{total_groups} processed successfully.") # MODIFICATION: Success message
             else:
-                # MODIFICATION START: A non-quota error occurred, mark as failed and copy
-                failed_file_list.append(filepath)
-                copy_failed_file(filepath)
-                # MODIFICATION END
+                failed_file_list.extend(group_of_filepaths)
+                for fp in group_of_filepaths: copy_failed_file(fp)
+                print(f"✗ FAILED: Group {i + 1}/{total_groups} failed. See log for details.") # MODIFICATION: Failure message
             
-            i += 1 # Move to the next file on success or normal failure
+            i += 1
 
         except QuotaExhaustedError:
             quota_hits += 1
@@ -451,22 +587,20 @@ def main():
             
             all_google_models, err = fetch_google_models(gui_settings['api_key'])
             if err or not all_google_models:
-                print("Could not fetch alternative models. This file will be marked as failed.")
-                # MODIFICATION START: Mark as failed and copy
-                failed_file_list.append(filepath)
-                copy_failed_file(filepath)
-                # MODIFICATION END
-                i += 1 # Move to the next file
+                print("Could not fetch alternative models. This group will be marked as failed.")
+                failed_file_list.extend(group_of_filepaths)
+                for fp in group_of_filepaths: copy_failed_file(fp)
+                i += 1
                 continue
             
-            prompt = "Please choose an action:\n"
+            prompt_text = "Please choose an action:\n"
             for idx, model_name in enumerate(all_google_models):
                 marker = " (Quota Reached)" if model_name in exhausted_models else ""
-                prompt += f"  [{idx + 1}] Switch to model: {model_name}{marker}\n"
-            prompt += f"  [{len(all_google_models) + 1}] Quit the batch process\nYour choice: "
+                prompt_text += f"  [{idx + 1}] Switch to model: {model_name}{marker}\n"
+            prompt_text += f"  [{len(all_google_models) + 1}] Quit the batch process\nYour choice: "
             
             while True:
-                choice = input(prompt).strip()
+                choice = input(prompt_text).strip()
                 try:
                     choice_num = int(choice)
                     if 1 <= choice_num <= len(all_google_models):
@@ -474,12 +608,10 @@ def main():
                         print(f"Switching to model: {new_model}"); gui_settings['model'] = new_model
                         break
                     elif choice_num == len(all_google_models) + 1:
-                        print("Quitting batch process. This file will be marked as failed.")
-                        # MODIFICATION START: Mark as failed and copy
-                        failed_file_list.append(filepath)
-                        copy_failed_file(filepath)
-                        # MODIFICATION END
-                        i = total_files
+                        print("Quitting batch process. This group will be marked as failed.")
+                        failed_file_list.extend(group_of_filepaths)
+                        for fp in group_of_filepaths: copy_failed_file(fp)
+                        i = total_groups
                         break
                     else:
                         print("Invalid number. Please try again.")
@@ -488,20 +620,18 @@ def main():
 
         except KeyboardInterrupt:
             print("\n" + "="*50); print("CANCELLED: Batch processing was interrupted by the user."); print("="*50)
-            # MODIFICATION START: Mark as failed and copy
-            failed_file_list.append(filepath)
-            copy_failed_file(filepath)
-            # MODIFICATION END
-            break # Exit the main while loop
+            failed_file_list.extend(group_of_filepaths)
+            for fp in group_of_filepaths: copy_failed_file(fp)
+            break
 
-    # MODIFICATION START: Update the entire summary section
     failed_count = len(failed_file_list)
     attempted_count = processed_files + failed_count
     
     print("\n=========================================")
     print("          Batch Processing Summary")
     print("=========================================")
-    print(f"Total files attempted: {attempted_count}")
+    group_str = f" (in {total_groups} groups)" if group_size > 1 else ""
+    print(f"Total files attempted: {attempted_count}{group_str}")
     print(f"Successfully processed: {processed_files}")
     print(f"Failed (unrecoverable errors or cancelled): {failed_count}")
     print(f"Quota limits reached: {quota_hits} time(s)")
@@ -514,9 +644,6 @@ def main():
         print("(Originals of failed files have been copied to a 'failed' subfolder)")
 
     print("=========================================")
-    # MODIFICATION END
 
 if __name__ == "__main__":
     main()
-
-# --- END OF FILE GPTBatcher_Multimodal_Logged_v13_mod.py ---

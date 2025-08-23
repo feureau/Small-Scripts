@@ -213,7 +213,7 @@ class VideoData:
 
 # --- Main Application Class ---
 class SchedulerApp:
-    def __init__(self):
+    def __init__(self, log_dir=None):
         self.service = None
         self.all_channel_videos = []
         self.videos_to_process_on_exit = []
@@ -289,9 +289,12 @@ class SchedulerApp:
         sched = ttk.LabelFrame(bottom_frame, text='Scheduling', padding=10); sched.pack(side=tk.LEFT, fill=tk.Y, padx=(0,5))
         meta = ttk.LabelFrame(bottom_frame, text='Default Metadata (for selected)', padding=10); meta.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        ttk.Label(sched, text='First Publish (YYYY-MM-DD HH:MM):').grid(row=0, column=0, sticky='w'); self.start_ent = ttk.Entry(sched, width=20); self.start_ent.insert(0, (datetime.now() + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')); self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
-        ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w'); self.interval_hour_var = tk.StringVar(value='0'); ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_hour_var).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(sched, text='Interval Mins:').grid(row=2, column=0, sticky='w'); self.interval_minute_var = tk.StringVar(value='0'); ttk.Spinbox(sched, from_=0, to=59, width=5, textvariable=self.interval_minute_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
+        # UPDATED: Set default "First Publish" time to 2 hours into the future
+        ttk.Label(sched, text='First Publish (YYYY-MM-DD HH:MM):').grid(row=0, column=0, sticky='w'); self.start_ent = ttk.Entry(sched, width=20); self.start_ent.insert(0, (datetime.now() + timedelta(hours=2)).strftime('%Y-%m-%d %H:%M')); self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
+        # UPDATED: Set default "Interval Hours" to 2
+        ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w'); self.interval_hour_var = tk.StringVar(value='2'); ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_hour_var).grid(row=1, column=1, sticky='w', padx=5, pady=2)
+        # UPDATED: Set default "Interval Mins" to 24
+        ttk.Label(sched, text='Interval Mins:').grid(row=2, column=0, sticky='w'); self.interval_minute_var = tk.StringVar(value='24'); ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_minute_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
 
         ttk.Label(meta, text='Description:').grid(row=0, column=0, sticky='nw'); self.desc_txt = tk.Text(meta, height=5, width=40, wrap=tk.WORD); self.desc_txt.grid(row=0, column=1, sticky='ew', columnspan=2)
         ttk.Label(meta, text='Subtitle Lang:').grid(row=1, column=0, sticky='w'); self.subtitle_lang_cb = ttk.Combobox(meta, values=list(LANGUAGES.keys()), state="readonly"); self.subtitle_lang_cb.set('English'); self.subtitle_lang_cb.grid(row=1, column=1, sticky='ew', pady=(5,0))
@@ -362,9 +365,9 @@ class SchedulerApp:
             filename = Path(path).name
             if file_type == 'description':
                 vd_obj.description_to_set = Path(path).read_text(encoding='utf-8', errors='ignore')
-                vd_obj.description_file_path, vd_obj.description_filename = path, filename
+                vd_obj.description_file_path, vd_obj.description_filename = str(file_path), file_path.name
             else:
-                vd_obj.subtitle_file_path, vd_obj.subtitle_filename = path, filename
+                vd_obj.subtitle_file_path, vd_obj.subtitle_filename = str(file_path), file_path.name
             self.refresh_treeview_row(item_id, vd_obj)
 
     def refresh_treeview_row(self, item_id, vd_obj):
