@@ -35,6 +35,7 @@ Key Features:
   subfolder upon any failure.
 - API Rate Limiting: Includes an automatic delay for the Google Gemini API.
 - **NEW**: The final summary now includes the specific reason for each file's failure.
+- **NEW**: Option to add the filename to the prompt before the file content.
 
 Dependencies:
 -------------
@@ -232,7 +233,10 @@ def copy_failed_file(filepath):
         shutil.copy2(filepath, dest_path)
         print(f"Copied failed source file to: {dest_path}")
     except Exception as e: print(f"**ERROR: Could not copy failed file {filepath}: {e}**", file=sys.stderr)
-def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, **kwargs):
+
+# MODIFICATION START: Add add_filename_to_prompt parameter
+def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, **kwargs):
+# MODIFICATION END
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
     raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
@@ -245,7 +249,13 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             content, mime, is_image, err = read_file_content(filepath)
             if err: raise ValueError(f"Error reading {filepath}: {err}")
             if is_image: images_data.append({"bytes": content, "mime_type": mime})
-            else: text_content_parts.append(f"\n\n--- File Content Start: {os.path.basename(filepath)} ---\n{content}\n--- File Content End ---")
+            else:
+                # MODIFICATION START: Conditionally add the filename to the prompt
+                if add_filename_to_prompt:
+                    filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                    text_content_parts.append(f"\n\n--- Filename: {filename_no_ext} ---")
+                # MODIFICATION END
+                text_content_parts.append(f"\n\n--- File Content Start: {os.path.basename(filepath)} ---\n{content}\n--- File Content End ---")
         if text_content_parts: prompt += "".join(text_content_parts)
         log_data['prompt_sent'] = prompt
         api_response = call_generative_ai_api(engine, prompt, api_key, model_name, images_data_list=images_data, stream_output=kwargs['stream_output'], safety_settings=kwargs.get('safety_settings'))
@@ -286,6 +296,9 @@ class AppGUI(tk.Tk):
         self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
         self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', False))
+        # MODIFICATION START: Add BooleanVar for the new option
+        self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
+        # MODIFICATION END
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.batch_size_warning = tk.BooleanVar(value=False)
@@ -353,6 +366,9 @@ class AppGUI(tk.Tk):
         ttk.Label(options_frame, text="Model:").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
         self.model_combo = ttk.Combobox(options_frame, textvariable=self.model_var, state="disabled")
         self.model_combo.grid(row=1, column=1, sticky=tk.EW, pady=(5,0))
+        # MODIFICATION START: Add Checkbutton for the new option
+        ttk.Checkbutton(options_frame, text="Append filename to prompt before content", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
+        # MODIFICATION END
         grouping_frame = ttk.LabelFrame(right_pane, text="Batch Grouping", padding=10)
         grouping_frame.pack(fill=tk.X, pady=5)
         self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_group_size_entry)
@@ -454,7 +470,10 @@ class AppGUI(tk.Tk):
             'files': list(self.files_var.get()), 'custom_prompt': self.prompt_text.get("1.0", tk.END).strip(),
             'engine': self.engine_var.get(), 'model': self.model_var.get(), 'output_dir': self.output_dir_var.get(),
             'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key,
-            'group_size': group_size, 'safety_settings': final_safety_settings
+            'group_size': group_size, 'safety_settings': final_safety_settings,
+            # MODIFICATION START: Add the new setting to the settings dictionary
+            'add_filename_to_prompt': self.add_filename_var.get()
+            # MODIFICATION END
         }
         if not self.settings['files']: tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self); return
         if not self.settings['model'] or self.settings['model'].startswith("Error:"): tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self); return
@@ -469,6 +488,9 @@ def main():
     parser.add_argument("--stream", action='store_true', help="Enable streaming output (Google Only).")
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help="AI engine.")
     parser.add_argument("-m", "--model", help="Suggest a model to select by default.")
+    # MODIFICATION START: Add command-line argument for the new feature
+    parser.add_argument("--add-filename-to-prompt", action='store_true', help="Append filename (no extension) to the prompt before the file content.")
+    # MODIFICATION END
     args = parser.parse_args()
 
     filepaths = []
@@ -499,9 +521,7 @@ def main():
     total_groups = len(file_groups)
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
     
-    # MODIFICATION START: Changed failed_file_list to a dictionary to store reasons.
     processed_files, quota_hits, failed_files = 0, 0, {}
-    # MODIFICATION END
     
     exhausted_models = set()
     print(f"\nStarting batch processing for {len(all_files)} file(s) in {total_groups} group(s)...")
@@ -515,12 +535,13 @@ def main():
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(log_folder, exist_ok=True)
         try:
+            # MODIFICATION START: Pass the new setting to the processing function
             _, error_msg = process_file_group(group_of_filepaths, gui_settings['api_key'], gui_settings['engine'],
                 gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
                 stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder,
-                safety_settings=gui_settings['safety_settings'])
+                safety_settings=gui_settings['safety_settings'], add_filename_to_prompt=gui_settings['add_filename_to_prompt'])
+            # MODIFICATION END
             
-            # MODIFICATION START: Populate the failed_files dictionary with reasons.
             if not error_msg:
                 processed_files += len(group_of_filepaths)
                 print(f"✓ SUCCESS: Group {i + 1}/{total_groups} processed successfully.")
@@ -578,9 +599,7 @@ def main():
                 failed_files[fp] = reason
             [copy_failed_file(fp) for fp in group_of_filepaths]
             break
-            # MODIFICATION END
             
-    # MODIFICATION START: Update the summary to print reasons from the dictionary.
     failed_count = len(failed_files)
     attempted_count = processed_files + failed_count
     print("\n=========================================")
@@ -593,13 +612,11 @@ def main():
     if failed_files:
         print("\n--- List of Failed Files ---")
         for filepath, reason in failed_files.items():
-            # Clean up the reason for better display
             clean_reason = reason.replace('Error: ', '').strip()
             print(f"  - {os.path.basename(filepath)}: {clean_reason}")
         print("----------------------------")
         print("(Originals of failed files have been copied to a 'failed' subfolder)")
     print("=========================================")
-    # MODIFICATION END
 
 if __name__ == "__main__":
     main()
