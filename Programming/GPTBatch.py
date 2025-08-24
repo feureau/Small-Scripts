@@ -1,6 +1,6 @@
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v18_mod
+Multimodal AI Batch Processor (GPTBatcher) v18_mod_auto_summary
 ================================================================================
 
 Purpose:
@@ -8,13 +8,17 @@ Purpose:
 This script provides a powerful tool for batch-processing local files (both
 text and images) using generative AI models. It features a graphical user
 interface (GUI) for easy operation and supports both the Google Gemini API and
-a local Ollama instance. For each file processed, it saves the raw AI response
-and a detailed processing log.
+a local Ollama instance. If run without any file arguments, it will automatically
+scan the current directory for all supported file types. For each file processed,
+it saves the raw AI response and a detailed processing log.
 
 Key Features:
 -------------
 - Dual AI Engine Support: Seamlessly switch between Google's cloud API and a
   local Ollama instance.
+- Automatic File Discovery: If launched without command-line file arguments,
+  it automatically finds and loads all supported file types from the current
+  directory.
 - Resizable Two-Pane GUI: The interface is a modern, wide layout with a
   draggable sash, allowing dynamic resizing to fit any screen.
 - Multimodal Input & Grouping: Natively handles text/image files and can
@@ -30,6 +34,7 @@ Key Features:
 - Robust Failure Handling: Copies original source files to a "failed"
   subfolder upon any failure.
 - API Rate Limiting: Includes an automatic delay for the Google Gemini API.
+- **NEW**: The final summary now includes the specific reason for each file's failure.
 
 Dependencies:
 -------------
@@ -38,9 +43,13 @@ pip install google-generativeai requests
 Setup & Usage:
 --------------
 1. Configure your Google API Key (preferably via the GOOGLE_API_KEY env var).
-2. Run from the command line: `python GPTBatcher_Multimodal_Logged_v18_mod.py`
-3. The GUI will now be wider and you can drag the central divider to resize
-   the input and settings columns.
+2. Run from the command line in one of two ways:
+   a) To process specific files (supports wildcards):
+      `python <script_name>.py *.jpg *.txt`
+   b) To automatically find and load all supported files in the folder:
+      `python <script_name>.py`
+3. The GUI will appear, pre-loaded with the files. You can drag the central
+   divider to resize the input and settings columns.
 
 --------------------------------------------------------------------------------
 """
@@ -186,8 +195,6 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
         return "Error: Unexpected response format from Ollama."
     except requests.exceptions.RequestException as e: return f"Error: Could not connect to Ollama API - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Ollama Call Failed - {e}"
-
-# MODIFICATION START: Fixed the IndentationError in this function
 def determine_unique_output_paths(base_name, suffix, out_folder, log_folder):
     out_base = f"{base_name}{suffix}"
     def find_unique(folder, base, ext):
@@ -201,8 +208,6 @@ def determine_unique_output_paths(base_name, suffix, out_folder, log_folder):
                 return path
             i += 1
     return find_unique(out_folder, out_base, RAW_OUTPUT_FILE_EXTENSION), find_unique(log_folder, out_base, LOG_FILE_EXTENSION)
-# MODIFICATION END
-
 def save_raw_api_response(text, filepath):
     try:
         with open(filepath, 'w', encoding='utf-8') as f: f.write(text or "[Info: API response was empty]")
@@ -458,16 +463,30 @@ class AppGUI(tk.Tk):
 
 def main():
     parser = argparse.ArgumentParser(description="Multimodal AI Batch Processor")
-    parser.add_argument("files", nargs="*", help="Path(s) to input file(s). Supports wildcards.")
+    parser.add_argument("files", nargs="*", help="Path(s) to input file(s). Supports wildcards. If omitted, scans current directory.")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME, help="Subfolder for output.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help="Suffix for output filenames.")
     parser.add_argument("--stream", action='store_true', help="Enable streaming output (Google Only).")
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help="AI engine.")
     parser.add_argument("-m", "--model", help="Suggest a model to select by default.")
     args = parser.parse_args()
+
     filepaths = []
     if args.files:
-        for pattern in args.files: filepaths.extend(glob.glob(pattern, recursive=True))
+        print("Processing files specified on the command line...")
+        for pattern in args.files:
+            filepaths.extend(glob.glob(pattern, recursive=True))
+    else:
+        print("No input files specified. Searching current directory for supported files...")
+        current_directory = os.getcwd()
+        for ext in ALL_SUPPORTED_EXTENSIONS:
+            filepaths.extend(glob.glob(os.path.join(current_directory, f"*{ext}")))
+        
+        if filepaths:
+            print(f"Found {len(filepaths)} supported files to process.")
+        else:
+            print("No supported files found in the current directory.")
+            
     filepaths = sorted(list(set(f for f in filepaths if os.path.isfile(f) and os.path.splitext(f)[1].lower() in ALL_SUPPORTED_EXTENSIONS)), key=natural_sort_key)
     initial_api_key = get_api_key()
     app = AppGUI(initial_api_key, filepaths, args); app.mainloop()
@@ -479,7 +498,11 @@ def main():
     file_groups = [all_files[i:i + group_size] for i in range(0, len(all_files), group_size)]
     total_groups = len(file_groups)
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
-    processed_files, quota_hits, failed_file_list = 0, 0, []
+    
+    # MODIFICATION START: Changed failed_file_list to a dictionary to store reasons.
+    processed_files, quota_hits, failed_files = 0, 0, {}
+    # MODIFICATION END
+    
     exhausted_models = set()
     print(f"\nStarting batch processing for {len(all_files)} file(s) in {total_groups} group(s)...")
     i = 0
@@ -496,18 +519,33 @@ def main():
                 gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
                 stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder,
                 safety_settings=gui_settings['safety_settings'])
+            
+            # MODIFICATION START: Populate the failed_files dictionary with reasons.
             if not error_msg:
-                processed_files += len(group_of_filepaths); print(f"✓ SUCCESS: Group {i + 1}/{total_groups} processed successfully.")
+                processed_files += len(group_of_filepaths)
+                print(f"✓ SUCCESS: Group {i + 1}/{total_groups} processed successfully.")
             else:
-                failed_file_list.extend(group_of_filepaths); [copy_failed_file(fp) for fp in group_of_filepaths]; print(f"✗ FAILED: Group {i + 1}/{total_groups} failed. See log for details.")
+                for fp in group_of_filepaths:
+                    failed_files[fp] = error_msg
+                [copy_failed_file(fp) for fp in group_of_filepaths]
+                print(f"✗ FAILED: Group {i + 1}/{total_groups} failed. See log for details.")
             i += 1
         except QuotaExhaustedError:
-            quota_hits += 1; failed_model = gui_settings['model']; exhausted_models.add(failed_model)
-            print("\n" + "="*50); print(f"QUOTA LIMIT REACHED for model: {failed_model}"); print("="*50)
+            quota_hits += 1
+            failed_model = gui_settings['model']
+            exhausted_models.add(failed_model)
+            print("\n" + "=" * 50)
+            print(f"QUOTA LIMIT REACHED for model: {failed_model}")
+            print("=" * 50)
             all_google_models, err = fetch_google_models(gui_settings['api_key'])
             if err or not all_google_models:
                 print("Could not fetch alternative models. This group will be marked as failed.")
-                failed_file_list.extend(group_of_filepaths); [copy_failed_file(fp) for fp in group_of_filepaths]; i += 1; continue
+                reason = f"Quota limit reached for model {failed_model}; could not fetch alternatives"
+                for fp in group_of_filepaths:
+                    failed_files[fp] = reason
+                [copy_failed_file(fp) for fp in group_of_filepaths]
+                i += 1
+                continue
             prompt_text = "Please choose an action:\n"
             for idx, model_name in enumerate(all_google_models): prompt_text += f"  [{idx + 1}] Switch to model: {model_name}{' (Quota Reached)' if model_name in exhausted_models else ''}\n"
             prompt_text += f"  [{len(all_google_models) + 1}] Quit the batch process\nYour choice: "
@@ -515,22 +553,53 @@ def main():
                 choice = input(prompt_text).strip()
                 try:
                     choice_num = int(choice)
-                    if 1 <= choice_num <= len(all_google_models): gui_settings['model'] = all_google_models[choice_num - 1]; print(f"Switching to model: {gui_settings['model']}"); break
+                    if 1 <= choice_num <= len(all_google_models):
+                        gui_settings['model'] = all_google_models[choice_num - 1]
+                        print(f"Switching to model: {gui_settings['model']}")
+                        break
                     elif choice_num == len(all_google_models) + 1:
                         print("Quitting batch process. This group will be marked as failed.")
-                        failed_file_list.extend(group_of_filepaths); [copy_failed_file(fp) for fp in group_of_filepaths]; i = total_groups; break
-                    else: print("Invalid number. Please try again.")
-                except ValueError: print("Invalid choice. Please enter a number from the list.")
+                        reason = f"Quota limit reached for model {failed_model}"
+                        for fp in group_of_filepaths:
+                            failed_files[fp] = reason
+                        [copy_failed_file(fp) for fp in group_of_filepaths]
+                        i = total_groups
+                        break
+                    else:
+                        print("Invalid number. Please try again.")
+                except ValueError:
+                    print("Invalid choice. Please enter a number from the list.")
         except KeyboardInterrupt:
-            print("\n" + "="*50); print("CANCELLED: Batch processing was interrupted by the user."); print("="*50)
-            failed_file_list.extend(group_of_filepaths); [copy_failed_file(fp) for fp in group_of_filepaths]; break
-    failed_count = len(failed_file_list); attempted_count = processed_files + failed_count
-    print("\n========================================="); print("          Batch Processing Summary"); print("=========================================")
-    print(f"Total files attempted: {attempted_count}{f' (in {total_groups} groups)' if group_size > 1 else ''}")
-    print(f"Successfully processed: {processed_files}"); print(f"Failed (unrecoverable errors or cancelled): {failed_count}"); print(f"Quota limits reached: {quota_hits} time(s)")
-    if failed_file_list:
-        print("\n--- List of Failed Files ---"); [print(f"  - {os.path.basename(f)}") for f in failed_file_list]; print("----------------------------"); print("(Originals of failed files have been copied to a 'failed' subfolder)")
+            print("\n" + "=" * 50)
+            print("CANCELLED: Batch processing was interrupted by the user.")
+            print("=" * 50)
+            reason = "Processing cancelled by user"
+            for fp in group_of_filepaths:
+                failed_files[fp] = reason
+            [copy_failed_file(fp) for fp in group_of_filepaths]
+            break
+            # MODIFICATION END
+            
+    # MODIFICATION START: Update the summary to print reasons from the dictionary.
+    failed_count = len(failed_files)
+    attempted_count = processed_files + failed_count
+    print("\n=========================================")
+    print("          Batch Processing Summary")
     print("=========================================")
+    print(f"Total files attempted: {attempted_count}{f' (in {total_groups} groups)' if group_size > 1 else ''}")
+    print(f"Successfully processed: {processed_files}")
+    print(f"Failed (unrecoverable errors or cancelled): {failed_count}")
+    print(f"Quota limits reached: {quota_hits} time(s)")
+    if failed_files:
+        print("\n--- List of Failed Files ---")
+        for filepath, reason in failed_files.items():
+            # Clean up the reason for better display
+            clean_reason = reason.replace('Error: ', '').strip()
+            print(f"  - {os.path.basename(filepath)}: {clean_reason}")
+        print("----------------------------")
+        print("(Originals of failed files have been copied to a 'failed' subfolder)")
+    print("=========================================")
+    # MODIFICATION END
 
 if __name__ == "__main__":
     main()

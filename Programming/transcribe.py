@@ -96,6 +96,8 @@ COMMAND-LINE ARGUMENTS:
 ------------------------------------------------------------------------------------------------
 [Input/Output]
   files                 : One or more media files, directories, or wildcard patterns.
+                          If no files are provided, the script will scan the current
+                          directory and all subdirectories for media files.
   -o, --output_dir      : Directory to save output files. (Default: same as input)
   --srt                 : Force generation of an SRT file. (Default: on)
   --text                : Generate a plain text file in addition to the SRT.
@@ -129,8 +131,9 @@ COMMAND-LINE ARGUMENTS:
 
 """
 
-import sys, os, subprocess, tkinter as tk, argparse, glob, re, json
-from tkinter import filedialog
+# --- MODIFICATION START: Removed tkinter import ---
+import sys, os, subprocess, argparse, glob, re, json
+# --- MODIFICATION END ---
 
 # ==============================================================================================
 # --- DEFAULT CONFIGURATION ---
@@ -157,6 +160,7 @@ def is_media_file(filepath: str) -> bool:
     SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma",
                             ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v"}
     return os.path.splitext(filepath)[1].lower() in SUPPORTED_EXTENSIONS
+
 def get_files_from_args(args: list) -> list:
     collected_files = []
     for arg in args:
@@ -176,25 +180,33 @@ def get_files_from_args(args: list) -> list:
                 elif is_media_file(arg): collected_files.append(arg)
             else: print(f"Warning: {arg} does not exist, skipping...")
     return collected_files
-def prompt_user_for_files_or_folder() -> list:
-    root = tk.Tk()
-    root.withdraw()
-    choice = input("Press [F] for folder, [A] for files, [Q] to quit: ").lower()
-    if choice == 'q': sys.exit(0)
-    elif choice == 'f':
-        folder = filedialog.askdirectory(title="Select Folder")
-        return [os.path.join(folder, f) for f in os.listdir(folder) if is_media_file(f)] if folder else []
-    elif choice == 'a':
-        files = filedialog.askopenfilenames(title="Select Media Files")
-        return list(files) if files else []
+
+# --- MODIFICATION START: Replaced prompt_user_for_files_or_folder with a new scanning function ---
+def scan_current_directory_recursively() -> list:
+    """Scans the current working directory and all subdirectories for media files."""
+    print("ℹ️ No input files provided. Scanning current directory and subdirectories...")
+    media_files = []
+    current_directory = os.getcwd()
+    for root, _, filenames in os.walk(current_directory):
+        for filename in filenames:
+            filepath = os.path.join(root, filename)
+            if is_media_file(filepath):
+                media_files.append(filepath)
+    
+    if media_files:
+        print(f"✅ Found {len(media_files)} media file(s) to process.")
     else:
-        print("Invalid choice. Exiting.")
-        sys.exit(0)
+        print("⚠️ No media files found in the current directory or its subdirectories.")
+        
+    return media_files
+# --- MODIFICATION END ---
+
 def format_srt_time(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     milliseconds = int((seconds - int(seconds)) * 1000)
     return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02},{milliseconds:03}"
+
 def post_process_word_timestamps(data: dict, max_duration_ms: int) -> dict:
     max_duration_s = max_duration_ms / 1000.0
     corrected_count = 0
@@ -208,6 +220,7 @@ def post_process_word_timestamps(data: dict, max_duration_ms: int) -> dict:
     if corrected_count > 0:
         print(f"ℹ️ Post-processing: Corrected {corrected_count} early/lingering word(s) with durations > {max_duration_ms}ms.")
     return data
+
 def convert_data_to_word_level_srt(data: dict, srt_path: str):
     try:
         with open(srt_path, 'w', encoding='utf-8') as f:
@@ -257,7 +270,6 @@ def run_whisper_xxl_transcription(
     if ff_speechnorm: command.append("--ff_speechnorm")
 
     print(f"\n🔥 Transcribing: {os.path.basename(file_path)}")
-    # print("DEBUG Command:", " ".join(command))
     
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -290,7 +302,11 @@ def convert_srt_to_plaintext(srt_path: str) -> str:
     return " ".join(plaintext_lines)
 
 def main():
-    parser = argparse.ArgumentParser(prog="transcribe.py", description="Advanced Transcription and Diarization with Faster Whisper XXL.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        prog="transcribe.py", 
+        description="Advanced Transcription and Diarization with Faster Whisper XXL. If no files are provided, scans the current directory tree.", 
+        formatter_class=argparse.RawTextHelpFormatter # Use RawTextHelpFormatter to preserve help text formatting
+    )
     parser.add_argument("files", nargs="*", help="One or more media files, directories, or wildcard patterns.")
     parser.add_argument("-o", "--output_dir", type=str, default=None, help="Directory to save output files.")
     parser.add_argument("--srt", action="store_true", help="Generate an SRT subtitle file.")
@@ -302,9 +318,7 @@ def main():
     
     # VAD & Timestamp Arguments
     parser.add_argument("-vsc", "--vad_silence_cutoff", type=int, default=DEFAULT_VAD_SILENCE_CUTOFF, help="VAD silence cutoff in ms for standard (segment) mode.")
-    # --- THIS IS THE CORRECTED LINE ---
     parser.add_argument("-wt", "--word_timestamps", action="store_true", help="Enable precise word-level timestamps. Overrides -vsc with a more sensitive internal value and enables post-processing.")
-    # --- END CORRECTION ---
     parser.add_argument("-mwd", "--max_word_duration", type=int, default=DEFAULT_MAX_WORD_DURATION, help="Sanity check to cap word duration in ms (used only with -wt).")
 
     # Formatting Arguments
@@ -323,10 +337,18 @@ def main():
     parser.set_defaults(ff_speechnorm=DEFAULT_ENABLE_FF_SPEECHNORM)
 
     args = parser.parse_args()
-    files = get_files_from_args(args.files) if args.files else prompt_user_for_files_or_folder()
-    if not files: print("No media files selected or found. Exiting."); sys.exit(0)
+    
+    # --- MODIFICATION START: Updated file collection logic ---
+    files = get_files_from_args(args.files) if args.files else scan_current_directory_recursively()
+    # --- MODIFICATION END ---
+    
+    if not files: 
+        print("No media files found to process. Exiting.")
+        sys.exit(0)
+    
     produce_srt = args.srt or (not args.srt and not args.text)
     produce_text = args.text
+    
     for file_path in files:
         srt_path = run_whisper_xxl_transcription(
             file_path=file_path, enable_diarization=args.diarization, language=args.lang,
@@ -336,18 +358,26 @@ def main():
             max_word_duration=args.max_word_duration, ff_rnndn_xiph=args.ff_rnndn_xiph,
             ff_speechnorm=args.ff_speechnorm
         )
-        if not srt_path: print(f"⚠️ Skipping file due to transcription failure: {os.path.basename(file_path)}"); continue
+        if not srt_path: 
+            print(f"⚠️ Skipping file due to transcription failure: {os.path.basename(file_path)}")
+            continue
+            
         if produce_text:
             plain_text = convert_srt_to_plaintext(srt_path)
             txt_path = os.path.splitext(srt_path)[0] + ".txt"
             try:
                 with open(txt_path, "w", encoding="utf-8") as f: f.write(plain_text)
                 print(f"✅ Plain text output created: {os.path.basename(txt_path)}")
-            except Exception as e: print(f"❌ Failed to write plain text file: {e}")
+            except Exception as e: 
+                print(f"❌ Failed to write plain text file: {e}")
+                
         if not produce_srt and os.path.exists(srt_path):
             try:
-                os.remove(srt_path); print(f"ℹ️ Final SRT file removed as only text was requested: {os.path.basename(srt_path)}")
-            except Exception as e: print(f"❌ Could not remove final SRT file: {e}")
+                os.remove(srt_path)
+                print(f"ℹ️ Final SRT file removed as only text was requested: {os.path.basename(srt_path)}")
+            except Exception as e: 
+                print(f"❌ Could not remove final SRT file: {e}")
+                
     print("\n✅ All processing completed!")
 
 if __name__ == "__main__":
