@@ -35,6 +35,13 @@
 #   without changing the video schedule.
 # - Subtitle Uploads: Can upload subtitle files (.srt, .vtt) and associate them with the
 #   correct video and language.
+# - Dimension Fetching: Retrieves video resolution (width/height) during the loading
+#   process to enable powerful filtering.
+# - Comprehensive Filtering: Provides a dropdown menu to filter the video list by privacy
+#   status, schedule status, whether metadata files have been matched, and video
+#   orientation (Horizontal vs. Vertical/Shorts).
+# - Clickable Column Sorting: The main video list can be sorted by any column (ID, Title,
+#   etc.) by simply clicking on the column header. Clicking again reverses the sort order.
 # - Tag Validation & Sanitization: Automatically cleans and truncates video tags to comply with
 #   YouTube's 500-character limit and other API rules, preventing errors.
 # - Dry Run Mode: Provides a "test mode" to verify all settings and file matches without
@@ -56,6 +63,8 @@
 #      file, which opens a browser for Google account login and consent.
 #    - Load Videos: The user clicks the second button to fetch all videos from their
 #      channel. The script simultaneously scans the local directory for matching metadata files.
+#    - Filter & Sort (Optional): The user can use the filter menu to narrow down the list
+#      (e.g., show only Vertical videos with no subtitle file) or click on column headers to sort.
 #    - Select & Configure: The user selects one or more videos from the list. They can then
 #      set the scheduling options (start time, interval) and choose whether to update the
 #      schedule, upload subtitles, or run in "Dry Run" mode.
@@ -84,9 +93,16 @@
 #   program exits, we ensure that the credential cannot be used again if it were ever
 #   compromised. It forces a fresh authentication on each run, which is a safer default.
 #
-# - Batch API Calls: When fetching video details, the script first gets a list of all video
-#   IDs and then requests full details in batches of 50. This is vastly more efficient and
-#   consumes significantly less API quota compared to making one API call per video.
+# - Efficient, Single-Pass API Calls: When fetching video details, the script requests all
+#   necessary data (`snippet`, `status`, `fileDetails`) in a single API call, batched in
+#   groups of 50. This is vastly more efficient and consumes significantly less API quota
+#   compared to making multiple calls per video.
+#
+# - Manual Implementation of GUI Features: Tkinter provides a foundational toolkit, but advanced
+#   widget features like clickable column sorting are not built-in. This functionality was
+#   manually implemented by capturing header click events and programmatically re-ordering
+#   the data in the Treeview widget. This provides a better user experience at the cost of
+#   more complex GUI code.
 #
 # - Resilient JSON Parsing: The `sanitize_and_parse_json` function is designed to be forgiving.
 #   Users often copy-paste text which can lead to simple syntax errors (like unescaped quotes).
@@ -107,7 +123,8 @@
 #    You can install them with: `pip install --upgrade google-api-python-client google-auth-oauthlib google-auth-library requests`
 # 3. `client_secrets.json` file: You must have a project in the Google Cloud Platform,
 #    enable the "YouTube Data API v3", and create OAuth 2.0 Client ID credentials for a
-#    "Desktop app". Download the resulting JSON file and save it as `client_secrets.json`.
+#    "Desktop app". Download the resulting JSON file and save it as `client_secrets.json`
+#    in the same directory as this script.
 #
 # --------------------------------------------------------------------------------------------------
 #
@@ -203,7 +220,6 @@ def sanitize_and_parse_json(content: str) -> dict | None:
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         return json.loads(json_str)
     except json.JSONDecodeError as e:
-        # Re-raise the error so the calling function can catch it and log details.
         raise e
     except Exception:
         return None
@@ -261,11 +277,20 @@ def get_authenticated_service(secrets_path):
 
 # --- Data Model ---
 class VideoData:
-    def __init__(self, video_id, video_title, video_snippet, video_status):
+    def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None):
         self.video_id, self.original_title = video_id, video_title
         self.video_snippet, self.video_status = video_snippet or {}, video_status or {}
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
+        
+        self.width = 0
+        self.height = 0
+        if video_file_details:
+            video_streams = video_file_details.get('videoStreams', [])
+            if video_streams:
+                self.width = video_streams[0].get('widthPixels', 0)
+                self.height = video_streams[0].get('heightPixels', 0)
+
         self.title_to_set = self.video_snippet.get('title', self.original_title)
         self.description_to_set = self.video_snippet.get('description', '')
         self.tags_to_set = self.video_snippet.get('tags', [])
@@ -303,7 +328,17 @@ class SchedulerApp:
         self.tree.heading('sub_file', text='Subtitle File'); self.tree.column('sub_file', width=150)
         self.tree.heading('status', text='Privacy'); self.tree.column('status', width=80, stretch=tk.NO)
         self.tree.heading('publish_at', text='Scheduled At (UTC)'); self.tree.column('publish_at', width=150)
-        
+
+        for col in self.tree['columns']:
+            self.tree.heading(col, text=col, command=lambda _col=col: self._sort_column(_col, False))
+
+        self.tree.heading('id', text='Video ID')
+        self.tree.heading('title', text='Title (New title if from JSON)')
+        self.tree.heading('desc_file', text='Desc. File')
+        self.tree.heading('sub_file', text='Subtitle File')
+        self.tree.heading('status', text='Privacy')
+        self.tree.heading('publish_at', text='Scheduled At (UTC)')
+
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -316,7 +351,7 @@ class SchedulerApp:
         self.tree.bind("<Button-3>", self.show_context_menu)
         
         list_controls = ttk.Frame(list_lf); list_controls.pack(fill=tk.X, pady=(5,0))
-        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by Status...", state=tk.DISABLED)
+        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED)
         self.filter_menubutton.pack(side=tk.LEFT, padx=(0,10))
         self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0)
         self.filter_menubutton["menu"] = self.filter_menu
@@ -325,8 +360,10 @@ class SchedulerApp:
             "public": tk.BooleanVar(), "not_public": tk.BooleanVar(),
             "private": tk.BooleanVar(), "not_private": tk.BooleanVar(),
             "unlisted": tk.BooleanVar(), "not_unlisted": tk.BooleanVar(),
-            "has_schedule": tk.BooleanVar(),
-            "no_schedule": tk.BooleanVar()
+            "has_schedule": tk.BooleanVar(), "no_schedule": tk.BooleanVar(),
+            "has_desc_file": tk.BooleanVar(), "no_desc_file": tk.BooleanVar(),
+            "has_sub_file": tk.BooleanVar(), "no_sub_file": tk.BooleanVar(),
+            "is_horizontal": tk.BooleanVar(), "is_vertical": tk.BooleanVar()
         }
 
         self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters)
@@ -340,6 +377,15 @@ class SchedulerApp:
         self.filter_menu.add_separator()
         self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters)
         self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters)
+        self.filter_menu.add_separator()
+        self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters)
+        self.filter_menu.add_separator()
+        self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters)
+        self.filter_menu.add_separator()
+        self.filter_menu.add_checkbutton(label="Horizontal Video (Landscape)", variable=self.filter_vars["is_horizontal"], command=self.apply_filters)
+        self.filter_menu.add_checkbutton(label="Vertical Video (Portrait/Shorts)", variable=self.filter_vars["is_vertical"], command=self.apply_filters)
         self.filter_menu.add_separator()
         self.filter_menu.add_command(label="Clear Filters", command=self.clear_filters)
 
@@ -372,6 +418,27 @@ class SchedulerApp:
         self.schedule_button.pack(fill=tk.X, ipady=8, pady=5)
         self.status_bar = ttk.Label(frm, text="Welcome! Please authenticate.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
+    def _sort_column(self, col, reverse):
+        """Sorts the treeview items when a column header is clicked."""
+        data_list = [(self.tree.set(k, col), k) for k in self.tree.get_children('')]
+        
+        if col == 'publish_at':
+            def get_sort_key(item):
+                if item[0] == "Not Scheduled":
+                    return datetime.min if not reverse else datetime.max
+                try:
+                    return datetime.strptime(item[0], '%Y-%m-%d %H:%M:%S UTC')
+                except ValueError:
+                    return datetime.min
+            data_list.sort(key=get_sort_key, reverse=reverse)
+        else:
+            data_list.sort(key=lambda x: str(x[0]).lower(), reverse=reverse)
+
+        for index, (val, k) in enumerate(data_list):
+            self.tree.move(k, '', index)
+        
+        self.tree.heading(col, command=lambda: self._sort_column(col, not reverse))
+
     def update_status(self, message):
         self.status_bar.config(text=message)
         self.root.update_idletasks()
@@ -395,6 +462,16 @@ class SchedulerApp:
             if is_match and "not_unlisted" in active_filters and status == 'unlisted': is_match = False
             if is_match and "has_schedule" in active_filters and not vd.video_status.get('publishAt'): is_match = False
             if is_match and "no_schedule" in active_filters and vd.video_status.get('publishAt'): is_match = False
+            if is_match and "has_desc_file" in active_filters and not vd.description_file_path: is_match = False
+            if is_match and "no_desc_file" in active_filters and vd.description_file_path: is_match = False
+            if is_match and "has_sub_file" in active_filters and not vd.subtitle_file_path: is_match = False
+            if is_match and "no_sub_file" in active_filters and vd.subtitle_file_path: is_match = False
+
+            if vd.width > 0 and vd.height > 0:
+                if is_match and "is_horizontal" in active_filters and vd.width <= vd.height: is_match = False
+                if is_match and "is_vertical" in active_filters and vd.height <= vd.width: is_match = False
+            elif "is_horizontal" in active_filters or "is_vertical" in active_filters:
+                is_match = False
             
             if is_match: filtered_list.append(vd)
         
@@ -471,7 +548,7 @@ class SchedulerApp:
                 self.update_status("Authentication failed. Check console.")
 
     def gui_load_all_videos(self):
-        self.update_status("Loading videos from YouTube...")
+        self.update_status("Loading videos from YouTube... This may take a moment.")
         self.all_channel_videos = self.fetch_all_videos_from_api()
         self.clear_filters()
         self.filter_menubutton.config(state=tk.NORMAL)
@@ -494,9 +571,9 @@ class SchedulerApp:
             
             for i in range(0, len(video_ids), 50):
                 batch_ids = video_ids[i:i+50]
-                videos_resp = self.service.videos().list(id=",".join(batch_ids), part="snippet,status").execute()
+                videos_resp = self.service.videos().list(id=",".join(batch_ids), part="snippet,status,fileDetails").execute()
                 for item in videos_resp.get("items", []):
-                    vd_obj = VideoData(item["id"], item["snippet"]["title"], item["snippet"], item["status"])
+                    vd_obj = VideoData(item["id"], item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails"))
                     normalized_title = normalize_for_matching(vd_obj.original_title)
                     
                     for file_path in local_files:
@@ -590,9 +667,10 @@ def update_videos_on_youtube(service, processing_data):
 
     for i, vd_obj in enumerate(videos_to_update):
         if update_schedule:
-            vd_obj.publishAt_to_set_new = curr_pub_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # This is the corrected line for timestamp formatting to prevent API errors
+            vd_obj.publishAt_to_set_new = curr_pub_utc.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         else:
-            vd_obj.publishAt_to_set_new = None # Explicitly set to None if not scheduling
+            vd_obj.publishAt_to_set_new = None
             
         final_tags = []
         current_length = 0
@@ -617,6 +695,7 @@ def update_videos_on_youtube(service, processing_data):
 
         if is_dry_run:
             logger.info(f"DRY RUN ({i+1}/{len(videos_to_update)}): Video '{vd_obj.original_title}'")
+            logger.info(f"  - Dimensions: {vd_obj.width}x{vd_obj.height}")
             logger.info(f"  - Would set title to: '{vd_obj.title_to_set}'")
             logger.info(f"  - Would set tags to (validated): {final_tags}")
             if vd_obj.publishAt_to_set_new:
@@ -635,7 +714,6 @@ def update_videos_on_youtube(service, processing_data):
             continue
 
         try:
-            # Build the request body dynamically based on whether we are scheduling
             request_body_status = {'privacyStatus': 'private'}
             if vd_obj.publishAt_to_set_new:
                 request_body_status['publishAt'] = vd_obj.publishAt_to_set_new
