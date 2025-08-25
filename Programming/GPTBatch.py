@@ -1,21 +1,22 @@
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v18_mod_auto_summary
+Multimodal AI Batch Processor (GPTBatcher) v19_mod_lmstudio
 ================================================================================
 
 Purpose:
 --------
 This script provides a powerful tool for batch-processing local files (both
 text and images) using generative AI models. It features a graphical user
-interface (GUI) for easy operation and supports both the Google Gemini API and
-a local Ollama instance. If run without any file arguments, it will automatically
-scan the current directory for all supported file types. For each file processed,
-it saves the raw AI response and a detailed processing log.
+interface (GUI) for easy operation and supports the Google Gemini API, a
+local Ollama instance, and a local LM Studio instance. If run without any file
+arguments, it will automatically scan the current directory for all supported
+file types. For each file processed, it saves the raw AI response and a detailed
+processing log.
 
 Key Features:
 -------------
-- Dual AI Engine Support: Seamlessly switch between Google's cloud API and a
-  local Ollama instance.
+- Triple AI Engine Support: Seamlessly switch between Google's cloud API, a
+  local Ollama instance, or a local LM Studio instance.
 - Automatic File Discovery: If launched without command-line file arguments,
   it automatically finds and loads all supported file types from the current
   directory.
@@ -34,8 +35,9 @@ Key Features:
 - Robust Failure Handling: Copies original source files to a "failed"
   subfolder upon any failure.
 - API Rate Limiting: Includes an automatic delay for the Google Gemini API.
-- **NEW**: The final summary now includes the specific reason for each file's failure.
-- **NEW**: Option to add the filename to the prompt before the file content.
+- NEW: The final summary now includes the specific reason for each file's failure.
+- NEW: Option to add the filename to the prompt before the file content.
+- NEW: Added support for LM Studio as an AI provider.
 
 Dependencies:
 -------------
@@ -44,12 +46,13 @@ pip install google-generativeai requests
 Setup & Usage:
 --------------
 1. Configure your Google API Key (preferably via the GOOGLE_API_KEY env var).
-2. Run from the command line in one of two ways:
+2. For local models, ensure Ollama or LM Studio's server is running.
+3. Run from the command line in one of two ways:
    a) To process specific files (supports wildcards):
       `python <script_name>.py *.jpg *.txt`
    b) To automatically find and load all supported files in the folder:
       `python <script_name>.py`
-3. The GUI will appear, pre-loaded with the files. You can drag the central
+4. The GUI will appear, pre-loaded with the files. You can drag the central
    divider to resize the input and settings columns.
 
 --------------------------------------------------------------------------------
@@ -82,9 +85,19 @@ import shutil
 # --- Customizable Variables (Configuration) ---
 ################################################################################
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
+
+# Ollama Configuration
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_API_URL}/api/tags"
 OLLAMA_GENERATE_ENDPOINT = f"{OLLAMA_API_URL}/api/generate"
+
+# LM Studio Configuration
+# LM STUDIO INTEGRATION START
+LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1")
+LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
+LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
+# LM STUDIO INTEGRATION END
+
 USER_PROMPT_TEMPLATE = """Analyze the provided content (text or image).
 
 If text is provided below: Summarize the key points, identify main topics, and suggest relevant keywords.
@@ -140,6 +153,21 @@ def fetch_ollama_models():
     except requests.exceptions.ConnectionError: return [], f"Connection Error: Is Ollama running at {OLLAMA_API_URL}?"
     except requests.exceptions.RequestException as e: return [], f"Ollama Request Error: {e}"
     except Exception as e: return [], f"An unexpected error occurred: {e}"
+
+# LM STUDIO INTEGRATION START
+def fetch_lmstudio_models():
+    try:
+        print(f"Fetching LM Studio models from {LMSTUDIO_MODELS_ENDPOINT}...")
+        response = requests.get(LMSTUDIO_MODELS_ENDPOINT, timeout=10)
+        response.raise_for_status()
+        models = sorted([m.get("id") for m in response.json().get("data", []) if m.get("id")])
+        print(f"Found LM Studio models: {models}")
+        return models, None
+    except requests.exceptions.ConnectionError: return [], f"Connection Error: Is LM Studio server running at {os.path.dirname(LMSTUDIO_API_URL)}?"
+    except requests.exceptions.RequestException as e: return [], f"LM Studio Request Error: {e}"
+    except Exception as e: return [], f"An unexpected error occurred while fetching LM Studio models: {e}"
+# LM STUDIO INTEGRATION END
+
 def read_file_content(filepath):
     _, extension = os.path.splitext(filepath)
     ext = extension.lower()
@@ -151,10 +179,15 @@ def read_file_content(filepath):
             with open(filepath, 'rb') as f: return f.read(), mime_type or 'application/octet-stream', True, None
         else: return None, None, False, f"Unsupported file extension '{ext}'"
     except Exception as e: return None, None, False, f"Error reading file {filepath}: {e}"
+
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     if engine == "google": return call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
     elif engine == "ollama": return call_ollama_api(prompt_text, model_name, **kwargs)
+    # LM STUDIO INTEGRATION START
+    elif engine == "lmstudio": return call_lmstudio_api(prompt_text, model_name, **kwargs)
+    # LM STUDIO INTEGRATION END
     else: return f"Error: Unknown engine '{engine}'"
+
 def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=None, stream_output=False, safety_settings=None):
     global last_request_time
     if not api_key: return "Error: Google API Key not configured."
@@ -196,6 +229,40 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
         return "Error: Unexpected response format from Ollama."
     except requests.exceptions.RequestException as e: return f"Error: Could not connect to Ollama API - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Ollama Call Failed - {e}"
+
+# LM STUDIO INTEGRATION START
+def call_lmstudio_api(prompt_text, model_name, images_data_list=None, **kwargs):
+    headers = {"Content-Type": "application/json"}
+    message_content = [{"type": "text", "text": prompt_text}]
+    if images_data_list:
+        for img_data in images_data_list:
+            base64_image = base64.b64encode(img_data['bytes']).decode('utf-8')
+            message_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{img_data['mime_type']};base64,{base64_image}"}
+            })
+    payload = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": message_content}],
+        "stream": False
+    }
+    try:
+        print(f"Calling LM Studio API ({model_name}) with {len(images_data_list or [])} image(s) at {LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT}")
+        response = requests.post(LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT, headers=headers, json=payload, timeout=600)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("choices"):
+            return data["choices"][0]["message"]["content"].strip()
+        if "error" in data:
+            return f"Error: LM Studio API returned an error - {data['error']}"
+        return "Error: Unexpected response format from LM Studio."
+    except requests.exceptions.RequestException as e:
+        return f"Error: Could not connect to LM Studio API - {e}"
+    except Exception as e:
+        traceback.print_exc()
+        return f"Error: Unexpected LM Studio Call Failed - {e}"
+# LM STUDIO INTEGRATION END
+
 def determine_unique_output_paths(base_name, suffix, out_folder, log_folder):
     out_base = f"{base_name}{suffix}"
     def find_unique(folder, base, ext):
@@ -233,10 +300,7 @@ def copy_failed_file(filepath):
         shutil.copy2(filepath, dest_path)
         print(f"Copied failed source file to: {dest_path}")
     except Exception as e: print(f"**ERROR: Could not copy failed file {filepath}: {e}**", file=sys.stderr)
-
-# MODIFICATION START: Add add_filename_to_prompt parameter
 def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, **kwargs):
-# MODIFICATION END
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
     raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
@@ -250,11 +314,9 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             if err: raise ValueError(f"Error reading {filepath}: {err}")
             if is_image: images_data.append({"bytes": content, "mime_type": mime})
             else:
-                # MODIFICATION START: Conditionally add the filename to the prompt
                 if add_filename_to_prompt:
                     filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
                     text_content_parts.append(f"\n\n--- Filename: {filename_no_ext} ---")
-                # MODIFICATION END
                 text_content_parts.append(f"\n\n--- File Content Start: {os.path.basename(filepath)} ---\n{content}\n--- File Content End ---")
         if text_content_parts: prompt += "".join(text_content_parts)
         log_data['prompt_sent'] = prompt
@@ -296,9 +358,7 @@ class AppGUI(tk.Tk):
         self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
         self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', False))
-        # MODIFICATION START: Add BooleanVar for the new option
         self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
-        # MODIFICATION END
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.batch_size_warning = tk.BooleanVar(value=False)
@@ -362,13 +422,13 @@ class AppGUI(tk.Tk):
         options_frame.pack(fill=tk.X, pady=(0, 5))
         options_frame.columnconfigure(1, weight=1)
         ttk.Label(options_frame, text="AI Engine:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Combobox(options_frame, textvariable=self.engine_var, values=['google', 'ollama'], state="readonly").grid(row=0, column=1, sticky=tk.EW)
+        # LM STUDIO INTEGRATION START
+        ttk.Combobox(options_frame, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky=tk.EW)
+        # LM STUDIO INTEGRATION END
         ttk.Label(options_frame, text="Model:").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
         self.model_combo = ttk.Combobox(options_frame, textvariable=self.model_var, state="disabled")
         self.model_combo.grid(row=1, column=1, sticky=tk.EW, pady=(5,0))
-        # MODIFICATION START: Add Checkbutton for the new option
         ttk.Checkbutton(options_frame, text="Append filename to prompt before content", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
-        # MODIFICATION END
         grouping_frame = ttk.LabelFrame(right_pane, text="Batch Grouping", padding=10)
         grouping_frame.pack(fill=tk.X, pady=5)
         self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_group_size_entry)
@@ -427,7 +487,16 @@ class AppGUI(tk.Tk):
         else: self.api_status_label.config(text="API Key Status: NOT Set")
     def update_models(self, *args):
         engine = self.engine_var.get(); self.model_combo.set('Fetching...'); self.model_combo.configure(state="disabled"); self.update_idletasks()
-        models, error_msg = fetch_google_models(self.api_key) if engine == "google" else fetch_ollama_models()
+        # LM STUDIO INTEGRATION START
+        if engine == "google":
+            models, error_msg = fetch_google_models(self.api_key)
+        elif engine == "ollama":
+            models, error_msg = fetch_ollama_models()
+        elif engine == "lmstudio":
+            models, error_msg = fetch_lmstudio_models()
+        else:
+            models, error_msg = [], "Unknown engine selected"
+        # LM STUDIO INTEGRATION END
         if error_msg: self.model_combo.set(f"Error: {error_msg}"); self.model_var.set("")
         elif models:
             self.model_combo['values'] = models; self.model_combo.configure(state="readonly")
@@ -471,9 +540,7 @@ class AppGUI(tk.Tk):
             'engine': self.engine_var.get(), 'model': self.model_var.get(), 'output_dir': self.output_dir_var.get(),
             'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key,
             'group_size': group_size, 'safety_settings': final_safety_settings,
-            # MODIFICATION START: Add the new setting to the settings dictionary
             'add_filename_to_prompt': self.add_filename_var.get()
-            # MODIFICATION END
         }
         if not self.settings['files']: tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self); return
         if not self.settings['model'] or self.settings['model'].startswith("Error:"): tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self); return
@@ -486,11 +553,11 @@ def main():
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME, help="Subfolder for output.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help="Suffix for output filenames.")
     parser.add_argument("--stream", action='store_true', help="Enable streaming output (Google Only).")
-    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama'], help="AI engine.")
+    # LM STUDIO INTEGRATION START
+    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama', 'lmstudio'], help="AI engine.")
+    # LM STUDIO INTEGRATION END
     parser.add_argument("-m", "--model", help="Suggest a model to select by default.")
-    # MODIFICATION START: Add command-line argument for the new feature
     parser.add_argument("--add-filename-to-prompt", action='store_true', help="Append filename (no extension) to the prompt before the file content.")
-    # MODIFICATION END
     args = parser.parse_args()
 
     filepaths = []
@@ -535,12 +602,10 @@ def main():
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(log_folder, exist_ok=True)
         try:
-            # MODIFICATION START: Pass the new setting to the processing function
             _, error_msg = process_file_group(group_of_filepaths, gui_settings['api_key'], gui_settings['engine'],
                 gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
                 stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder,
                 safety_settings=gui_settings['safety_settings'], add_filename_to_prompt=gui_settings['add_filename_to_prompt'])
-            # MODIFICATION END
             
             if not error_msg:
                 processed_files += len(group_of_filepaths)
