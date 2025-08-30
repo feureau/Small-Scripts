@@ -1,60 +1,85 @@
 #!/usr/bin/env python3
 """
-Pandoc Batch Converter Script
-============================
+=================================================
+Pandoc Batch Converter Script: Detailed Rationale
+=================================================
 
-A Python script to convert multiple files between various document formats using pandoc.
-This script uses pypandoc (Python wrapper for pandoc) to perform batch conversions.
+Version: 2.0
 
-Requirements:
--------------
-- Python 3.x
-- pypandoc: pip install pypandoc
-- pandoc executable (will be downloaded automatically if missing)
+### 1. High-Level Purpose
 
-Features:
----------
-- Batch convert multiple files using glob patterns
-- Support for various input and output formats
-- Automatic pandoc installation if missing
-- Progress reporting and error handling
-- Cross-platform compatibility
+This script serves as a user-friendly command-line wrapper for Pandoc, a powerful universal document converter. Its primary goal is to simplify the process of converting multiple files (batch conversion) from one format to another without needing to remember complex Pandoc commands. It is designed for common, everyday conversion tasks while providing flexibility for more advanced uses.
 
-Usage Examples:
---------------
-1. Convert all markdown files to docx:
-   python pandoc_converter.py "*.md" docx
+### 2. Key Features
 
-2. Convert all text files to PDF:
-   python pandoc_converter.py "*.txt" pdf
+-   **Batch Conversion:** Uses glob patterns (e.g., "*.md") to convert many files at once.
+-   **User-Friendly:** Simplifies command-line usage compared to raw Pandoc.
+-   **Automatic Setup:** Checks for Pandoc and attempts to automatically download and install it if missing, reducing setup friction.
+-   **Flexible Input:** Can handle a wide range of common formats and includes an explicit '--from' flag to support any input format Pandoc can read.
+-   **Robustness:** Includes progress reporting and error handling, so one failed file won't stop the entire batch process.
+-   **Cross-Platform:** Built with standard Python libraries to work on Windows, macOS, and Linux.
 
-3. Convert files with specific pattern to HTML:
-   python pandoc_converter.py "chapter*.md" html
+### 3. System Requirements
 
-4. Convert a single file:
-   python pandoc_converter.py "document.md" epub
+-   **Python 3.x:** The script uses modern Python syntax and the `pathlib` library.
+-   **pypandoc:** A Python library that acts as a wrapper for the Pandoc executable. It can be installed with `pip install pypandoc`.
+-   **pandoc executable:** The core conversion engine. The `pypandoc` library will attempt to download this automatically if it's not found in the system's PATH.
 
-5. Convert all supported files in current directory to docx:
-   python pandoc_converter.py "*" docx
+### 4. Usage Instructions
 
-Supported Input Formats:
------------------------
-.md, .markdown, .txt, .html, .htm, .rst, .tex, .latex, .doc, .docx, .odt
+The script is run from the command line with the following structure:
+`python pandoc_converter_v2.py [input_pattern] [output_format] [options]`
 
-Supported Output Formats:
-------------------------
-docx, pdf, html, epub, odt, rst, markdown, txt, latex, etc.
+**Examples:**
+-   `python pandoc_converter_v2.py "*.md" docx`
+    (Converts all Markdown files in the current directory to DOCX)
+-   `python pandoc_converter_v2.py "report.txt" pdf`
+    (Converts a single plaintext file to PDF, automatically treating it as Markdown)
+-   `python pandoc_converter_v2.py "book.epub" odt -f epub`
+    (Explicitly tells Pandoc that the input format is EPUB, converting it to ODT)
+-   `python pandoc_converter_v2.py "chapter-*.rst" html`
+    (Converts all ReStructuredText files starting with 'chapter-' to HTML)
 
-Notes:
-------
-- The script will automatically download pandoc if it's not found
-- Output files are created in the same directory as input files
-- Existing files with the same name will be overwritten
-- Use quotes around patterns with wildcards to prevent shell expansion
+**Important Note:** Use quotes around patterns with wildcards (like "*.md") to prevent your command-line shell from expanding the pattern before the script can process it.
 
-Author: Assistant
-Version: 1.0
-License: MIT
+-------------------------------------------------
+### 5. Core Logic and Design Rationale
+-------------------------------------------------
+
+This section explains *why* the script is built the way it is.
+
+**a. Dependency Management (`ensure_pandoc` function):**
+-   **Why:** The script's core functionality depends entirely on the Pandoc executable. A common point of failure for users is not having dependencies installed correctly.
+-   **Rationale:** This function was created to make the script as "plug-and-play" as possible. It leverages `pypandoc.ensure_pandoc_installed()` to first check for an existing installation. If that fails, it proactively tries to download it. This design choice significantly improves the user experience by automating the most critical setup step. If the automatic download also fails, it provides clear, actionable instructions for manual installation.
+
+**b. Command-Line Argument Parsing (`main` function):**
+-   **Why:** The script needs to accept user input (files, formats) from the command line.
+-   **Rationale:** The script uses Python's built-in `sys.argv` for parsing. For the simple needs of this script (input pattern, output format, and one optional flag), this approach is lightweight and avoids adding extra dependencies like `argparse`. A more complex script with many flags would benefit from `argparse`, but for this use case, manual parsing of the list is sufficient and keeps the code simple and readable.
+
+**c. File Discovery (`glob.glob` and `pathlib`):**
+-   **Why:** The script needs to find all the files that match the user's input pattern.
+-   **Rationale:**
+    -   `glob.glob` is the standard Python library for handling Unix-style wildcard patterns (`*`, `?`, `[]`). This is the most intuitive way for a user to specify multiple files and is a core feature of the script's "batch" capability.
+    -   `pathlib` is used for all file path manipulations. This is a deliberate choice over older `os.path` methods because `pathlib` provides an object-oriented, modern, and cross-platform-safe way to handle paths. For example, `file_path.with_suffix(f'.{output_format}')` is a much cleaner and more reliable way to change a file's extension than manual string splitting and joining.
+
+**d. Input Format Handling (The '--from' flag and `format_map`):**
+-   **Why:** Pandoc can read dozens of formats, but it can't always guess the correct format from a file's extension, especially for generic ones like `.txt`.
+-   **Rationale:** A multi-layered approach was chosen for maximum flexibility and ease of use:
+    1.  **User Override (`--from` flag):** This is the most powerful option. It gives the user complete control, allowing them to tell Pandoc exactly how to interpret a file. This design makes the script capable of handling *any* input format Pandoc supports, even if the file has a non-standard extension (e.g., converting a `.log` file as if it were markdown).
+    2.  **Ambiguous Extension Mapping (`format_map`):** For the most common ambiguity (`.txt`), a simple dictionary maps the extension to a default Pandoc format (`markdown`). This solves 90% of the common issues for casual users without forcing them to use the `--from` flag. This map can be easily extended if other common ambiguities are found.
+    3.  **Default Inference:** If neither of the above conditions is met, the script lets `pypandoc` do what it does best: infer the input format from the file extension (e.g., `.md` -> markdown, `.docx` -> docx).
+
+**e. Conversion Loop and Error Handling:**
+-   **Why:** When converting a large number of files, it's likely that one or more might be corrupted or in an unexpected format.
+-   **Rationale:** The main conversion logic is wrapped in a `try...except Exception as e:` block. This is a crucial design choice for a batch processing tool. It ensures that if a single file fails to convert, the script prints a helpful error message for that specific file and then *continues* to the next one, rather than crashing the entire process. This makes the script robust and reliable for large jobs.
+
+**f. Modular Functions (`ensure_pandoc`, `convert_files`, `show_help`, `main`):**
+-   **Why:** The code is organized into separate functions, each with a clear purpose.
+-   **Rationale:** This follows standard software design principles. It makes the code easier to read, test, and maintain. For example, if the argument parsing logic needed to be changed, only the `main` function would need to be edited. If the core conversion logic needed updating, only `convert_files` would be affected.
+
+**g. Entry Point (`if __name__ == "__main__":`)**
+-   **Why:** This is a standard Python convention.
+-   **Rationale:** It ensures that the `main()` function is only called when the script is executed directly from the command line. This allows the script's functions (like `convert_files`) to be potentially imported and used in other Python programs without automatically running the command-line interface.
 """
 
 import pypandoc
@@ -72,7 +97,6 @@ def ensure_pandoc():
         bool: True if pandoc is available, False otherwise
     """
     try:
-        # Try to ensure pandoc is installed
         pypandoc.ensure_pandoc_installed()
         print("✓ Pandoc is ready!")
         return True
@@ -90,77 +114,78 @@ def ensure_pandoc():
             print("- Or run: conda install -c conda-forge pandoc")
             return False
 
-def convert_files(input_pattern, output_format='docx'):
+def convert_files(input_pattern, output_format='docx', input_format=None):
     """
     Convert files matching the input pattern to the specified format.
     
     Args:
         input_pattern (str): File pattern to match (e.g., "*.md", "file.txt")
         output_format (str): Target format for conversion (default: 'docx')
+        input_format (str, optional): Explicit input format for pandoc.
     """
-    # First ensure pandoc is available
     if not ensure_pandoc():
         print("Cannot proceed without pandoc")
         return
     
-    # Expand the pattern to get all matching files
-    files = []
-    if '*' in input_pattern or '?' in input_pattern or '[' in input_pattern:
-        # Handle glob patterns
-        files = glob.glob(input_pattern)
-    else:
-        # Handle single file or direct path
-        path = Path(input_pattern)
-        if path.is_file():
-            files = [str(path)]
-        elif path.is_dir():
-            # If it's a directory, get all files in it
-            files = [str(f) for f in path.iterdir() if f.is_file()]
-        else:
-            # Try glob anyway
-            files = glob.glob(input_pattern)
+    files = glob.glob(input_pattern) if any(c in input_pattern for c in "*?[") else [input_pattern]
     
-    if not files:
+    if not any(Path(f).is_file() for f in files):
         print(f"No files found matching pattern: {input_pattern}")
         return
     
     print(f"Found {len(files)} files to convert")
     
-    # Supported input formats (common ones)
+    # Expanded list of common extensions. The '--from' flag is the true catch-all.
     supported_extensions = {
         '.md', '.markdown', '.txt', '.html', '.htm', '.rst', '.tex', '.latex',
-        '.doc', '.docx', '.odt', '.pdf'
+        '.doc', '.docx', '.odt', '.rtf', '.epub', '.opml', '.org', '.wiki', '.textile'
+    }
+    
+    # Mapping for ambiguous extensions to default Pandoc formats
+    format_map = {
+        '.txt': 'markdown',
     }
     
     converted_count = 0
     failed_count = 0
     
-    for file_path in files:
+    for file_path_str in files:
         try:
-            file_path = Path(file_path)
+            file_path = Path(file_path_str)
             
-            # Check if file exists
-            if not file_path.exists():
-                print(f"File not found: {file_path}")
-                failed_count += 1
+            if not file_path.exists() or not file_path.is_file():
+                print(f"Skipping non-existent file or directory: {file_path}")
+                continue
+
+            # If an input format is NOT specified via command line, we check our default list.
+            if not input_format and file_path.suffix.lower() not in supported_extensions:
+                print(f"Skipping unsupported file type: {file_path}. Use '--from <format>' to force conversion.")
                 continue
             
-            # Check if it's a supported format
-            if file_path.suffix.lower() not in supported_extensions:
-                print(f"Skipping unsupported file type: {file_path}")
-                continue
-            
-            # Generate output filename
             output_filename = file_path.with_suffix(f'.{output_format}')
-            
-            # Convert the file
             print(f"Converting {file_path.name} to {output_filename.name}...")
-            pypandoc.convert_file(str(file_path), output_format, outputfile=str(output_filename))
+
+            # Determine the input format specifier for Pandoc
+            format_specifier = input_format  # Prioritize user-provided format
+
+            if not format_specifier:  # If user did not provide a format, check our map
+                format_specifier = format_map.get(file_path.suffix.lower())
+
+            if format_specifier:
+                print(f"  → Explicitly using input format: '{format_specifier}'")
+
+            pypandoc.convert_file(
+                str(file_path),
+                output_format,
+                format=format_specifier,  # This will be user's choice, our guess for .txt, or None
+                outputfile=str(output_filename)
+            )
+            
             converted_count += 1
             print(f"  ✓ Success")
             
         except Exception as e:
-            print(f"  ✗ Failed to convert {file_path}: {str(e)}")
+            print(f"  ✗ Failed to convert {file_path_str}: {str(e)}")
             failed_count += 1
     
     print(f"\nConversion complete!")
@@ -170,50 +195,53 @@ def convert_files(input_pattern, output_format='docx'):
 def show_help():
     """Display help information."""
     help_text = """
-Pandoc Batch Converter
-=====================
+Pandoc Batch Converter v2.0
+===========================
 
-Usage: python pandoc_converter.py [input_pattern] [output_format]
+Usage: python pandoc_converter.py [input_pattern] [output_format] [options]
 
 Arguments:
   input_pattern    Pattern to match input files (use quotes for wildcards)
   output_format    Target format (docx, pdf, html, etc.) - default: docx
 
+Options:
+  -f, --from [format]    Explicitly specify the input format (e.g., markdown, latex, html, rtf)
+  -h, --help             Show this help message
+
 Examples:
-  python pandoc_converter.py "*.md" docx          # Convert all .md files to .docx
-  python pandoc_converter.py "chapter*.txt" pdf   # Convert txt files starting with 'chapter' to pdf
-  python pandoc_converter.py "document.md" html   # Convert single file to html
-  python pandoc_converter.py "*.rst"              # Convert all .rst files to .docx (default)
-  python pandoc_converter.py "*" docx             # Convert all supported files to docx
-
-Supported input formats: 
-  .md, .markdown, .txt, .html, .htm, .rst, .tex, .latex, .doc, .docx, .odt, .pdf
-
-Supported output formats:
-  docx, pdf, html, epub, odt, rst, markdown, txt, latex, etc.
-
-Notes:
-  - Use quotes around patterns with wildcards
-  - Output files are created in the same directory as input files
-  - Existing files will be overwritten
+  python pandoc_converter.py "*.md" docx               # Convert all .md files to .docx
+  python pandoc_converter.py "report.txt" pdf          # Auto-detect .txt as markdown
+  python pandoc_converter.py "book.epub" odt -f epub   # Explicitly define input format
 """
     print(help_text)
 
 def main():
     """Main function to handle command line arguments and start conversion."""
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    
+    if not args or '-h' in args or '--help' in args:
         show_help()
         return
+
+    input_pattern = args.pop(0)
+    output_format = 'docx'
+    input_format = None
     
-    # Handle help flags
-    if sys.argv[1] in ['-h', '--help', 'help']:
-        show_help()
-        return
-    
-    input_pattern = sys.argv[1]
-    output_format = sys.argv[2] if len(sys.argv) > 2 else 'docx'
-    
-    convert_files(input_pattern, output_format)
+    # Check if output_format is provided and it's not a flag
+    if args and not args[0].startswith('-'):
+        output_format = args.pop(0)
+        
+    # Check for the input format flag
+    if '-f' in args:
+        idx = args.index('-f')
+        if len(args) > idx + 1:
+            input_format = args[idx+1]
+    elif '--from' in args:
+        idx = args.index('--from')
+        if len(args) > idx + 1:
+            input_format = args[idx+1]
+
+    convert_files(input_pattern, output_format, input_format)
 
 if __name__ == "__main__":
     main()

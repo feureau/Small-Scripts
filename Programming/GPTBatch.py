@@ -38,6 +38,7 @@ Key Features:
 - NEW: The final summary now includes the specific reason for each file's failure.
 - NEW: Option to add the filename to the prompt before the file content.
 - NEW: Added support for LM Studio as an AI provider.
+- NEW: Added a sanitizer to remove Markdown code fences (```) from API output.
 
 Dependencies:
 -------------
@@ -180,6 +181,23 @@ def read_file_content(filepath):
         else: return None, None, False, f"Unsupported file extension '{ext}'"
     except Exception as e: return None, None, False, f"Error reading file {filepath}: {e}"
 
+def sanitize_api_response(text):
+    """
+    Removes Markdown code fences from the start and end of a string.
+    Handles optional language identifiers like 'json' or 'markdown'.
+    """
+    if not text:
+        return ""
+    # Regex to find a markdown block with an optional language identifier.
+    # It captures the content inside. re.DOTALL allows '.' to match newlines.
+    pattern = re.compile(r"^\s*```[a-z]*\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+    match = pattern.match(text.strip())
+    if match:
+        # If the entire string is a markdown block, return the captured content.
+        return match.group(1).strip()
+    # If no markdown block is found, return the original (stripped) text.
+    return text.strip()
+
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     if engine == "google": return call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
     elif engine == "ollama": return call_ollama_api(prompt_text, model_name, **kwargs)
@@ -205,9 +223,9 @@ def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=No
             for img_data in images_data_list: payload.append({"inline_data": {"mime_type": img_data['mime_type'], "data": img_data['bytes']}})
         print(f"Sending request to Google Gemini (Model: {model_name}) with {len(images_data_list or [])} image(s)...")
         response = model.generate_content(payload, stream=stream_output)
-        if stream_output: return "".join(chunk.text for chunk in response).strip()
+        if stream_output: return sanitize_api_response("".join(chunk.text for chunk in response))
         else:
-            try: return response.text.strip()
+            try: return sanitize_api_response(response.text)
             except ValueError:
                 if response.prompt_feedback and response.prompt_feedback.block_reason: return f"Error: Request blocked by safety filter. Reason: {response.prompt_feedback.block_reason.name}"
                 if response.candidates and response.candidates[0].finish_reason.name != "STOP": return f"Error: No content generated. Finish Reason: {response.candidates[0].finish_reason.name}"
@@ -224,7 +242,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
         response = requests.post(OLLAMA_GENERATE_ENDPOINT, json=payload, timeout=600)
         response.raise_for_status()
         data = response.json()
-        if "response" in data: return data["response"].strip()
+        if "response" in data: return sanitize_api_response(data["response"])
         if "error" in data: return f"Error: Ollama API returned an error - {data['error']}"
         return "Error: Unexpected response format from Ollama."
     except requests.exceptions.RequestException as e: return f"Error: Could not connect to Ollama API - {e}"
@@ -252,7 +270,7 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, **kwargs):
         response.raise_for_status()
         data = response.json()
         if data.get("choices"):
-            return data["choices"][0]["message"]["content"].strip()
+            return sanitize_api_response(data["choices"][0]["message"]["content"])
         if "error" in data:
             return f"Error: LM Studio API returned an error - {data['error']}"
         return "Error: Unexpected response format from LM Studio."
