@@ -16,138 +16,6 @@
 # videos, automatically match them with local text files for metadata, and then update
 # them according to a user-defined schedule.
 #
-# --------------------------------------------------------------------------------------------------
-#
-# FEATURES
-#
-# - Graphical User Interface: Uses Tkinter for a user-friendly, cross-platform experience.
-# - Secure OAuth 2.0 Authentication: Follows Google's standard, secure flow for API access.
-# - Automatic Token Revocation: For enhanced security, the access token is automatically
-#   revoked when the application is closed, minimizing risk.
-# - Bulk Video Loading: Fetches all videos from a user's channel via the YouTube Data API.
-# - Smart Metadata Matching: Automatically associates videos with local metadata files
-#   (.txt for description/tags, .srt/.vtt for subtitles) based on video titles.
-# - Advanced Metadata Parsing: Can read metadata from either plain text files or, for more
-#   control, structured JSON files containing a title, description, hashtags, and tags.
-# - Flexible Scheduling: Allows setting a precise start date/time for the first video and a
-#   custom interval (hours/minutes) for all subsequent videos.
-# - Optional Updates: The user can choose to update only metadata (title, description, etc.)
-#   without changing the video schedule.
-# - Subtitle Uploads: Can upload subtitle files (.srt, .vtt) and associate them with the
-#   correct video and language.
-# - Dimension Fetching: Retrieves video resolution (width/height) during the loading
-#   process to enable powerful filtering.
-# - Comprehensive Filtering: Provides a dropdown menu to filter the video list by privacy
-#   status, schedule status, whether metadata files have been matched, and video
-#   orientation (Horizontal vs. Vertical/Shorts).
-# - Clickable Column Sorting: The main video list can be sorted by any column (ID, Title,
-#   etc.) by simply clicking on the column header. Clicking again reverses the sort order.
-# - Tag Validation & Sanitization: Automatically cleans and truncates video tags to comply with
-#   YouTube's 500-character limit and other API rules, preventing errors.
-# - Dry Run Mode: Provides a "test mode" to verify all settings and file matches without
-#   making any actual changes to the YouTube channel. The console will log what it *would* do.
-# - Two-Stage Architecture: The GUI is used for configuration only. The actual API updates
-#   are performed in the console after the GUI is closed, ensuring a non-blocking user
-#   experience and clear, sequential logging.
-# - Robust Error Handling: Includes specific checks for common API issues like quota
-#   exhaustion and will gracefully abort operations if necessary.
-#
-# --------------------------------------------------------------------------------------------------
-#
-# HOW IT WORKS (USER WORKFLOW)
-#
-# The application operates in two distinct stages:
-#
-# 1. Stage 1: GUI Configuration
-#    - Authenticate: The user clicks the first button to select their `client_secrets.json`
-#      file, which opens a browser for Google account login and consent.
-#    - Load Videos: The user clicks the second button to fetch all videos from their
-#      channel. The script simultaneously scans the local directory for matching metadata files.
-#    - Filter & Sort (Optional): The user can use the filter menu to narrow down the list
-#      (e.g., show only Vertical videos with no subtitle file) or click on column headers to sort.
-#    - Select & Configure: The user selects one or more videos from the list. They can then
-#      set the scheduling options (start time, interval) and choose whether to update the
-#      schedule, upload subtitles, or run in "Dry Run" mode.
-#    - Initiate Update: The user clicks the final "UPDATE SELECTED VIDEOS & EXIT" button.
-#      This action saves all the selected videos and settings into memory and closes the GUI.
-#
-# 2. Stage 2: Console Processing
-#    - After the GUI closes, the script continues running in the command line/terminal.
-#    - It iterates through the list of videos prepared in the first stage.
-#    - For each video, it makes the necessary API calls to YouTube to update its metadata
-#      and, if enabled, set its publication schedule.
-#    - Detailed progress, successes, and any errors are logged directly to the console.
-#
-# --------------------------------------------------------------------------------------------------
-#
-# DESIGN PHILOSOPHY (REASONS FOR KEY DECISIONS)
-#
-# - Separation of GUI and Processing: The decision to close the GUI before processing begins
-#   is intentional. API calls, especially for uploads, can be slow and are subject to network
-#   latency. Performing these tasks in a separate console stage prevents the GUI from
-#   freezing or becoming unresponsive, which provides a much smoother user experience. It
-#   also allows for clean, uninterrupted logging of the batch process.
-#
-# - Automatic Token Revocation on Exit: Security is paramount. The script stores an OAuth
-#   token (`token.json`) to stay authenticated. By automatically revoking this token when the
-#   program exits, we ensure that the credential cannot be used again if it were ever
-#   compromised. It forces a fresh authentication on each run, which is a safer default.
-#
-# - Efficient, Single-Pass API Calls: When fetching video details, the script requests all
-#   necessary data (`snippet`, `status`, `fileDetails`) in a single API call, batched in
-#   groups of 50. This is vastly more efficient and consumes significantly less API quota
-#   compared to making multiple calls per video.
-#
-# - Manual Implementation of GUI Features: Tkinter provides a foundational toolkit, but advanced
-#   widget features like clickable column sorting are not built-in. This functionality was
-#   manually implemented by capturing header click events and programmatically re-ordering
-#   the data in the Treeview widget. This provides a better user experience at the cost of
-#   more complex GUI code.
-#
-# - Resilient JSON Parsing: The `sanitize_and_parse_json` function is designed to be forgiving.
-#   Users often copy-paste text which can lead to simple syntax errors (like unescaped quotes).
-#   This function attempts to fix these common issues programmatically, making the script
-#   more robust and user-friendly by avoiding failures on minor formatting mistakes.
-#
-# - "Dry Run" Mode as a Core Feature: Making bulk changes to a YouTube channel is a high-stakes
-#   operation. The Dry Run mode acts as a critical safety net, allowing users to perform a
-#   complete test run to verify that file matching, metadata parsing, and scheduling
-#   calculations are all correct *before* any permanent changes are made.
-#
-# --------------------------------------------------------------------------------------------------
-#
-# PREREQUISITES
-#
-# 1. Python 3.x.
-# 2. Required libraries: `google-api-python-client`, `google-auth-oauthlib`, `requests`.
-#    You can install them with: `pip install --upgrade google-api-python-client google-auth-oauthlib google-auth-library requests`
-# 3. `client_secrets.json` file: You must have a project in the Google Cloud Platform,
-#    enable the "YouTube Data API v3", and create OAuth 2.0 Client ID credentials for a
-#    "Desktop app". Download the resulting JSON file and save it as `client_secrets.json`
-#    in the same directory as this script.
-#
-# --------------------------------------------------------------------------------------------------
-#
-# METADATA FILE FORMAT (.txt)
-#
-# The script can read metadata from `.txt` files in two ways:
-#
-# 1. Plain Text Mode: If the file does not contain a valid JSON object, its entire content
-#    will be used as the video's description.
-#
-# 2. JSON Mode: For maximum control, the `.txt` file can contain a JSON object. This allows
-#    setting the title, description, hashtags, and tags independently.
-#
-#    JSON Example (`my_video_title.txt`):
-#    ```json
-#    {
-#      "title": "My New Awesome Video Title From JSON",
-#      "description": "This is the main part of my video description.\nIt can have multiple lines.",
-#      "hashtags": ["#awesome", "#tutorial", "#python"],
-#      "tags": ["python programming", "youtube api", "automation", "tkinter gui"]
-#    }
-#    ```
-#
 # ==================================================================================================
 
 import os
@@ -157,6 +25,7 @@ import signal
 import atexit
 import re
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import requests
@@ -175,11 +44,13 @@ from tkinter import ttk, filedialog
 # --- Constants ---
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 TOKEN_FILE = "token.json"
+FAILED_UPDATES_FOLDER = "failed_updates"
 LOG_FILE = "ytscheduler.log"
 OAUTH_PORT = 0
 API_TIMEOUT_SECONDS = 60
 YOUTUBE_TAGS_MAX_LENGTH = 500 # The official limit for total tag length
 YOUTUBE_TAGS_MAX_COUNT = 15   # A safe, conservative limit to avoid API rejection
+YOUTUBE_TITLE_MAX_LENGTH = 100 # The official limit for video title length
 
 CATEGORY_MAP = {
     "Film & Animation": "1", "Autos & Vehicles": "2", "Music": "10",
@@ -197,14 +68,55 @@ def normalize_for_matching(text: str) -> str:
     text = re.sub(r'\s+', '_', text)
     return text
 
+def sanitize_for_youtube(text: str) -> str:
+    """Removes characters forbidden by the YouTube API in titles/descriptions."""
+    text = text.replace('<', '')
+    text = text.replace('>', '')
+    return text
+
 def sanitize_and_parse_json(content: str) -> dict | None:
     try:
+        # Step 1: Remove invalid control characters (keeps current functionality)
+        content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content)
+        
+        # Step 2: Find the start of the first JSON object
         start_index = content.find('{')
-        end_index = content.rfind('}')
-        if start_index == -1 or end_index == -1 or end_index < start_index:
+        if start_index == -1:
             return None
-        json_str = content[start_index : end_index + 1]
 
+        # Step 3: Find the correctly matched closing brace to isolate the object
+        brace_level = 1
+        in_string = False
+        end_index = -1
+        for i in range(start_index + 1, len(content)):
+            char = content[i]
+            
+            # Toggle in_string status if we encounter a non-escaped quote
+            if char == '"' and content[i-1] != '\\':
+                in_string = not in_string
+            
+            # If we are inside a string, we ignore braces
+            if in_string:
+                continue
+
+            if char == '{':
+                brace_level += 1
+            elif char == '}':
+                brace_level -= 1
+            
+            # When the brace level returns to 0, we've found our match
+            if brace_level == 0:
+                end_index = i + 1 # Include the closing brace in the slice
+                break
+        
+        if end_index == -1:
+            # If no matching brace was found, the JSON is incomplete
+            return None
+
+        # Isolate the actual JSON string, ignoring any extra data that followed
+        json_str = content[start_index:end_index]
+
+        # Step 4: Perform the original sanitization on the isolated string
         def escape_quotes_in_value(match):
             key_part = match.group(1)
             value_part = match.group(2)
@@ -218,7 +130,10 @@ def sanitize_and_parse_json(content: str) -> dict | None:
             flags=re.DOTALL
         )
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        
+        # Step 5: Parse the final, clean, and isolated JSON string
         return json.loads(json_str)
+        
     except json.JSONDecodeError as e:
         raise e
     except Exception:
@@ -592,7 +507,21 @@ class SchedulerApp:
                                             vd_obj.title_to_set = data["title"]
                                             hashtags_str = " ".join(data.get("hashtags", []))
                                             vd_obj.description_to_set = f"{data['description']}\n\n{hashtags_str}".strip()
-                                            vd_obj.tags_to_set = data["tags"]
+                                            
+                                            # Sanitize the loaded tags array to enforce YouTube policies
+                                            loaded_tags = data.get("tags", [])
+                                            if isinstance(loaded_tags, list):
+                                                if len(loaded_tags) > YOUTUBE_TAGS_MAX_COUNT:
+                                                    logger.warning(
+                                                        f"    -> WARNING: Tag list in '{file_path.name}' is too long ({len(loaded_tags)} tags). "
+                                                        f"Automatically truncating to the first {YOUTUBE_TAGS_MAX_COUNT} tags."
+                                                    )
+                                                    vd_obj.tags_to_set = loaded_tags[:YOUTUBE_TAGS_MAX_COUNT]
+                                                else:
+                                                    vd_obj.tags_to_set = loaded_tags
+                                            else:
+                                                vd_obj.tags_to_set = []
+                                            
                                         else:
                                             vd_obj.description_to_set = content
                                     except json.JSONDecodeError as e:
@@ -667,7 +596,6 @@ def update_videos_on_youtube(service, processing_data):
 
     for i, vd_obj in enumerate(videos_to_update):
         if update_schedule:
-            # This is the corrected line for timestamp formatting to prevent API errors
             vd_obj.publishAt_to_set_new = curr_pub_utc.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         else:
             vd_obj.publishAt_to_set_new = None
@@ -683,11 +611,11 @@ def update_videos_on_youtube(service, processing_data):
             if not sanitized_tag: continue
 
             if len(final_tags) >= YOUTUBE_TAGS_MAX_COUNT:
-                logger.warning(f"  -> WARNING: Tag list for '{vd_obj.original_title}' truncated due to tag count limit ({YOUTUBE_TAGS_MAX_COUNT}).")
+                logger.warning(f"  -> WARNING: Tag list for '{vd_obj.original_title}' truncated during validation due to tag count limit ({YOUTUBE_TAGS_MAX_COUNT}).")
                 break
 
             if current_length + len(sanitized_tag) + 1 > YOUTUBE_TAGS_MAX_LENGTH:
-                logger.warning(f"  -> WARNING: Tag list for '{vd_obj.original_title}' truncated due to 500-character limit.")
+                logger.warning(f"  -> WARNING: Tag list for '{vd_obj.original_title}' truncated during validation due to 500-character limit.")
                 break
             
             final_tags.append(sanitized_tag)
@@ -696,12 +624,13 @@ def update_videos_on_youtube(service, processing_data):
         if is_dry_run:
             logger.info(f"DRY RUN ({i+1}/{len(videos_to_update)}): Video '{vd_obj.original_title}'")
             logger.info(f"  - Dimensions: {vd_obj.width}x{vd_obj.height}")
-            logger.info(f"  - Would set title to: '{vd_obj.title_to_set}'")
+            logger.info(f"  - Would set title to: '{sanitize_for_youtube(vd_obj.title_to_set)}'")
             logger.info(f"  - Would set tags to (validated): {final_tags}")
             if vd_obj.publishAt_to_set_new:
                 logger.info(f"  - Would be scheduled for: {vd_obj.publishAt_to_set_new}")
+                logger.info(f"  - Visibility would be changed to 'private' for scheduling.")
             else:
-                logger.info("  - Schedule update is disabled by user setting.")
+                logger.info("  - Schedule update is disabled. Video visibility would NOT be changed.")
             if vd_obj.subtitle_file_path and not skip_subtitles:
                 logger.info(f"  - Would upload subtitle: '{vd_obj.subtitle_filename}'")
             elif skip_subtitles:
@@ -714,20 +643,56 @@ def update_videos_on_youtube(service, processing_data):
             continue
 
         try:
-            request_body_status = {'privacyStatus': 'private'}
-            if vd_obj.publishAt_to_set_new:
-                request_body_status['publishAt'] = vd_obj.publishAt_to_set_new
-            
-            service.videos().update(part="snippet,status", body={
+            # Sanitize title and description for forbidden characters first
+            title_to_send = sanitize_for_youtube(vd_obj.title_to_set)
+            description_to_send = sanitize_for_youtube(vd_obj.description_to_set)
+
+            # Smartly truncate the title if it's too long, without adding ellipsis
+            if len(title_to_send) > YOUTUBE_TITLE_MAX_LENGTH:
+                logger.warning(
+                    f"    -> WARNING: Title for '{vd_obj.original_title}' is too long ({len(title_to_send)} chars). "
+                    f"Automatically shortening to {YOUTUBE_TITLE_MAX_LENGTH} characters or less."
+                )
+                
+                # Find the last word boundary (space) at or before the max length
+                safe_limit = YOUTUBE_TITLE_MAX_LENGTH
+                last_space = title_to_send.rfind(' ', 0, safe_limit + 1) # Search up to and including the limit
+                
+                if last_space != -1:
+                    # Found a space, so cut there.
+                    title_to_send = title_to_send[:last_space]
+                else:
+                    # No space found, so do a hard cut at exactly 100 characters.
+                    title_to_send = title_to_send[:safe_limit]
+
+            # 1. Start with the base request body containing only the metadata.
+            request_body = {
                 'id': vd_obj.video_id,
                 'snippet': {
-                    'title': vd_obj.title_to_set, 
-                    'description': vd_obj.description_to_set, 
-                    'tags': final_tags, 
+                    'title': title_to_send,
+                    'description': description_to_send,
+                    'tags': final_tags,
                     'categoryId': vd_obj.categoryId_to_set
-                },
-                'status': request_body_status
-            }).execute()
+                }
+            }
+
+            # 2. Start with the base list of API parts to update.
+            parts_to_update = ["snippet"]
+
+            # 3. ONLY add the 'status' part IF a new schedule is being set.
+            if vd_obj.publishAt_to_set_new:
+                request_body['status'] = {
+                    'privacyStatus': 'private',
+                    'publishAt': vd_obj.publishAt_to_set_new
+                }
+                parts_to_update.append("status")
+
+            # 4. Execute the API call with the dynamically constructed parts and body.
+            service.videos().update(
+                part=",".join(parts_to_update),
+                body=request_body
+            ).execute()
+            
             logger.info(f"({i+1}/{len(videos_to_update)}) Metadata updated for '{vd_obj.title_to_set}' ({vd_obj.video_id})")
 
             if vd_obj.subtitle_file_path and not skip_subtitles:
@@ -752,6 +717,15 @@ def update_videos_on_youtube(service, processing_data):
                 break
             else:
                 logger.error(f"Failed to process video {vd_obj.video_id} ('{vd_obj.original_title}'):", exc_info=True)
+
+                # Copy the failing metadata file to a subfolder for easy debugging
+                if vd_obj.description_file_path and os.path.exists(vd_obj.description_file_path):
+                    try:
+                        os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True)
+                        shutil.copy(vd_obj.description_file_path, FAILED_UPDATES_FOLDER)
+                        logger.info(f"    -> Copied failing metadata file to the '{FAILED_UPDATES_FOLDER}' folder for review.")
+                    except Exception as copy_e:
+                        logger.error(f"    -> FAILED to copy metadata file. Reason: {copy_e}")
 
         except Exception as e:
             fail += 1
