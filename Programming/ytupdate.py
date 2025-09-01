@@ -1,20 +1,237 @@
 # ==================================================================================================
 #
-# YouTube Batch Scheduler & Uploader
+#                                  YouTube Batch Uploader & Scheduler
 #
-# --------------------------------------------------------------------------------------------------
+# ==================================================================================================
 #
-# SCRIPT DOCUMENTATION
+# TABLE OF CONTENTS
 #
-# --------------------------------------------------------------------------------------------------
+# 1. OVERVIEW
+# 2. FEATURES
+# 3. PREREQUISITES
+# 4. REQUIRED FILE STRUCTURE
+# 5. METADATA FILE FORMAT (.txt)
+# 6. USER WORKFLOW (HOW IT WORKS)
+# 7. DESIGN PHILOSOPHY (KEY DECISIONS & REASONING)
+# 8. KEY CONSTANTS EXPLAINED
+# 9. TROUBLESHOOTING COMMON ERRORS
 #
-# OVERVIEW
+# ==================================================================================================
+#
+# 1. OVERVIEW
 #
 # This script is a desktop application with a Graphical User Interface (GUI) built to
 # streamline and automate the process of updating metadata and scheduling multiple YouTube
-# videos in bulk. It allows a user to connect to their YouTube account, load all their
+# videos in bulk. It allows a user to securely connect to their YouTube account, load all their
 # videos, automatically match them with local text files for metadata, and then update
-# them according to a user-defined schedule.
+# their titles, descriptions, tags, and visibility/scheduling according to a user-defined
+# configuration. It is designed to be highly robust, automatically sanitizing bad data to
+# prevent common API errors.
+#
+# ==================================================================================================
+#
+# 2. FEATURES
+#
+# - Graphical User Interface: Uses Tkinter for a user-friendly, cross-platform experience.
+# - Secure OAuth 2.0 Authentication: Follows Google's standard, secure flow for API access.
+# - Automatic Token Revocation: For enhanced security, the access token is automatically
+#   revoked when the application is closed, minimizing risk.
+# - Bulk Video Loading: Fetches all videos from a user's channel via the YouTube Data API.
+# - Smart Metadata Matching: Automatically associates videos with local metadata files
+#   (.txt for description/tags, .srt/.vtt for subtitles) based on video titles.
+# - Advanced Metadata Parsing: Can read metadata from either plain text files or, for more
+#   control, structured JSON files containing a title, description, hashtags, and tags.
+# - Flexible Scheduling & Visibility Control:
+#   - Set a precise start date/time for the first video and a custom interval for all others.
+#   - Explicitly set the final visibility of videos to Public, Private, or Unlisted.
+#   - The UI intelligently forces "Private" visibility when scheduling, as required by the API.
+# - Comprehensive Filtering & Sorting:
+#   - Filter the video list by privacy, schedule status, metadata file availability, and orientation.
+#   - Sort the video list by any column (ID, Title, Scheduled At, Upload Date) by clicking the header.
+# - Robust Data Sanitization (Error Prevention):
+#   - JSON Sanitization: Automatically cleans and parses malformed JSON files, removing invisible
+#     control characters and ignoring extra data outside the main object.
+#   - Title Sanitization: Automatically shortens titles that exceed YouTube's 100-character limit
+#     by truncating at the last word, preventing API errors.
+#   - Tag Sanitization: Automatically truncates oversized tag lists from JSON files to the first
+#     15 tags, preventing API errors and policy violations.
+#   - Metadata Sanitization: Automatically removes forbidden characters ('<', '>') from titles
+#     and descriptions before uploading.
+# - Debugging & Safety Features:
+#   - Dry Run Mode: A "test mode" to verify all settings and file matches without making any
+#     actual changes to the YouTube channel. The console will log what it *would* do.
+#   - Failed File Isolation: If an API update fails due to bad metadata, the script automatically
+#     copies the problematic .txt file into a "failed_updates" subfolder for easy review.
+# - Efficient & User-Friendly Architecture:
+#   - Two-Stage Design: The GUI is for configuration only. API updates are performed in the
+#     console after the GUI closes, ensuring a non-blocking user experience and clear logging.
+#   - Efficient API Usage: Fetches all required video data in a single, batched API call to
+#     conserve the daily API quota.
+#
+# ==================================================================================================
+#
+# 3. PREREQUISITES
+#
+# 1. Python 3.x installed on your system.
+#
+# 2. Required Python libraries. You can install them with this command in your terminal:
+#    pip install --upgrade google-api-python-client google-auth-oauthlib google-auth-library requests
+#
+# 3. A `client_secrets.json` file from the Google Cloud Platform:
+#    - Go to the Google Cloud Console (https://console.cloud.google.com/).
+#    - Create a new project.
+#    - Go to "APIs & Services" -> "Library" and enable the "YouTube Data API v3".
+#    - Go to "APIs & Services" -> "Credentials".
+#    - Click "Create Credentials" -> "OAuth client ID".
+#    - Select "Desktop app" for the Application type.
+#    - Click "Create". A popup will appear. Click "DOWNLOAD JSON".
+#    - Rename the downloaded file to `client_secrets.json` and save it in the same
+#      directory as this script.
+#
+# ==================================================================================================
+#
+# 4. REQUIRED FILE STRUCTURE
+#
+# For the script to work correctly, your files should be organized in a single folder like this:
+#
+# /MyProjectFolder/
+# │
+# ├── ytupdate.py                 (This script)
+# ├── client_secrets.json         (Your downloaded Google credentials)
+# │
+# ├── video_one_title.txt         (Metadata for "Video One Title")
+# ├── video_one_title.srt         (Subtitles for "Video One Title")
+# │
+# ├── another_video.txt           (Metadata for "Another Video")
+# ├── another_video.vtt           (Subtitles for "Another Video")
+# │
+# └── ... (and so on for all other videos)
+#
+# ==================================================================================================
+#
+# 5. METADATA FILE FORMAT (.txt)
+#
+# The script can read metadata from `.txt` files in two ways:
+#
+# 1. Plain Text Mode:
+#    If the file does not contain a valid JSON object, its ENTIRE content
+#    will be used as the video's description.
+#
+# 2. JSON Mode:
+#    For maximum control, the `.txt` file can contain a JSON object. This allows
+#    setting the title, description, hashtags, and tags independently.
+#
+#    JSON Example (`my_video_title.txt`):
+#    ```json
+#    {
+#      "title": "My New Awesome Video Title From JSON",
+#      "description": "This is the main part of my video description.\nIt can have multiple lines.",
+#      "hashtags": ["#awesome", "#tutorial", "#python"],
+#      "tags": ["python programming", "youtube api", "automation", "tkinter gui"]
+#    }
+#    ```
+#
+# ==================================================================================================
+#
+# 6. USER WORKFLOW (HOW IT WORKS)
+#
+# The application operates in two distinct stages:
+#
+# 1. Stage 1: GUI Configuration
+#    - Authenticate: Click "Select client_secrets.json" and choose your file. A browser
+#      window will open for Google account login and consent.
+#    - Load Videos: Click "Load My Videos" to fetch all videos from your channel. The script
+#      simultaneously scans the local directory for matching metadata and subtitle files.
+#    - Filter & Sort (Optional): Use the "Filter by..." menu to narrow down the list
+#      (e.g., show only Vertical videos) or click on column headers to sort by date, title, etc.
+#    - Select & Configure:
+#      - Select one or more videos from the list.
+#      - Set the scheduling options (start time, interval) and default metadata if needed.
+#      - In the "Actions" panel, configure the desired final visibility, scheduling, and
+#        other options like "Dry Run" mode.
+#    - Initiate Update: Click the final "UPDATE SELECTED VIDEOS & EXIT" button.
+#      This saves all settings and selections into memory and closes the GUI.
+#
+# 2. Stage 2: Console Processing
+#    - After the GUI closes, the script continues running in the command line/terminal.
+#    - It iterates through the list of videos prepared in the first stage.
+#    - For each video, it makes the necessary API calls to YouTube to update its metadata
+#      and, if configured, its visibility and publication schedule.
+#    - Detailed progress, successes, and any errors are logged directly to the console.
+#
+# ==================================================================================================
+#
+# 7. DESIGN PHILOSOPHY (KEY DECISIONS & REASONING)
+#
+# - Separation of GUI and Processing: This is an intentional choice. API calls, especially for
+#   uploads or bulk updates, can be slow. Performing them in a separate console stage after the
+#   GUI closes prevents the interface from freezing, providing a much smoother user experience
+#   and allowing for clean, uninterrupted logging of the entire batch process.
+#
+# - Automatic Token Revocation on Exit: Security is paramount. The script stores an OAuth
+#   token (`token.json`) to stay authenticated. By automatically revoking this token when the
+#   program exits, we ensure the credential cannot be used again if it were ever compromised.
+#   This forces a fresh, secure authentication on each run.
+#
+# - Multi-Layered Data Sanitization: Bulk updates are high-stakes. The script was designed to
+#   be highly defensive and fault-tolerant. Instead of failing on bad data, it actively
+#   sanitizes it. This includes fixing broken JSON, shortening long titles, truncating oversized
+#   tag lists, and removing forbidden characters. This prevents the entire batch from failing due
+#   to a single malformed file.
+#
+# - Efficient API Quota Usage: The YouTube Data API has a daily usage limit (quota). This script
+#   was designed to be efficient. When fetching video details, it requests all necessary data
+#   (`snippet`, `status`, `fileDetails`) in a single API call, batched in groups of 50. This is
+#   vastly more efficient and consumes significantly less quota than making multiple calls per video.
+#
+# - "Dry Run" as a Core Safety Feature: Making bulk changes to a YouTube channel can be
+#   nerve-wracking. The Dry Run mode was included as a critical safety net, allowing users to
+#   perform a complete test run to verify that file matching, metadata parsing, and scheduling
+#   calculations are all correct *before* any permanent changes are made.
+#
+# ==================================================================================================
+#
+# 8. KEY CONSTANTS EXPLAINED
+#
+# These constants are at the top of the script and can be modified to change behavior.
+#
+# - `FAILED_UPDATES_FOLDER`: The name of the subfolder where problematic metadata files will be
+#   copied if an API update fails. Default is "failed_updates".
+# - `YOUTUBE_TAGS_MAX_LENGTH`: The total maximum number of characters allowed for all tags
+#   combined. YouTube's official limit is 500.
+# - `YOUTUBE_TAGS_MAX_COUNT`: A conservative limit on the number of tags to use, preventing
+#   the script from being flagged for spam/keyword stuffing. Default is 15.
+# - `YOUTUBE_TITLE_MAX_LENGTH`: The official character limit for a YouTube video title.
+#   Default is 100.
+#
+# ==================================================================================================
+#
+# 9. TROUBLESHOOTING COMMON ERRORS
+#
+# - `[ERROR] ... 'reason': 'quotaExceeded'`:
+#   - Cause: You have used up your daily 10,000 unit allowance for the YouTube Data API.
+#     Updating a single video costs 50 units, so this can happen quickly with large batches.
+#   - Solution: Wait 24 hours for the quota to reset (midnight PST), or process your
+#     videos in smaller batches.
+#
+# - `[ERROR] ... 'reason': 'invalidDescription'`:
+#   - Cause 1: The script failed to parse the `.txt` file as JSON and fell back to plain
+#     text mode. The raw text, including broken JSON syntax, was sent as the description.
+#   - Cause 2: The description is longer than YouTube's 5000-character limit.
+#   - Solution: Check the "failed_updates" folder for the copied file. Fix the JSON syntax
+#     or shorten the description content.
+#
+# - `[ERROR] ... 'reason': 'invalidTitle'`:
+#   - Cause: The title in the JSON file is either empty (`"title": ""`) or was longer than
+#     100 characters.
+#   - Solution: The script now automatically shortens long titles, so this should be rare.
+#     If it occurs, check the JSON file to ensure the "title" field is not empty.
+#
+# - `[ERROR] Failed to parse '...'. Reason: ...`:
+#   - Cause: The `.txt` file has a JSON syntax error that the script could not automatically fix,
+#     such as a corrupted, unterminated string.
+#   - Solution: Open the specified file and manually correct the JSON syntax. Look for
+#     missing quotes, brackets, or corrupted text.
 #
 # ==================================================================================================
 
@@ -195,6 +412,8 @@ class VideoData:
     def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None):
         self.video_id, self.original_title = video_id, video_title
         self.video_snippet, self.video_status = video_snippet or {}, video_status or {}
+        self.upload_date = self.video_snippet.get('publishedAt', '')
+        
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
         
@@ -236,13 +455,14 @@ class SchedulerApp:
 
         list_lf = ttk.LabelFrame(frm, text="Video List", padding=5); list_lf.pack(fill=tk.BOTH, expand=True, pady=5)
         tree_frame = ttk.Frame(list_lf); tree_frame.pack(fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(tree_frame, columns=('id', 'title', 'desc_file', 'sub_file', 'status', 'publish_at'), show='headings', selectmode="extended")
+        self.tree = ttk.Treeview(tree_frame, columns=('id', 'title', 'desc_file', 'sub_file', 'status', 'publish_at', 'upload_date'), show='headings', selectmode="extended")
         self.tree.heading('id', text='Video ID'); self.tree.column('id', width=120, stretch=tk.NO)
         self.tree.heading('title', text='Title (New title if from JSON)'); self.tree.column('title', width=300)
         self.tree.heading('desc_file', text='Desc. File'); self.tree.column('desc_file', width=150)
         self.tree.heading('sub_file', text='Subtitle File'); self.tree.column('sub_file', width=150)
         self.tree.heading('status', text='Privacy'); self.tree.column('status', width=80, stretch=tk.NO)
         self.tree.heading('publish_at', text='Scheduled At (UTC)'); self.tree.column('publish_at', width=150)
+        self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150)
 
         for col in self.tree['columns']:
             self.tree.heading(col, text=col, command=lambda _col=col: self._sort_column(_col, False))
@@ -253,6 +473,7 @@ class SchedulerApp:
         self.tree.heading('sub_file', text='Subtitle File')
         self.tree.heading('status', text='Privacy')
         self.tree.heading('publish_at', text='Scheduled At (UTC)')
+        self.tree.heading('upload_date', text='Upload Date (UTC)')
 
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -320,29 +541,72 @@ class SchedulerApp:
         meta.grid_columnconfigure(1, weight=1)
 
         action_frame = ttk.LabelFrame(frm, text="Actions", padding=10); action_frame.pack(fill=tk.X, pady=5)
+        
+        self.update_visibility_var = tk.BooleanVar(value=False)
+        vis_cb = ttk.Checkbutton(action_frame, text="Update Visibility Status", variable=self.update_visibility_var, command=self._update_ui_states)
+        vis_cb.grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 5))
+
+        self.visibility_choice_var = tk.StringVar(value='private')
+        self.rad_private = ttk.Radiobutton(action_frame, text="Private", variable=self.visibility_choice_var, value='private')
+        self.rad_unlisted = ttk.Radiobutton(action_frame, text="Unlisted", variable=self.visibility_choice_var, value='unlisted')
+        self.rad_public = ttk.Radiobutton(action_frame, text="Public", variable=self.visibility_choice_var, value='public')
+        
+        self.rad_private.grid(row=1, column=0, sticky='w', padx=20)
+        self.rad_unlisted.grid(row=1, column=1, sticky='w', padx=10)
+        self.rad_public.grid(row=1, column=2, sticky='w', padx=10)
+        
+        ttk.Separator(action_frame, orient='horizontal').grid(row=2, column=0, columnspan=3, sticky='ew', pady=10)
+
         self.dry_run_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(action_frame, text="Dry Run (Verify only, no uploads)", variable=self.dry_run_var).pack(anchor='w')
+        ttk.Checkbutton(action_frame, text="Dry Run (Verify only, no uploads)", variable=self.dry_run_var).grid(row=3, column=0, columnspan=3, sticky='w')
         
         self.update_schedule_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(action_frame, text="Update Schedule (Set publish time for selected videos)", variable=self.update_schedule_var).pack(anchor='w')
+        sched_cb = ttk.Checkbutton(action_frame, text="Update Schedule (Set publish time for selected videos)", variable=self.update_schedule_var, command=self._update_ui_states)
+        sched_cb.grid(row=4, column=0, columnspan=3, sticky='w')
         
         self.skip_subs_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(action_frame, text="Skip Subtitle Uploads (Saves quota)", variable=self.skip_subs_var).pack(anchor='w')
+        ttk.Checkbutton(action_frame, text="Skip Subtitle Uploads (Saves quota)", variable=self.skip_subs_var).grid(row=5, column=0, columnspan=3, sticky='w')
         
         self.schedule_button = ttk.Button(action_frame, text='3. UPDATE SELECTED VIDEOS & EXIT', command=self.prepare_for_exit, state=tk.DISABLED)
-        self.schedule_button.pack(fill=tk.X, ipady=8, pady=5)
+        self.schedule_button.grid(row=6, column=0, columnspan=3, sticky='ew', ipady=8, pady=(10, 0))
+
         self.status_bar = ttk.Label(frm, text="Welcome! Please authenticate.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        self._update_ui_states()
+
+    def _update_ui_states(self):
+        """Manages enabling/disabling of GUI elements based on user selections."""
+        vis_cb = self.root.nametowidget(str(self.rad_private.winfo_parent()) + ".!checkbutton")
+        
+        if self.update_schedule_var.get():
+            self.update_visibility_var.set(True)
+            self.visibility_choice_var.set('private')
+            vis_cb.config(state=tk.DISABLED)
+            self.rad_private.config(state=tk.DISABLED)
+            self.rad_unlisted.config(state=tk.DISABLED)
+            self.rad_public.config(state=tk.DISABLED)
+        else:
+            vis_cb.config(state=tk.NORMAL)
+            if self.update_visibility_var.get():
+                self.rad_private.config(state=tk.NORMAL)
+                self.rad_unlisted.config(state=tk.NORMAL)
+                self.rad_public.config(state=tk.NORMAL)
+            else:
+                self.rad_private.config(state=tk.DISABLED)
+                self.rad_unlisted.config(state=tk.DISABLED)
+                self.rad_public.config(state=tk.DISABLED)
 
     def _sort_column(self, col, reverse):
         """Sorts the treeview items when a column header is clicked."""
         data_list = [(self.tree.set(k, col), k) for k in self.tree.get_children('')]
         
-        if col == 'publish_at':
+        if col in ['publish_at', 'upload_date']:
             def get_sort_key(item):
-                if item[0] == "Not Scheduled":
+                date_str = item[0]
+                if date_str == "Not Scheduled":
                     return datetime.min if not reverse else datetime.max
                 try:
-                    return datetime.strptime(item[0], '%Y-%m-%d %H:%M:%S UTC')
+                    return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
                 except ValueError:
                     return datetime.min
             data_list.sort(key=get_sort_key, reverse=reverse)
@@ -426,14 +690,16 @@ class SchedulerApp:
 
     def refresh_treeview_row(self, item_id, vd_obj):
         publish_at = self.format_publish_time(vd_obj.video_status.get('publishAt'))
-        values = (vd_obj.video_id, vd_obj.title_to_set, vd_obj.description_filename, vd_obj.subtitle_filename, vd_obj.video_status.get('privacyStatus', 'N/A'), publish_at)
+        upload_date = self.format_publish_time(vd_obj.upload_date)
+        values = (vd_obj.video_id, vd_obj.title_to_set, vd_obj.description_filename, vd_obj.subtitle_filename, vd_obj.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date)
         self.tree.item(item_id, values=values)
 
     def _populate_treeview(self, videos_to_display):
         self.tree.delete(*self.tree.get_children())
         for vd in videos_to_display:
             publish_at = self.format_publish_time(vd.video_status.get('publishAt'))
-            self.tree.insert('', tk.END, values=(vd.video_id, vd.title_to_set, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at))
+            upload_date = self.format_publish_time(vd.upload_date)
+            self.tree.insert('', tk.END, values=(vd.video_id, vd.title_to_set, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date))
         self.update_status(f"Displaying {len(videos_to_display)} of {len(self.all_channel_videos)} videos.")
 
     def format_publish_time(self, time_str):
@@ -508,7 +774,6 @@ class SchedulerApp:
                                             hashtags_str = " ".join(data.get("hashtags", []))
                                             vd_obj.description_to_set = f"{data['description']}\n\n{hashtags_str}".strip()
                                             
-                                            # Sanitize the loaded tags array to enforce YouTube policies
                                             loaded_tags = data.get("tags", [])
                                             if isinstance(loaded_tags, list):
                                                 if len(loaded_tags) > YOUTUBE_TAGS_MAX_COUNT:
@@ -556,7 +821,9 @@ class SchedulerApp:
             "subtitle_lang": self.subtitle_lang_cb.get(),
             "is_dry_run": self.dry_run_var.get(),
             "skip_subtitles": self.skip_subs_var.get(),
-            "update_schedule": self.update_schedule_var.get()
+            "update_schedule": self.update_schedule_var.get(),
+            "update_visibility": self.update_visibility_var.get(),
+            "visibility_to_set": self.visibility_choice_var.get()
         }
         
         logger.info("Configuration complete. Closing GUI and starting console processing.")
@@ -577,6 +844,8 @@ def update_videos_on_youtube(service, processing_data):
     is_dry_run = processing_data["is_dry_run"]
     skip_subtitles = processing_data["skip_subtitles"]
     update_schedule = processing_data["update_schedule"]
+    update_visibility = processing_data["update_visibility"]
+    visibility_to_set = processing_data["visibility_to_set"]
     
     try:
         start_dt_local = datetime.strptime(processing_data["start_time_str"], '%Y-%m-%d %H:%M')
@@ -643,29 +912,22 @@ def update_videos_on_youtube(service, processing_data):
             continue
 
         try:
-            # Sanitize title and description for forbidden characters first
             title_to_send = sanitize_for_youtube(vd_obj.title_to_set)
             description_to_send = sanitize_for_youtube(vd_obj.description_to_set)
 
-            # Smartly truncate the title if it's too long, without adding ellipsis
             if len(title_to_send) > YOUTUBE_TITLE_MAX_LENGTH:
                 logger.warning(
                     f"    -> WARNING: Title for '{vd_obj.original_title}' is too long ({len(title_to_send)} chars). "
                     f"Automatically shortening to {YOUTUBE_TITLE_MAX_LENGTH} characters or less."
                 )
-                
-                # Find the last word boundary (space) at or before the max length
                 safe_limit = YOUTUBE_TITLE_MAX_LENGTH
-                last_space = title_to_send.rfind(' ', 0, safe_limit + 1) # Search up to and including the limit
+                last_space = title_to_send.rfind(' ', 0, safe_limit + 1)
                 
                 if last_space != -1:
-                    # Found a space, so cut there.
                     title_to_send = title_to_send[:last_space]
                 else:
-                    # No space found, so do a hard cut at exactly 100 characters.
                     title_to_send = title_to_send[:safe_limit]
 
-            # 1. Start with the base request body containing only the metadata.
             request_body = {
                 'id': vd_obj.video_id,
                 'snippet': {
@@ -675,19 +937,20 @@ def update_videos_on_youtube(service, processing_data):
                     'categoryId': vd_obj.categoryId_to_set
                 }
             }
-
-            # 2. Start with the base list of API parts to update.
             parts_to_update = ["snippet"]
 
-            # 3. ONLY add the 'status' part IF a new schedule is being set.
             if vd_obj.publishAt_to_set_new:
                 request_body['status'] = {
                     'privacyStatus': 'private',
                     'publishAt': vd_obj.publishAt_to_set_new
                 }
                 parts_to_update.append("status")
-
-            # 4. Execute the API call with the dynamically constructed parts and body.
+            elif update_visibility:
+                request_body['status'] = {
+                    'privacyStatus': visibility_to_set
+                }
+                parts_to_update.append("status")
+            
             service.videos().update(
                 part=",".join(parts_to_update),
                 body=request_body
@@ -718,7 +981,6 @@ def update_videos_on_youtube(service, processing_data):
             else:
                 logger.error(f"Failed to process video {vd_obj.video_id} ('{vd_obj.original_title}'):", exc_info=True)
 
-                # Copy the failing metadata file to a subfolder for easy debugging
                 if vd_obj.description_file_path and os.path.exists(vd_obj.description_file_path):
                     try:
                         os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True)

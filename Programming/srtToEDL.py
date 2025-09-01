@@ -1,3 +1,138 @@
+"""
+================================================================================
+SRT/TXT to EDL Timeline Marker Converter
+================================================================================
+
+Version: 1.2
+Author: [Your Name/Organization Here]
+Last Modified: 2025-09-01
+
+---
+SUMMARY
+---
+This command-line utility converts subtitle files (.srt or .txt formatted as SRT)
+into Edit Decision List (.edl) files. The generated EDL files are specifically
+formatted to create timeline markers in non-linear editing (NLE) software, most
+notably DaVinci Resolve.
+
+The primary use case is to turn a transcript with timestamps into a set of
+navigable markers on a video timeline, which is invaluable for editing interviews,
+documentaries, or any content where locating specific sound bites is crucial.
+
+---
+DEPENDENCIES
+---
+1.  Python 3.6+
+2.  `regex` module: This script requires the third-party `regex` module.
+    Install it via pip: `pip install regex`
+
+    **Why `regex` instead of the standard `re`?**
+    The `regex` module offers more advanced and robust Unicode support compared
+    to Python's built-in `re` module. Subtitles can contain a wide variety of
+    international characters, accents, emojis, and symbols. Using `regex` with
+    the `re.UNICODE` flag ensures that character properties (like what is
+    considered a "word character" `\w`) are handled correctly across all
+    languages, preventing bugs and ensuring consistent behavior.
+
+---
+USAGE
+---
+Run the script from your terminal, providing one or more file paths or patterns
+as arguments.
+
+Syntax:
+`python srt_to_timeline.py <file_pattern_1> [file_pattern_2] ...`
+
+Examples:
+  # Process a single file (use quotes if the name has spaces)
+  python srt_to_timeline.py "My Interview Subtitles.srt"
+
+  # Process all .txt files in the current directory
+  python srt_to_timeline.py *.txt
+
+  # Process all .srt and .txt files
+  python srt_to_timeline.py *.srt *.txt
+
+The script will create a corresponding `.edl` file in the same directory as each
+source file (e.g., "input.srt" will generate "input.edl").
+
+---
+DESIGN CHOICES & RATIONALE
+---
+
+1.  **Input Flexibility (.srt and .txt):**
+    - The script accepts both extensions because transcripts are often delivered
+      as plain `.txt` files. As long as the *content* of the `.txt` file adheres
+      to the standard SRT block structure (index, timestamp --> timestamp, text),
+      the script will parse it correctly. This avoids the needless step of having
+      to rename files.
+
+2.  **Robust Parsing Logic:**
+    - **Flexible Time Separator:** The timestamp regex `([,.:'])` intentionally
+      accepts a comma, period, colon, or apostrophe as the millisecond separator.
+      While comma is standard, different auto-captioning services and software
+      (e.g., FFMPEG, YouTube) can output non-standard separators. This flexibility
+      maximizes compatibility and reduces parsing failures.
+    - **Whitespace Tolerance:** The parser uses an alternative regex pattern to
+      handle files with inconsistent or excessive spacing around timestamps and
+      the `-->` arrow. This caters to manually edited or poorly formatted files.
+
+3.  **Content Pre-processing (Cleaning):**
+    - **UTF-8 Enforcement:** The script first reads the file in binary mode and
+      then attempts to decode it as UTF-8. This is a deliberate, strict approach.
+      It prevents a whole class of errors related to character encoding and ensures
+      that all subsequent text processing is performed on a consistent, Unicode-
+      aware string.
+    - **Line Ending Normalization:** All line endings (`\r\n` for Windows, `\r` for
+      old Mac) are converted to a single newline (`\n`). This is done *before*
+      any regex operations to simplify the patterns and ensure they work
+      reliably regardless of the file's origin.
+    - **Markdown Fence Stripping:** The code explicitly removes ` ```srt ` and
+      ` ``` ` from the start and end of the file. This is a practical, user-
+      focused feature. Users often copy-paste subtitles from web pages (like
+      GitHub, forums) where they are enclosed in code fences. This feature
+      allows the script to work on such content without requiring manual cleaning.
+
+4.  **Text Sanitization for Marker Labels:**
+    - The subtitle text that becomes the marker label undergoes several cleaning
+      steps to ensure maximum compatibility with EDL standards and NLE software.
+    - **HTML Tag Removal:** SRT files often use tags like `<i>...</i>` for
+      formatting. These are stripped as they are meaningless in a marker label.
+    - **Strict Character Filtering:** The regex `[^\w\s\'\,\(\)]+` is the core of
+      the sanitization. It creates a "whitelist" of allowed characters:
+      alphanumeric, underscore, whitespace, apostrophe, comma, and parentheses.
+      All other symbols (including emojis) are removed. This prevents import
+      errors in NLEs that are sensitive to non-standard characters in EDL comments.
+    - **Length Truncation:** Marker labels are truncated to 80 characters. Most
+      NLEs have a limit on the length of marker text, and this prevents silent
+      truncation or import failures.
+
+5.  **EDL Output Formatting:**
+    - **DaVinci Resolve Specifics:** The EDL is formatted with a special comment line:
+      `* |C:ResolveColorBlue |M:Marker Text Here |D:1`. This is not a generic
+      EDL comment; it's a specific syntax that DaVinci Resolve interprets to
+      create a colored timeline marker with a specific name. This makes the
+      script a powerful tool for a targeted workflow.
+    - **Zero-Duration Markers:** The EDL event's start and end timecodes are set
+      to be only one frame (or 1/100th of a second) apart. This creates a
+      point-in-time "flag" marker, not a duration marker, which is the desired
+      behavior for annotating specific moments.
+
+6.  **Debugging System:**
+    - The global `DEBUG_MODE` flag can be enabled to provide a verbose, block-by-
+      block log of the parsing process. This was implemented to make it easy to
+      diagnose *which specific block* in a large SRT file is causing a parsing
+      failure, without overwhelming the user with logs during normal operation.
+
+7.  **Robust Command-Line Argument Handling:**
+    - The script iterates through `sys.argv[1:]`, allowing it to handle any number
+      of arguments. It uses `glob.glob` to expand wildcards (`*`, `?`).
+    - A `set` is used to collect the full file paths. This automatically handles
+      duplicates, so if a user runs `script.py file.txt *.txt`, `file.txt` is
+      only processed once. This makes the script's behavior predictable and safe.
+
+"""
+
 # -*- coding: utf-8 -*-
 # --- IMPORTANT: This script requires the 'regex' module ---
 # Install it using: pip install regex
@@ -81,13 +216,13 @@ def generate_timeline_data(srt_file_path, output_file_path):
         if DEBUG_MODE: print(f"File '{srt_file_path}' read successfully using {encoding_used} encoding.")
 
     except FileNotFoundError:
-        print(f"Error: SRT file not found at {srt_file_path}")
+        print(f"Error: Input file not found at {srt_file_path}")
         return False
     except UnicodeDecodeError:
         print(f"Error: Could not decode file '{srt_file_path}' as UTF-8. Please ensure the input file is saved in UTF-8 format.")
         return False
     except Exception as e:
-        print(f"Error reading SRT file '{srt_file_path}': {e}")
+        print(f"Error reading input file '{srt_file_path}': {e}")
         return False
 
 
@@ -120,8 +255,8 @@ def generate_timeline_data(srt_file_path, output_file_path):
 
     if DEBUG_MODE: print(f"Split into {len(srt_blocks)} potential blocks.")
 
-    if not srt_blocks or (len(srt_blocks) == 1 and not srt_blocks[0].strip()):
-         print(f"Warning: Could not split SRT file '{srt_file_path}' into meaningful blocks (after potential cleaning).")
+    if not srt_blocks or (len(srt_blocks) == 1 and not srt_blocks.strip()):
+         print(f"Warning: Could not split input file '{srt_file_path}' into meaningful blocks (after potential cleaning).")
          try: # Write empty EDL
             with open(output_file_path, 'w', encoding='utf-8') as output_file:
                 output_file.write(edl_header)
@@ -191,7 +326,6 @@ def generate_timeline_data(srt_file_path, output_file_path):
                 dummy_date = "1900-01-01"
                 if DEBUG_MODE: print(f"DEBUG: Attempting strptime with: '{start_time_str_pad}' and '{end_time_str_pad}'")
                 start_time_dt = datetime.strptime(f"{dummy_date} {start_time_str_pad}", "%Y-%m-%d %H:%M:%S.%f")
-                # end_time_dt_validation = datetime.strptime(f"{dummy_date} {end_time_str_pad}", "%Y-%m-%d %H:%M:%S.%f") # Validation not strictly needed for EDL output
                 if DEBUG_MODE: print(f"DEBUG: strptime successful.")
 
                 # -- EDL Formatting --
@@ -274,74 +408,69 @@ def generate_timeline_data(srt_file_path, output_file_path):
 # --- Main execution block (ensure this is present in your final script) ---
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("\nUsage: python srt_to_timeline.py <srt_file_pattern>")
-        print("  Processes SRT files matching the pattern and creates corresponding .edl files.")
-        print("  Requires input SRT files to be encoded in UTF-8.")
-        print("  Requires the 'regex' module: pip install regex") # Added reminder here too
-        print("  Markers will contain only letters, numbers, whitespace, and underscores.")
+        print("\nUsage: python srt_to_timeline.py <file_pattern_1> [file_pattern_2] ...")
+        print("  Processes SRT or TXT files matching the pattern(s) and creates corresponding .edl files.")
+        print("  Requires input files to be encoded in UTF-8 and formatted like SRT.")
+        print("  Requires the 'regex' module: pip install regex")
         print("\nExamples:")
-        print("  Process a specific file (use quotes if name has spaces/special chars):")
+        print("  Process a specific file:")
         print("    python srt_to_timeline.py \"My Subtitles.srt\"")
-        print("\n  Process all SRT files in the current directory:")
-        print("    python srt_to_timeline.py *.srt")
-        print("\n  Process files matching a partial name:")
-        print("    python srt_to_timeline.py episode*.srt")
+        print("\n  Process all TXT files in the current directory:")
+        print("    python srt_to_timeline.py *.txt")
+        print("\n  Process all SRT and TXT files:")
+        print("    python srt_to_timeline.py *.srt *.txt")
         print("\n  Set DEBUG_MODE = True inside the script for detailed parsing logs.")
-        sys.exit(1) # Exit if no args
+        sys.exit(1)
 
-    pattern = sys.argv[1]
+    # --- Robust argument handling ---
+    
+    input_patterns = sys.argv[1:]
     current_dir = os.getcwd()
-    srt_files_to_process = []
+    files_to_process_set = set()
 
-    # File finding logic (improved slightly from original)
-    if '*' in pattern or '?' in pattern:
+    # Define acceptable file extensions
+    ACCEPTED_EXTENSIONS = ('.srt', '.txt')
+
+    # Iterate over each argument, which could be a literal filename or a pattern
+    for pattern in input_patterns:
         search_pattern = os.path.join(current_dir, pattern)
         potential_matches = glob.glob(search_pattern)
-        # Filter ensuring it's a file and ends with .srt (case-insensitive)
-        srt_files_to_process = [f for f in potential_matches if os.path.isfile(f) and f.lower().endswith('.srt')]
-    else:
-        # Handle literal filename potentially with relative path parts
-        literal_path = os.path.join(current_dir, pattern)
-        if os.path.isfile(literal_path) and literal_path.lower().endswith('.srt'):
-             srt_files_to_process = [literal_path] # Use the constructed path
-        elif os.path.isfile(literal_path) and not literal_path.lower().endswith('.srt'):
-             print(f"Warning: File '{pattern}' exists but does not have a .srt extension. Skipping: {literal_path}")
-        elif not os.path.exists(literal_path):
-             print(f"Error: Specified file not found: {literal_path}")
 
+        # Filter the matches and add them to our set
+        for match_path in potential_matches:
+            if os.path.isfile(match_path) and match_path.lower().endswith(ACCEPTED_EXTENSIONS):
+                files_to_process_set.add(match_path)
 
-    if not srt_files_to_process:
-        # Refined error message based on whether it was a pattern or specific file
-        if '*' in pattern or '?' in pattern:
-            print(f"\nError: No SRT files found matching the pattern {repr(pattern)} in the directory: {current_dir}")
-        elif not os.path.exists(os.path.join(current_dir, pattern)):
-             # Already printed the specific 'not found' message above
-             pass # Avoid duplicate message
-        else: # File existed but wasn't .srt or other issue
-            print(f"\nError: No valid SRT file specified or found for '{pattern}'.")
+    files_to_process = sorted(list(files_to_process_set)) # Sort for predictable order
 
+    if not files_to_process:
+        print(f"\nError: No valid .srt or .txt files found matching the provided patterns: {repr(input_patterns)}")
         sys.exit(1)
+
+    # --- Main processing loop ---
 
     processed_count_total = 0
     error_count = 0
-    print(f"\nFound {len(srt_files_to_process)} SRT file(s) to process:")
-    # List files being processed for clarity
-    for fpath in srt_files_to_process:
+    print(f"\nFound {len(files_to_process)} file(s) to process:")
+    for fpath in files_to_process:
         print(f"  - {os.path.basename(fpath)}")
 
-    for srt_file_path_full in srt_files_to_process:
-        # Ensure we use the absolute path found by glob or constructed
-        print(f"\nProcessing: {os.path.basename(srt_file_path_full)}")
-        base_name = os.path.splitext(os.path.basename(srt_file_path_full))[0]
-        output_dir = os.path.dirname(srt_file_path_full)
+    for file_path_full in files_to_process:
+        print(f"\nProcessing: {os.path.basename(file_path_full)}")
+        
+        # --- *** FIX IS HERE *** ---
+        # Unpack the tuple from os.path.splitext to get just the base name
+        base_name, _ = os.path.splitext(os.path.basename(file_path_full))
+        # --- *** END OF FIX *** ---
+
+        output_dir = os.path.dirname(file_path_full)
         output_file_path = os.path.join(output_dir, f"{base_name}.edl")
 
-        # DEBUG_MODE is set at the top of the script
-        if generate_timeline_data(srt_file_path_full, output_file_path):
+        if generate_timeline_data(file_path_full, output_file_path):
             processed_count_total += 1
         else:
             error_count += 1
-            print(f"^^^ Failed to process {os.path.basename(srt_file_path_full)} due to errors (check warnings above).")
+            print(f"^^^ Failed to process {os.path.basename(file_path_full)} due to errors (check warnings above).")
 
     print(f"\n--- Processing Complete ---")
     print(f"Successfully attempted processing for: {processed_count_total} file(s).")
@@ -349,6 +478,6 @@ if __name__ == "__main__":
         print(f"Failed or skipped processing for: {error_count} file(s). Check warnings and debug logs above.")
     elif processed_count_total > 0 :
          print("All attempted files processed successfully.")
-    else: # No files were processed successfully, and no errors were flagged (e.g., only non-SRT files found)
+    else:
          print("No files were successfully processed.")
 # --- End of Script ---
