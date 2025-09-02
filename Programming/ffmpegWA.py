@@ -1,39 +1,182 @@
 """
 =========================================================================================
- GPU-Accelerated Video Splitting, Compression, and Normalization Script (v3)
+ GPU-Accelerated Video Processing Script - Full Documentation (v4)
 =========================================================================================
 
 -----------------------------------------------------------------------------------------
  I. OVERVIEW
 -----------------------------------------------------------------------------------------
-This script is a powerful command-line tool designed to automate the process of video
-compression and segmentation. It can operate on a single file or batch-process an entire
-directory tree.
+This script is a powerful, configurable command-line tool designed to automate the
+entire workflow of preparing videos for modern web and social media platforms. It can
+operate on a single file or batch-process an entire directory tree.
 
-The primary goal is to produce video files that adhere to a strict set of modern web
-and social media standards: a file size under 10MB, a resolution that fits within
-a 1080x1080 frame, and normalized audio.
+Its core purpose is to take any video and produce one or more output files that adhere
+to a strict set of standards: a predictable file size, a specific duration per part,
+a capped resolution, and loud, compressed, broadcast-standard audio.
 
-A key feature is its ability to handle long videos: if an input video exceeds the
-maximum allowed duration, it is automatically split into multiple, sequentially
-numbered parts, each conforming to the duration limit. Each part is guaranteed to
-adhere to the file size limit due to strict rate control.
+All key processing parameters are exposed as command-line flags, allowing for a high
+degree of flexibility without needing to modify the source code.
 
 -----------------------------------------------------------------------------------------
  II. KEY FEATURES
 -----------------------------------------------------------------------------------------
+- **Configurable via Flags:** Key parameters like target size, duration, and audio
+  loudness can be set using command-line arguments (e.g., --target-mb 8).
 - **Automatic Video Splitting:** Videos longer than the maximum duration are automatically
-  cut into multiple parts (e.g., a 4-min video becomes three 90-sec or less parts).
-- **Strict Target Size Compression:** Intelligently calculates the video bitrate for each part
-  and uses strict rate control (`maxrate` and `bufsize`) to ensure every output file
-  reliably meets the target size limit.
-- **GPU Acceleration:** Offloads the intensive video encoding process to the GPU
-  (NVIDIA NVENC, AMD AMF, Intel QSV) for significant speed improvements.
+  cut into multiple, sequentially numbered parts.
+- **Strict Target Size Compression:** Intelligently calculates the required bitrate and
+  uses strict rate control (`maxrate`, `bufsize`) to ensure every output file reliably
+  meets the target file size, even with variable-complexity content.
+- **Aggressive Audio Processing:** Utilizes the sophisticated 'loudnorm' filter to act
+  as an all-in-one normalizer, compressor, and true-peak limiter. The default settings
+  produce a loud, punchy, and consistent audio experience suitable for social media.
+- **GPU Acceleration:** Offloads the computationally intensive video encoding process to
+  the GPU (NVIDIA NVENC, AMD AMF, Intel QSV) for significant speed improvements.
 - **Resolution Capping:** Resizes videos to fit within a 1080x1080 frame while
-  maintaining the original aspect ratio WITHOUT adding black bars.
-- **Audio Normalization:** Uses the 'loudnorm' filter to adjust audio to a standard
-  loudness level (EBU R128) for a consistent listening experience.
-- **Dual-Mode Operation:** Process a single file or batch process an entire directory.
+  maintaining the original aspect ratio, without adding black bars (letterboxing).
+- **Dual-Mode Operation:** Can process a specific video file passed as an argument or, if
+  no argument is given, recursively scan and process all videos in the current directory.
+
+-----------------------------------------------------------------------------------------
+ III. PREREQUISITES
+-----------------------------------------------------------------------------------------
+1.  **Python 3:** The script requires Python 3.
+2.  **FFmpeg:** A recent version of FFmpeg must be installed and accessible from your
+    system's PATH.
+    - **Crucially, your FFmpeg build must have support for your GPU's hardware
+      encoder.** For example, to use 'h264_nvenc', FFmpeg needs to be compiled with
+      the `--enable-nvenc` flag.
+3.  **ffmpeg-python:** The Python wrapper for FFmpeg. Install it via pip:
+    `pip install ffmpeg-python`
+
+-----------------------------------------------------------------------------------------
+ IV. HOW TO USE
+-----------------------------------------------------------------------------------------
+1. Save the code as a Python file (e.g., `process_videos.py`).
+2. Open a terminal or command prompt.
+3. Navigate (`cd`) to the folder containing the videos you want to process.
+4. Execute the script in one of the following ways:
+
+   **A) Single File Mode:**
+   Provide the path to the video file as the first argument.
+
+   Example:
+   `python process_videos.py "My Awesome Video.mp4"`
+
+   **B) Batch Mode:**
+   Run the script without any arguments. It will find all videos in the current folder.
+
+   Example:
+   `python process_videos.py`
+
+An output folder (named `compressed_videos` by default) will be created in the
+directory from which you ran the command.
+
+-----------------------------------------------------------------------------------------
+ V. COMMAND-LINE ARGUMENTS (FLAGS)
+-----------------------------------------------------------------------------------------
+Use these flags to override the default settings. Run with `-h` for a quick reference.
+
+`input_file`
+    - Description: Path to a single video file. If omitted, batch mode is enabled.
+    - Example: `python process_videos.py "path/to/my video.mov"`
+
+`--target-mb`
+    - Description: The target file size in Megabytes for each output video part.
+    - Default: 9.8
+    - Example: `python process_videos.py --target-mb 8`
+
+`--duration`
+    - Description: The maximum duration in seconds for each video part before splitting.
+    - Default: 90
+    - Example: `python process_videos.py --duration 60`
+
+`--output-folder`
+    - Description: Name of the directory where processed files will be saved.
+    - Default: "compressed_videos"
+    - Example: `python process_videos.py --output-folder "Final Renders"`
+
+`--loudness`
+    - Description: The integrated loudness target in LUFS. More negative numbers are
+      quieter. -7 is very loud, -14 is standard for streaming.
+    - Default: -9
+    - Example: `python process_videos.py --loudness -11`
+
+`--lra`
+    - Description: The Loudness Range (LRA). Controls dynamic range compression.
+      Lower values (e.g., 5-7) result in heavy compression. Higher values are more dynamic.
+    - Default: 7
+    - Example: `python process_videos.py --lra 11`
+
+`--peak`
+    - Description: The true peak ceiling in dBTP. This acts as a limiter to prevent clipping.
+    - Default: -1.0
+    - Example: `python process_videos.py --peak -1.5`
+
+-----------------------------------------------------------------------------------------
+ VI. CODE & DESIGN RATIONALE (The "Why")
+-----------------------------------------------------------------------------------------
+
+[ Overall Script Structure ]
+- **`argparse` for Configuration:** Using Python's standard `argparse` library is the
+  robust and conventional way to handle command-line flags. It automatically generates
+  help menus (`-h`) and provides clean, readable access to user-provided arguments.
+  This is far superior to manually parsing `sys.argv`.
+- **`_encode_chunk` Helper Function:** The core FFmpeg logic is isolated in this
+  internal function. This promotes code reuse and separation of concerns. The main
+  `process_video` function handles the logic of *what* to process (splitting, timing),
+  while `_encode_chunk` handles *how* to process it.
+- **`if __name__ == "__main__":`:** This is a standard Python best practice that ensures
+  the script's main logic only runs when it is executed directly, not when it is
+  imported as a module into another script.
+
+[ Video Processing Rationale ]
+- **Splitting Logic:** For videos exceeding `max_duration`, `math.ceil()` is used to
+  calculate the total number of parts needed, ensuring the final partial segment is
+  included. A loop then iterates through each segment, calculating the precise `start_time`
+  and `duration` for each chunk. The `-ss` (seek start) parameter in FFmpeg is used
+  for this, as it is highly efficient for seeking within a file.
+- **Bitrate Calculation:** The formula `bitrate = (size_in_bits) / duration_in_seconds`
+  is fundamental to video encoding. The script calculates the total bit budget for the
+  target file size, subtracts a fixed budget for audio, and allocates the remainder
+  to the video stream. This is the cornerstone of achieving a predictable file size.
+- **Strict Rate Control (`maxrate`, `bufsize`):** Simply targeting an average bitrate
+  (`b:v`) is not enough. Video encoders use Variable Bitrate (VBR), allocating more
+- **Resolution Capping (`scale`):** The `scale` filter uses `force_original_aspect_ratio='decrease'`
+  which is the key to resizing the video to fit *inside* a 1080x1080 box without
+  distortion. The `pad` filter was intentionally removed to prevent letterboxing,
+  resulting in an output resolution that matches the video's aspect ratio (e.g.,
+  1080x607 for widescreen, 607x1080 for portrait).
+
+[ Audio Processing Rationale (`loudnorm`) ]
+- **Modern Loudness (LUFS):** The `loudnorm` filter was chosen because it adheres to the
+  modern EBU R128 standard, which measures loudness based on human perception (LUFS)
+  rather than simple digital peaks. This ensures consistency across devices and
+  platforms like YouTube and Spotify.
+- **All-in-One Audio Mastering:** `loudnorm` is not just a normalizer; it is a
+  sophisticated, two-pass audio processor that functions as a combined normalizer,
+  compressor, and true-peak limiter. This is far more effective than chaining separate,
+  less-aware filters.
+- **Loudness (`i` parameter):** The `i` (Integrated Loudness) parameter is set to a
+  default of -9 LUFS. This is an aggressive, "hot" target designed to make the audio
+  stand out on mobile devices and social media platforms, where ambient noise may be a factor.
+- **Compression (`lra` parameter):** The `lra` (Loudness Range) parameter directly
+  controls dynamic range compression. By targeting a low LRA of 7, we are instructing
+  the filter to significantly reduce the difference between quiet and loud sounds,
+  resulting in a dense, consistently loud, and "in-your-face" audio track.
+- **Clipping Prevention (`tp` parameter):** The `tp` (True Peak) parameter is the crucial
+  safety net. By setting it to -1.0, we are commanding the filter to apply a
+  **brick-wall true-peak limiter** at the end of its processing chain. This guarantees
+  that no part of the final audio will ever exceed -1.0 dBTP, effectively and reliably
+  preventing any clipping or distortion.
+
+-----------------------------------------------------------------------------------------
+ VII. NOTE ON FUTURE UPDATES
+-----------------------------------------------------------------------------------------
+This documentation is an integral part of the script. If you modify the script's logic,
+add, or change any command-line arguments, please ensure this documentation block is
+updated to reflect those changes.
+
 """
 
 import sys
@@ -41,25 +184,39 @@ import os
 import glob
 import ffmpeg
 import math
+import argparse
 
-# --- Script Configuration ---
+# --- Default Script Configuration ---
+# These values are used if not overridden by command-line flags.
 
-# Target file size in Megabytes. We use a slightly smaller value for a safety margin.
-TARGET_MB = 9.8
-TARGET_SIZE_BYTES = TARGET_MB * 1024 * 1024
-
-# Maximum allowed video duration in seconds for each output part.
-MAX_DURATION_SECONDS = 90
-
-# The name of the folder where compressed videos will be saved.
-OUTPUT_FOLDER_NAME = "compressed_videos"
+DEFAULT_CONFIG = {
+    # Target file size in Megabytes.
+    "target_mb": 9.8,
+    
+    # Maximum duration in seconds for each output part.
+    "max_duration": 90,
+    
+    # Name of the folder for processed videos.
+    "output_folder": "compressed_videos",
+    
+    # --- Loudness & Compression Settings ---
+    # Integrated Loudness Target (LUFS). Louder = smaller negative number (e.g., -7 is louder than -14).
+    "loudness_target": -9,
+    
+    # Loudness Range (LRA). Lower number = more compression, less dynamic range.
+    "loudness_range": 7,
+    
+    # True Peak ceiling (dBTP). The maximum peak level. -1.0 is a safe, loud value.
+    "true_peak": -1.0,
+}
 
 # Video extensions to look for in batch mode.
 VIDEO_EXTENSIONS = ["mp4", "mov", "mkv", "avi", "webm"]
 
+
 # --- Core Processing Functions ---
 
-def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_exists):
+def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_exists, config):
     """
     Encodes a specific time segment of a video file to the target specifications.
     This is a helper function called by process_video.
@@ -67,52 +224,51 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
     try:
         print(f"   [INFO] Encoding segment: start={start_time:.1f}s, duration={duration:.1f}s")
         
-        # 1. CALCULATE BITRATE: Determine the required video bitrate for this chunk.
+        target_size_bytes = config['target_mb'] * 1024 * 1024
+        
+        # 1. CALCULATE BITRATE
         print("   [1/4] Calculating target bitrate...")
         audio_bitrate = 128 * 1000 if audio_stream_exists else 0
-        total_bitrate = (TARGET_SIZE_BYTES * 8) / duration
+        total_bitrate = (target_size_bytes * 8) / duration
         video_bitrate = total_bitrate - audio_bitrate
 
         if video_bitrate <= 0:
-            print(f"   [ERROR] Target size of {TARGET_MB}MB is too small for a {duration:.1f}s video segment. Skipping.")
+            print(f"   [ERROR] Target size of {config['target_mb']}MB is too small for a {duration:.1f}s segment. Skipping.")
             return
         
         print(f"   [INFO] Target video bitrate: {int(video_bitrate / 1000)} kbps")
 
-        # 2. BUILD FFMPEG COMMAND: Construct the processing graph for the segment.
+        # 2. BUILD FFMPEG COMMAND
         print("   [2/4] Building FFmpeg command...")
-        
-        # Use 'ss' for seeking to start_time, which is very fast.
         stream = ffmpeg.input(input_path, ss=start_time, t=duration)
-        
         video = stream.video.filter('scale', w=1080, h=1080, force_original_aspect_ratio='decrease')
 
         audio = None
         if audio_stream_exists:
-            audio = stream.audio.filter('loudnorm')
+            print("   [INFO] Applying aggressive audio loudness and compression.")
+            audio = stream.audio.filter(
+                'loudnorm',
+                i=config['loudness_target'],
+                lra=config['loudness_range'],
+                tp=config['true_peak']
+            )
 
-        # 3. EXECUTE: Run the command.
+        # 3. EXECUTE
         print("   [3/4] Starting GPU-accelerated encoding...")
-        
-        # ======================= MODIFICATION HERE =======================
-        # Added 'maxrate' and 'bufsize' to enforce stricter rate control. This ensures
-        # that even complex video segments do not exceed the target file size.
         output_options = {
-            'c:v': 'h264_nvenc',              # Encoder (AMD: 'h264_amf', Intel: 'h264_qsv')
-            'b:v': int(video_bitrate),        # Target average bitrate
-            'maxrate': int(video_bitrate),    # Hard ceiling for bitrate
-            'bufsize': int(video_bitrate * 2),# Rate control buffer size
+            'c:v': 'h264_nvenc',
+            'b:v': int(video_bitrate),
+            'maxrate': int(video_bitrate),
+            'bufsize': int(video_bitrate * 2),
             'c:a': 'aac',
             'b:a': '128k'
         }
-        # ===============================================================
         
-        if audio is None:
-            del output_options['c:a']
-            del output_options['b:a']
-            output_streams = [video]
+        output_streams = [video]
+        if audio is not None:
+            output_streams.append(audio)
         else:
-            output_streams = [video, audio]
+            del output_options['c:a'], output_options['b:a']
             
         (
             ffmpeg
@@ -121,12 +277,12 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
             .run(capture_stdout=True, capture_stderr=True)
         )
         
-        # 4. VERIFY: Check the final file size.
+        # 4. VERIFY
         print("   [4/4] Verifying output...")
         final_size_bytes = os.path.getsize(output_path)
         final_size_mb = final_size_bytes / (1024 * 1024)
 
-        if final_size_bytes <= TARGET_SIZE_BYTES:
+        if final_size_bytes <= target_size_bytes:
             print(f"   [SUCCESS] Compression successful! Final size: {final_size_mb:.2f} MB")
         else:
             print(f"   [WARNING] Compression finished, but file size ({final_size_mb:.2f} MB) is OVER the target.")
@@ -138,10 +294,10 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
         print(f"   [UNEXPECTED ERROR] An unexpected error occurred: {e}", file=sys.stderr)
 
 
-def process_video(input_path, output_path):
+def process_video(input_path, output_path, config):
     """
-    Analyzes a video. If it's longer than MAX_DURATION_SECONDS, it splits it
-    into multiple parts. Then, for each part, it calls the encoding function.
+    Analyzes a video. If it's too long, it splits it into parts and calls the
+    encoding function for each part, passing along the configuration.
     """
     print(f"\n--- Analyzing: {os.path.basename(input_path)} ---")
 
@@ -155,14 +311,13 @@ def process_video(input_path, output_path):
             return
 
         original_duration = float(probe['format']['duration'])
+        max_duration = config['max_duration']
 
-        if original_duration <= MAX_DURATION_SECONDS:
-            # Video is short enough, process as a single file.
+        if original_duration <= max_duration:
             print("   [INFO] Video is within duration limit. Processing as a single file.")
-            _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None)
+            _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None, config)
         else:
-            # Video is too long, must be split into parts.
-            num_parts = math.ceil(original_duration / MAX_DURATION_SECONDS)
+            num_parts = math.ceil(original_duration / max_duration)
             print(f"   [INFO] Video is too long ({original_duration:.1f}s). Splitting into {num_parts} parts.")
             
             output_name, output_ext = os.path.splitext(output_path)
@@ -172,11 +327,10 @@ def process_video(input_path, output_path):
                 part_output_path = f"{output_name}_part_{part_num}{output_ext}"
                 print(f"\n--- Processing Part {part_num} of {num_parts} for: {os.path.basename(input_path)} ---")
 
-                start_time = i * MAX_DURATION_SECONDS
-                # The duration for the last part might be shorter.
-                duration = min(MAX_DURATION_SECONDS, original_duration - start_time)
+                start_time = i * max_duration
+                duration = min(max_duration, original_duration - start_time)
 
-                _encode_chunk(input_path, part_output_path, start_time, duration, audio_stream is not None)
+                _encode_chunk(input_path, part_output_path, start_time, duration, audio_stream is not None, config)
 
     except Exception as e:
         print(f"   [FATAL ERROR] An error occurred during video analysis: {e}", file=sys.stderr)
@@ -185,22 +339,55 @@ def process_video(input_path, output_path):
 # --- Main Execution Block ---
 def main():
     """
-    Main function to handle command-line arguments and start the processing.
+    Parses command-line arguments and starts the video processing.
     """
+    parser = argparse.ArgumentParser(
+        description="GPU-accelerated video compression, splitting, and normalization script.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument(
+        'input_file',
+        nargs='?', # Makes the argument optional
+        default=None,
+        help="Path to a single video file to process. If omitted, script runs in Batch Mode."
+    )
+    
+    # --- Add arguments to override default config ---
+    parser.add_argument("--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
+    parser.add_argument("--duration", type=int, default=DEFAULT_CONFIG['max_duration'], help="Maximum duration in seconds for each video part.")
+    parser.add_argument("--output-folder", type=str, default=DEFAULT_CONFIG['output_folder'], help="Name of the directory to save processed files.")
+    parser.add_argument("--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
+    parser.add_argument("--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
+    parser.add_argument("--peak", type=float, default=DEFAULT_CONFIG['true_peak'], help="True Peak ceiling in dBTP.")
+    
+    args = parser.parse_args()
+
+    # Create a config dictionary from the parsed arguments
+    config = {
+        'target_mb': args.target_mb,
+        'max_duration': args.duration,
+        'output_folder': args.output_folder,
+        'loudness_target': args.loudness,
+        'loudness_range': args.lra,
+        'true_peak': args.peak,
+    }
+
     current_working_dir = os.getcwd()
-    output_dir = os.path.join(current_working_dir, OUTPUT_FOLDER_NAME)
+    output_dir = os.path.join(current_working_dir, config['output_folder'])
     os.makedirs(output_dir, exist_ok=True)
     
-    if len(sys.argv) > 1:
-        input_file = sys.argv[1]
+    if args.input_file:
+        # Single File Mode
         print(f"--- Single File Mode ---")
-        if not os.path.isfile(input_file):
-            print(f"Error: The file '{input_file}' does not exist.")
+        if not os.path.isfile(args.input_file):
+            print(f"Error: The file '{args.input_file}' does not exist.")
             return
-        base_name = os.path.basename(input_file)
+        base_name = os.path.basename(args.input_file)
         output_file = os.path.join(output_dir, base_name)
-        process_video(input_file, output_file)
+        process_video(args.input_file, output_file, config)
     else:
+        # Batch Mode
         print(f"--- Batch Mode ---")
         print(f"Searching for video files in '{current_working_dir}' and its subfolders...")
         video_files = []
@@ -216,8 +403,12 @@ def main():
         for i, input_file in enumerate(video_files):
             print(f"\n>>> Processing file {i + 1} of {len(video_files)}")
             base_name = os.path.basename(input_file)
+            # Exclude files that are already in the output directory
+            if os.path.dirname(input_file) == output_dir:
+                print(f"   Skipping file already in output directory: {base_name}")
+                continue
             output_file = os.path.join(output_dir, base_name)
-            process_video(input_file, output_file)
+            process_video(input_file, output_file, config)
 
     print("\n--- All tasks completed. ---")
 
