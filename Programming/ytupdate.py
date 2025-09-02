@@ -280,9 +280,22 @@ LANGUAGES = {"English": "en", "Spanish": "es", "French": "fr", "German": "de", "
 
 # --- Helper functions ---
 def normalize_for_matching(text: str) -> str:
+    """
+    Normalizes a string for robust matching by mimicking YouTube's title sanitization.
+    It converts to lowercase, replaces non-alphanumeric characters with spaces,
+    and then collapses all spaces into single underscores.
+    """
+    # Convert to lowercase
     text = text.lower()
-    text = re.sub(r'[\\/*?:"<>|]', "", text)
+    
+    # Step 1: Replace all non-alphanumeric characters (hyphens, dots, etc.) with a space.
+    # This is the key step that replicates YouTube's sanitization.
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    
+    # Step 2: Collapse all sequences of whitespace (both original and newly created) 
+    # into a single underscore for a clean, consistent format.
     text = re.sub(r'\s+', '_', text)
+    
     return text
 
 def sanitize_for_youtube(text: str) -> str:
