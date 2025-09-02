@@ -450,6 +450,12 @@ class SchedulerApp:
         top_frame = ttk.Frame(frm); top_frame.pack(fill=tk.X, pady=5)
         self.select_cred_button = ttk.Button(top_frame, text='1. Select client_secrets.json & Authenticate', command=self.select_credentials_and_auth)
         self.select_cred_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
+        
+        ttk.Label(top_frame, text='Max Videos (0=all):').pack(side=tk.LEFT, padx=(10, 2))
+        self.max_videos_var = tk.StringVar(value='50')
+        self.max_videos_spinbox = ttk.Spinbox(top_frame, from_=0, to=10000, width=5, textvariable=self.max_videos_var)
+        self.max_videos_spinbox.pack(side=tk.LEFT, padx=(0,5))
+
         self.load_all_button = ttk.Button(top_frame, text='2. Load My Videos', command=self.gui_load_all_videos, state=tk.DISABLED)
         self.load_all_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
@@ -700,7 +706,7 @@ class SchedulerApp:
             publish_at = self.format_publish_time(vd.video_status.get('publishAt'))
             upload_date = self.format_publish_time(vd.upload_date)
             self.tree.insert('', tk.END, values=(vd.video_id, vd.title_to_set, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date))
-        self.update_status(f"Displaying {len(videos_to_display)} of {len(self.all_channel_videos)} videos.")
+        self.update_status(f"Displaying {len(videos_to_display)} of {len(self.all_channel_videos)} total videos on channel.")
 
     def format_publish_time(self, time_str):
         if not time_str: return "Not Scheduled"
@@ -729,14 +735,20 @@ class SchedulerApp:
                 self.update_status("Authentication failed. Check console.")
 
     def gui_load_all_videos(self):
-        self.update_status("Loading videos from YouTube... This may take a moment.")
-        self.all_channel_videos = self.fetch_all_videos_from_api()
+        try:
+            max_to_load = int(self.max_videos_var.get())
+        except ValueError:
+            max_to_load = 50 # Default to 50 on invalid input
+            self.update_status("Invalid number for max videos, defaulting to 50.")
+        
+        self.update_status(f"Loading up to {max_to_load if max_to_load > 0 else 'ALL'} videos from YouTube... This may take a moment.")
+        self.all_channel_videos = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load)
         self.clear_filters()
         self.filter_menubutton.config(state=tk.NORMAL)
         self.schedule_button.config(state=tk.NORMAL)
         self.update_status(f"Loaded {len(self.all_channel_videos)} videos. Ready for scheduling.")
 
-    def fetch_all_videos_from_api(self):
+    def fetch_all_videos_from_api(self, max_videos_to_fetch=0):
         all_video_data, video_ids = [], []
         try:
             uploads_id = self.service.channels().list(part="contentDetails", mine=True).execute()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
@@ -745,8 +757,15 @@ class SchedulerApp:
             while True:
                 pl_resp = self.service.playlistItems().list(playlistId=uploads_id, part="contentDetails", maxResults=50, pageToken=next_page_token).execute()
                 video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp["items"]])
+                
+                if max_videos_to_fetch > 0 and len(video_ids) >= max_videos_to_fetch:
+                    break
+
                 next_page_token = pl_resp.get("nextPageToken")
                 if not next_page_token: break
+            
+            if max_videos_to_fetch > 0:
+                video_ids = video_ids[:max_videos_to_fetch]
             
             local_files = [f for f in Path.cwd().iterdir() if f.is_file()]
             
