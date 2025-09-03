@@ -194,7 +194,7 @@ DEFAULT_CONFIG = {
     "target_mb": 9.8,
     
     # Maximum duration in seconds for each output part.
-    "max_duration": 90,
+    "max_duration": 15,
     
     # Name of the folder for processed videos.
     "output_folder": "compressed_videos",
