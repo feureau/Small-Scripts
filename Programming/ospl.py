@@ -2,25 +2,29 @@
 # Script: One Sentence Per Line (OSPL) Text Formatter
 #
 # Description:
-# This script processes one or more text files to reformat their content
-# for clarity and easier processing by other tools. It standardizes the
-# text by ensuring each sentence is on its own line and by separating
-# any decorative or non-textual prefixes from the sentences.
+# This script intelligently processes text and Markdown files to reformat their
+# prose content for clarity, ensuring each sentence is on its own line.
+# It is designed to be "structure-aware," preserving important formatting like
+# Markdown tables, fenced code blocks, YAML front matter, and poetry.
 #
 # Key Functionality:
-# 1.  Encoding Detection: Uses the 'chardet' library to automatically
-#     detect the input file's character encoding for robust reading.
-# 2.  Text Cleaning: Uses the 'ftfy' library to fix mojibake, repair
-#     encoding issues, and normalize characters like quotation marks.
-# 3.  Paragraph Preservation: It identifies paragraphs separated by blank
-#     lines and maintains these breaks in the output file.
-# 4.  Line Break Normalization: It joins lines within a paragraph that have
-#     been split by soft line breaks (e.g., in copied text).
-# 5.  Sentence Tokenization: It uses the Natural Language Toolkit (NLTK)
+# 1.  Prose Reformatting: The core feature is to process standard paragraphs,
+#     placing each sentence on a new line.
+# 2.  Structure Preservation: The script identifies and protects special text
+#     blocks from being altered. This includes:
+#     - Fenced Code Blocks (```)
+#     - Markdown Tables
+#     - YAML Front Matter (---)
+#     - Any text where line breaks are meaningful (e.g., poetry, addresses).
+# 3.  Sentence Tokenization: It uses the Natural Language Toolkit (NLTK)
 #     to accurately split paragraphs into individual sentences.
-# 6.  Decorative Prefix Splitting: It detects if a sentence starts with
-#     non-alphanumeric characters (like '***', '---', or list markers)
-#     and splits this prefix onto a separate line from the actual sentence.
+# 4.  Decorative Prefix Splitting: It detects if a sentence starts with
+#     non-alphanumeric characters (like '***') and splits this prefix onto a
+#     separate line, while correctly ignoring Markdown syntax (like '#', '>', '**').
+# 5.  Encoding Detection: Uses 'chardet' to automatically detect the
+#     input file's character encoding for robust reading.
+# 6.  Text Cleaning: Uses 'ftfy' to fix mojibake, repair encoding issues,
+#     and normalize characters before processing.
 # 7.  In-Place Editing & UTF-8 Conversion: The script overwrites the
 #     original files with the formatted text, saving them in UTF-8.
 # 8.  Cross-Platform Wildcard Support: Uses the 'glob' module to handle
@@ -41,7 +45,7 @@
 # Examples:
 #   python your_script_name.py
 #   python your_script_name.py document1.txt chapter*.txt "path/to/another file.txt"
-#
+# any update to this script must also include updates to the documentation, and the documentation must always be included.
 
 import os
 import sys
@@ -50,7 +54,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import glob
 import ftfy
-import chardet  # <-- NEW: Import for encoding detection
+import chardet
 
 def tokenize_text(text):
     """
@@ -69,63 +73,120 @@ def tokenize_text(text):
 
 def split_decorative(sentence):
     """
-    Checks if the sentence begins with extra decorative text.
-    If so, splits the sentence into two parts: the prefix and the actual sentence.
+    Checks if a sentence begins with a decorative prefix (e.g., '*** ').
+    If so, it splits the prefix from the actual sentence.
+    This function is robust and avoids splitting standard Markdown syntax.
     """
-    m = re.search(r'([A-Za-z“"])', sentence)
+    # This single, comprehensive pattern identifies valid sentence starters that should NOT be split.
+    # It includes: Markdown structural elements, inline formatting, and standard punctuation.
+    # Crucially, it allows for optional spaces after the markers (e.g., `[ `).
+    no_split_pattern = r'^\s*(?:[A-Za-z0-9“"]|#{1,6}\s*|>{1,}\s*|[*\-+]\s*|\d+\.\s*|\\?\[\s*|\(\s*)'
+    
+    # If the sentence starts with a valid, non-decorative character/pattern, leave it alone.
+    if re.match(no_split_pattern, sentence):
+        return [sentence]
+
+    # Fallback: If the sentence does not start with a valid character (e.g., it starts with '--- '),
+    # then find the first valid character and split before it.
+    m = re.search(r'([A-Za-z0-9“"])', sentence)
     if m and m.start() > 0:
         prefix = sentence[:m.start()].rstrip()
         rest = sentence[m.start():].lstrip()
         if prefix:
             return [prefix, rest]
+
+    # If no other rules apply, return the sentence as is.
     return [sentence]
+
+def is_table_row(line):
+    """ Heuristic to determine if a line is part of a Markdown table. """
+    stripped_line = line.strip()
+    if stripped_line.startswith('|') and stripped_line.endswith('|'):
+        return True
+    if re.match(r'^\s*\|?(:?-+:?\|)+:?-+:?\|?\s*$', stripped_line):
+        return True
+    return False
 
 def process_file(filepath):
     """
-    Reads a file with auto-detected encoding, processes its content to put
-    one sentence per line, and overwrites the original file in UTF-8.
+    Reads a file and processes it line-by-line, reformatting prose while
+    preserving structured blocks like code, tables, and YAML front matter.
+    Overwrites the original file in UTF-8.
     """
-    # --- NEW: Robust file reading with encoding detection ---
     try:
-        # 1. Read the file in binary mode to analyze its raw bytes.
         with open(filepath, 'rb') as f:
             raw_data = f.read()
             if not raw_data:
                 print(f"Skipped empty file: {filepath}")
                 return
-
-        # 2. Detect the encoding from the raw bytes.
         detection = chardet.detect(raw_data)
-        encoding = detection['encoding']
-
-        # 3. Decode the raw bytes into a text string using the detected encoding.
-        # Fallback to UTF-8 if detection is uncertain.
-        if encoding is None or detection['confidence'] < 0.9:
-            print(f"  - Info: Low confidence for detected encoding ({encoding}). Using UTF-8 for {filepath}.")
-            encoding = 'utf-8'
-        
+        encoding = detection.get('encoding', 'utf-8') or 'utf-8'
         text = raw_data.decode(encoding, errors='replace')
-
     except Exception as e:
         print(f"Error reading or decoding file {filepath}: {e}")
         return
 
-    # --- Text processing remains the same ---
     text = ftfy.fix_text(text)
-    paragraphs = re.split(r'\n\s*\n', text.strip())
-    processed_paragraphs = []
-    for para in paragraphs:
-        single_line_para = ' '.join(para.splitlines())
-        sentences = tokenize_text(single_line_para)
-        processed_lines = []
+    lines = text.splitlines()
+    
+    output_buffer = []
+    prose_paragraph_buffer = []
+    in_fenced_block = False
+    in_yaml_block = False
+
+    def flush_prose_buffer():
+        """ Processes the collected prose lines and adds them to the output. """
+        if not prose_paragraph_buffer:
+            return
+        
+        full_paragraph = ' '.join(prose_paragraph_buffer)
+        sentences = tokenize_text(full_paragraph)
+        
         for sentence in sentences:
-            for line in split_decorative(sentence):
-                processed_lines.append(line)
-        processed_paragraphs.append("\n".join(processed_lines))
+            for formatted_line in split_decorative(sentence.strip()):
+                output_buffer.append(formatted_line)
+        
+        prose_paragraph_buffer.clear()
 
-    output_text = "\n\n".join(processed_paragraphs)
+    for i, line in enumerate(lines):
+        stripped_line = line.strip()
 
-    # --- NEW: Robust file writing, always guaranteeing UTF-8 output ---
+        if i == 0 and stripped_line == '---':
+            in_yaml_block = True
+            output_buffer.append(line)
+            continue
+
+        if in_yaml_block:
+            output_buffer.append(line)
+            if stripped_line == '---':
+                in_yaml_block = False
+            continue
+
+        if stripped_line.startswith('```') or stripped_line.startswith('~~~'):
+            flush_prose_buffer()
+            in_fenced_block = not in_fenced_block
+            output_buffer.append(line)
+            continue
+        
+        if in_fenced_block:
+            output_buffer.append(line)
+            continue
+
+        if is_table_row(line):
+            flush_prose_buffer()
+            output_buffer.append(line)
+            continue
+            
+        if not stripped_line:
+            flush_prose_buffer()
+            output_buffer.append('')
+        else:
+            prose_paragraph_buffer.append(line)
+
+    flush_prose_buffer()
+
+    output_text = "\n".join(output_buffer).rstrip() + "\n"
+
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(output_text)
@@ -157,9 +218,8 @@ def main():
     print(f"\nFound {len(input_files)} file(s) to process...")
     for filepath in input_files:
         if os.path.isfile(filepath):
-            process_file(filepath) # Error handling is now inside process_file
+            process_file(filepath)
     print("\nProcessing complete.")
-
 
 if __name__ == "__main__":
     main()
