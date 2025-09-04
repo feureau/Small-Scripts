@@ -83,7 +83,7 @@ Use these flags to override the default settings. Run with `-h` for a quick refe
 
 `--target-mb`
     - Description: The target file size in Megabytes for each output video part.
-    - Default: 9.8
+    - Default: 9.3
     - Example: `python process_videos.py --target-mb 8`
 
 `--duration`
@@ -191,7 +191,7 @@ import argparse
 
 DEFAULT_CONFIG = {
     # Target file size in Megabytes.
-    "target_mb": 9.8,
+    "target_mb": 9.3,
     
     # Maximum duration in seconds for each output part.
     "max_duration": 15,
