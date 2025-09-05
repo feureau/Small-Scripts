@@ -1,6 +1,6 @@
 """
 =========================================================================================
- GPU-Accelerated Video Processing Script - Full Documentation (v4)
+ GPU-Accelerated Video Processing Script - Full Documentation (v4.2)
 =========================================================================================
 
 -----------------------------------------------------------------------------------------
@@ -21,9 +21,9 @@ degree of flexibility without needing to modify the source code.
  II. KEY FEATURES
 -----------------------------------------------------------------------------------------
 - **Configurable via Flags:** Key parameters like target size, duration, and audio
-  loudness can be set using command-line arguments (e.g., --target-mb 8).
+  loudness can be set using command-line arguments (e.g., -s 8).
 - **Automatic Video Splitting:** Videos longer than the maximum duration are automatically
-  cut into multiple, sequentially numbered parts.
+  cut into multiple, sequentially numbered parts. This can be overridden.
 - **Strict Target Size Compression:** Intelligently calculates the required bitrate and
   uses strict rate control (`maxrate`, `bufsize`) to ensure every output file reliably
   meets the target file size, even with variable-complexity content.
@@ -75,43 +75,48 @@ directory from which you ran the command.
 -----------------------------------------------------------------------------------------
  V. COMMAND-LINE ARGUMENTS (FLAGS)
 -----------------------------------------------------------------------------------------
-Use these flags to override the default settings. Run with `-h` for a quick reference.
+Use these flags to override the default settings. Run with `-h` or `--help` for a quick reference.
 
 `input_file`
     - Description: Path to a single video file. If omitted, batch mode is enabled.
     - Example: `python process_videos.py "path/to/my video.mov"`
 
-`--target-mb`
+`-s, --target-mb`
     - Description: The target file size in Megabytes for each output video part.
     - Default: 9.3
-    - Example: `python process_videos.py --target-mb 8`
+    - Example: `python process_videos.py -s 8`
 
-`--duration`
+`-d, --duration`
     - Description: The maximum duration in seconds for each video part before splitting.
     - Default: 90
-    - Example: `python process_videos.py --duration 60`
+    - Example: `python process_videos.py -d 60`
 
-`--output-folder`
+`-o, --output-folder`
     - Description: Name of the directory where processed files will be saved.
     - Default: "compressed_videos"
-    - Example: `python process_videos.py --output-folder "Final Renders"`
+    - Example: `python process_videos.py -o "Final Renders"`
+    
+`-f, --full-video`
+    - Description: Encode the entire video without splitting, ignoring the --duration setting.
+    - Default: False
+    - Example: `python process_videos.py -f --target-mb 50 "My Long Movie.mp4"`
 
-`--loudness`
+`-l, --loudness`
     - Description: The integrated loudness target in LUFS. More negative numbers are
       quieter. -7 is very loud, -14 is standard for streaming.
     - Default: -9
-    - Example: `python process_videos.py --loudness -11`
+    - Example: `python process_videos.py -l -11`
 
-`--lra`
+`-r, --lra`
     - Description: The Loudness Range (LRA). Controls dynamic range compression.
       Lower values (e.g., 5-7) result in heavy compression. Higher values are more dynamic.
     - Default: 7
-    - Example: `python process_videos.py --lra 11`
+    - Example: `python process_videos.py -r 11`
 
-`--peak`
+`-p, --peak`
     - Description: The true peak ceiling in dBTP. This acts as a limiter to prevent clipping.
     - Default: -1.0
-    - Example: `python process_videos.py --peak -1.5`
+    - Example: `python process_videos.py -p -1.5`
 
 -----------------------------------------------------------------------------------------
  VI. CODE & DESIGN RATIONALE (The "Why")
@@ -294,10 +299,11 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
         print(f"   [UNEXPECTED ERROR] An unexpected error occurred: {e}", file=sys.stderr)
 
 
-def process_video(input_path, output_path, config):
+def process_video(input_path, output_path, config, process_full_video=False):
     """
     Analyzes a video. If it's too long, it splits it into parts and calls the
     encoding function for each part, passing along the configuration.
+    This behavior is overridden by the process_full_video flag.
     """
     print(f"\n--- Analyzing: {os.path.basename(input_path)} ---")
 
@@ -313,10 +319,16 @@ def process_video(input_path, output_path, config):
         original_duration = float(probe['format']['duration'])
         max_duration = config['max_duration']
 
-        if original_duration <= max_duration:
-            print("   [INFO] Video is within duration limit. Processing as a single file.")
+        # If --full-video is used OR the video is already short enough, process as a single file.
+        if process_full_video or original_duration <= max_duration:
+            if process_full_video:
+                print("   [INFO] --full-video flag is set. Encoding the entire video as a single file.")
+                print(f"   [NOTE] Target size is {config['target_mb']}MB for the full {original_duration:.1f}s duration.")
+            else:
+                print("   [INFO] Video is within duration limit. Processing as a single file.")
             _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None, config)
         else:
+            # Otherwise, split the video into parts.
             num_parts = math.ceil(original_duration / max_duration)
             print(f"   [INFO] Video is too long ({original_duration:.1f}s). Splitting into {num_parts} parts.")
             
@@ -354,12 +366,13 @@ def main():
     )
     
     # --- Add arguments to override default config ---
-    parser.add_argument("--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
-    parser.add_argument("--duration", type=int, default=DEFAULT_CONFIG['max_duration'], help="Maximum duration in seconds for each video part.")
-    parser.add_argument("--output-folder", type=str, default=DEFAULT_CONFIG['output_folder'], help="Name of the directory to save processed files.")
-    parser.add_argument("--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
-    parser.add_argument("--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
-    parser.add_argument("--peak", type=float, default=DEFAULT_CONFIG['true_peak'], help="True Peak ceiling in dBTP.")
+    parser.add_argument("-s", "--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
+    parser.add_argument("-d", "--duration", type=int, default=DEFAULT_CONFIG['max_duration'], help="Maximum duration in seconds for each video part.")
+    parser.add_argument("-o", "--output-folder", type=str, default=DEFAULT_CONFIG['output_folder'], help="Name of the directory to save processed files.")
+    parser.add_argument("-f", "--full-video", action='store_true', help="Encode the entire video without splitting, ignoring the --duration setting.")
+    parser.add_argument("-l", "--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
+    parser.add_argument("-r", "--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
+    parser.add_argument("-p", "--peak", type=float, default=DEFAULT_CONFIG['true_peak'], help="True Peak ceiling in dBTP.")
     
     args = parser.parse_args()
 
@@ -385,7 +398,7 @@ def main():
             return
         base_name = os.path.basename(args.input_file)
         output_file = os.path.join(output_dir, base_name)
-        process_video(args.input_file, output_file, config)
+        process_video(args.input_file, output_file, config, args.full_video)
     else:
         # Batch Mode
         print(f"--- Batch Mode ---")
@@ -408,7 +421,7 @@ def main():
                 print(f"   Skipping file already in output directory: {base_name}")
                 continue
             output_file = os.path.join(output_dir, base_name)
-            process_video(input_file, output_file, config)
+            process_video(input_file, output_file, config, args.full_video)
 
     print("\n--- All tasks completed. ---")
 

@@ -1,3 +1,151 @@
+# =================================================================================================
+#
+#                                  NVEncC AV1 Batch Processor
+#                                          Version: 3.0
+#
+# =================================================================================================
+"""
+---------------------------------------------------------------------------------------------------
+ SCRIPT DOCUMENTATION
+---------------------------------------------------------------------------------------------------
+**IMPORTANT**: This documentation block should be reviewed and updated with each new iteration of
+             this script to ensure it accurately reflects the current codebase and features.
+
+---------------------------------------------------------------------------------------------------
+ I. OVERVIEW
+---------------------------------------------------------------------------------------------------
+This script is a comprehensive, GUI-based batch video encoding tool designed to automate the
+process of converting video files to high-quality AV1 format using NVIDIA's NVEncC encoder.
+
+It streamlines the entire workflow by performing pre-analysis (metadata, crop detection),
+presenting the user with a clear set of options in a Tkinter GUI, and then processing a batch
+of files with robust settings optimized for quality.
+
+The primary goal is to produce archival-quality encodes that respect modern video standards like
+HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as film grain.
+
+---------------------------------------------------------------------------------------------------
+ II. CORE FEATURES
+---------------------------------------------------------------------------------------------------
+- Batch Processing: Add multiple files or use wildcards (e.g., *.mkv) for batch encoding.
+- Pre-Analysis: Automatically detects HDR metadata, audio tracks, and video resolution from the
+  first file to set sensible defaults.
+- Automatic Crop Detection: Samples the video at multiple points to intelligently detect and
+  remove black bars (letterboxing/pillarboxing), maximizing resolution.
+- Interactive GUI: Provides user-friendly controls for all major encoding options, eliminating
+  the need for complex command-line arguments.
+- Advanced Rate Control: Offers two main modes:
+    1. QVBR: Quality-based Variable Bitrate, excellent for achieving a target file size.
+    2. CQP: Constant Quantization Parameter, the recommended mode for preserving fine details
+       like film grain at the cost of a larger file size.
+- Film Grain Preservation: The CQP mode, combined with high-quality presets, is specifically
+  designed to retain the aesthetic of film grain, a common challenge for encoders.
+- HDR Support: Correctly copies HDR10, HLG, and Dolby Vision metadata to ensure videos display
+  correctly on compatible screens.
+- Audio Control: Allows selection and passthrough (copy) of multiple audio tracks, or conversion
+  to a compatible format like AC3.
+- Multiprocessing: Can run multiple encoding jobs in parallel to significantly speed up the
+  processing of large batches.
+
+---------------------------------------------------------------------------------------------------
+ III. PREREQUISITES
+---------------------------------------------------------------------------------------------------
+1. Python 3.x: With the following libraries installed:
+   - opencv-python: `pip install opencv-python`
+   - (Tkinter is usually included with standard Python installations)
+
+2. FFmpeg & FFprobe: Must be installed and accessible in the system's PATH. These are used for
+   metadata extraction and crop detection.
+
+3. NVEncC: The NVIDIA Hardware Encoder command-line tool. The script is written for `NVEncC64.exe`
+   and it must be accessible in the system's PATH.
+
+---------------------------------------------------------------------------------------------------
+ IV. HOW IT WORKS (TECHNICAL BREAKDOWN)
+---------------------------------------------------------------------------------------------------
+1. INITIALIZATION:
+   - The script parses command-line arguments to build a list of video files to process.
+   - It then performs a detailed analysis of the *first* video file in the list. This includes
+     running `ffprobe` to get color/HDR info and audio stream details, and `ffmpeg` with the
+     `cropdetect` filter to find the optimal crop parameters.
+   - This initial analysis is used to populate the GUI with intelligent defaults.
+
+2. THE GUI (TKINTER):
+   - A GUI window is launched, presenting all configurable options to the user.
+   - The user can adjust file lists, crop dimensions, resolution, rate control mode (QVBR/CQP),
+     and select audio tracks.
+   - The CQP fields include a ratio-locking feature: changing one QP value (for I, P, or B-frames)
+     will automatically adjust the other two to maintain their proportional quality difference,
+     making it intuitive to tune.
+   - Once the user clicks "Start Processing", all selected settings are collected into a
+     dictionary.
+
+3. ENCODING PHILOSOPHY (`process_video` function):
+   - For each video file, a new `NVEncC64` command is constructed based on the user's settings.
+   - The command is built around a philosophy of prioritizing quality:
+     - `--codec av1 --output-depth 10`: Uses the modern AV1 codec in 10-bit color for excellent
+       compression and prevention of color banding, crucial for HDR.
+     - `--preset p7`: This is the highest quality, slowest preset. It enables the most thorough
+       analysis, motion estimation, and decision-making by the encoder, which is vital for
+       preserving detail.
+     - `--lookahead 32`: A large lookahead buffer (32 frames) allows the encoder to make much
+       smarter decisions about bit allocation, anticipating complex scenes and distributing bits
+       more effectively.
+     - `--aq --aq-temporal`: Adaptive Quantization (spatial and temporal) is enabled. This feature
+       intelligently distributes more bits to complex, detailed areas of a frame (like grainy
+       textures) and fewer bits to flat, simple areas, maximizing perceived quality.
+     - Rate Control (The User's Choice):
+       - If CQP is selected (`--cqp <I:P:B>`): This is the key to film grain. Instead of targeting
+         a bitrate, it targets a constant *quality* level. This forces the encoder to spend
+         whatever bits are necessary to preserve the detail in the grain, preventing it from
+         being smoothed away. The recommended values (e.g., 18:20:22) are low to ensure high
+         fidelity.
+       - If QVBR is selected (`--qvbr <value>`): This mode is better for controlling file size
+         while still maintaining a quality baseline. It's paired with `--multipass 2pass-full`
+         for a more optimized result.
+
+4. BATCH & MULTIPROCESSING:
+   - The script uses Python's `multiprocessing.Pool` to spawn a user-defined number of `NVEncC64`
+     processes simultaneously, dramatically reducing total processing time for large batches.
+
+---------------------------------------------------------------------------------------------------
+"""
+# =================================================================================================
+#                                  USER-CONFIGURABLE VARIABLES
+# =================================================================================================
+# --- General Settings ---
+NVENC_EXECUTABLE = "NVEncC64"        # Name of the NVEncC executable
+OUTPUT_SUBDIR = "processed_videos" # Subdirectory where processed files will be saved
+
+# --- Encoder Quality Settings ---
+# These are high-quality defaults. Changing them may impact quality or compatibility.
+ENCODER_PRESET = "p7"              # p7 is the highest quality preset.
+LOOKAHEAD = "32"                   # Max lookahead for better bitrate control.
+GOP_LENGTH = "6"                   # GOP length in seconds.
+AQ_STRENGTH = "5"                  # Adaptive Quantization strength (1-15).
+
+# --- Rate Control Defaults ---
+# Default CQP values for preserving film grain (I-Frame:P-Frame:B-Frame)
+DEFAULT_CQP_I = "20"
+DEFAULT_CQP_P = "22"
+DEFAULT_CQP_B = "24"
+
+# Default QVBR quality levels based on input video resolution
+DEFAULT_QVBR_1080P = "22"
+DEFAULT_QVBR_4K = "30"
+DEFAULT_QVBR_8K = "40"
+
+# --- Audio Settings ---
+AUDIO_CONVERT_BITRATE = "640"      # Bitrate in kbps for AC3 audio conversion.
+
+# --- Crop Detection Settings ---
+# More samples are more accurate but take longer.
+CROP_DETECT_SAMPLES = 12           # Minimum number of samples to take for crop detection.
+CROP_DETECT_INTERVAL_S = 300       # Interval in seconds between samples (e.g., 300 = 5 minutes).
+
+# =================================================================================================
+#                                        SCRIPT CORE LOGIC
+# =================================================================================================
 
 import os
 import sys
@@ -9,7 +157,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from collections import Counter
 from multiprocessing import Pool
-import glob  # Import the glob module
+import glob
 
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
@@ -138,12 +286,10 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
     if duration is None or duration < 1:
         print("Unable to determine video duration or video is too short.")
         return None, None, None, None
-    # Set round_value to "2" to ensure mod2 rounding in ffmpeg cropdetect
     round_value = "2"
-    sample_interval = 300  # 5 minutes
-    num_samples = max(12, min(72, int(duration // sample_interval)))
-    if num_samples < 12:
-        num_samples = 12
+    num_samples = max(CROP_DETECT_SAMPLES, min(72, int(duration // CROP_DETECT_INTERVAL_S)))
+    if num_samples < CROP_DETECT_SAMPLES:
+        num_samples = CROP_DETECT_SAMPLES
     start_offset = min(300, duration * 0.05)
     interval = (duration - start_offset) / num_samples if duration > start_offset else duration / num_samples
     crop_values = []
@@ -236,8 +382,6 @@ def move_down(file_listbox):
 def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height):
     root = tk.Tk()
     root.title("Video Processing Settings")
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
     main_frame = tk.Frame(root)
     main_frame.pack(fill='both', expand=True)
     canvas = tk.Canvas(main_frame)
@@ -267,12 +411,11 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     hdr_enable = tk.BooleanVar(value=default_hdr)
     sleep_enable = tk.BooleanVar(value=False)
     fruc_enable = tk.BooleanVar()
-    nvvfx_denoise_var = tk.BooleanVar() # rename for clarity
-    artifact_enable = tk.BooleanVar(value=False) # default off
+    nvvfx_denoise_var = tk.BooleanVar()
+    artifact_enable = tk.BooleanVar(value=False)
     resolution_var = tk.StringVar(value="No Resize")
     qvbr = tk.StringVar(value=default_qvbr)
-    gop_len = tk.StringVar(value="6")
-    # Multiprocessing "Max Processes" variable (default=1)
+    gop_len = tk.StringVar(value=str(GOP_LENGTH))
     max_processes = tk.StringVar(value="1")
     no_crop_var = tk.BooleanVar(value=False)
     metadata_text = None
@@ -288,18 +431,14 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     original_crop_x = crop_x.get()
     original_crop_y = crop_y.get()
 
-    # --- New: Automatically update crop offsets when crop width or height is changed ---
     def update_crop_offsets(*args):
         try:
             new_crop_w = int(crop_w.get())
             new_crop_h = int(crop_h.get())
-            # Force crop width and height to be even
             new_crop_w = new_crop_w - (new_crop_w % 2)
             new_crop_h = new_crop_h - (new_crop_h % 2)
-            # Recalculate offsets so the crop is centered.
             new_crop_x = (input_width - new_crop_w) // 2
             new_crop_y = (input_height - new_crop_h) // 2
-            # Optionally enforce mod2 on offsets too
             new_crop_x = new_crop_x - (new_crop_x % 2)
             new_crop_y = new_crop_y - (new_crop_y % 2)
             crop_w.set(str(new_crop_w))
@@ -310,13 +449,12 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             pass
     crop_w.trace("w", update_crop_offsets)
     crop_h.trace("w", update_crop_offsets)
-    # --------------------------------------------------------------------------------
 
     resolution_map = {
         "No Resize": (None, None, None),
-        "HD 1080p":  (1920, 1080, "20"),
-        "4K 2160p":  (3840, 2160, "30"),
-        "8K 4320p":  (7680, 4320, "40")
+        "HD 1080p":  (1920, 1080, DEFAULT_QVBR_1080P),
+        "4K 2160p":  (3840, 2160, DEFAULT_QVBR_4K),
+        "8K 4320p":  (7680, 4320, DEFAULT_QVBR_8K)
     }
     def on_resolution_change(*args):
         selection = resolution_var.get()
@@ -326,9 +464,6 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
                 qvbr.set(recommended_qvbr)
     resolution_var.trace("w", on_resolution_change)
 
-    # -------------
-    # Update Metadata
-    # -------------
     def update_metadata_display(selected_file):
         nonlocal metadata_text
         if not selected_file:
@@ -339,21 +474,19 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             return
         color_data = get_video_color_info(selected_file)
         meta_txt = (
-            f"File: {selected_file}\n"
+            f"File: {os.path.basename(selected_file)}\n"
             f"Color Range: {color_data['color_range'] or 'N/A'}\n"
             f"Color Primaries: {color_data['color_primaries'] or 'N/A'}\n"
             f"Color Transfer: {color_data['color_transfer'] or 'N/A'}\n"
             f"Color Space: {color_data['color_space'] or 'N/A'}\n"
-            f"Mastering Display Metadata: {color_data['mastering_display_metadata'] or 'N/A'}\n"
+            f"Mastering Display: {bool(color_data['mastering_display_metadata'])}\n"
             f"Max CLL: {color_data['max_cll'] or 'N/A'}\n"
         )
         metadata_text.config(state='normal')
         metadata_text.delete("1.0", "end")
         metadata_text.insert("1.0", meta_txt)
         metadata_text.config(state='disabled')
-    # -------------------------
-    # File List UI
-    # -------------------------
+
     file_frame = tk.Frame(inner_frame)
     file_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
     file_frame.columnconfigure(0, weight=1)
@@ -383,61 +516,105 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     metadata_text.grid(row=0, column=0, sticky="nsew")
     if file_list:
         update_metadata_display(file_list[0])
-    # -------------------------
-    # Video Options
-    # -------------------------
+        file_listbox.select_set(0)
+
     options_frame = tk.LabelFrame(inner_frame, text="Video Options")
     options_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
     options_frame.columnconfigure(0, weight=1)
     decode_mode_frame = tk.LabelFrame(options_frame, text="Decoding Mode")
     decode_mode_frame.pack(fill="x", padx=5, pady=5)
-    tk.Radiobutton(
-        decode_mode_frame,
-        text="Hardware Decoding",
-        variable=decoding_mode,
-        value="Hardware"
-    ).pack(anchor="w")
-    tk.Radiobutton(
-        decode_mode_frame,
-        text="Software Decoding",
-        variable=decoding_mode,
-        value="Software"
-    ).pack(anchor="w")
-    # Multiprocessing input
+    tk.Radiobutton(decode_mode_frame, text="Hardware Decoding", variable=decoding_mode, value="Hardware").pack(anchor="w")
+    tk.Radiobutton(decode_mode_frame, text="Software Decoding", variable=decoding_mode, value="Software").pack(anchor="w")
+
     multi_frame = tk.Frame(options_frame)
     multi_frame.pack(anchor='w', pady=(5, 0))
     tk.Label(multi_frame, text="Max Processes:").pack(side='left')
-    mp_entry = tk.Entry(multi_frame, textvariable=max_processes, width=3)
-    mp_entry.pack(side='left', padx=(5, 0))
-    tk.Checkbutton(options_frame, text="Enable HDR Conversion", variable=hdr_enable).pack(anchor='w')
-    # Output resolution
+    tk.Entry(multi_frame, textvariable=max_processes, width=3).pack(side='left', padx=(5, 0))
+    tk.Checkbutton(options_frame, text="Enable HDR Conversion (SDR to HDR)", variable=hdr_enable).pack(anchor='w')
+    
     resolution_frame = tk.Frame(options_frame)
     resolution_frame.pack(anchor='w', pady=(10,0))
     tk.Label(resolution_frame, text="Output Resolution:").pack(side='left')
-    resolution_menu = tk.OptionMenu(resolution_frame, resolution_var, *resolution_map.keys())
-    resolution_menu.pack(side='left', padx=(5,0))
+    tk.OptionMenu(resolution_frame, resolution_var, *resolution_map.keys()).pack(side='left', padx=(5,0))
     tk.Checkbutton(options_frame, text="Enable FRUC (fps=60)", variable=fruc_enable).pack(anchor='w')
-    # NVVFX Denoise Checkbox with condition
+    
     nvvfx_denoise_check = tk.Checkbutton(options_frame, text="Enable Denoising (NVVFX - for < 1080p)", variable=nvvfx_denoise_var)
     nvvfx_denoise_check.pack(anchor='w')
-    if input_height >= 1080 and input_width >= 1920:  # Corrected condition: AND instead of OR
-        nvvfx_denoise_check.config(state='disabled') # Disable if resolution is 1080p OR HIGHER in BOTH dimensions
-    # NVVFX Artifact Reduction Checkbox
-    artifact_reduction_var = tk.BooleanVar(value=False) # default off
-    artifact_reduction_check = tk.Checkbutton(options_frame, text="Enable Artifact Reduction (NVVFX)", variable=artifact_reduction_var)
-    artifact_reduction_check.pack(anchor='w')
-    # QVBR and GOP side-by-side
-    qvbr_frame = tk.Frame(options_frame)
-    qvbr_frame.pack(anchor='w', pady=(10, 0))
-    tk.Label(qvbr_frame, text="Target QVBR:").pack(side='left', anchor='w')
-    tk.Entry(qvbr_frame, textvariable=qvbr, width=6).pack(side='left', padx=(5, 0), anchor='w')
+    if input_height >= 1080 and input_width >= 1920:
+        nvvfx_denoise_check.config(state='disabled')
+    
+    artifact_reduction_var = tk.BooleanVar(value=False)
+    tk.Checkbutton(options_frame, text="Enable Artifact Reduction (NVVFX)", variable=artifact_reduction_var).pack(anchor='w')
+    
+    rate_control_mode = tk.StringVar(value="QVBR")
+    cqp_i = tk.StringVar(value=DEFAULT_CQP_I)
+    cqp_p = tk.StringVar(value=DEFAULT_CQP_P)
+    cqp_b = tk.StringVar(value=DEFAULT_CQP_B)
+    _is_updating_cqp = False
+
+    def _update_cqp_ratios(*args, source_var=None):
+        nonlocal _is_updating_cqp
+        if _is_updating_cqp: return
+        _is_updating_cqp = True
+        
+        ratio_p_to_i = int(DEFAULT_CQP_P) / int(DEFAULT_CQP_I)
+        ratio_b_to_i = int(DEFAULT_CQP_B) / int(DEFAULT_CQP_I)
+
+        try:
+            if source_var == 'i':
+                base_val = int(cqp_i.get())
+                cqp_p.set(str(round(base_val * ratio_p_to_i)))
+                cqp_b.set(str(round(base_val * ratio_b_to_i)))
+            elif source_var == 'p':
+                p_val = int(cqp_p.get())
+                base_val = round(p_val / ratio_p_to_i)
+                cqp_i.set(str(base_val))
+                cqp_b.set(str(round(base_val * ratio_b_to_i)))
+            elif source_var == 'b':
+                b_val = int(cqp_b.get())
+                base_val = round(b_val / ratio_b_to_i)
+                cqp_i.set(str(base_val))
+                cqp_p.set(str(round(base_val * ratio_p_to_i)))
+        except (ValueError, ZeroDivisionError): pass
+        finally: _is_updating_cqp = False
+
+    cqp_i.trace_add("write", lambda *args: _update_cqp_ratios(*args, source_var='i'))
+    cqp_p.trace_add("write", lambda *args: _update_cqp_ratios(*args, source_var='p'))
+    cqp_b.trace_add("write", lambda *args: _update_cqp_ratios(*args, source_var='b'))
+
+    rc_frame = tk.LabelFrame(options_frame, text="Rate Control")
+    rc_frame.pack(fill='x', padx=5, pady=5)
+    qvbr_options_frame = tk.Frame(rc_frame)
+    cqp_options_frame = tk.Frame(rc_frame)
+
+    tk.Label(qvbr_options_frame, text="Target QVBR:").grid(row=0, column=0, sticky='w')
+    tk.Entry(qvbr_options_frame, textvariable=qvbr, width=5).grid(row=0, column=1, padx=5, sticky='w')
+    tk.Label(cqp_options_frame, text="QP (I):").grid(row=0, column=0, sticky='w')
+    tk.Entry(cqp_options_frame, textvariable=cqp_i, width=5).grid(row=0, column=1, padx=5, sticky='w')
+    tk.Label(cqp_options_frame, text="QP (P):").grid(row=0, column=2, sticky='w', padx=(10,0))
+    tk.Entry(cqp_options_frame, textvariable=cqp_p, width=5).grid(row=0, column=3, padx=5, sticky='w')
+    tk.Label(cqp_options_frame, text="QP (B):").grid(row=0, column=4, sticky='w', padx=(10,0))
+    tk.Entry(cqp_options_frame, textvariable=cqp_b, width=5).grid(row=0, column=5, padx=5, sticky='w')
+
+    def update_rate_control_ui(*args):
+        if rate_control_mode.get() == "CQP":
+            qvbr_options_frame.pack_forget()
+            cqp_options_frame.pack(anchor='w', pady=5)
+        else:
+            cqp_options_frame.pack_forget()
+            qvbr_options_frame.pack(anchor='w', pady=5)
+
+    radio_frame = tk.Frame(rc_frame)
+    radio_frame.pack(anchor='w', pady=(0, 5))
+    tk.Radiobutton(radio_frame, text="QVBR (Target Bitrate)", variable=rate_control_mode, value="QVBR", command=update_rate_control_ui).pack(side='left')
+    tk.Radiobutton(radio_frame, text="CQP (Target Quality / Film Grain)", variable=rate_control_mode, value="CQP", command=update_rate_control_ui).pack(side='left', padx=10)
+    update_rate_control_ui()
+
     gop_frame = tk.Frame(options_frame)
-    gop_frame.pack(anchor='w', pady=(10, 0))
-    tk.Label(gop_frame, text="GOP Length:").pack(side='left', anchor='w')
+    gop_frame.pack(anchor='w', pady=(5, 0))
+    tk.Label(gop_frame, text="GOP Length (sec):").pack(side='left', anchor='w')
     tk.Entry(gop_frame, textvariable=gop_len, width=6).pack(side='left', padx=(5, 0), anchor='w')
-    # -------------------------
-    # Crop UI
-    # -------------------------
+
     crop_frame = tk.LabelFrame(inner_frame, text="Crop Parameters (Modify if needed)")
     crop_frame.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
     crop_frame.columnconfigure(1, weight=1)
@@ -453,48 +630,34 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
     y_entry = tk.Entry(crop_frame, textvariable=crop_y)
     y_entry.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
+
     def on_no_crop_toggle():
+        state = 'disabled' if no_crop_var.get() else 'normal'
         if no_crop_var.get():
             crop_w.set(str(input_width))
             crop_h.set(str(input_height))
             crop_x.set("0")
             crop_y.set("0")
-            width_entry.config(state='disabled')
-            height_entry.config(state='disabled')
-            x_entry.config(state='disabled')
-            y_entry.config(state='disabled')
         else:
             crop_w.set(str(original_crop_w))
             crop_h.set(str(original_crop_h))
             crop_x.set(str(original_crop_x))
             crop_y.set(str(original_crop_y))
-            width_entry.config(state='normal')
-            height_entry.config(state='normal')
-            x_entry.config(state='normal')
-            y_entry.config(state='normal')
-    no_crop_checkbox = tk.Checkbutton(crop_frame, text="No Crop", variable=no_crop_var, command=on_no_crop_toggle)
-    no_crop_checkbox.grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w", padx=5)
-    # -------------------------
-    # Audio Tracks
-    # -------------------------
+        for entry in [width_entry, height_entry, x_entry, y_entry]:
+            entry.config(state=state)
+
+    tk.Checkbutton(crop_frame, text="No Crop", variable=no_crop_var, command=on_no_crop_toggle).grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w", padx=5)
+
     audio_tracks_frame = tk.LabelFrame(inner_frame, text="Audio Tracks")
     audio_tracks_frame.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
     audio_tracks_frame.columnconfigure(0, weight=1)
     audio_tracks_frame.columnconfigure(1, weight=1)
     button_frame = tk.Frame(audio_tracks_frame)
     button_frame.grid(row=0, column=0, columnspan=2, sticky="n", padx=5, pady=5)
-    def on_select_all_audio():
-        for var in audio_vars:
-            var.set(True)
-    def on_clear_all_audio():
-        for var in audio_vars:
-            var.set(False)
-    def copy_all_audio():
-        for var in convert_vars:
-            var.set(False)
-    def convert_all_audio():
-        for var in convert_vars:
-            var.set(True)
+    def on_select_all_audio(): [var.set(True) for var in audio_vars]
+    def on_clear_all_audio(): [var.set(False) for var in audio_vars]
+    def copy_all_audio(): [var.set(False) for var in convert_vars]
+    def convert_all_audio(): [var.set(True) for var in convert_vars]
     tk.Button(button_frame, text="Select All", command=on_select_all_audio).pack(side='left', padx=2)
     tk.Button(button_frame, text="Clear All", command=on_clear_all_audio).pack(side='left', padx=2)
     tk.Button(button_frame, text="Copy All", command=copy_all_audio).pack(side='left', padx=2)
@@ -503,22 +666,20 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         for idx, stream in enumerate(audio_streams, start=1):
             track_frame = tk.Frame(audio_tracks_frame)
             track_frame.grid(row=idx, column=0, padx=5, pady=2, sticky='e')
-            # auto-select if english
             auto_selected = (stream['language'] == 'eng')
-            track_label_text = f"Track {stream['track_number']}: {stream['codec']} ({stream['language'] or 'N/A'}, {stream.get('channels', 0)}-ch)"
-            label = tk.Label(track_frame, text=track_label_text, anchor='e')
-            label.pack(side='left')
+            track_label = f"Track {stream['track_number']}: {stream['codec']} ({stream['language'] or 'N/A'}, {stream.get('channels', 0)}-ch)"
+            tk.Label(track_frame, text=track_label, anchor='e').pack(side='left')
             track_var = tk.BooleanVar(value=auto_selected)
             tk.Checkbutton(track_frame, variable=track_var).pack(side='right', padx=(5,0))
             audio_vars.append(track_var)
             convert_var = tk.BooleanVar(value=(stream['codec'] != 'ac3'))
-            convert_check = tk.Checkbutton(audio_tracks_frame, text="Convert to AC3", variable=convert_var, anchor='w')
-            convert_check.grid(row=idx, column=1, padx=5, pady=2, sticky='w')
+            tk.Checkbutton(audio_tracks_frame, text="Convert to AC3", variable=convert_var, anchor='w').grid(row=idx, column=1, padx=5, pady=2, sticky='w')
             convert_vars.append(convert_var)
     else:
-        tk.Label(audio_tracks_frame, text="No audio tracks found in the selected file.")\
-            .grid(row=1, column=0, padx=5, pady=5, sticky='w')
-    tk.Checkbutton(inner_frame, text="Put Computer to Sleep", variable=sleep_enable).grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        tk.Label(audio_tracks_frame, text="No audio tracks found.").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+    
+    tk.Checkbutton(inner_frame, text="Put Computer to Sleep on Completion", variable=sleep_enable).grid(row=5, column=0, padx=10, pady=5, sticky="w")
+    
     def start_processing():
         selected_files = list(file_listbox.get(0, 'end'))
         if not selected_files:
@@ -532,71 +693,52 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
                     s_copy['convert_to_ac3'] = convert_vars[i].get()
                     selected_tracks.append(s_copy)
         try:
-            crop_w_val = int(crop_w.get())
-            crop_h_val = int(crop_h.get())
-            crop_x_val = int(crop_x.get())
-            crop_y_val = int(crop_y.get())
-            
-            # Adjust all values to be even (nearest lower even number)
-            crop_w_val -= crop_w_val % 2
-            crop_h_val -= crop_h_val % 2
-            crop_x_val -= crop_x_val % 2
-            crop_y_val -= crop_y_val % 2
-
-            if crop_w_val <= 0 or crop_h_val <= 0:
-                messagebox.showerror("Error", "Crop width and height must be positive integers.")
-                return
-            if crop_x_val < 0 or crop_y_val < 0:
-                messagebox.showerror("Error", "Crop X and Y offsets cannot be negative.")
-                return
+            crop_w_val = int(crop_w.get()) - (int(crop_w.get()) % 2)
+            crop_h_val = int(crop_h.get()) - (int(crop_h.get()) % 2)
+            crop_x_val = int(crop_x.get()) - (int(crop_x.get()) % 2)
+            crop_y_val = int(crop_y.get()) - (int(crop_y.get()) % 2)
+            if any(v <= 0 for v in [crop_w_val, crop_h_val]) or any(v < 0 for v in [crop_x_val, crop_y_val]):
+                raise ValueError("Invalid dimensions or offsets")
             if crop_x_val + crop_w_val > input_width or crop_y_val + crop_h_val > input_height:
                 messagebox.showerror("Error", "Crop parameters exceed video dimensions.")
                 return
         except ValueError:
-            messagebox.showerror("Error", "Invalid crop parameters. Please enter integers.")
+            messagebox.showerror("Error", "Invalid crop parameters. Please enter positive integers.")
             return
-        resolution_choice = resolution_var.get()
+        
         settings = {
             "files": selected_files,
             "decode_mode": decoding_mode.get(),
             "hdr_enable": hdr_enable.get(),
-            "resolution_choice": resolution_choice,
+            "resolution_choice": resolution_var.get(),
             "fruc_enable": fruc_enable.get(),
-            "denoise_enable": nvvfx_denoise_var.get(),  # Use nvvfx_denoise_var here
-            "artifact_enable": artifact_reduction_var.get(),  # Use artifact_reduction_var here
+            "denoise_enable": nvvfx_denoise_var.get(),
+            "artifact_enable": artifact_reduction_var.get(),
+            "rate_control_mode": rate_control_mode.get(),
             "qvbr": qvbr.get(),
+            "cqp_i": cqp_i.get(),
+            "cqp_p": cqp_p.get(),
+            "cqp_b": cqp_b.get(),
             "gop_len": gop_len.get(),
             "max_processes": max_processes.get(),
-            "crop_params": {
-                "crop_w": crop_w_val,
-                "crop_h": crop_h_val,
-                "crop_x": crop_x_val,
-                "crop_y": crop_y_val
-            },
+            "crop_params": {"crop_w": crop_w_val, "crop_h": crop_h_val, "crop_x": crop_x_val, "crop_y": crop_y_val},
             "audio_tracks": selected_tracks,
             "sleep_after_processing": sleep_enable.get()
         }
         root.destroy()
-        print("\nSettings collected. Starting processing...\n")
-        print(json.dumps(settings, indent=4))
+        print("\nSettings collected. Starting processing...\n" + json.dumps(settings, indent=4))
         process_batch(settings["files"], settings)
         if settings.get("sleep_after_processing"):
             print("Putting the computer to sleep...")
-            if platform.system() == "Windows":
-                os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-            elif platform.system() == "Linux":
-                os.system("systemctl suspend")
-            elif platform.system() == "Darwin":
-                os.system("pmset sleepnow")
-            else:
-                print("Sleep command not supported on this platform.")
+            if platform.system() == "Windows": os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+            elif platform.system() == "Linux": os.system("systemctl suspend")
+            elif platform.system() == "Darwin": os.system("pmset sleepnow")
+            else: print("Sleep command not supported on this platform.")
+            
     tk.Button(inner_frame, text="Start Processing", command=start_processing).grid(row=6, column=0, padx=10, pady=10, sticky="ew")
     root.update_idletasks()
-    required_width = inner_frame.winfo_reqwidth()
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    window_width = min(required_width + 20, screen_width)
-    window_height = int(screen_height * 2 / 3)
+    window_width = min(inner_frame.winfo_reqwidth() + 40, root.winfo_screenwidth())
+    window_height = min(inner_frame.winfo_reqheight() + 40, int(root.winfo_screenheight() * 0.9))
     root.geometry(f"{window_width}x{window_height}")
     root.mainloop()
 
@@ -606,234 +748,140 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
 def process_video(file_path, settings):
     input_dir = os.path.dirname(file_path)
     file_name = os.path.basename(file_path)
-    output_subdir = os.path.join(input_dir, "processed_videos")
+    output_subdir = os.path.join(input_dir, OUTPUT_SUBDIR)
     os.makedirs(output_subdir, exist_ok=True)
     output_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + ".mp4")
     log_file = os.path.join(output_subdir, os.path.splitext(file_name)[0] + "_encoding.log")
     input_height, input_width = get_video_resolution(file_path)
-    if input_height is None or input_width is None:
+    if input_height is None:
         print(f"Error: Could not retrieve resolution for {file_path}. Skipping.")
         return
-    hdr_convert = settings["hdr_enable"]
+
     command = [
-        "NVEncC64",
+        NVENC_EXECUTABLE,
         "--codec", "av1",
-        "--qvbr", settings["qvbr"],
-        "--preset", "p7",
+        "--preset", ENCODER_PRESET,
         "--output-depth", "10",
         "--gop-len", settings["gop_len"],
         "--metadata", "copy",
         "--chapter-copy",
-        #"--key-on-chapter",
-        #"--sub-copy",
-        "--bframes","4",
-        "--tf-level","4",
-	"--max-bitrate","100000",
-        "--split-enc","disable",
-        #"--parallel", "auto",
-        "--profile", "high",
-        "--multipass", "2pass-full",
+        "--bframes", "4",
+        "--tf-level", "4",
+        "--max-bitrate", "100000",
+        "--split-enc", "disable",
+        "--profile", "main",
         "--aq",
         "--aq-temporal",
-        "--aq-strength", "5",
-        "--lookahead", "32",
-        "-i", file_path,
-        "-o", output_file
+        "--aq-strength", AQ_STRENGTH,
+        "--lookahead", LOOKAHEAD,
     ]
-    # Decoding
-    if settings["decode_mode"] == "Hardware":
-        command.append("--avhw")
+
+    if settings["rate_control_mode"] == "CQP":
+        print("Using CQP mode for preserving film grain.")
+        cqp_values = f'{settings["cqp_i"]}:{settings["cqp_p"]}:{settings["cqp_b"]}'
+        command.extend(["--cqp", cqp_values])
     else:
-        command.append("--avsw")
-    # Always set color tags
-    command.extend(["--colormatrix", "bt2020nc"])
-    command.extend(["--colorprim", "bt2020"])
-    command.extend(["--transfer", "smpte2084"])
-    # HDR logic
-    if hdr_convert:
+        print("Using QVBR mode.")
+        command.extend(["--qvbr", settings["qvbr"], "--multipass", "2pass-full"])
+
+    command.extend(["-i", file_path, "-o", output_file])
+    
+    command.append("--avhw" if settings["decode_mode"] == "Hardware" else "--avsw")
+    
+    command.extend(["--colormatrix", "bt2020nc", "--colorprim", "bt2020", "--transfer", "smpte2084"])
+    
+    if settings["hdr_enable"]:
         command.append("--vpp-ngx-truehdr")
     else:
-        command.extend(["--dhdr10-info", "copy"])
-        command.extend(["--dolby-vision-profile", "copy"])
-        command.extend(["--dolby-vision-rpu", "copy"])
-    # Crop
+        command.extend(["--dhdr10-info", "copy", "--dolby-vision-profile", "copy", "--dolby-vision-rpu", "copy"])
+
     crop = settings["crop_params"]
-    left = crop["crop_x"]
-    top = crop["crop_y"]
-    crop_w_val = crop["crop_w"]
-    crop_h_val = crop["crop_h"]
-    if left + crop_w_val > input_width:
-        crop_w_val = input_width - left
-    if top + crop_h_val > input_height:
-        crop_h_val = input_height - top
-    right = input_width - (left + crop_w_val)
-    bottom = input_height - (top + crop_h_val)
-    right = max(right, 0)
-    bottom = max(bottom, 0)
-    command.extend(["--crop", f"{left},{top},{right},{bottom}"])
-    # Additional features
-    if settings["fruc_enable"]:
-        command.extend(["--vpp-fruc", "fps=60"])
-    # Conditional NVVFX Denoise
-    if settings["denoise_enable"]:
-        command.append("--vpp-nvvfx-denoise")
-    # NVVFX Artifact Reduction - always add if enabled
-    if settings["artifact_enable"]:
-        command.append("--vpp-nvvfx-artifact-reduction")
+    right = input_width - (crop["crop_x"] + crop["crop_w"])
+    bottom = input_height - (crop["crop_y"] + crop["crop_h"])
+    command.extend(["--crop", f'{crop["crop_x"]},{crop["crop_y"]},{max(0, right)},{max(0, bottom)}'])
+
+    if settings["fruc_enable"]: command.extend(["--vpp-fruc", "fps=60"])
+    if settings["denoise_enable"]: command.append("--vpp-nvvfx-denoise")
+    if settings["artifact_enable"]: command.append("--vpp-nvvfx-artifact-reduction")
+    
     chosen_res = settings["resolution_choice"]
     resolution_map = {
-        "No Resize": (None, None),
-        "HD 1080p":  (1080, 1080), # Note: These are target heights, width will be calculated or set
-        "4K 2160p":  (2160, 2160), # For simplicity assuming square pixels for this map
-        "8K 4320p":  (4320, 4320)
+        "No Resize": None, "HD 1080p": 1080, "4K 2160p": 2160, "8K 4320p": 4320
     }
-    if chosen_res in resolution_map:
-        target_h_res_map, _ = resolution_map[chosen_res] # Using the first value as target height for scaling logic
+    target_h = resolution_map.get(chosen_res)
+    if target_h:
+        current_w, current_h = crop["crop_w"], crop["crop_h"]
+        output_h = target_h
+        output_w = int(current_w * (output_h / current_h)) - (int(current_w * (output_h / current_h)) % 2)
         
-        # Determine target width and height based on choice, maintaining aspect ratio for output-res
-        current_crop_w = crop_w_val
-        current_crop_h = crop_h_val
+        if output_w > current_w or output_h > current_h:
+            command.extend(["--vpp-resize", "algo=nvvfx-superres,superres-mode=0", "--output-res", f"{output_w}x{output_h}"])
+        elif output_w < current_w or output_h < current_h:
+            command.extend(["--vpp-resize", "algo=spline36", "--output-res", f"{output_w}x{output_h}"])
 
-        if target_h_res_map is not None: # If not "No Resize"
-            output_res_h = target_h_res_map
-            output_res_w = int(current_crop_w * (output_res_h / current_crop_h))
-            # Ensure output width is even
-            output_res_w = output_res_w - (output_res_w % 2)
+    audio_to_copy = [s["track_number"] for s in settings["audio_tracks"] if not s.get("convert_to_ac3")]
+    audio_to_convert = [s["track_number"] for s in settings["audio_tracks"] if s.get("convert_to_ac3")]
+    if audio_to_copy: command.extend(["--audio-copy", ",".join(map(str, audio_to_copy))])
+    for track in audio_to_convert:
+        command.extend([f"--audio-codec", f"{track}?ac3", f"--audio-bitrate", f"{track}?{AUDIO_CONVERT_BITRATE}", f"--audio-stream", f"{track}?5.1", f"--audio-samplerate", f"{track}?48000"])
 
-            if output_res_w > current_crop_w or output_res_h > current_crop_h:
-                # Up-scaling => use superres
-                command.extend([
-                    "--vpp-resize",
-                    "algo=nvvfx-superres,superres-mode=0",
-                    "--output-res", f"{output_res_w}x{output_res_h}"
-                ])
-            elif output_res_w < current_crop_w or output_res_h < current_crop_h:
-                # Down-scaling => use simpler method (e.g., bilinear)
-                 command.extend([
-                    "--vpp-resize",
-                    "algo=bilinear", # or spline36 for potentially better quality downscale
-                    "--output-res", f"{output_res_w}x{output_res_h}"
-                ])
-            # If dimensions are the same as cropped, no resize needed unless explicitly chosen
-            # The current logic correctly handles this by not adding resize if target is same as cropped.
-
-    # Audio
-    selected_tracks = settings["audio_tracks"]
-    tracks_to_copy = []
-    tracks_to_convert = []
-    for s in selected_tracks:
-        track_number = str(s["track_number"])
-        if s.get("convert_to_ac3"):
-            tracks_to_convert.append(track_number)
-        else:
-            tracks_to_copy.append(track_number)
-    if tracks_to_copy:
-        track_str = ",".join(tracks_to_copy)
-        command.extend(["--audio-copy", track_str])
-    if tracks_to_convert:
-        for track_number in tracks_to_convert:
-            command.extend(["--audio-codec", f"{track_number}?ac3"])
-            command.extend(["--audio-bitrate", f"{track_number}?640"])
-            command.extend(["--audio-stream", f"{track_number}?5.1"])
-            # --- ADDED LINE ---
-            command.extend(["--audio-samplerate", f"{track_number}?48000"])
-            # ------------------
-    # Print the command
     quoted_command = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in command)
-    print(f"\nProcessing: {file_path}")
-    print("NVEncC command:\n" + quoted_command)
+    print(f"\nProcessing: {file_name}\nNVEncC command:\n{quoted_command}")
     try:
         subprocess.run(command, check=True)
-        print(f"Success: Processed {file_path} -> {output_file}")
         status = "Success"
     except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to process {file_path}")
         status = f"Error: {e}"
-    # Logging
+    
+    print(f"{status}: Processed {file_name} -> {os.path.basename(output_file)}")
     with open(log_file, "w", encoding='utf-8') as log:
-        log.write("Command:\n" + quoted_command + "\n\n")
-        log.write(f"Processing file: {file_path}\n")
-        log.write(f"Output file: {output_file}\n")
-        log.write(f"Status: {status}\n")
+        log.write(f"Command:\n{quoted_command}\n\nStatus: {status}\n")
 
 def process_wrapper(args):
-    """
-    Top-level function so it can be pickled by multiprocessing on Windows.
-    Expects (video_file, settings) as a tuple.
-    """
-    vf, settings = args
-    process_video(vf, settings)
+    process_video(*args)
 
 def process_batch(video_files, settings):
-    try:
-        mp = int(settings.get("max_processes", "1"))
-    except ValueError:
-        mp = 1
-    if mp <= 1:
-        for vf in video_files:
-            process_video(vf, settings)
-        return
-    print(f"Using multiprocessing with {mp} processes...")
+    mp = int(settings.get("max_processes", "1"))
     tasks = [(vf, settings) for vf in video_files]
-    with Pool(mp) as p:
-        p.map(process_wrapper, tasks)
+    if mp > 1:
+        print(f"Using multiprocessing with {mp} processes...")
+        with Pool(mp) as p:
+            p.map(process_wrapper, tasks)
+    else:
+        for task in tasks:
+            process_wrapper(task)
 
 # ---------------------------------------------------------------------
-# Main Script Logic (Batch + GUI)
+# Main Script Logic
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    video_files = []
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            files_from_glob = glob.glob(arg)  # Expand wildcard patterns
-            video_files.extend(files_from_glob) # Add expanded files to the list
-    if not video_files: # Check if any files were found after expansion
-        print("No video file specified or no files found matching the input patterns.")
-        input("Press any key to exit...")
+    video_files = [f for arg in sys.argv[1:] for f in glob.glob(arg)]
+    if not video_files:
+        print("No video file specified or no files found matching input patterns.")
+        input("Press Enter to exit...")
         sys.exit()
+
     first_file = video_files[0]
-    color_data_first = get_video_color_info(first_file)
-    cp_first = (color_data_first["color_primaries"] or "").lower()
-    cs_first = (color_data_first["color_space"] or "").lower()
-    # HDR check
-    if cp_first in ["bt2020", "2020"] or cs_first in ["bt2020nc", "2020nc"]:
-        default_hdr = False
-        limit_value = "128"
-    else:
-        default_hdr = True
-        limit_value = "24"
+    color_data = get_video_color_info(first_file)
+    is_hdr = (color_data.get("color_primaries") == "bt2020" or color_data.get("color_space") == "bt2020nc")
+    
     first_h, first_w = get_video_resolution(first_file)
-    if first_h is None or first_w is None:
+    if first_h is None:
         print(f"Error: Could not retrieve resolution for {first_file}. Exiting.")
         sys.exit()
-    # Automatic crop detection
-    crop_w_val, crop_h_val, crop_x_val, crop_y_val = get_crop_parameters(first_file, first_w, first_h, limit_value=limit_value)
-    detected_crop_params = []
-    for vf in video_files:
-        detected_crop_params.append({
-            "file": vf,
-            "crop_w": crop_w_val,
-            "crop_h": crop_h_val,
-            "crop_x": crop_x_val,
-            "crop_y": crop_y_val
-        })
-    print("\nCrop detection complete (only for the first file). Launching GUI...\n")
-    # Audio
-    all_audio_streams = run_ffprobe_for_audio_streams(first_file)
-    # Decide default QVBR
-    if first_h >= 4320 or first_w >= 7680:
-        default_qvbr = "40"
-    elif first_h >= 2160 or first_w >= 3840:
-        default_qvbr = "30"
-    else:
-        default_qvbr = "22"
-    # Launch GUI
+
+    crop_params = get_crop_parameters(first_file, first_w, first_h, limit_value="128" if is_hdr else "24")
+    
+    if first_h >= 4320 or first_w >= 7680: default_qvbr = DEFAULT_QVBR_8K
+    elif first_h >= 2160 or first_w >= 3840: default_qvbr = DEFAULT_QVBR_4K
+    else: default_qvbr = DEFAULT_QVBR_1080P
+
     launch_gui(
-        [d["file"] for d in detected_crop_params],
-        detected_crop_params,
-        all_audio_streams,
-        default_qvbr,
-        default_hdr,
+        file_list=video_files,
+        crop_params=[{"file": vf, **dict(zip(["crop_w", "crop_h", "crop_x", "crop_y"], crop_params))} for vf in video_files],
+        audio_streams=run_ffprobe_for_audio_streams(first_file),
+        default_qvbr=default_qvbr,
+        default_hdr=not is_hdr,
         input_width=first_w,
         input_height=first_h
     )
