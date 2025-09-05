@@ -392,7 +392,7 @@ def main():
     
     if args.input_file:
         # Single File Mode
-        print(f"--- Single File Mode ---")
+        print(f"--- Mode: Processing a single input file ---")
         if not os.path.isfile(args.input_file):
             print(f"Error: The file '{args.input_file}' does not exist.")
             return
@@ -401,7 +401,7 @@ def main():
         process_video(args.input_file, output_file, config, args.full_video)
     else:
         # Batch Mode
-        print(f"--- Batch Mode ---")
+        print(f"--- Mode: Batch processing all files in directory ---")
         print(f"Searching for video files in '{current_working_dir}' and its subfolders...")
         video_files = []
         for ext in VIDEO_EXTENSIONS:
