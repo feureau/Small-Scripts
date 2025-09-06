@@ -1,7 +1,7 @@
 # =================================================================================================
 #
 #                                  NVEncC AV1 Batch Processor
-#                                          Version: 4.5 (Final)
+#                                          Version: 4.6 (Final)
 #
 # =================================================================================================
 """
@@ -36,11 +36,10 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 - Interactive GUI: Provides user-friendly controls for all major encoding options in a two-column
   layout designed for modern widescreen monitors.
 - Dynamic Console Output: During encoding, the script displays NVEncC's progress (FPS, ETA, etc.)
-  in real-time by explicitly handling carriage returns and using ANSI escape codes to cleanly
-  overwrite the progress line in place.
-- Flexible Sample Bracketing: Allows the user to generate a symmetrical set of test clips
-  around a baseline quality setting. The user can define the number of "Bracket Steps" and the
-  "Step Size" (the quality increment), similar to exposure bracketing in photography.
+  in real-time by explicitly handling carriage returns to overwrite the progress line in place.
+- Flexible Sample Bracketing: Generates the user-defined baseline value as a sample, plus a
+  symmetrical set of test clips around it. The user can define the number of "Bracket Steps"
+  and the "Step Size" (the quality increment), similar to exposure bracketing in photography.
 - Estimated File Size: After each sample is created, it is renamed to include a projection
   of the final video's file size (e.g., "..._~4.5GB.mp4"), allowing for easy quality vs. size
   comparison.
@@ -48,6 +47,9 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
     1. QVBR: Quality-based Variable Bitrate, excellent for achieving a target file size.
     2. CQP: Constant Quantization Parameter, the recommended mode for preserving fine details
        like film grain at the cost of a larger file size.
+- Comprehensive Logging: For each video processed, a detailed log file is created containing
+  a full summary, all user-selected settings (in JSON format for clarity), source file analysis,
+  the exact command used, and the full console output from the encoder.
 - HDR Support: Correctly copies HDR10, HLG, and Dolby Vision metadata to ensure videos display
   correctly on compatible screens.
 - Audio Control: Allows selection and passthrough (copy) of multiple audio tracks, or conversion
@@ -87,6 +89,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
      progress updates, it reads the encoder's stdout stream line-by-line. If a line is a
      progress update, it is printed with a preceding carriage return (`\r`) and a trailing
      ANSI escape code (`\x1b[K`) to erase any leftover characters from the previous, longer line.
+     The full output is also captured and returned for detailed logging.
    - The command is built around prioritizing quality. The reasoning for key arguments is as follows:
      - `--codec av1 --output-depth 10`: To use the modern AV1 codec for superior compression
        efficiency and 10-bit color to prevent color banding, crucial for HDR content.
@@ -105,6 +108,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
+SCRIPT_VERSION = "4.6"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -115,9 +119,9 @@ GOP_LENGTH = "6"
 AQ_STRENGTH = "5"
 
 # --- Rate Control Defaults ---
-DEFAULT_CQP_I = "20"
-DEFAULT_CQP_P = "22"
-DEFAULT_CQP_B = "24"
+DEFAULT_CQP_I = "50"
+DEFAULT_CQP_P = "55"
+DEFAULT_CQP_B = "60"
 DEFAULT_QVBR_1080P = "22"
 DEFAULT_QVBR_4K = "30"
 DEFAULT_QVBR_8K = "40"
@@ -146,6 +150,7 @@ from multiprocessing import Pool
 import glob
 import tempfile
 import math
+from datetime import datetime
 
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
@@ -487,7 +492,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
 def format_bytes(byte_count):
     if byte_count is None or byte_count == 0: return "0 B"
     size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(byte_count, 1024)))
+    i = int(math.floor(math.log(byte_count, 1024))) if byte_count > 0 else 0
     p = math.pow(1024, i)
     s = round(byte_count / p, 2)
     return f"{s} {size_name[i]}"
@@ -495,8 +500,7 @@ def format_bytes(byte_count):
 def execute_nvencc(input_file, output_file, settings, is_sample=False):
     h, w = get_video_resolution(input_file)
     if not h:
-        print(f"Could not get resolution for {input_file}. Skipping.")
-        return False
+        return False, "", f"Could not get resolution for {input_file}. Skipping."
         
     command = [
         NVENC_EXECUTABLE, "--codec", "av1", "--preset", ENCODER_PRESET, "--output-depth", "10",
@@ -544,28 +548,30 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
     quoted_cmd = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in command)
     print(f"\nExecuting NVEncC command:\n{quoted_cmd}")
     
+    full_output = []
     try:
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
         for line in iter(proc.stdout.readline, ''):
+            full_output.append(line)
             clean_line = line.strip()
             if clean_line.startswith('['):
-                # Use carriage return and ANSI escape code to overwrite the line
                 print(f'\r{clean_line}\x1b[K', end='', flush=True)
             else:
                 print(clean_line)
         
         proc.wait()
-        print() # Add a final newline to move past the progress line
+        print()
         if proc.returncode != 0:
-            print(f"Error executing NVEncC. Return code: {proc.returncode}")
-            return False
-        return True
+            return False, quoted_cmd, "".join(full_output)
+        return True, quoted_cmd, "".join(full_output)
     except FileNotFoundError:
-        print(f"\nERROR: Could not find '{NVENC_EXECUTABLE}'. Is it in your system's PATH?")
-        return False
+        error_msg = f"ERROR: Could not find '{NVENC_EXECUTABLE}'. Is it in your system's PATH?"
+        print(error_msg)
+        return False, quoted_cmd, error_msg
     except Exception as e:
-        print(f"\nAn unexpected error occurred while running NVEncC: {e}")
-        return False
+        error_msg = f"An unexpected error occurred while running NVEncC: {e}"
+        print(error_msg)
+        return False, quoted_cmd, error_msg
 
 def generate_samples(settings):
     source_file = settings["files"][0]
@@ -587,6 +593,7 @@ def generate_samples(settings):
     if settings["rate_control_mode"] == "QVBR":
         try:
             base_qvbr = int(settings["qvbr"])
+            tasks.append({'qvbr': str(base_qvbr), 'name': f"QVBR_{base_qvbr}"})
             for i in range(1, bracket_steps + 1):
                 var = i * step_size
                 tasks.append({'qvbr': str(base_qvbr - var), 'name': f"QVBR_{base_qvbr - var}"})
@@ -596,6 +603,7 @@ def generate_samples(settings):
         try:
             i, p, b = int(settings["cqp_i"]), int(settings["cqp_p"]), int(settings["cqp_b"])
             r_p, r_b = (p / i) if i else 1.1, (b / i) if i else 1.2
+            tasks.append({'cqp_i':str(i), 'cqp_p':str(p), 'cqp_b':str(b), 'name':f"CQP_{i}-{p}-{b}"})
             for j in range(1, bracket_steps + 1):
                 var = j * step_size
                 ni_l, ni_h = max(0, i - var), i + var
@@ -620,7 +628,7 @@ def generate_samples(settings):
             sample_settings.update(task)
             output_file = os.path.join(output_dir, f"{base_name}_Sample_{task['name']}.mp4")
             
-            success = execute_nvencc(temp_clip, output_file, sample_settings, is_sample=True)
+            success, _, _ = execute_nvencc(temp_clip, output_file, sample_settings, is_sample=True)
 
             if success and os.path.exists(output_file):
                 sample_size = os.path.getsize(output_file)
@@ -651,13 +659,44 @@ def process_video(file_path, settings):
     output_file = os.path.join(output_dir, f"{base_name}.mp4")
     log_file = os.path.join(output_dir, f"{base_name}_encoding.log")
     
-    print(f"\nProcessing: {os.path.basename(file_path)}")
-    success = execute_nvencc(file_path, output_file, settings)
+    print(f"\n--- Processing: {os.path.basename(file_path)} ---")
+    start_time = datetime.now()
+    
+    success, command_str, console_out = execute_nvencc(file_path, output_file, settings)
+    
+    end_time = datetime.now()
+    duration = end_time - start_time
     status = "Success" if success else "Error"
+    final_size = format_bytes(os.path.getsize(output_file)) if success and os.path.exists(output_file) else "N/A"
     
     print(f"\n{status}: Processed {os.path.basename(file_path)} -> {os.path.basename(output_file)}")
+    
     with open(log_file, "w", encoding='utf-8') as log:
-        log.write(f"Status: {status}\n")
+        log.write(f"NVEncC AV1 Batch Processor Log (Version: {SCRIPT_VERSION})\n")
+        log.write("="*70 + "\n")
+        log.write("I. SUMMARY\n")
+        log.write("="*70 + "\n")
+        log.write(f"Source File: {file_path}\n")
+        log.write(f"Output File: {output_file}\n")
+        log.write(f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log.write(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log.write(f"Processing Duration: {str(duration)}\n")
+        log.write(f"Final Status: {status}\n")
+        log.write(f"Final File Size: {final_size}\n\n")
+
+        log.write("="*70 + "\n")
+        log.write("II. USER SETTINGS\n")
+        log.write("="*70 + "\n")
+        log_settings = settings.copy()
+        log_settings.pop('files', None) # Don't need to list all files in every log
+        log.write(json.dumps(log_settings, indent=4))
+        log.write("\n\n")
+
+        log.write("="*70 + "\n")
+        log.write("III. EXECUTION DETAILS\n")
+        log.write("="*70 + "\n")
+        log.write(f"Command:\n{command_str}\n\n")
+        log.write(f"Console Output:\n{console_out}\n")
 
 def process_wrapper(args):
     process_video(*args)
