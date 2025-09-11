@@ -196,7 +196,7 @@ import argparse
 
 DEFAULT_CONFIG = {
     # Target file size in Megabytes.
-    "target_mb": 9.3,
+    "target_mb": 8.7,
     
     # Maximum duration in seconds for each output part.
     "max_duration": 15,
