@@ -37,6 +37,8 @@
 # - Automatic Token Revocation: For enhanced security, the access token is automatically
 #   revoked when the application is closed, minimizing risk.
 # - Bulk Video Loading: Fetches all videos from a user's channel via the YouTube Data API.
+# - Dynamic Category Loading: Automatically fetches the correct, region-specific video categories
+#   for the authenticated user, preventing invalid category errors.
 # - Recursive File Matching: Automatically scans the entire folder tree (including all
 #   subdirectories) to find and associate videos with local metadata and subtitle files.
 # - Advanced Metadata Parsing: Can read metadata from either plain text files or, for more
@@ -129,10 +131,9 @@
 #
 # 6. USER WORKFLOW (HOW IT WORKS)
 #
-# The application allows for continuous operation in a single session.
-#
 # 1. Authenticate: Click "Select client_secrets.json" and choose your file. A browser
-#    window will open for Google account login and consent.
+#    window will open for Google account login and consent. After success, the app will
+#    automatically load the correct video categories for your channel.
 #
 # 2. Load Videos: Click "Load My Videos" to fetch all videos from your channel. The script
 #    simultaneously scans the local directory and all its subdirectories for matching
@@ -190,13 +191,13 @@
 # 9. TROUBLESHOOTING COMMON ERRORS
 #
 # - `quotaExceeded`: You have used your daily YouTube Data API allowance. Wait 24 hours.
+# - `invalidCategoryId`: The category you selected is no longer valid. Re-authenticate to refresh the list.
 # - `invalidDescription`: The `.txt` file has broken JSON or the description exceeds 5000 chars.
 # - `invalidTitle`: The title is empty or was longer than 100 characters.
 # - `playlistItemDuplicate`: The video was already in the specified playlist. This is a warning, not an error.
 # - `Failed to parse`: The `.txt` file contains a JSON syntax error the script could not fix.
 #
 # ==================================================================================================
-
 
 
 import os
@@ -233,14 +234,6 @@ API_TIMEOUT_SECONDS = 60
 YOUTUBE_TAGS_MAX_LENGTH = 500
 YOUTUBE_TAGS_MAX_COUNT = 15
 YOUTUBE_TITLE_MAX_LENGTH = 100
-
-CATEGORY_MAP = {
-    "Film & Animation": "1", "Autos & Vehicles": "2", "Music": "10",
-    "Pets & Animals": "15", "Sports": "17", "Travel & Events": "19",
-    "Gaming": "20", "People & Blogs": "22", "Comedy": "23",
-    "Entertainment": "24", "News & Politics": "25", "Howto & Style": "26",
-    "Education": "27", "Science & Technology": "28", "Nonprofits & Activism": "29"
-}
 
 LANGUAGES_MAP = {
     "Don't Change": None, "English": "en", "Spanish": "es", "French": "fr", 
@@ -320,13 +313,15 @@ class VideoData:
         self.title_to_set = self.video_snippet.get('title', self.original_title)
         self.description_to_set = self.video_snippet.get('description', '')
         self.tags_to_set = self.video_snippet.get('tags', [])
-        self.categoryId_to_set = self.video_snippet.get('categoryId', CATEGORY_MAP['Entertainment'])
+        # --- FIX: Store the original category ID when the video is loaded ---
+        self.categoryId_to_set = self.video_snippet.get('categoryId', '24') # Default to Entertainment
 
 # --- Main Application Class ---
 class SchedulerApp:
     def __init__(self, log_dir=None):
         self.service = None
         self.all_channel_videos = []
+        self.dynamic_category_map = {}
         self.root = tk.Tk()
         setup_revocation_on_exit()
         self.root.title('YouTube Batch Uploader & Scheduler')
@@ -354,7 +349,6 @@ class SchedulerApp:
         
         list_controls = ttk.Frame(list_lf); list_controls.pack(fill=tk.X, pady=(5,0))
         
-        # --- FILTER MENU (RESTORED) ---
         self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0,10))
         self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu
         self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}
@@ -383,13 +377,13 @@ class SchedulerApp:
         self.visibility_choice_var = tk.StringVar(value='private'); self.rad_private = ttk.Radiobutton(sched, text="Private", variable=self.visibility_choice_var, value='private'); self.rad_private.grid(row=6, column=0, columnspan=2, sticky='w', padx=10); self.rad_unlisted = ttk.Radiobutton(sched, text="Unlisted", variable=self.visibility_choice_var, value='unlisted'); self.rad_unlisted.grid(row=7, column=0, columnspan=2, sticky='w', padx=10); self.rad_public = ttk.Radiobutton(sched, text="Public", variable=self.visibility_choice_var, value='public'); self.rad_public.grid(row=8, column=0, columnspan=2, sticky='w', padx=10)
         
         ttk.Label(meta, text='Description:').grid(row=0, column=0, sticky='nw'); self.desc_txt = tk.Text(meta, height=4, width=40, wrap=tk.WORD); self.desc_txt.grid(row=0, column=1, sticky='ew', columnspan=3)
-        ttk.Label(meta, text='Video Category:').grid(row=1, column=0, sticky='w', pady=(5,0)); self.category_var = tk.StringVar(); self.category_cb = ttk.Combobox(meta, textvariable=self.category_var, values=["Don't Change"] + list(CATEGORY_MAP.keys()), state="readonly"); self.category_cb.set("Don't Change"); self.category_cb.grid(row=1, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Video Category:').grid(row=1, column=0, sticky='w', pady=(5,0)); self.category_var = tk.StringVar(); self.category_cb = ttk.Combobox(meta, textvariable=self.category_var, values=["Don't Change"], state="readonly"); self.category_cb.set("Don't Change"); self.category_cb.grid(row=1, column=1, sticky='ew', pady=(5,0), columnspan=3)
         ttk.Label(meta, text='Metadata Lang:').grid(row=2, column=0, sticky='w', pady=(5,0)); self.metadata_lang_var = tk.StringVar(); self.metadata_lang_cb = ttk.Combobox(meta, textvariable=self.metadata_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.metadata_lang_cb.set('English'); self.metadata_lang_cb.grid(row=2, column=1, sticky='ew', pady=(5,0), columnspan=3)
         ttk.Label(meta, text='Audio Language:').grid(row=3, column=0, sticky='w', pady=(5,0)); self.audio_lang_var = tk.StringVar(); self.audio_lang_cb = ttk.Combobox(meta, textvariable=self.audio_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.audio_lang_cb.set('English'); self.audio_lang_cb.grid(row=3, column=1, sticky='ew', pady=(5,0), columnspan=3)
         ttk.Label(meta, text='Recording Date:').grid(row=4, column=0, sticky='w', pady=(5,0)); self.recording_date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d')); ttk.Entry(meta, textvariable=self.recording_date_var).grid(row=4, column=1, sticky='ew', pady=(5,0), columnspan=3)
         ttk.Label(meta, text='Playlist ID:').grid(row=5, column=0, sticky='w', pady=(5,0)); self.playlist_id_var = tk.StringVar(); ttk.Entry(meta, textvariable=self.playlist_id_var).grid(row=5, column=1, sticky='ew', pady=(5,0), columnspan=3)
         self.allow_embedding_var = tk.BooleanVar(value=True); ttk.Checkbutton(meta, text="Allow Embedding", variable=self.allow_embedding_var).grid(row=6, column=0, sticky='w', pady=(5,0), columnspan=2)
-        self.notify_subscribers_var = tk.BooleanVar(value=False); ttk.Checkbutton(meta, text="Notify Subscribers", variable=self.notify_subscribers_var).grid(row=7, column=0, sticky='w', pady=(5,0), columnspan=2)
+        self.notify_subscribers_var = tk.BooleanVar(value=False); ttk.Checkbutton(meta, text="Notify Subscribers (Public only)", variable=self.notify_subscribers_var).grid(row=7, column=0, sticky='w', pady=(5,0), columnspan=2)
         ttk.Label(meta, text='Made for Kids:').grid(row=8, column=0, sticky='w', pady=(5,0)); self.made_for_kids_var = tk.StringVar(value='no'); mfk_frame = ttk.Frame(meta); mfk_frame.grid(row=8, column=1, sticky='ew', pady=(5,0), columnspan=3); ttk.Radiobutton(mfk_frame, text="No", variable=self.made_for_kids_var, value='no').pack(side=tk.LEFT, padx=(0, 10)); ttk.Radiobutton(mfk_frame, text="Yes", variable=self.made_for_kids_var, value='yes').pack(side=tk.LEFT, padx=(0, 10)); ttk.Radiobutton(mfk_frame, text="Don't Change", variable=self.made_for_kids_var, value='dont_change').pack(side=tk.LEFT)
         meta.grid_columnconfigure(1, weight=1)
 
@@ -417,7 +411,6 @@ class SchedulerApp:
 
     def update_status(self, message): self.status_bar.config(text=message); self.root.update_idletasks()
     
-    # --- FILTER FUNCTIONS (RESTORED) ---
     def apply_filters(self):
         if not self.all_channel_videos: return
         active_filters = {key for key, var in self.filter_vars.items() if var.get()}
@@ -470,16 +463,43 @@ class SchedulerApp:
         path = filedialog.askopenfilename(title='Select client_secrets.json', filetypes=[('JSON files', '*.json')])
         if path:
             self.update_status("Authenticating..."); self.service = get_authenticated_service(path)
-            if self.service: self.update_status("Authentication successful."); self.load_all_button.config(state=tk.NORMAL)
-            else: self.update_status("Authentication failed.")
+            if self.service:
+                self.load_channel_categories()
+                self.load_all_button.config(state=tk.NORMAL)
+            else:
+                self.update_status("Authentication failed.")
     
+    def load_channel_categories(self):
+        self.update_status("Loading channel categories...")
+        try:
+            channels_resp = self.service.channels().list(part="snippet", mine=True).execute()
+            region_code = channels_resp["items"][0]["snippet"].get("country", "US")
+            
+            categories_resp = self.service.videoCategories().list(part="snippet", regionCode=region_code).execute()
+            
+            self.dynamic_category_map = {
+                item['snippet']['title']: item['id']
+                for item in categories_resp.get("items", [])
+                if item.get('snippet', {}).get('assignable', False)
+            }
+            
+            sorted_categories = sorted(self.dynamic_category_map.keys())
+            self.category_cb['values'] = ["Don't Change"] + sorted_categories
+            self.category_cb.set("Don't Change")
+            self.update_status("Authentication successful. Categories loaded.")
+
+        except Exception as e:
+            logger.error(f"Failed to load video categories: {e}")
+            self.update_status("Error: Could not load categories.")
+
     def gui_load_all_videos(self):
         try: max_to_load = int(self.max_videos_var.get())
         except ValueError: max_to_load = 50
         self.update_status(f"Loading up to {max_to_load or 'ALL'} videos...")
         self.all_channel_videos = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load)
-        self.apply_filters() # Apply filters after loading
+        self.apply_filters()
         self.process_button.config(state=tk.NORMAL)
+        self.filter_menubutton.config(state=tk.NORMAL)
         self.update_status(f"Loaded {len(self.all_channel_videos)} videos.")
 
     def fetch_all_videos_from_api(self, max_videos_to_fetch=0):
@@ -526,13 +546,18 @@ class SchedulerApp:
     def start_processing_thread(self):
         selected_items = self.tree.selection()
         if not selected_items: return self.update_status("Error: No videos selected.")
+        
+        category_name = self.category_var.get()
+        category_id_to_set = self.dynamic_category_map.get(category_name) if category_name != "Don't Change" else None
+
         processing_data = {
             "videos": [vd for vd in self.all_channel_videos if vd.video_id in [self.tree.item(i, 'values')[0] for i in selected_items]],
             "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()),
             "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "skip_subtitles": self.skip_subs_var.get(),
             "update_schedule": self.update_schedule_var.get(), "update_visibility": self.update_visibility_var.get(),
             "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(),
-            "category_name": self.category_var.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(),
+            "category_id": category_id_to_set,
+            "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(),
             "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "made_for_kids": self.made_for_kids_var.get()
         }
         self.update_status("Processing... Check console for details.")
@@ -551,7 +576,7 @@ class SchedulerApp:
 def update_videos_on_youtube(service, processing_data):
     videos = processing_data["videos"]; is_dry_run = processing_data["is_dry_run"]
     notify_subscribers = processing_data["notify_subscribers"]
-    category_id = CATEGORY_MAP.get(processing_data["category_name"])
+    category_id_from_gui = processing_data["category_id"]
     metadata_lang = LANGUAGES_MAP.get(processing_data["metadata_lang_name"])
     audio_lang = LANGUAGES_MAP.get(processing_data["audio_lang_name"])
     recording_date = processing_data["recording_date"]
@@ -568,7 +593,15 @@ def update_videos_on_youtube(service, processing_data):
     for i, vd in enumerate(videos):
         parts, body = [], {'id': vd.video_id}
         snippet = {'title': vd.title_to_set[:YOUTUBE_TITLE_MAX_LENGTH], 'description': vd.description_to_set, 'tags': vd.tags_to_set}
-        if category_id: snippet['categoryId'] = category_id
+        
+        # --- FINAL FIX: Always include a category ID in the snippet update ---
+        if category_id_from_gui:
+            # If the user chose a new category, use it.
+            snippet['categoryId'] = category_id_from_gui
+        else:
+            # Otherwise, use the video's existing category ID.
+            snippet['categoryId'] = vd.categoryId_to_set
+
         if metadata_lang: snippet['defaultLanguage'] = metadata_lang
         if audio_lang: snippet['defaultAudioLanguage'] = audio_lang
         body['snippet'] = snippet; parts.append('snippet')
@@ -576,10 +609,12 @@ def update_videos_on_youtube(service, processing_data):
         status, is_publishing = {}, False
         if processing_data["update_schedule"]:
             status['publishAt'] = (start_dt + i * delta).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-            status['privacyStatus'] = 'private'; is_publishing = True
+            status['privacyStatus'] = 'private'
         elif processing_data["update_visibility"]:
             status['privacyStatus'] = processing_data["visibility_to_set"]
-            if status['privacyStatus'] == 'public' and vd.video_status.get('privacyStatus') != 'public': is_publishing = True
+            if status['privacyStatus'] == 'public' and vd.video_status.get('privacyStatus') != 'public':
+                is_publishing = True
+        
         status['embeddable'] = allow_embedding
         if made_for_kids != 'dont_change': status['selfDeclaredMadeForKids'] = (made_for_kids == 'yes')
         body['status'] = status; parts.append('status')
@@ -593,12 +628,15 @@ def update_videos_on_youtube(service, processing_data):
         if is_dry_run:
             logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}' -> '{snippet['title']}'")
             logger.info(f"  - Schedule: {status.get('publishAt', 'N/A')}, Privacy: {status.get('privacyStatus', 'N/A')}")
-            logger.info(f"  - Notify Subs: {notify_subscribers if is_publishing else 'N/A'}, Embedding: {allow_embedding}, Made for Kids: {made_for_kids}")
+            logger.info(f"  - Category ID: {snippet.get('categoryId', 'N/A')}")
+            logger.info(f"  - Notify Subs: {notify_subscribers if is_publishing else 'N/A (Not publishing publicly)'}, Embedding: {allow_embedding}, Made for Kids: {made_for_kids}")
             continue
 
         try:
             kwargs = {'part': ",".join(parts), 'body': body}
-            if is_publishing: kwargs['notifySubscribers'] = notify_subscribers
+            if is_publishing:
+                kwargs['notifySubscribers'] = notify_subscribers
+            
             service.videos().update(**kwargs).execute()
             logger.info(f"({i+1}/{len(videos)}) Successfully updated '{snippet['title']}'.")
 
@@ -614,7 +652,8 @@ def update_videos_on_youtube(service, processing_data):
             logger.error(f"FAILED to update '{vd.original_title}': {e.reason}")
             if vd.description_file_path and os.path.exists(vd.description_file_path):
                 os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True); shutil.copy(vd.description_file_path, FAILED_UPDATES_FOLDER)
-        except Exception as e: logger.error(f"An unexpected error occurred for '{vd.original_title}': {e}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred for '{vd.original_title}': {e}", exc_info=True)
     
     logger.info("--- Processing complete. ---")
 
