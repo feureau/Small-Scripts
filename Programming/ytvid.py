@@ -268,10 +268,10 @@ def get_input_width(file_path):
 
 def get_bitrate(resolution_key, framerate, is_hdr):
     is_high_fps = framerate > 40
-    sdr_table = {"8k": (160, 240), "4k": (45, 68), "1440p": (16, 24), "1080p": (8, 12), "720p": (5, 7.5)}
-    hdr_table = {"8k": (200, 300), "4k": (56, 85), "1440p": (20, 30), "1080p": (10, 15), "720p": (6.5, 9.5)}
+    sdr_table = {"8k": (320, 480), "4k": (90, 136), "1440p": (32, 48), "1080p": (16, 24), "720p": (10, 15)}
+    dr_table = {"8k": (400, 600), "4k": (112, 170), "1440p": (40, 60), "1080p": (20, 30), "720p": (13, 19)}
     table = hdr_table if is_hdr else sdr_table
-    default_bitrate = (15, 20) if is_hdr else (12, 18)
+    default_bitrate = (30, 40) if is_hdr else (24, 36)
     rate_tuple = table.get(resolution_key, default_bitrate)
     return rate_tuple[1] if is_high_fps else rate_tuple[0]
 
