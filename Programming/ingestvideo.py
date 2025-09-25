@@ -1,16 +1,16 @@
 # =================================================================================================
 #
 #                                  NVEncC AV1 Batch Processor
-#                                          Version: 4.6 (Final)
+#                                          Version: 5.0 (Documentation Overhaul)
 #
 # =================================================================================================
 """
 ---------------------------------------------------------------------------------------------------
  SCRIPT DOCUMENTATION
 ---------------------------------------------------------------------------------------------------
-**IMPORTANT**: This documentation block is an integral part of the script and must be reviewed and
-             updated with each new version to accurately reflect the current codebase, features,
-             and design philosophy.
+**IMPORTANT**: This documentation block is an integral part of the script and is **mandatory**
+to review and update with each new version. It must accurately reflect the current codebase,
+features, design philosophy, and change history.
 
 ---------------------------------------------------------------------------------------------------
  I. OVERVIEW
@@ -29,8 +29,8 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
  II. CORE FEATURES
 ---------------------------------------------------------------------------------------------------
 - Batch Processing: Add multiple files or use wildcards (e.g., *.mkv) for batch encoding.
-- Pre-Analysis: Automatically detects HDR metadata, audio tracks, and video resolution from the
-  first file to set sensible defaults.
+- Pre-Analysis: Automatically detects HDR metadata, audio tracks, video resolution, and frame rate
+  from the first file to set sensible defaults.
 - Automatic Crop Detection: Samples the video at multiple points and displays its findings in
   real-time in the console.
 - Interactive GUI: Provides user-friendly controls for all major encoding options in a two-column
@@ -56,6 +56,9 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
   to a compatible format like AC3.
 - Multiprocessing: Can run multiple encoding jobs in parallel to leverage multi-core CPUs and
   significantly reduce the total processing time for large batches.
+- VFR Handling: Dynamically detects the source frame rate and instructs the encoder to resample
+  the video (using --fps for compatibility with NVEncC 9.x and older), fixing audio sync issues
+  with Variable Frame Rate (VFR) sources.
 
 ---------------------------------------------------------------------------------------------------
  III. PREREQUISITES
@@ -70,37 +73,66 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
    and it must be accessible in the system's PATH.
 
 ---------------------------------------------------------------------------------------------------
- IV. HOW IT WORKS & DESIGN PHILOSOPHY
+ IV. DESIGN PHILOSOPHY & RATIONALE
 ---------------------------------------------------------------------------------------------------
 1. INITIALIZATION & ANALYSIS:
-   - The script parses command-line arguments to build a list of video files to process.
-   - It performs a detailed analysis of the *first* video file for intelligent GUI defaults.
+   - The script analyzes only the *first* video file for intelligent GUI defaults. This is a
+     design choice for speed and simplicity in batch workflows where files are often similar.
 
-2. THE GUI (TKINTER):
-   - A GUI window is launched with a two-column layout to prevent an overly tall window and to
-     separate interactive settings (left) from informational displays and lists (right).
+2. GUI PHILOSOPHY:
    - A core design principle is the avoidance of blocking pop-up dialogs. All feedback,
      including errors and completion notices, is printed to the console. This ensures the user
-     can always see the script's status in a log-friendly, non-blocking manner and is a
-     mandatory feature for all future versions.
+     can always see the script's status in a log-friendly, non-blocking manner.
 
-3. ENCODING PHILOSOPHY (`execute_nvencc` function):
-   - This function uses `subprocess.Popen` to launch the NVEncC encoder. To provide real-time
-     progress updates, it reads the encoder's stdout stream line-by-line. If a line is a
-     progress update, it is printed with a preceding carriage return (`\r`) and a trailing
-     ANSI escape code (`\x1b[K`) to erase any leftover characters from the previous, longer line.
-     The full output is also captured and returned for detailed logging.
-   - The command is built around prioritizing quality. The reasoning for key arguments is as follows:
-     - `--codec av1 --output-depth 10`: To use the modern AV1 codec for superior compression
-       efficiency and 10-bit color to prevent color banding, crucial for HDR content.
-     - `--preset p7`: The highest quality, slowest preset, enabling the most thorough analysis.
-     - `--lookahead 32`: A large lookahead buffer for smarter bit allocation on complex scenes.
-     - `--aq --aq-temporal`: Adaptive Quantization to maximize perceived visual quality.
+3. ENCODING RATIONALE (WHY THESE SETTINGS?):
+   - The command is built around prioritizing quality for archival purposes over raw speed.
+   - `--codec av1 --output-depth 10`: AV1 provides superior compression efficiency over older
+     codecs. 10-bit color depth is crucial to prevent color banding, especially in HDR content
+     and scenes with smooth gradients (like skies).
+   - `--preset p7`: This is the highest quality, slowest preset. It enables the most thorough
+     motion estimation and encoding analysis, maximizing quality at the cost of time.
+   - `--lookahead 32`: A large lookahead buffer (32 frames) allows the encoder to make smarter
+     decisions about bitrate allocation, giving more bits to complex future scenes and saving
+     bits on simpler ones. This significantly improves overall quality.
+   - `--aq --aq-temporal`: Adaptive Quantization is enabled to improve perceived visual quality.
+     It allocates more bits to complex, detailed areas of a frame (spatial AQ) and across
+     frames (temporal AQ), which humans are more likely to notice.
+   - `--fps`: This command is critical for stability. It forces the output to a constant frame
+     rate matching the detected source rate. This is the primary fix for audio desynchronization
+     issues found in Variable Frame Rate (VFR) source files. The `--fps` flag is used specifically
+     for compatibility with older NVEncC versions (e.g., 9.x), as newer versions use `--vpp-fps`.
 
 4. SAMPLE GENERATION:
    - To guarantee samples are accurate previews, the script first uses FFmpeg to create a
-     temporary, 10-second clip via a lossless stream copy. This clip is then fed into the
-     exact same encoding function used for the final output, ensuring consistency.
+     temporary, 10-second clip via a lossless stream copy (`-c copy`). This ensures the sample
+     is not a re-encode of a re-encode, and that the clip fed to NVEncC is identical in quality
+     to the original source file.
+
+---------------------------------------------------------------------------------------------------
+ V. CHANGE HISTORY
+---------------------------------------------------------------------------------------------------
+- **v5.0 (Current):**
+    - Overhauled internal documentation to include a mandatory update clause, detailed rationale
+      for encoding settings, and a comprehensive change history.
+    - Bumped version number to reflect feature maturity and documentation completion.
+
+- **v4.9:**
+    - Corrected the VFR-handling command from `--vpp-fps` to `--fps` to provide compatibility
+      with the user's installed NVEncC 9.03 version, resolving the "Unknown option" error.
+
+- **v4.8:**
+    - Changed the default rate control mode in the GUI from "QVBR" to "CQP".
+    - Lowered the default CQP I-frame value from 50 to 40 to better suit user preference for
+      higher quality film grain preservation. The P/B values are calculated automatically.
+
+- **v4.7:**
+    - Implemented dynamic frame rate detection using `ffprobe` to handle various source files
+      (e.g., 23.976, 25, 30 FPS) automatically.
+    - Added the frame rate resampling command to the NVEncC execution logic to fix the root
+      cause of audio desynchronization with Variable Frame Rate (VFR) files.
+
+- **v4.6 (Baseline):**
+    - Initial version provided for analysis. Lacked VFR handling, leading to audio sync issues.
 
 ---------------------------------------------------------------------------------------------------
 """
@@ -108,7 +140,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "4.6"
+SCRIPT_VERSION = "5.0"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -119,7 +151,7 @@ GOP_LENGTH = "6"
 AQ_STRENGTH = "5"
 
 # --- Rate Control Defaults ---
-DEFAULT_CQP_I = "50"
+DEFAULT_CQP_I = "40"
 DEFAULT_CQP_P = "55"
 DEFAULT_CQP_B = "60"
 DEFAULT_QVBR_1080P = "22"
@@ -198,6 +230,16 @@ def get_video_duration(video_file):
     cap.release()
     return (frame_count / fps) if fps and frame_count else None
 
+def get_video_frame_rate(video_file):
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", video_file]
+    try:
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace').strip()
+        if '/' in output or output.isdigit():
+            return output
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        pass
+    return "24000/1001"
+
 # ---------------------------------------------------------------------
 # Step 2: Automatic Crop Detection
 # ---------------------------------------------------------------------
@@ -241,7 +283,7 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
 # ---------------------------------------------------------------------
 # Step 3: GUI
 # ---------------------------------------------------------------------
-def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height):
+def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height, frame_rate):
     root = tk.Tk()
     root.title("NVEncC AV1 Batch Processor")
     
@@ -272,7 +314,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     audio_vars, convert_vars = [], []
     crop_w, crop_h, crop_x, crop_y = (tk.StringVar(value=str(v)) for v in crop_params)
     original_crop_w, original_crop_h, original_crop_x, original_crop_y = crop_w.get(), crop_h.get(), crop_x.get(), crop_y.get()
-    rate_control_mode = tk.StringVar(value="QVBR")
+    rate_control_mode = tk.StringVar(value="CQP")
     cqp_i, cqp_p, cqp_b = (tk.StringVar(value=v) for v in [DEFAULT_CQP_I, DEFAULT_CQP_P, DEFAULT_CQP_B])
     bracket_steps = tk.StringVar(value="2")
     step_size = tk.StringVar(value="3")
@@ -435,15 +477,30 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         if _is_updating_cqp: return
         _is_updating_cqp = True
         try:
-            r_p, r_b = float(DEFAULT_CQP_P) / float(DEFAULT_CQP_I), float(DEFAULT_CQP_B) / float(DEFAULT_CQP_I)
-            if source_var == 'i': base = int(cqp_i.get()); cqp_p.set(round(base * r_p)); cqp_b.set(round(base * r_b))
-            elif source_var == 'p': base = round(int(cqp_p.get()) / r_p); cqp_i.set(base); cqp_b.set(round(base * r_b))
-            else: base = round(int(cqp_b.get()) / r_b); cqp_i.set(base); cqp_p.set(round(base * r_p))
+            # Use the original default values to establish the ratio, not the current ones
+            base_i_default, base_p_default, base_b_default = int("40"), int(DEFAULT_CQP_P), int(DEFAULT_CQP_B)
+            r_p, r_b = float(base_p_default) / float(base_i_default), float(base_b_default) / float(base_i_default)
+            
+            if source_var == 'i': 
+                base = int(cqp_i.get())
+                cqp_p.set(round(base * r_p))
+                cqp_b.set(round(base * r_b))
+            elif source_var == 'p': 
+                base = round(int(cqp_p.get()) / r_p)
+                cqp_i.set(base)
+                cqp_b.set(round(base * r_b))
+            else: # source_var == 'b'
+                base = round(int(cqp_b.get()) / r_b)
+                cqp_i.set(base)
+                cqp_p.set(round(base * r_p))
         except (ValueError, ZeroDivisionError): pass
         finally: _is_updating_cqp = False
+
     cqp_i.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='i'))
     cqp_p.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='p'))
     cqp_b.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='b'))
+    # Trigger initial calculation
+    _update_cqp_ratios(source_var='i')
     
     def gather_and_run(action_function):
         files = list(file_listbox.get(0, 'end'))
@@ -464,7 +521,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             "gop_len": gop_len.get(), "max_processes": max_processes.get(),
             "crop_params": {"crop_w":w, "crop_h":h, "crop_x":x, "crop_y":y},
             "audio_tracks": tracks, "sleep_after_processing": sleep_enable.get(),
-            "bracket_steps": bracket_steps.get(), "step_size": step_size.get()
+            "bracket_steps": bracket_steps.get(), "step_size": step_size.get(),
+            "frame_rate": frame_rate
         }
         action_function(settings)
         
@@ -511,6 +569,10 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
     ]
     command.append("--avhw" if settings["decode_mode"] == "Hardware" else "--avsw")
     command.extend(["--colormatrix", "bt2020nc", "--colorprim", "bt2020", "--transfer", "smpte2084"])
+
+    if not settings["fruc_enable"] and "frame_rate" in settings:
+        # Use --fps for compatibility with older NVEncC versions like 9.xx
+        command.extend(["--fps", settings["frame_rate"]])
 
     if settings["hdr_enable"]: command.append("--vpp-ngx-truehdr")
     else: command.extend(["--dhdr10-info", "copy", "--dolby-vision-profile", "copy", "--dolby-vision-rpu", "copy"])
@@ -721,6 +783,9 @@ if __name__ == "__main__":
     h, w = get_video_resolution(first_file)
     if h is None: print(f"Error: Could not get resolution for {first_file}. Exiting."); sys.exit()
 
+    frame_rate = get_video_frame_rate(first_file)
+    print(f"Detected source frame rate: {frame_rate}")
+
     color = get_video_color_info(first_file)
     is_hdr = "bt2020" in (color.get("color_primaries","") or "")
     
@@ -735,7 +800,8 @@ if __name__ == "__main__":
         default_qvbr=qvbr,
         default_hdr=not is_hdr,
         input_width=w,
-        input_height=h
+        input_height=h,
+        frame_rate=frame_rate
     )
     print("\nProcessing Complete.")
     os.system("pause")
