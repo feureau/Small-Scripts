@@ -152,8 +152,8 @@ AQ_STRENGTH = "5"
 
 # --- Rate Control Defaults ---
 DEFAULT_CQP_I = "40"
-DEFAULT_CQP_P = "55"
-DEFAULT_CQP_B = "60"
+DEFAULT_CQP_P = "44"  # Changed from "55"
+DEFAULT_CQP_B = "48"  # Changed from "60"
 DEFAULT_QVBR_1080P = "22"
 DEFAULT_QVBR_4K = "30"
 DEFAULT_QVBR_8K = "40"
