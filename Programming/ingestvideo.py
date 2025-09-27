@@ -1,7 +1,7 @@
 # =================================================================================================
 #
 #                                  NVEncC AV1 Batch Processor
-#                                          Version: 5.0 (Documentation Overhaul)
+#                                          Version: 5.1 (Color-Aware Update)
 #
 # =================================================================================================
 """
@@ -50,8 +50,13 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 - Comprehensive Logging: For each video processed, a detailed log file is created containing
   a full summary, all user-selected settings (in JSON format for clarity), source file analysis,
   the exact command used, and the full console output from the encoder.
-- HDR Support: Correctly copies HDR10, HLG, and Dolby Vision metadata to ensure videos display
-  correctly on compatible screens.
+- **Color-Aware Processing (New in v5.1):**
+    - Automatically detects if the source video is SDR or HDR.
+    - GUI defaults to "Auto (Match Source)" to produce SDR from SDR and HDR from HDR, preventing
+      accidental color space mismatches.
+    - Provides explicit GUI options to force conversions:
+        1. **SDR-to-HDR:** Upscale SDR content to HDR, with an optional AI-powered filter.
+        2. **HDR-to-SDR:** Tone-map HDR content down to high-quality SDR.
 - Audio Control: Allows selection and passthrough (copy) of multiple audio tracks, or conversion
   to a compatible format like AC3.
 - Multiprocessing: Can run multiple encoding jobs in parallel to leverage multi-core CPUs and
@@ -111,7 +116,18 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 ---------------------------------------------------------------------------------------------------
  V. CHANGE HISTORY
 ---------------------------------------------------------------------------------------------------
-- **v5.0 (Current):**
+- **v5.1 (Current):**
+    - Implemented robust color space detection (SDR/HDR).
+    - Reworked the GUI to be "color-aware," with a new "Output Color Space" selection:
+      'Auto (Match Source)', 'Force HDR', and 'Force SDR'.
+    - The new default is 'Auto', preventing incorrect color shifts on SDR files.
+    - Encoder logic is now dynamic, applying correct color metadata (BT.709 for SDR, BT.2020 for HDR)
+      and tone-mapping filters (--vpp-tone-map) as needed.
+    - Renamed old "HDR Conversion" checkbox to "Use AI Up-conversion" and integrated it into
+      the new color space logic.
+    - Updated internal documentation to reflect the new color handling philosophy.
+
+- **v5.0:**
     - Overhauled internal documentation to include a mandatory update clause, detailed rationale
       for encoding settings, and a comprehensive change history.
     - Bumped version number to reflect feature maturity and documentation completion.
@@ -140,7 +156,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "5.0"
+SCRIPT_VERSION = "5.1"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -152,8 +168,8 @@ AQ_STRENGTH = "5"
 
 # --- Rate Control Defaults ---
 DEFAULT_CQP_I = "40"
-DEFAULT_CQP_P = "44"  # Changed from "55"
-DEFAULT_CQP_B = "48"  # Changed from "60"
+DEFAULT_CQP_P = "44"
+DEFAULT_CQP_B = "48"
 DEFAULT_QVBR_1080P = "22"
 DEFAULT_QVBR_4K = "30"
 DEFAULT_QVBR_8K = "40"
@@ -197,6 +213,9 @@ def get_video_color_info(video_file):
                 color_info = {k: s.get(k) for k in ["color_range", "color_primaries", "color_transfer", "color_space"]}
                 color_info["mastering_display_metadata"] = None
                 color_info["max_cll"] = None
+                # Check for HDR based on transfer characteristics
+                is_hdr = "smpte2084" in (s.get("color_transfer") or "") or "arib-std-b67" in (s.get("color_transfer") or "")
+                color_info["is_hdr"] = is_hdr
                 for side_data in s.get("side_data_list", []):
                     if side_data.get("side_data_type") == "Mastering display metadata":
                         color_info["mastering_display_metadata"] = side_data
@@ -205,7 +224,7 @@ def get_video_color_info(video_file):
                         if max_c or max_a: color_info["max_cll"] = f"{max_c},{max_a}"
                 return color_info
     except (subprocess.CalledProcessError, json.JSONDecodeError): pass
-    return {k: None for k in ["color_range", "color_primaries", "color_transfer", "color_space", "mastering_display_metadata", "max_cll"]}
+    return {k: None for k in ["color_range", "color_primaries", "color_transfer", "color_space", "mastering_display_metadata", "max_cll", "is_hdr"]}
 
 def run_ffprobe_for_audio_streams(video_file):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,codec_name,channels:stream_tags=language", "-of", "json", video_file]
@@ -283,7 +302,7 @@ def get_crop_parameters(video_file, input_width, input_height, limit_value):
 # ---------------------------------------------------------------------
 # Step 3: GUI
 # ---------------------------------------------------------------------
-def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr, input_width, input_height, frame_rate):
+def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sdr, input_width, input_height, frame_rate):
     root = tk.Tk()
     root.title("NVEncC AV1 Batch Processor")
     
@@ -301,7 +320,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     
     # --- Tkinter Variables ---
     decoding_mode = tk.StringVar(value="Hardware")
-    hdr_enable = tk.BooleanVar(value=default_hdr)
+    output_color_mode = tk.StringVar(value="Auto (Match Source)")
+    ai_upscale_enable = tk.BooleanVar(value=False)
     sleep_enable = tk.BooleanVar(value=False)
     fruc_enable = tk.BooleanVar()
     nvvfx_denoise_var = tk.BooleanVar()
@@ -325,8 +345,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
             meta_text.config(state='normal'); meta_text.delete("1.0", "end"); meta_text.insert("1.0", "No file selected."); meta_text.config(state='disabled')
             return
         meta = get_video_color_info(selected_file)
+        source_type = "SDR" if meta.get('is_hdr') == False else "HDR"
         txt = (f"File: {os.path.basename(selected_file)}\n"
-               f"Color Range: {meta.get('color_range') or 'N/A'}\n"
+               f"Detected Type: {source_type}\n"
                f"Color Primaries: {meta.get('color_primaries') or 'N/A'}\n"
                f"Color Transfer: {meta.get('color_transfer') or 'N/A'}\n"
                f"Color Space: {meta.get('color_space') or 'N/A'}\n"
@@ -373,7 +394,18 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     proc_frame.pack(anchor='w', pady=5, padx=5)
     tk.Label(proc_frame, text="Max Processes:").pack(side='left')
     tk.Entry(proc_frame, textvariable=max_processes, width=3).pack(side='left', padx=5)
-    tk.Checkbutton(options_frame, text="Enable HDR Conversion (SDR to HDR)", variable=hdr_enable).pack(anchor='w', padx=5)
+    
+    color_frame = tk.LabelFrame(options_frame, text="Output Color Space")
+    color_frame.pack(fill='x', padx=5, pady=5)
+    auto_radio = tk.Radiobutton(color_frame, text="Auto (Match Source)", variable=output_color_mode, value="Auto (Match Source)")
+    auto_radio.pack(anchor="w")
+    hdr_radio = tk.Radiobutton(color_frame, text="Force HDR (Upscale SDR)", variable=output_color_mode, value="Force HDR")
+    hdr_radio.pack(anchor="w")
+    ai_upscale_check = tk.Checkbutton(color_frame, text="Use AI Up-conversion", variable=ai_upscale_enable)
+    ai_upscale_check.pack(anchor='w', padx=25)
+    sdr_radio = tk.Radiobutton(color_frame, text="Force SDR (Tone-map HDR)", variable=output_color_mode, value="Force SDR")
+    sdr_radio.pack(anchor="w")
+    
     res_frame = tk.Frame(options_frame)
     res_frame.pack(anchor='w', pady=10, padx=5)
     tk.Label(res_frame, text="Output Resolution:").pack(side='left')
@@ -452,6 +484,20 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     file_listbox.bind("<<ListboxSelect>>", on_file_select)
     if file_list: file_listbox.select_set(0); on_file_select(None)
 
+    def update_color_ui(*args):
+        mode = output_color_mode.get()
+        # SDR source can be upscaled, but not tone-mapped
+        if is_source_sdr:
+            sdr_radio.config(state='disabled')
+            hdr_radio.config(state='normal')
+            ai_upscale_check.config(state='normal' if mode == "Force HDR" else 'disabled')
+        # HDR source can be tone-mapped, but not upscaled
+        else:
+            sdr_radio.config(state='normal')
+            hdr_radio.config(state='disabled')
+            ai_upscale_check.config(state='disabled')
+    output_color_mode.trace_add("write", update_color_ui); update_color_ui()
+
     def on_no_crop_toggle(*args):
         state = 'disabled' if no_crop_var.get() else 'normal'
         if no_crop_var.get(): crop_w.set(input_width); crop_h.set(input_height); crop_x.set("0"); crop_y.set("0")
@@ -477,10 +523,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         if _is_updating_cqp: return
         _is_updating_cqp = True
         try:
-            # Use the original default values to establish the ratio, not the current ones
             base_i_default, base_p_default, base_b_default = int("40"), int(DEFAULT_CQP_P), int(DEFAULT_CQP_B)
             r_p, r_b = float(base_p_default) / float(base_i_default), float(base_b_default) / float(base_i_default)
-            
             if source_var == 'i': 
                 base = int(cqp_i.get())
                 cqp_p.set(round(base * r_p))
@@ -499,7 +543,6 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
     cqp_i.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='i'))
     cqp_p.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='p'))
     cqp_b.trace_add("write", lambda *a: _update_cqp_ratios(*a, source_var='b'))
-    # Trigger initial calculation
     _update_cqp_ratios(source_var='i')
     
     def gather_and_run(action_function):
@@ -513,7 +556,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, default_hdr,
         except ValueError: print("ERROR: Invalid crop parameters."); return
         
         settings = {
-            "files": files, "decode_mode": decoding_mode.get(), "hdr_enable": hdr_enable.get(),
+            "files": files, "decode_mode": decoding_mode.get(),
+            "output_color_mode": output_color_mode.get(), "ai_upscale": ai_upscale_enable.get(),
+            "is_source_sdr": is_source_sdr,
             "resolution_choice": resolution_var.get(), "fruc_enable": fruc_enable.get(),
             "denoise_enable": nvvfx_denoise_var.get(), "artifact_enable": artifact_enable.get(),
             "rate_control_mode": rate_control_mode.get(), "qvbr": qvbr.get(),
@@ -568,15 +613,31 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
         "--aq-strength", AQ_STRENGTH, "--lookahead", LOOKAHEAD
     ]
     command.append("--avhw" if settings["decode_mode"] == "Hardware" else "--avsw")
-    command.extend(["--colormatrix", "bt2020nc", "--colorprim", "bt2020", "--transfer", "smpte2084"])
+    
+    # --- New Dynamic Color Handling Logic ---
+    output_mode = settings["output_color_mode"]
+    is_sdr_source = settings["is_source_sdr"]
+    
+    # Determine the target color space
+    target_is_hdr = (output_mode == "Force HDR") or (output_mode == "Auto (Match Source)" and not is_sdr_source)
+    
+    # Handle conversions
+    if is_sdr_source and target_is_hdr: # SDR -> HDR
+        if settings["ai_upscale"]:
+            command.append("--vpp-ngx-truehdr")
+    elif not is_sdr_source and not target_is_hdr: # HDR -> SDR
+        command.extend(["--vpp-tone-map", "mobiushg"]) # Use mobiushg for high-quality tone-mapping
+        
+    # Apply the correct metadata for the target
+    if target_is_hdr:
+        command.extend(["--colormatrix", "bt2020nc", "--colorprim", "bt2020", "--transfer", "smpte2084"])
+        command.extend(["--dhdr10-info", "copy", "--dolby-vision-profile", "copy", "--dolby-vision-rpu", "copy"])
+    else: # Target is SDR
+        command.extend(["--colormatrix", "bt709", "--colorprim", "bt709", "--transfer", "bt709"])
 
     if not settings["fruc_enable"] and "frame_rate" in settings:
-        # Use --fps for compatibility with older NVEncC versions like 9.xx
         command.extend(["--fps", settings["frame_rate"]])
 
-    if settings["hdr_enable"]: command.append("--vpp-ngx-truehdr")
-    else: command.extend(["--dhdr10-info", "copy", "--dolby-vision-profile", "copy", "--dolby-vision-rpu", "copy"])
-    
     crop = settings["crop_params"]
     if not is_sample and not (crop["crop_w"] == w and crop["crop_h"] == h):
         right, bottom = w - (crop["crop_x"] + crop["crop_w"]), h - (crop["crop_y"] + crop["crop_h"])
@@ -679,7 +740,8 @@ def generate_samples(settings):
     
     temp_clip = None
     try:
-        temp_clip = os.path.join(output_dir, f"temp_clip_{os.getpid()}.mkv")
+        with tempfile.NamedTemporaryFile(suffix=".mkv", delete=False) as temp:
+            temp_clip = temp.name
         
         print(f"Creating temporary 10-second clip...")
         ffmpeg_cmd = ["ffmpeg", "-hide_banner", "-y", "-ss", str(start_time), "-i", source_file, "-t", "10", "-map", "0", "-c", "copy", temp_clip]
@@ -699,13 +761,18 @@ def generate_samples(settings):
                 
                 base, ext = os.path.splitext(output_file)
                 new_name = f"{base}_~{formatted_size}{ext}"
-                os.rename(output_file, new_name)
-                print(f"\nSample created successfully: {os.path.basename(new_name)}")
+                try:
+                    os.rename(output_file, new_name)
+                    print(f"\nSample created successfully: {os.path.basename(new_name)}")
+                except OSError: # Handle cases where the file might be temporarily locked
+                    os.replace(output_file, new_name)
+                    print(f"\nSample created successfully: {os.path.basename(new_name)}")
+
             else:
                 print(f"\nFailed to create sample: {os.path.basename(output_file)}")
 
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        err_out = e.stderr if isinstance(e, subprocess.CalledProcessError) else str(e)
+        err_out = e.stderr.decode(errors='replace') if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
         print(f"ERROR during sample creation process: {err_out}\nEnsure FFmpeg is installed and accessible in your system's PATH.")
     finally:
         if temp_clip and os.path.exists(temp_clip):
@@ -777,7 +844,10 @@ def process_batch(video_files, settings):
 
 if __name__ == "__main__":
     files = [f for arg in sys.argv[1:] for f in glob.glob(arg)]
-    if not files: print("No video files specified."); sys.exit()
+    if not files:
+        print("Usage: Drop video files onto this script or run from command line with file paths/wildcards.")
+        os.system("pause")
+        sys.exit()
 
     first_file = files[0]
     h, w = get_video_resolution(first_file)
@@ -786,10 +856,12 @@ if __name__ == "__main__":
     frame_rate = get_video_frame_rate(first_file)
     print(f"Detected source frame rate: {frame_rate}")
 
-    color = get_video_color_info(first_file)
-    is_hdr = "bt2020" in (color.get("color_primaries","") or "")
+    color_info = get_video_color_info(first_file)
+    is_sdr = color_info.get("is_hdr") == False
+    source_type_str = "SDR" if is_sdr else "HDR"
+    print(f"Detected source type: {source_type_str}")
     
-    crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, w, h, "128" if is_hdr else "24")
+    crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, w, h, "24" if is_sdr else "128")
     
     qvbr = DEFAULT_QVBR_8K if h >= 4320 else DEFAULT_QVBR_4K if h >= 2160 else DEFAULT_QVBR_1080P
 
@@ -798,7 +870,7 @@ if __name__ == "__main__":
         crop_params=(crop_w, crop_h, crop_x, crop_y),
         audio_streams=run_ffprobe_for_audio_streams(first_file),
         default_qvbr=qvbr,
-        default_hdr=not is_hdr,
+        is_source_sdr=is_sdr,
         input_width=w,
         input_height=h,
         frame_rate=frame_rate

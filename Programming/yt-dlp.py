@@ -8,7 +8,8 @@ in one of two modes: Download or Text Extraction. It can also update its own dep
 
 1.  **Download Mode (Default):** Intelligently detects if a URL is video or an image
     gallery and uses the appropriate tool to download the media files in parallel.
-    By default, this mode now also saves the full, raw metadata to a .json file.
+    This mode now automatically detects if an input is a text file and treats it as a
+    batch file of URLs. By default, it also saves the full, raw metadata to a .json file.
 2.  **Text Extraction Mode (`--extract-text`):** Extracts and saves the clean text
     (descriptions, captions, tweets) associated with a URL to a `.txt` file.
 3.  **Update Mode (`--update`):** Updates `yt-dlp` and `gallery-dl` to their latest
@@ -38,6 +39,7 @@ fail during processing are logged to a specified error file for easy retries.
 - **v9.0 (Error Logging):** Added `--output-errors` (`-oE`).
 - **v10.0 (Self-Updating):** Added the `--update` (`-U`) flag.
 - **v11.0 (Streaming Worker Architecture):** Re-architected to a "Streaming Worker" model for higher throughput and implemented an enhanced two-file logging system.
+- **v12.0 (Intuitive CLI):** Re-assigned `-a` to audio and implemented automatic batch file detection.
 
 ---
 ## Usage
@@ -45,15 +47,21 @@ fail during processing are logged to a specified error file for easy retries.
 **To Update Dependencies:**
     python3 downloader.py -U
 
-**To Download Media Files (and Text Metadata):**
+**To Download Media Files (and Text Metadata) from a single URL:**
     python3 downloader.py <URL> [OPTIONS]
+
+**To Download Audio from a single URL:**
+    python3 downloader.py -a <URL>
+
+**To Batch Download from a file:**
+    python3 downloader.py my_urls.txt
 
 **To Extract Only Clean Text:**
     python3 downloader.py <URL> -E
 
 ### URL Input (Required unless updating)
-    URL                     The URL of the content to download or extract.
-    -a, --batch-file FILE   Path to a text file containing URLs.
+    INPUT...                One or more URLs or file paths. The script automatically
+                            detects if an input is a file and reads URLs from it.
 
 ### General Options
 | Flag | Short | Description |
@@ -68,7 +76,7 @@ fail during processing are logged to a specified error file for easy retries.
 | Flag | Short | Description |
 | :--- | :--- | :--- |
 | `--video` | `-v` | Download video (best quality, MP4). |
-| `--audio` | `-A` | Download audio-only (best quality, MP3). |
+| `--audio-only`| `-a` | Download audio-only (best quality, MP3). |
 | `--srt` | `-s` | Download subtitles (SRT format). |
 | `--thumbnail` | `-t` | Download video thumbnail image. |
 | `--metadata` | `-m` | Download video metadata to a `.json` file (this is now the default behavior). |
@@ -1095,8 +1103,7 @@ def main():
     mode_group.add_argument("-E", "--extract-text", action="store_true", help="Switches to Text Extraction Mode. Extracts text to a .txt file.")
     
     input_group = parser.add_argument_group('URL Input (Required unless updating)')
-    input_group.add_argument("url", nargs='?', help="The URL of the content to download or extract.")
-    input_group.add_argument("-a", "--batch-file", type=str, help="Path to a text file containing URLs.")
+    input_group.add_argument("inputs", nargs='*', default=[], help="One or more URLs or paths to text files containing URLs.")
     
     general_group = parser.add_argument_group('General Options')
     general_group.add_argument("-L", "--log-file", type=str, default="processing_log.txt", help="File to save a verbose, timestamped log (default: processing_log.txt).")
@@ -1105,7 +1112,7 @@ def main():
     
     ytdlp_group = parser.add_argument_group('yt-dlp Options (for video content in Download Mode)')
     ytdlp_group.add_argument("-v", "--video", action="store_true", help="Download video (MP4).")
-    ytdlp_group.add_argument("-A", "--audio", dest="audio_only", action="store_true", help="Download audio-only (MP3).")
+    ytdlp_group.add_argument("-a", "--audio-only", dest="audio_only", action="store_true", help="Download audio-only (MP3).")
     ytdlp_group.add_argument("-s", "--srt", action="store_true", help="Download subtitles (SRT).")
     ytdlp_group.add_argument("-t", "--thumbnail", action="store_true", help="Download video thumbnail.")
     ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json) (default).")
@@ -1123,21 +1130,25 @@ def main():
     if args.update:
         run_updates()
 
-    if not args.url and not args.batch_file: parser.error("Either a URL or a batch file must be provided for this mode.")
-    if args.url and args.batch_file: parser.error("Cannot specify both a URL and a batch file.")
+    if not args.inputs:
+        parser.error("At least one input (URL or file path) is required for this mode.")
 
     signal.signal(signal.SIGINT, signal_handler)
 
     urls_to_process = []
-    if args.batch_file:
-        try:
-            with open(args.batch_file, 'r', encoding='utf-8') as f:
-                urls_to_process = [line.strip() for line in f if line.strip() and not line.strip().startswith(('#', ';', ']'))]
-            if not urls_to_process: print(f"❌ No valid URLs found in batch file: {args.batch_file}"); return
-        except FileNotFoundError:
-            print(f"❌ Batch file not found: {args.batch_file}"); sys.exit(1)
-    else:
-        urls_to_process.append(args.url)
+    for item in args.inputs:
+        if os.path.isfile(item):
+            try:
+                with open(item, 'r', encoding='utf-8') as f:
+                    urls_to_process.extend([line.strip() for line in f if line.strip() and not line.strip().startswith(('#', ';', ']'))])
+            except Exception as e:
+                print(f"❌ Error reading batch file '{item}': {e}", file=sys.stderr)
+        else:
+            urls_to_process.append(item)
+    
+    if not urls_to_process:
+        print("❌ No valid URLs were found from the provided inputs. Exiting.", file=sys.stderr)
+        sys.exit(1)
     
     is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.metadata, args.g_write_metadata])
     args.default_download = not is_any_specific_flag
