@@ -1,7 +1,7 @@
 # =================================================================================================
 #
 #                                  NVEncC AV1 Batch Processor
-#                                          Version: 5.1 (Color-Aware Update)
+#                                          Version: 5.2 (Bugfix Update)
 #
 # =================================================================================================
 """
@@ -10,7 +10,8 @@
 ---------------------------------------------------------------------------------------------------
 **IMPORTANT**: This documentation block is an integral part of the script and is **mandatory**
 to review and update with each new version. It must accurately reflect the current codebase,
-features, design philosophy, and change history.
+features, design philosophy, and change history. All future updates to this script MUST include
+corresponding updates to this documentation.
 
 ---------------------------------------------------------------------------------------------------
  I. OVERVIEW
@@ -50,7 +51,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 - Comprehensive Logging: For each video processed, a detailed log file is created containing
   a full summary, all user-selected settings (in JSON format for clarity), source file analysis,
   the exact command used, and the full console output from the encoder.
-- **Color-Aware Processing (New in v5.1):**
+- Color-Aware Processing:
     - Automatically detects if the source video is SDR or HDR.
     - GUI defaults to "Auto (Match Source)" to produce SDR from SDR and HDR from HDR, preventing
       accidental color space mismatches.
@@ -106,6 +107,14 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
      rate matching the detected source rate. This is the primary fix for audio desynchronization
      issues found in Variable Frame Rate (VFR) source files. The `--fps` flag is used specifically
      for compatibility with older NVEncC versions (e.g., 9.x), as newer versions use `--vpp-fps`.
+   - **`--profile main` Omission (v5.2 Workaround):** Through extensive testing, a bug was
+     identified in the pre-release NVEncC v9.03 executable. When `--profile main` is explicitly
+     set on the command line for an HDR AV1 encode, it forces the entire video processing pipeline
+     into a faulty 8-bit mode (evidenced by a `cspconv(p010 -> yv12)` filter). By **omitting** this
+     flag, NVEncC's auto-detection logic correctly selects the `main` profile while engaging the
+     proper 10-bit pipeline (using a high-precision 16-bit intermediate for filters). Therefore,
+     this flag has been removed from the command to ensure correct 10-bit HDR output with the
+     affected NVEncC version.
 
 4. SAMPLE GENERATION:
    - To guarantee samples are accurate previews, the script first uses FFmpeg to create a
@@ -116,7 +125,17 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 ---------------------------------------------------------------------------------------------------
  V. CHANGE HISTORY
 ---------------------------------------------------------------------------------------------------
-- **v5.1 (Current):**
+- **v5.2 (Current - Bugfix):**
+    - Removed explicit `--profile main` flag from the NVEncC command.
+    - **Reason:** A bug was discovered in the user's pre-release NVEncC v9.03 executable where
+      explicitly setting this flag incorrectly forced 10-bit HDR video into an 8-bit conversion
+      pipeline. Omitting the flag allows the encoder to auto-select the correct profile while
+      maintaining the high-precision 10-bit path, resolving the issue.
+    - The issue was identified through a methodical, subtractive elimination process using
+      a series of direct command-line tests.
+    - Updated documentation to reflect the findings and the rationale for the flag's removal.
+
+- **v5.1:**
     - Implemented robust color space detection (SDR/HDR).
     - Reworked the GUI to be "color-aware," with a new "Output Color Space" selection:
       'Auto (Match Source)', 'Force HDR', and 'Force SDR'.
@@ -156,7 +175,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "5.1"
+SCRIPT_VERSION = "5.2"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -609,7 +628,8 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
         NVENC_EXECUTABLE, "--codec", "av1", "--preset", ENCODER_PRESET, "--output-depth", "10",
         "--gop-len", settings["gop_len"], "--metadata", "copy", "--chapter-copy",
         "--bframes", "4", "--tf-level", "4", "--max-bitrate", "100000",
-        "--split-enc", "disable", "--profile", "main", "--aq", "--aq-temporal",
+        "--split-enc", "disable", # "--profile", "main", <-- [v5.2] Removed to fix 10-bit bug in NVEncC 9.03
+        "--aq", "--aq-temporal",
         "--aq-strength", AQ_STRENGTH, "--lookahead", LOOKAHEAD
     ]
     command.append("--avhw" if settings["decode_mode"] == "Hardware" else "--avsw")
