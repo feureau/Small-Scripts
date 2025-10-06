@@ -28,6 +28,24 @@ and clear. The goal is to not only explain *what* the script does, but *why* it 
 in a particular way, especially in relation to YouTube's encoding standards.
 
 ----------------------------------------------------------------------------------------------------
+                        DEVELOPER'S PLEDGE AND CHANGELOG
+----------------------------------------------------------------------------------------------------
+This script's documentation is considered an integral part of the codebase. It is a
+living document that must be maintained with the same care as the code itself.
+
+Before committing any changes to this script, you must complete the following checklist:
+
+[ ] 1. Have you tested the functional code changes and confirmed they work as expected?
+[ ] 2. Have you located the section(s) in the documentation that describe the feature you modified?
+[ ] 3. Have you updated those sections to reflect the new logic, parameters, or behavior?
+[ ] 4. Have you explained not just *what* changed, but *why* the change was necessary?
+[ ] 5. Have you added an entry to the changelog below?
+
+Failure to update this documentation with every code change is a failure of the change itself.
+
+
+
+----------------------------------------------------------------------------------------------------
                                     COMMAND-LINE ARGUMENTS
 ----------------------------------------------------------------------------------------------------
 This script can be configured with flags when run from a command prompt or terminal.
