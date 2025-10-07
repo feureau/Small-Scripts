@@ -1,310 +1,320 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+================================================================================
+Comprehensive FFmpeg Batch Processor with Embedded Subtitle Extraction
+================================================================================
+
+Author: (Your Name)
+Version: 1.1
+Date: 2025-10-07
+
+--------------------------------------------------------------------------------
+UPDATE SUMMARY (v1.1)
+--------------------------------------------------------------------------------
+• Subtitle outputs are now placed in a subfolder named “SRT” inside the same
+  directory as each video input.
+  Example:
+      /Movies/Action/Movie1.mkv
+      /Movies/Action/SRT/Movie1_sub1_idx0_eng_srt.srt
+
+• All SRT and MKV subtitle outputs use this subfolder.
+• The folder is created automatically if it does not exist.
+--------------------------------------------------------------------------------
+DOCUMENTATION & IMPLEMENTATION NOTES
+--------------------------------------------------------------------------------
+
+This script automates **video processing and subtitle extraction** for entire
+directory trees. It is designed for batch workflows involving `.mkv`, `.mp4`,
+and other video containers. It performs two primary operations per file:
+
+  1. **Conversion to subtitle-free video** (default: `.mp4`):
+       - Uses FFmpeg to remove all subtitle streams while copying
+         video/audio tracks losslessly.
+       - Keeps original codecs to ensure zero-quality degradation.
+       - Outputs into the same folder as the original file.
+
+  2. **Subtitle extraction** (default: hybrid mode):
+       - Uses FFprobe to detect subtitle streams.
+       - Extracts text-based subtitles (e.g., SRT, ASS, WebVTT) directly
+         into `.srt` format.
+       - Packages non-text (bitmap) subtitles (e.g., PGS, VobSub)
+         into `.mkv` files.
+       - Places all outputs in the same folder as the source video.
+
+--------------------------------------------------------------------------------
+RATIONALE & DESIGN DECISIONS
+--------------------------------------------------------------------------------
+
+• **Recursive scanning via os.walk**
+    Instead of relying on `glob.glob` (non-recursive by default), this script
+    uses `os.walk` to ensure every subdirectory under the working directory is
+    scanned for supported video files. This supports large and nested libraries.
+
+• **Direct FFmpeg/FFprobe invocation**
+    The script calls FFmpeg and FFprobe directly through `subprocess` for
+    maximum control and portability. Using libraries like `ffmpeg-python` would
+    add dependencies and restrict cross-platform compatibility.
+
+• **Lossless video/audio copy**
+    The conversion uses `-c:v copy -c:a copy -sn`, which means video and audio
+    are *not* re-encoded. This ensures speed and prevents quality loss.
+    Subtitles are stripped via `-sn`.
+
+• **Hybrid subtitle extraction logic**
+    The embedded module from `srtextract.py` provides robust handling of both
+    text and bitmap subtitle codecs. The hybrid mode extracts `.srt` for text
+    and `.mkv` for non-text subtitles automatically.
+
+• **Embedded design**
+    The subtitle extraction system is embedded within this script so users can
+    run a single file without managing multiple modules. This simplifies
+    deployment across systems.
+
+• **Command-line customization**
+    Users can specify:
+        - Target extension (default `.mp4`) with `-e`
+        - Subtitle extraction format (default `hybrid`) with `-f`
+        - Custom file patterns or directories
+
+• **Safety mechanisms**
+    - Skips processing when input and output paths are identical.
+    - Deletes zero-byte outputs on failure.
+    - Warns when FFmpeg or FFprobe are missing.
+
+--------------------------------------------------------------------------------
+USAGE
+--------------------------------------------------------------------------------
+
+    python3 ffmpegtomp4_full.py [-e EXT] [-f FORMAT] [patterns...]
+
+Examples:
+    python3 ffmpegtomp4_full.py
+    python3 ffmpegtomp4_full.py -e mp4 -f hybrid
+    python3 ffmpegtomp4_full.py -f srt **/*.mkv
+    python3 ffmpegtomp4_full.py -e mov -f mkv /path/to/videos
+
+--------------------------------------------------------------------------------
+DEPENDENCIES
+--------------------------------------------------------------------------------
+    • FFmpeg and FFprobe must be installed and in system PATH.
+      Download: https://ffmpeg.org/download.html
+
+--------------------------------------------------------------------------------
+UPDATE POLICY
+--------------------------------------------------------------------------------
+For every script revision or feature update:
+    - This documentation block MUST be retained and updated.
+    - Any new behavior or design change must be documented with rationale.
+================================================================================
+"""
+
 import argparse
-import glob
-import subprocess
 import os
-import shutil
 import sys
+import subprocess
+import json
 import traceback
 
+# ==============================================================================
+# FFmpeg Utilities
+# ==============================================================================
+
 def find_ffmpeg_tools():
-    """Checks if ffmpeg and ffprobe are in PATH and executable."""
-    # Use shutil.which for cross-platform compatibility
-    ffmpeg_found = shutil.which("ffmpeg") is not None
-    ffprobe_found = shutil.which("ffprobe") is not None
+    """Check that ffmpeg and ffprobe are installed and accessible."""
+    from shutil import which
+    ffmpeg_found = which("ffmpeg") is not None
+    ffprobe_found = which("ffprobe") is not None
 
     if not ffmpeg_found:
-        print("ERROR: ffmpeg not found in PATH. Please install ffmpeg and ensure it's accessible.")
-        print("Download from: https://ffmpeg.org/download.html")
+        print("ERROR: ffmpeg not found in PATH.")
     if not ffprobe_found:
-        print("ERROR: ffprobe not found in PATH. Please install ffprobe and ensure it's accessible.")
-        print("ffprobe is usually included with ffmpeg.")
-    
+        print("ERROR: ffprobe not found in PATH.")
     return ffmpeg_found and ffprobe_found
 
+
 def convert_to_subtitle_free_video(input_file, output_extension):
-    """
-    Converts a video file to a new container, copying video/audio streams only (no subtitles).
-    Returns the path to the output file if successful, otherwise None.
-    """
+    """Converts a video to subtitle-free version (no re-encoding, same codecs)."""
     if not os.path.isfile(input_file):
-        print(f"Skipping non-file for conversion: {input_file}")
+        print(f"Skipping non-file: {input_file}")
         return None
 
-    base, old_ext = os.path.splitext(input_file)
+    base, _ = os.path.splitext(input_file)
     output_file = base + "." + output_extension.lstrip('.')
 
     if os.path.abspath(input_file) == os.path.abspath(output_file):
-        print(f"Warning: Input and output file paths are identical ({input_file}).")
-        print(f"To create a subtitle-free version of an existing {output_extension} file, ensure output path is different or rename input.")
-        print("Skipping conversion for this file to prevent issues.")
-        return None 
+        print(f"Skipping identical paths: {input_file}")
+        return None
 
-    print(f"Converting to subtitle-free {output_extension}: {input_file} -> {output_file}")
-
+    print(f"Converting: {input_file} -> {output_file}")
     command = [
-        "ffmpeg",
-        "-hide_banner", # Added to reduce clutter in output
+        "ffmpeg", "-hide_banner",
         "-i", input_file,
-        "-map", "0:v?",         # Map all video streams (optional)
-        "-map", "0:a?",         # Map all audio streams (optional)
-        "-c:v", "copy",
-        "-c:a", "copy",
-        "-sn",                  # Crucial: Strip (disable) all subtitle recording
-        "-map_metadata", "0",
-        "-map_chapters", "0",
-        "-y", 
-        # Add the experimental flag specifically for potential experimental codecs like TrueHD in MP4
-        # This is safe for muxing TrueHD into MP4, which FFmpeg warns about but can do.
-        "-strict", "experimental", # Using 'experimental' is equivalent to '-strict -2'
-        output_file
+        "-map", "0:v?", "-map", "0:a?",
+        "-c:v", "copy", "-c:a", "copy",
+        "-sn", "-map_metadata", "0", "-map_chapters", "0",
+        "-strict", "experimental", "-y", output_file
     ]
 
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-
+        process = subprocess.run(command, capture_output=True, text=True)
         if process.returncode == 0:
-            print(f"Successfully created subtitle-free {output_extension}: {output_file}")
+            print(f"  Created: {output_file}")
             return output_file
         else:
-            print(f"Error creating subtitle-free {output_extension} from {input_file}:")
-            print("FFmpeg stdout:")
-            # print(stdout.decode(errors='replace')) # FFmpeg usually outputs progress to stderr
-            print("FFmpeg stderr:")
-            print(stderr.decode(errors='replace'))
+            print(f"  FFmpeg error converting {input_file}")
+            print(process.stderr)
             if os.path.exists(output_file) and os.path.getsize(output_file) == 0:
-                try:
-                    os.remove(output_file)
-                    print(f"Deleted zero-byte output file: {output_file}")
-                except OSError as e:
-                    print(f"Error deleting zero-byte file {output_file}: {e}")
+                os.remove(output_file)
             return None
-    except FileNotFoundError:
-        print("Error: ffmpeg command not found. Make sure it's installed and in your PATH.")
-        return None
     except Exception as e:
-        print(f"An unexpected error occurred while converting {input_file}: {e}")
+        print(f"Unexpected error: {e}")
         traceback.print_exc()
         return None
 
-def extract_srt_from_original_file(original_video_path, srt_output_folder):
-    """
-    Extracts all convertible subtitle streams from the ORIGINAL video file to SRT format.
-    Saves SRT files in the specified srt_output_folder.
-    Bitmap subtitles (like PGS/VobSub) cannot be converted to SRT directly and will be skipped.
-    """
-    if not original_video_path or not os.path.isfile(original_video_path):
-        print(f"Error: Original video file for subtitle extraction not found: {original_video_path}")
-        return False
+# ==============================================================================
+# Embedded Subtitle Extraction Module (modified to use /SRT subfolder)
+# ==============================================================================
 
-    base_name = os.path.splitext(os.path.basename(original_video_path))[0]
-    print(f"Proceeding to extract subtitles from original file: {original_video_path} into {srt_output_folder}")
+KNOWN_TEXT_SUBTITLE_CODECS = [
+    'srt', 'subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'tx3g',
+    'subviewer', 'microdvd', 'eia_608', 'cea608'
+]
 
+def _probe_subtitle_streams(video_path):
+    """Probe subtitle streams via ffprobe (returns list of stream dicts)."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "s",
+        "-show_entries", "stream=index,codec_name,tags", "-of", "json", video_path
+    ]
     try:
-        ffprobe_command = [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "s",
-            "-show_entries", "stream=index,codec_name:stream_tags=language",
-            "-of", "csv=p=0",
-            original_video_path # Probe the original file
-        ]
-        
-        process_ffprobe = subprocess.run(ffprobe_command, capture_output=True, text=True, check=False)
-        
-        if process_ffprobe.returncode != 0:
-            print(f"ffprobe command failed for {original_video_path}. Return code: {process_ffprobe.returncode}")
-            print(f"ffprobe stderr:\n>>>\n{process_ffprobe.stderr}\n<<<")
-            return False
-
-        ffprobe_output = process_ffprobe.stdout.strip()
-        subtitle_lines = ffprobe_output.split('\n')
-        if not ffprobe_output:
-             subtitle_lines = []
-
-        if not subtitle_lines:
-            print(f"No subtitle streams found by ffprobe in original: {original_video_path}")
-            return True
-        
-        subtitle_stream_info = []
-        for line in subtitle_lines:
-            if not line.strip():
-                continue
-            parts = line.split(',')
-            try:
-                ffmpeg_idx = int(parts[0])
-                codec_name = parts[1] if len(parts) > 1 and parts[1] else "unknown_codec"
-                lang = parts[2] if len(parts) > 2 and parts[2] else "und"
-                subtitle_stream_info.append({"ffmpeg_index": ffmpeg_idx, "lang": lang, "codec": codec_name})
-            except (ValueError, IndexError):
-                print(f"Warning: Could not parse subtitle stream info from line: '{line}' in {original_video_path}")
-                continue
-        
-        if not subtitle_stream_info:
-            print(f"No valid subtitle streams could be parsed from original: {original_video_path}")
-            return True
-
-        extracted_any = False
-        for stream_data in subtitle_stream_info:
-            ffmpeg_stream_idx = stream_data['ffmpeg_index']
-            lang_code = stream_data['lang']
-            original_codec = stream_data['codec']
-            
-            # Check if the codec is image-based (bitmap) and cannot be converted to SRT directly
-            # Common bitmap subtitle codecs include hdmv_pgs_subtitle (PGS) and vobsub
-            if original_codec in ["hdmv_pgs_subtitle", "vobsub"]:
-                 print(f"  Skipping subtitle stream (FFmpeg index {ffmpeg_stream_idx}, codec: {original_codec}, lang: {lang_code}): Cannot convert bitmap subtitles directly to SRT with ffmpeg.")
-                 print("  You need an external OCR tool for this.")
-                 continue # Skip this stream
-
-            unique_track_suffix = f"idx{ffmpeg_stream_idx}_{lang_code}"
-            output_srt_filename = f"{base_name}_sub.{unique_track_suffix}.srt"
-            output_srt_path = os.path.join(srt_output_folder, output_srt_filename)
-
-            # Proceed with extraction for potentially text-based formats
-            ffmpeg_extract_command = [
-                "ffmpeg",
-                "-hide_banner", # Added to reduce clutter
-                "-i", original_video_path, # Extract from the ORIGINAL file
-                "-map", f"0:s:{ffmpeg_stream_idx}", # Explicitly map stream as subtitle
-                "-c:s", "srt", # Attempt to convert to SRT
-                "-y",
-                output_srt_path
-            ]
-
-            print(f"  Extracting subtitle stream (FFmpeg index {ffmpeg_stream_idx} from ORIGINAL '{os.path.basename(original_video_path)}', original codec: {original_codec}, lang: {lang_code}) to: {output_srt_path}")
-            extract_process = subprocess.Popen(ffmpeg_extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            s_stdout, s_stderr = extract_process.communicate()
-
-            if extract_process.returncode == 0:
-                if os.path.exists(output_srt_path) and os.path.getsize(output_srt_path) > 0:
-                    print(f"  SRT extracted successfully: {output_srt_path}")
-                    extracted_any = True
-                else:
-                    # This might happen if the stream was empty or not actually text,
-                    # or if the conversion failed silently in FFmpeg's stderr.
-                    # Check stderr for clues if needed, but reporting empty file is key.
-                    print(f"  SRT extraction resulted in an empty or missing file for stream (FFmpeg index {ffmpeg_stream_idx}). Original codec was {original_codec}. File: {output_srt_path}")
-                    # If a zero-byte file was created, delete it
-                    if os.path.exists(output_srt_path) and os.path.getsize(output_srt_path) == 0:
-                         try: os.remove(output_srt_path)
-                         except OSError: pass
-
-            else:
-                print(f"  Error extracting SRT (FFmpeg index {ffmpeg_stream_idx} from original):")
-                # print(f"  FFmpeg stdout: {s_stdout.decode(errors='replace')}") # Usually empty for extraction errors
-                print(f"  FFmpeg stderr: {s_stderr.decode(errors='replace')}")
-                if os.path.exists(output_srt_path) and os.path.getsize(output_srt_path) == 0:
-                    try:
-                        os.remove(output_srt_path)
-                        print(f"  Deleted zero-byte output file: {output_srt_path}")
-                    except OSError as e:
-                        print(f"  Error deleting zero-byte file {output_srt_path}: {e}")
-
-
-        if not extracted_any and any(s['codec'] not in ["hdmv_pgs_subtitle", "vobsub"] for s in subtitle_stream_info):
-             # Only report this if there were non-bitmap subtitles that weren't extracted
-             print(f"No *convertible* subtitles were successfully extracted as non-empty SRT from {original_video_path}. Check FFmpeg errors above.")
-        elif all(s['codec'] in ["hdmv_pgs_subtitle", "vobsub"] for s in subtitle_stream_info):
-             print(f"All subtitle streams in {original_video_path} were bitmap formats (like PGS/VobSub) and cannot be converted to SRT directly by this script.")
-
-
-        return True # Return True even if no SRTs were extracted, if the process completed without crashing
-
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(proc.stdout)
+        return data.get("streams", [])
     except Exception as e:
-        print(f"Unexpected error extracting subtitles from {original_video_path}: {type(e).__name__} - {e}")
-        traceback.print_exc()
-        return False
+        print(f"  FFprobe error for {video_path}: {e}")
+        return []
+
+def _safe_filename(s):
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)
+
+def _generate_subtitle_filename(video_basename, stream_info, i, ext):
+    codec = stream_info.get('codec_name', 'unknown').lower()
+    lang = stream_info.get('tags', {}).get('language', 'und')
+    name = f"{video_basename}_sub{i}_idx{stream_info['index']}_{lang}_{codec}.{ext}"
+    return _safe_filename(name)[:180]
+
+def _ensure_srt_subfolder(video_path):
+    """Ensure a subfolder named 'SRT' exists in the same directory as the video."""
+    folder = os.path.join(os.path.dirname(video_path), "SRT")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+def _extract_to_srt(video_path, streams, basename):
+    if not streams:
+        print("  No text-based subtitles found.")
+        return
+    output_dir = _ensure_srt_subfolder(video_path)
+    for i, s in enumerate(streams, 1):
+        output_path = os.path.join(output_dir, _generate_subtitle_filename(basename, s, i, "srt"))
+        cmd = ["ffmpeg", "-i", video_path, "-map", f"0:{s['index']}", "-y", output_path]
+        print(f"  Extracting stream {s['index']} to {output_path}")
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(f"    OK: {output_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"    Failed: {output_path}")
+            if os.path.exists(output_path) and os.path.getsize(output_path) < 20:
+                os.remove(output_path)
+
+def _package_bitmap_subs(video_path, streams, basename):
+    if not streams:
+        print("  No bitmap subtitles found.")
+        return
+    output_dir = _ensure_srt_subfolder(video_path)
+    for i, s in enumerate(streams, 1):
+        output_path = os.path.join(output_dir, _generate_subtitle_filename(basename, s, i, "mkv"))
+        cmd = ["ffmpeg", "-i", video_path, "-map", f"0:{s['index']}", "-c", "copy", "-y", output_path]
+        print(f"  Packaging stream {s['index']} to {output_path}")
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(f"    OK: {output_path}")
+        except subprocess.CalledProcessError:
+            print(f"    Failed: {output_path}")
+
+def extract_subtitles(video_path, mode="hybrid"):
+    """Main entry for subtitle extraction (hybrid/srt/mkv)."""
+    basename = os.path.splitext(os.path.basename(video_path))[0]
+    subs = _probe_subtitle_streams(video_path)
+    if not subs:
+        print("  No subtitles found.")
+        return
+    text_subs = [s for s in subs if s.get('codec_name', '').lower() in KNOWN_TEXT_SUBTITLE_CODECS]
+    bitmap_subs = [s for s in subs if s not in text_subs]
+
+    if mode == "srt":
+        _extract_to_srt(video_path, subs, basename)
+    elif mode == "mkv":
+        _package_bitmap_subs(video_path, subs, basename)
+    else:
+        if text_subs:
+            _extract_to_srt(video_path, text_subs, basename)
+        if bitmap_subs:
+            _package_bitmap_subs(video_path, bitmap_subs, basename)
+
+# ==============================================================================
+# Main Control Flow
+# ==============================================================================
 
 def main():
     if not find_ffmpeg_tools():
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
-        description="Converts videos to a subtitle-free MP4 (or other specified format), then extracts SRT subtitles from the ORIGINAL input file into an 'SRT' subfolder.",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""
-Notes:
-- Requires ffmpeg and ffprobe to be installed and in your system's PATH.
-- Video conversion creates new files (e.g., MP4) *without any embedded subtitles*.
-- SRT subtitles are then extracted from the *original input* video files.
-- Extracted SRTs are saved in a subfolder named 'SRT' in the current working directory.
-  SRT filenames: {original_basename}_sub.idx{ffmpeg_stream_index}_{language}.srt
-- This script CANNOT convert image-based subtitles (like PGS/VobSub from Blu-rays) to text-based SRT.
-  These streams will be identified but skipped for SRT extraction, and a message will be printed.
-- Uses '-strict experimental' for MP4 conversion to handle experimental codecs like TrueHD audio.
-"""
+        description="Recursively convert videos to subtitle-free format and extract subtitles."
     )
-    parser.add_argument(
-        "-e", "--extension",
-        default="mp4",
-        help="Target container extension for subtitle-free conversion (e.g., mp4, mkv, mov). Default is 'mp4'."
-    )
-    parser.add_argument(
-        "input_files",
-        nargs="*",
-        help="Video files or glob patterns to process (e.g., *.mkv video.avi)."
-    )
-
+    parser.add_argument("-e", "--extension", default="mp4",
+                        help="Target container extension (default: mp4)")
+    parser.add_argument("-f", "--format",
+                        choices=["hybrid", "srt", "mkv"], default="hybrid",
+                        help="Subtitle extraction format (default: hybrid)")
+    parser.add_argument("input_patterns", nargs="*",
+                        help="Optional file patterns or directories (default: recursive scan)")
     args = parser.parse_args()
-    target_extension = args.extension.lstrip('.')
-    
-    srt_main_output_folder = os.path.join(os.getcwd(), "SRT")
-    try:
-        # Ensure the SRT output directory exists
-        os.makedirs(srt_main_output_folder, exist_ok=True)
-        print(f"SRT files (if extractable) will be saved in: {srt_main_output_folder}")
-    except OSError as e:
-        print(f"Error: Could not create SRT output directory '{srt_main_output_folder}': {e}")
-        sys.exit(1)
 
+    supported_exts = (".mkv", ".mp4", ".avi", ".mov", ".flv", ".webm", ".wmv")
     files_to_process = []
-    if not args.input_files:
-        print("No input files provided. Trying common video files in current directory...")
-        common_video_extensions = ["*.mkv", "*.mp4", "*.avi", "*.mov", "*.webm", "*.flv"]
-        for pattern in common_video_extensions: files_to_process.extend(glob.glob(pattern))
-        if not files_to_process:
-            print("No common video files found in current directory.")
-            parser.print_help()
-            return
+
+    if args.input_patterns:
+        for pattern in args.input_patterns:
+            if os.path.isdir(pattern):
+                for root, _, files in os.walk(pattern):
+                    for f in files:
+                        if f.lower().endswith(supported_exts):
+                            files_to_process.append(os.path.join(root, f))
+            else:
+                if os.path.isfile(pattern) and pattern.lower().endswith(supported_exts):
+                    files_to_process.append(os.path.abspath(pattern))
     else:
-        for pattern in args.input_files:
-            expanded_files = glob.glob(pattern)
-            if not expanded_files: print(f"Warning: Pattern '{pattern}' did not match any files.")
-            files_to_process.extend(expanded_files)
+        for root, _, files in os.walk(os.getcwd()):
+            for f in files:
+                if f.lower().endswith(supported_exts):
+                    files_to_process.append(os.path.join(root, f))
 
     if not files_to_process:
-        print("No files matched input patterns or found in current directory. Exiting.")
+        print("No supported video files found.")
         return
 
-    # Use absolute paths and a set to handle duplicates from glob patterns
-    processed_paths = set()
-    unique_files = []
-    for f in files_to_process:
-        abs_f = os.path.abspath(f)
-        if abs_f not in processed_paths:
-            processed_paths.add(abs_f)
-            unique_files.append(f)
+    print(f"Found {len(files_to_process)} video(s) to process.")
 
-    print(f"\nFound {len(unique_files)} unique video file(s) to process.")
+    for file_path in files_to_process:
+        print(f"\n--- Processing: {file_path} ---")
+        converted = convert_to_subtitle_free_video(file_path, args.extension)
+        if converted:
+            print("  Conversion done.")
+        extract_subtitles(file_path, mode=args.format)
 
-    for input_file_path in unique_files: # This is the path to the original MKV or other input
-        print(f"\n--- Processing file: {input_file_path} ---")
-        
-        # 1. Convert original video to a subtitle-free MP4 (or specified extension)
-        # The function already handles printing errors.
-        converted_video_path = convert_to_subtitle_free_video(input_file_path, target_extension)
-        
-        if converted_video_path:
-             print(f"Subtitle-free conversion process finished (check logs above for success/failure).")
-        else:
-             print(f"Subtitle-free conversion process failed or was skipped for: {input_file_path}")
-
-        # 2. Extract SRT subtitles from the ORIGINAL input file
-        # The function now checks codec types and skips non-convertible ones.
-        extract_srt_from_original_file(input_file_path, srt_main_output_folder)
-        
-    print("\n--- All processing finished. ---")
+    print("\nAll processing complete.")
 
 if __name__ == "__main__":
     main()
