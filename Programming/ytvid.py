@@ -39,44 +39,16 @@ above all else.
         -   **Method:** Uses `--crop` to trim the source, then `--output-res` to resize.
         -   **Rationale:** Stable and efficient for filling a frame.
 
--   **"Pad (Fit)" Mode uses a "Pad then Final Resize" Method (v3.1+):**
-        -   **Method:** This is the most non-obvious, yet most stable, logic in the
-          script. The command chain is built by first applying the `--vpp-pad` filter
-          with calculated padding values, and then enforcing the final frame size with
-          `--output-res`.
-        -   **Rationale & Extensive Development History:** The goal of "Pad (Fit)" is to
-          resize a source video to fit *inside* a target aspect ratio and fill the
-          remaining space with black bars (letterboxing/pillarboxing). The final
-          implementation was chosen after a lengthy and difficult debugging process
-          that revealed critical, build-specific limitations of NVEncC.
-            -   *Failed Attempt #1 (The Intuitive "Resize then Pad"):* The most logical
-              approach is to first resize the video to its intermediate dimensions and
-              then add padding. This was attempted using VPP filters like:
-              `--vpp-resize width=W,height=H --vpp-pad ...`
-              **This failed with an `Unknown param "width"` error.** The root cause was
-              discovered to be the NVEncC build itself: minimal builds compiled without
-              the optional NVIDIA NPP or libplacebo libraries completely lack the
-              `width=` and `height=` parameters inside the `--vpp-resize` filter,
-              making this method impossible.
-            -   *Failed Attempt #2 (Filter Order Bug):* The next attempt involved separating
-              the commands, using `--vpp-pad` and then trying to control the resize with
-              a final `--output-res` command. This produced a visually corrupt,
-              incorrectly sized video. The logs confirmed that the `--vpp-pad` filter
-              was being applied to the *original, full-resolution source video* before
-              the final resize could occur, proving this method was unreliable due to
-              filter precedence issues.
-            -   **The Verified Solution (The Counter-Intuitive "Pad then Resize"):**
-              Extensive command-line testing revealed the definitive solution:
-              `--vpp-pad <pad_values> --output-res <final_target_WxH>`
-              This counter-intuitive order works because the NVEncC engine is intelligent.
-              When it parses the full command, it sees the final target resolution
-              from `--output-res`. It understands that to achieve this, it must
-              implicitly *pre-scale* the source video to fit within that final frame
-              *before* applying the explicit `--vpp-pad` filter. The engine essentially
-              performs an automatic letterbox resize, making this the only method that
-              is both syntactically valid for minimal builds and produces a predictable,
-              correctly sized output. This solution perfectly aligns with the script's
-              core design philosophy: **stability and predictability above all else.**
+    -   **"Pad (Fit)" Mode uses a "Pad then Final Resize" Method (v3.1+):**
+        -   **Method:** This method is tailored for minimal NVEncC builds that lack
+          `width`/`height` controls in `--vpp-resize`. The script applies `--vpp-pad`
+          first and then sets the final, correct dimensions with `--output-res`.
+        -   **Rationale & History:** This counter-intuitive "Pad then Resize" order is the
+          only one that works reliably on limited NVEncC builds. The encoder engine is
+          smart enough to see the final resolution and automatically perform an implicit
+          "letterbox" resize *before* applying the explicit `--vpp-pad` filter, resulting
+          in the correct output. This implicit resize uses the encoder's internal,
+          non-configurable scaler (e.g., Bicubic).
 
     -   **"Stretch" Mode uses a "Direct Resize" Method:**
         -   **Method:** Uses a single `--output-res` command.
@@ -94,16 +66,25 @@ above all else.
                                         CHANGELOG
 ----------------------------------------------------------------------------------------------------
 
+v3.4 (2025-10-07) - Gemini/User Collaboration
+  - REFACTOR: Implemented new settings logic. If no files are selected, changes apply
+    globally to all files. If one or more files are selected, changes apply only to
+    the selection, allowing for per-file overrides.
+  - UI/UX: App now starts with no files selected to support the new global settings mode.
+  - UI/UX: The "Pad (Fit)" mode no longer forces the upscaler GUI to "Auto". It will
+    now retain the user's selection (e.g., "SuperRes") by default.
+
+v3.3 (2025-10-07) - Gemini/User Collaboration
+  - UI/UX: Added "Select All" and "Clear Selection" buttons for easier file list management.
+
+v3.2 (2025-10-07) - Gemini/User Collaboration
+  - UI/UX: Changed default fallback scaler to "auto" instead of "Lanczos".
+  - UI/UX: Removed the GUI restriction that disabled AI upscaler options when in
+    "Pad (Fit)" mode. Note: The selected algorithm is still ignored in this mode.
+
 v3.1 (2025-10-07) - Gemini/User Collaboration
   - FIX (Definitive & Verified): Re-implemented the "Pad (Fit)" mode with the correct
-    "Pad then Final Resize" logic (`--vpp-pad` followed by `--output-res`). This is the
-    only working method for NVEncC builds compiled without NPP/libplacebo libraries.
-    This resolves all previous errors and produces the correct output resolution.
-
-v3.0 (2025-10-07) - Gemini/User Collaboration
-  - FIX (Erroneous): Attempted to fix "Pad (Fit)" using `key=value` syntax for
-    `--vpp-resize`, which failed because the user's build of NVEncC lacks the required
-    NPP/libplacebo libraries and does not support these parameters.
+    "Pad then Final Resize" logic (`--vpp-pad` followed by `--output-res`).
 """
 
 import os
@@ -211,7 +192,7 @@ class VideoProcessorApp:
         
         self.setup_gui()
         self.update_file_list(initial_files)
-        if self.file_listbox.size() > 0: self.file_listbox.select_set(0); self.on_file_select(None)
+        # self.on_file_select(None) # Do not select a file by default
     
     def setup_gui(self):
         # --- Main Window Structure ---
@@ -226,6 +207,11 @@ class VideoProcessorApp:
         self.file_listbox = tk.Listbox(listbox_frame, selectmode=tk.EXTENDED); self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.file_scrollbar = tk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.file_listbox.yview); self.file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.file_listbox.config(yscrollcommand=self.file_scrollbar.set); self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
+        
+        selection_buttons_frame = tk.Frame(file_group); selection_buttons_frame.pack(fill=tk.X, pady=(5, 0))
+        tk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
+        tk.Button(selection_buttons_frame, text="Clear Selection", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
+
         file_buttons_frame = tk.Frame(file_group); file_buttons_frame.pack(fill=tk.X, pady=(5, 0))
         tk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT, padx=(0,5))
         tk.Button(file_buttons_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=5)
@@ -272,7 +258,7 @@ class VideoProcessorApp:
         tk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
         self.rb_superres = tk.Radiobutton(upscale_frame, text="SuperRes (AI)", variable=self.upscale_algo_var, value="nvvfx-superres", command=self.apply_gui_options_to_selected_files); self.rb_superres.pack(side=tk.LEFT)
         self.rb_vsr = tk.Radiobutton(upscale_frame, text="VSR (AI)", variable=self.upscale_algo_var, value="ngx-vsr", command=self.apply_gui_options_to_selected_files); self.rb_vsr.pack(side=tk.LEFT)
-        self.rb_lanczos = tk.Radiobutton(upscale_frame, text="Lanczos (Std)", variable=self.upscale_algo_var, value="lanczos", command=self.apply_gui_options_to_selected_files); self.rb_lanczos.pack(side=tk.LEFT)
+        self.rb_auto = tk.Radiobutton(upscale_frame, text="Auto (Default)", variable=self.upscale_algo_var, value="auto", command=self.apply_gui_options_to_selected_files); self.rb_auto.pack(side=tk.LEFT)
         output_format_frame = tk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         tk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
         tk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
@@ -310,32 +296,49 @@ class VideoProcessorApp:
         self.apply_gui_options_to_selected_files()
 
     def _toggle_upscale_options(self):
-        is_pad = self.aspect_mode_var.get() == 'pad'; state = tk.DISABLED if is_pad else tk.NORMAL
-        self.rb_superres.config(state=state); self.rb_vsr.config(state=state); self.rb_lanczos.config(state=tk.NORMAL)
-        if is_pad and self.upscale_algo_var.get() in ["nvvfx-superres", "ngx-vsr"]: self.upscale_algo_var.set("lanczos")
+        # This function no longer disables any options.
         self.apply_gui_options_to_selected_files()
 
     def apply_gui_options_to_selected_files(self, event=None):
-        selected_indices = self.file_listbox.curselection();
-        if not selected_indices: return
-        options_state = { "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(), "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(), "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(), "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(), "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get() }
-        for index in selected_indices: self.file_options[self.file_list[index]] = options_state
+        selected_indices = self.file_listbox.curselection()
+        
+        # Capture the current state of the GUI
+        options_state = {
+            "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
+            "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
+            "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(),
+            "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(),
+            "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+            "horizontal_aspect": self.horizontal_aspect_var.get(),
+            "vertical_aspect": self.vertical_aspect_var.get()
+        }
+
+        # If nothing is selected, we are in "Global Mode"
+        if not selected_indices:
+            target_indices = range(len(self.file_list))
+        else: # Otherwise, we are in "Per-File Mode"
+            target_indices = selected_indices
+        
+        for index in target_indices:
+            self.file_options[self.file_list[index]] = options_state
 
     def update_file_list(self, files):
         for file_path in files:
             if file_path not in self.file_list:
                 self.file_list.append(file_path); self.file_listbox.insert(tk.END, os.path.basename(file_path)); self.subtitles_by_file[file_path] = []
                 self.detect_subtitle_tracks(file_path)
+                # Initialize with current global settings
                 self.file_options[file_path] = { "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(), "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(), "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(), "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(), "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get() }
 
     def on_file_select(self, event):
         sel = self.file_listbox.curselection()
+        # If one or more files are selected, update the GUI to reflect the first selected file's settings
         if sel:
             selected_file = self.file_list[sel[0]]
             if selected_file in self.file_options:
                 options = self.file_options[selected_file]
                 self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT)); self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)); self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.alignment_var.set(options.get("alignment", DEFAULT_SUBTITLE_ALIGNMENT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS)); self.generate_log_var.set(options.get("generate_log", False))
-                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options() 
+                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options()
         self.refresh_subtitle_list()
 
     def build_nvenc_command_and_run(self, file_path, orientation, ass_burn=None):
@@ -386,9 +389,6 @@ class VideoProcessorApp:
                 pad_l = (total_pad_w // 2) - ((total_pad_w // 2) % 2); pad_r = total_pad_w - pad_l
                 pad_t = (total_pad_h // 2) - ((total_pad_h // 2) % 2); pad_b = total_pad_h - pad_t
 
-                # This is the only working method for minimal NVEncC builds.
-                # The VPP pad filter is added first, then the final resolution is enforced.
-                # NVEncC automatically inserts the required pre-resize operation.
                 if pad_l > 0 or pad_t > 0 or pad_r > 0 or pad_b > 0:
                     cmd.extend(["--vpp-pad", f"{pad_l},{pad_t},{pad_r},{pad_b}"])
                 cmd.extend(["--output-res", f"{target_width}x{target_height}"])
@@ -437,6 +437,7 @@ class VideoProcessorApp:
         self.output_mode = self.output_mode_var.get(); orientation_mode = self.orientation_var.get()
         print("\n" + "="*80 + "\n--- Starting processing with the following settings ---")
         try:
+            # Display settings of the first file as a representative sample
             options = self.file_options.get(self.file_list[0], {})
             print(f"  Output Mode: {self.output_mode}"); print(f"  Orientation: {orientation_mode}"); print(f"  Resolution: {options.get('resolution')}"); print(f"  Aspect Handling: {options.get('aspect_mode')}")
             if "horizontal" in orientation_mode: print(f"  Horizontal Aspect: {options.get('horizontal_aspect')}")
@@ -482,10 +483,8 @@ class VideoProcessorApp:
     def add_files(self):
         files = filedialog.askopenfilenames(title="Select Video Files", filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")])
         self.update_file_list(files)
-        if self.file_listbox.size() > 0 and not self.file_listbox.curselection(): self.file_listbox.select_set(0); self.on_file_select(None)
     def handle_file_drop(self, event):
         files = self.root.tk.splitlist(event.data); self.update_file_list(files)
-        if self.file_listbox.size() > 0 and not self.file_listbox.curselection(): self.file_listbox.select_set(0); self.on_file_select(None)
     def remove_selected(self):
         selected_indices = list(self.file_listbox.curselection())
         for index in reversed(selected_indices):
@@ -496,6 +495,12 @@ class VideoProcessorApp:
         self.refresh_subtitle_list()
     def clear_all(self):
         self.file_list.clear(); self.file_listbox.delete(0, tk.END); self.subtitles_by_file.clear(); self.file_options.clear(); self.refresh_subtitle_list()
+    def select_all_files(self):
+        self.file_listbox.select_set(0, tk.END)
+        self.on_file_select(None)
+    def clear_file_selection(self):
+        self.file_listbox.select_clear(0, tk.END)
+        self.on_file_select(None)
     def detect_subtitle_tracks(self, file_path): pass
     def add_external_srt(self): pass
     def remove_selected_srt(self): pass
