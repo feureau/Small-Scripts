@@ -66,25 +66,19 @@ above all else.
                                         CHANGELOG
 ----------------------------------------------------------------------------------------------------
 
+v3.5 (2025-10-08) - Gemini/User Collaboration
+  - FEATURE: Added "Original" orientation mode. This mode preserves the source video's
+    exact dimensions and aspect ratio, bypassing all crop/pad/resize logic.
+  - FEATURE: When "Original" mode is active, the bitrate is automatically selected
+    based on the source resolution (e.g., a 1080p source uses the "HD" bitrate).
+  - UI/UX: The "Resolution" and "Upscale Algo" GUI controls are now disabled when
+    "Original" orientation is selected, as they are not applicable.
+
 v3.4 (2025-10-07) - Gemini/User Collaboration
   - REFACTOR: Implemented new settings logic. If no files are selected, changes apply
-    globally to all files. If one or more files are selected, changes apply only to
-    the selection, allowing for per-file overrides.
+    globally. If files are selected, changes apply only to the selection.
   - UI/UX: App now starts with no files selected to support the new global settings mode.
-  - UI/UX: The "Pad (Fit)" mode no longer forces the upscaler GUI to "Auto". It will
-    now retain the user's selection (e.g., "SuperRes") by default.
-
-v3.3 (2025-10-07) - Gemini/User Collaboration
-  - UI/UX: Added "Select All" and "Clear Selection" buttons for easier file list management.
-
-v3.2 (2025-10-07) - Gemini/User Collaboration
-  - UI/UX: Changed default fallback scaler to "auto" instead of "Lanczos".
-  - UI/UX: Removed the GUI restriction that disabled AI upscaler options when in
-    "Pad (Fit)" mode. Note: The selected algorithm is still ignored in this mode.
-
-v3.1 (2025-10-07) - Gemini/User Collaboration
-  - FIX (Definitive & Verified): Re-implemented the "Pad (Fit)" mode with the correct
-    "Pad then Final Resize" logic (`--vpp-pad` followed by `--output-res`).
+  - UI/UX: The "Pad (Fit)" mode no longer forces the upscaler GUI to "Auto".
 """
 
 import os
@@ -108,7 +102,7 @@ LUT_FILE_PATH = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\N
 DEFAULT_RESOLUTION = "4k"
 DEFAULT_UPSCALE_ALGO = "nvvfx-superres"
 DEFAULT_OUTPUT_FORMAT = "sdr"
-DEFAULT_ORIENTATION = "horizontal"
+DEFAULT_ORIENTATION = "original"
 DEFAULT_ASPECT_MODE = "crop"
 DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
@@ -192,7 +186,6 @@ class VideoProcessorApp:
         
         self.setup_gui()
         self.update_file_list(initial_files)
-        # self.on_file_select(None) # Do not select a file by default
     
     def setup_gui(self):
         # --- Main Window Structure ---
@@ -231,6 +224,7 @@ class VideoProcessorApp:
         tk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options).pack(side=tk.LEFT)
         tk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
         tk.Radiobutton(orientation_frame, text="Horizontal + Vertical", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
+        tk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options).pack(side=tk.LEFT)
 
         self.aspect_ratio_frame = tk.LabelFrame(geometry_group, text="Aspect Ratio", padx=10, pady=5); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         self.horizontal_rb_frame = tk.Frame(self.aspect_ratio_frame)
@@ -244,16 +238,16 @@ class VideoProcessorApp:
 
         aspect_handling_frame = tk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X)
         tk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        tk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        tk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        self.rb_crop = tk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options); self.rb_crop.pack(side=tk.LEFT)
+        self.rb_pad = tk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options); self.rb_pad.pack(side=tk.LEFT)
+        self.rb_stretch = tk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options); self.rb_stretch.pack(side=tk.LEFT)
 
         quality_group = tk.LabelFrame(right_frame, text="Format & Quality", padx=10, pady=10); quality_group.pack(fill=tk.X, pady=10)
         resolution_options_frame = tk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
         tk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        tk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        tk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        self.rb_hd = tk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=self.apply_gui_options_to_selected_files); self.rb_hd.pack(side=tk.LEFT)
+        self.rb_4k = tk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=self.apply_gui_options_to_selected_files); self.rb_4k.pack(side=tk.LEFT)
+        self.rb_8k = tk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=self.apply_gui_options_to_selected_files); self.rb_8k.pack(side=tk.LEFT)
         upscale_frame = tk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         tk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
         self.rb_superres = tk.Radiobutton(upscale_frame, text="SuperRes (AI)", variable=self.upscale_algo_var, value="nvvfx-superres", command=self.apply_gui_options_to_selected_files); self.rb_superres.pack(side=tk.LEFT)
@@ -289,20 +283,44 @@ class VideoProcessorApp:
         self._toggle_orientation_options(); self._toggle_upscale_options()
 
     def _toggle_orientation_options(self):
-        orientation = self.orientation_var.get(); self.horizontal_rb_frame.pack_forget(); self.vertical_rb_frame.pack_forget()
-        if orientation == "horizontal": self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio"); self.horizontal_rb_frame.pack(fill="x")
-        elif orientation == "vertical": self.aspect_ratio_frame.config(text="Vertical Aspect Ratio"); self.vertical_rb_frame.pack(fill="x")
-        elif orientation == "horizontal + vertical": self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)"); self.horizontal_rb_frame.pack(fill="x", pady=(0, 5)); self.vertical_rb_frame.pack(fill="x")
+        orientation = self.orientation_var.get()
+        self.horizontal_rb_frame.pack_forget()
+        self.vertical_rb_frame.pack_forget()
+
+        # Define lists of widgets to manage
+        resolution_widgets = [self.rb_hd, self.rb_4k, self.rb_8k]
+        upscale_widgets = [self.rb_superres, self.rb_vsr, self.rb_auto]
+        aspect_handling_widgets = [self.rb_crop, self.rb_pad, self.rb_stretch]
+
+        # Default state: enable all controls
+        for widget_list in [resolution_widgets, upscale_widgets, aspect_handling_widgets]:
+            for widget in widget_list:
+                widget.config(state="normal")
+        
+        if orientation == "horizontal":
+            self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio")
+            self.horizontal_rb_frame.pack(fill="x")
+        elif orientation == "vertical":
+            self.aspect_ratio_frame.config(text="Vertical Aspect Ratio")
+            self.vertical_rb_frame.pack(fill="x")
+        elif orientation == "horizontal + vertical":
+            self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)")
+            self.horizontal_rb_frame.pack(fill="x", pady=(0, 5))
+            self.vertical_rb_frame.pack(fill="x")
+        elif orientation == "original":
+            self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
+            # Disable irrelevant controls for "Original" mode
+            for widget_list in [resolution_widgets, upscale_widgets, aspect_handling_widgets]:
+                for widget in widget_list:
+                    widget.config(state="disabled")
+
         self.apply_gui_options_to_selected_files()
 
     def _toggle_upscale_options(self):
-        # This function no longer disables any options.
         self.apply_gui_options_to_selected_files()
 
     def apply_gui_options_to_selected_files(self, event=None):
         selected_indices = self.file_listbox.curselection()
-        
-        # Capture the current state of the GUI
         options_state = {
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
             "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
@@ -312,13 +330,7 @@ class VideoProcessorApp:
             "horizontal_aspect": self.horizontal_aspect_var.get(),
             "vertical_aspect": self.vertical_aspect_var.get()
         }
-
-        # If nothing is selected, we are in "Global Mode"
-        if not selected_indices:
-            target_indices = range(len(self.file_list))
-        else: # Otherwise, we are in "Per-File Mode"
-            target_indices = selected_indices
-        
+        target_indices = selected_indices if selected_indices else range(len(self.file_list))
         for index in target_indices:
             self.file_options[self.file_list[index]] = options_state
 
@@ -327,12 +339,10 @@ class VideoProcessorApp:
             if file_path not in self.file_list:
                 self.file_list.append(file_path); self.file_listbox.insert(tk.END, os.path.basename(file_path)); self.subtitles_by_file[file_path] = []
                 self.detect_subtitle_tracks(file_path)
-                # Initialize with current global settings
                 self.file_options[file_path] = { "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(), "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(), "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(), "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(), "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get() }
 
     def on_file_select(self, event):
         sel = self.file_listbox.curselection()
-        # If one or more files are selected, update the GUI to reflect the first selected file's settings
         if sel:
             selected_file = self.file_list[sel[0]]
             if selected_file in self.file_options:
@@ -342,9 +352,12 @@ class VideoProcessorApp:
         self.refresh_subtitle_list()
 
     def build_nvenc_command_and_run(self, file_path, orientation, ass_burn=None):
-        options = self.file_options.get(file_path, {}); resolution_mode = options.get("resolution"); output_format = options.get("output_format")
+        options = self.file_options.get(file_path, {})
+        resolution_mode = options.get("resolution", DEFAULT_RESOLUTION)
+        output_format = options.get("output_format", DEFAULT_OUTPUT_FORMAT)
         folder_name = f"{resolution_mode}_{output_format.upper()}"
         if orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
+        elif orientation == "original": folder_name += "_Original"
         else:
             horizontal_aspect = options.get('horizontal_aspect').replace(':', 'x')
             if horizontal_aspect != "16x9": folder_name += f"_Horizontal_{horizontal_aspect}"
@@ -364,55 +377,58 @@ class VideoProcessorApp:
 
     def construct_nvencc_command(self, file_path, output_file, orientation, ass_burn, options):
         info = get_video_info(file_path); cmd = ["NVEncC64", "--avhw", "--preset", "p1", "--log-level", "info"]
-        aspect_mode = options.get("aspect_mode"); resolution_key = options.get('resolution'); upscale_algo = options.get("upscale_algo")
-        if orientation == "vertical":
-            aspect_str = options.get('vertical_aspect'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
-            target_width = width_map.get(resolution_key, 1080)
-            try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
-            except: target_height = int(target_width * 16 / 9)
-        else:
-            aspect_str = options.get('horizontal_aspect'); width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
-            target_width = width_map.get(resolution_key, 1920)
-            try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
-            except: target_height = int(target_width * 9 / 16)
-        target_width = (target_width // 2) * 2; target_height = (target_height // 2) * 2
-
-        if aspect_mode == 'pad':
-            # METHOD: "Pad then Final Resize" (v3.1)
-            if info['height'] > 0 and info['width'] > 0:
-                source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height
-                if source_aspect > target_aspect: resized_w = target_width; resized_h = int(target_width / source_aspect)
-                else: resized_h = target_height; resized_w = int(target_height * source_aspect)
-                sanitized_w = resized_w - (resized_w % 2); sanitized_h = resized_h - (resized_h % 2)
-                
-                total_pad_w = target_width - sanitized_w; total_pad_h = target_height - sanitized_h
-                pad_l = (total_pad_w // 2) - ((total_pad_w // 2) % 2); pad_r = total_pad_w - pad_l
-                pad_t = (total_pad_h // 2) - ((total_pad_h // 2) % 2); pad_b = total_pad_h - pad_t
-
-                if pad_l > 0 or pad_t > 0 or pad_r > 0 or pad_b > 0:
-                    cmd.extend(["--vpp-pad", f"{pad_l},{pad_t},{pad_r},{pad_b}"])
-                cmd.extend(["--output-res", f"{target_width}x{target_height}"])
-        else:
-            cmd.extend(["--output-res", f"{target_width}x{target_height}"])
-            if aspect_mode == 'crop':
+        
+        if orientation != "original":
+            aspect_mode = options.get("aspect_mode"); resolution_key = options.get('resolution'); upscale_algo = options.get("upscale_algo")
+            if orientation == "vertical":
+                aspect_str = options.get('vertical_aspect'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                target_width = width_map.get(resolution_key, 1080)
+                try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
+                except: target_height = int(target_width * 16 / 9)
+            else:
+                aspect_str = options.get('horizontal_aspect'); width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
+                target_width = width_map.get(resolution_key, 1920)
+                try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
+                except: target_height = int(target_width * 9 / 16)
+            target_width = (target_width // 2) * 2; target_height = (target_height // 2) * 2
+            if aspect_mode == 'pad':
                 if info['height'] > 0 and info['width'] > 0:
-                    source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height; crop_str = "0,0,0,0"
-                    if source_aspect > target_aspect:
-                        new_width_in_source = int(info['height'] * target_aspect); crop_val = (info['width'] - new_width_in_source) // 2
-                        crop_val -= crop_val % 2;
-                        if crop_val > 0: crop_str = f"{crop_val},0,{crop_val},0"
-                    elif source_aspect < target_aspect:
-                        new_height_in_source = int(info['width'] / target_aspect); crop_val = (info['height'] - new_height_in_source) // 2
-                        crop_val -= crop_val % 2;
-                        if crop_val > 0: crop_str = f"0,{crop_val},0,{crop_val}"
-                    if crop_str != "0,0,0,0": cmd.extend(["--crop", crop_str])
-            resize_params = f"algo={upscale_algo}";
-            if upscale_algo == "ngx-vsr": resize_params += ",vsr-quality=1"
-            cmd.extend(["--vpp-resize", resize_params])
+                    source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height
+                    if source_aspect > target_aspect: resized_w = target_width; resized_h = int(target_width / source_aspect)
+                    else: resized_h = target_height; resized_w = int(target_height * source_aspect)
+                    sanitized_w = resized_w - (resized_w % 2); sanitized_h = resized_h - (resized_h % 2)
+                    total_pad_w = target_width - sanitized_w; total_pad_h = target_height - sanitized_h
+                    pad_l = (total_pad_w // 2) - ((total_pad_w // 2) % 2); pad_r = total_pad_w - pad_l
+                    pad_t = (total_pad_h // 2) - ((total_pad_h // 2) % 2); pad_b = total_pad_h - pad_t
+                    if pad_l > 0 or pad_t > 0 or pad_r > 0 or pad_b > 0: cmd.extend(["--vpp-pad", f"{pad_l},{pad_t},{pad_r},{pad_b}"])
+                cmd.extend(["--output-res", f"{target_width}x{target_height}"])
+            else:
+                cmd.extend(["--output-res", f"{target_width}x{target_height}"])
+                if aspect_mode == 'crop':
+                    if info['height'] > 0 and info['width'] > 0:
+                        source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height; crop_str = "0,0,0,0"
+                        if source_aspect > target_aspect:
+                            new_width_in_source = int(info['height'] * target_aspect); crop_val = (info['width'] - new_width_in_source) // 2
+                            if (crop_val := crop_val - crop_val % 2) > 0: crop_str = f"{crop_val},0,{crop_val},0"
+                        elif source_aspect < target_aspect:
+                            new_height_in_source = int(info['width'] / target_aspect); crop_val = (info['height'] - new_height_in_source) // 2
+                            if (crop_val := crop_val - crop_val % 2) > 0: crop_str = f"0,{crop_val},0,{crop_val}"
+                        if crop_str != "0,0,0,0": cmd.extend(["--crop", crop_str])
+                resize_params = f"algo={upscale_algo}";
+                if upscale_algo == "ngx-vsr": resize_params += ",vsr-quality=1"
+                cmd.extend(["--vpp-resize", resize_params])
 
         # --- Standard Encoder Settings ---
         output_format = options.get("output_format"); is_hdr_output = output_format == 'hdr'
-        bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
+        
+        if orientation == "original":
+            if info["height"] <= 1080: bitrate_res_key = "HD"
+            elif info["height"] <= 2160: bitrate_res_key = "4k"
+            else: bitrate_res_key = "8k"
+        else:
+            resolution_key = options.get('resolution', DEFAULT_RESOLUTION)
+            bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
+
         bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
         cmd.extend(["--vbr", str(bitrate_kbps), "--gop-len", str(gop_len)])
@@ -434,24 +450,22 @@ class VideoProcessorApp:
 
     def start_processing(self):
         if not self.file_list: messagebox.showwarning("No Files", "Please add at least one file to process."); return
-        self.output_mode = self.output_mode_var.get(); orientation_mode = self.orientation_var.get()
-        print("\n" + "="*80 + "\n--- Starting processing with the following settings ---")
-        try:
-            # Display settings of the first file as a representative sample
-            options = self.file_options.get(self.file_list[0], {})
-            print(f"  Output Mode: {self.output_mode}"); print(f"  Orientation: {orientation_mode}"); print(f"  Resolution: {options.get('resolution')}"); print(f"  Aspect Handling: {options.get('aspect_mode')}")
-            if "horizontal" in orientation_mode: print(f"  Horizontal Aspect: {options.get('horizontal_aspect')}")
-            if "vertical" in orientation_mode: print(f"  Vertical Aspect: {options.get('vertical_aspect')}")
-            print(f"  Upscale Algorithm: {options.get('upscale_algo')}"); print(f"  Output Format: {options.get('output_format')}")
-        except IndexError: print("  No files in list to show settings for.")
-        print("="*80 + "\n"); self.root.destroy()
+        self.output_mode = self.output_mode_var.get()
+        print("\n" + "="*80 + "\n--- Starting processing batch ---")
+        self.root.destroy()
         for file_path in self.file_list:
+            options = self.file_options.get(file_path, {})
+            orientation_mode = options.get("orientation", "horizontal")
             base_name = os.path.basename(file_path)
-            if orientation_mode == "horizontal": self.build_nvenc_command_and_run(file_path, "horizontal")
-            elif orientation_mode == "vertical": self.build_nvenc_command_and_run(file_path, "vertical")
-            elif orientation_mode == "horizontal + vertical":
-                print(f"\n--- Processing HORIZONTAL for: {base_name} ---"); self.build_nvenc_command_and_run(file_path, "horizontal")
-                print(f"\n--- Processing VERTICAL for: {base_name} ---"); self.build_nvenc_command_and_run(file_path, "vertical")
+            print("-" * 80)
+            print(f"Processing: {base_name} (Mode: {orientation_mode})")
+            if orientation_mode == "horizontal + vertical":
+                print(f"\n--- Processing HORIZONTAL for: {base_name} ---")
+                self.build_nvenc_command_and_run(file_path, "horizontal")
+                print(f"\n--- Processing VERTICAL for: {base_name} ---")
+                self.build_nvenc_command_and_run(file_path, "vertical")
+            else:
+                self.build_nvenc_command_and_run(file_path, orientation_mode)
         print("\n================== Processing Complete. ==================")
 
     def run_nvenc_command(self, cmd):
@@ -489,18 +503,15 @@ class VideoProcessorApp:
         selected_indices = list(self.file_listbox.curselection())
         for index in reversed(selected_indices):
             file_to_remove = self.file_list[index]
-            if file_to_remove in self.subtitles_by_file: del self.subtitles_by_file[file_to_remove]
-            if file_to_remove in self.file_options: del self.file_options[file_to_remove]
-            del self.file_list[index]; self.file_listbox.delete(index)
+            del self.subtitles_by_file[file_to_remove], self.file_options[file_to_remove], self.file_list[index]
+            self.file_listbox.delete(index)
         self.refresh_subtitle_list()
     def clear_all(self):
         self.file_list.clear(); self.file_listbox.delete(0, tk.END); self.subtitles_by_file.clear(); self.file_options.clear(); self.refresh_subtitle_list()
     def select_all_files(self):
-        self.file_listbox.select_set(0, tk.END)
-        self.on_file_select(None)
+        self.file_listbox.select_set(0, tk.END); self.on_file_select(None)
     def clear_file_selection(self):
-        self.file_listbox.select_clear(0, tk.END)
-        self.on_file_select(None)
+        self.file_listbox.select_clear(0, tk.END); self.on_file_select(None)
     def detect_subtitle_tracks(self, file_path): pass
     def add_external_srt(self): pass
     def remove_selected_srt(self): pass
