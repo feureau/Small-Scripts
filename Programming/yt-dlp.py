@@ -914,7 +914,20 @@ def run_download_task(task_type, identifier, title, args, original_url):
             return ("SUCCESS", f"Finished {tool_name}: {display_title}")
         else:
             error_message = stderr.strip().replace('\n', ' ')
+            # Treat these as warnings, not fatal errors
+            non_fatal_patterns = [
+                "HTTP Error 429",                        # subtitle rate-limit
+                "Too Many Requests",
+                "Unable to download video subtitles",
+                "Postprocessing: Supported filetypes for thumbnail embedding",
+                "Supported filetypes for thumbnail embedding",
+                "already been downloaded and merged"
+            ]
+            if any(p.lower() in error_message.lower() for p in non_fatal_patterns):
+                return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}")
             return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}")
+
+
             
     except Exception as e:
         return ("FAILURE", f"Error running {tool_name} for {display_title}: {e}")
@@ -1000,7 +1013,7 @@ def build_ytdlp_command(video_id, args):
         return ['--write-auto-subs', '--sub-langs', lang_code, '--convert-subs', 'srt', '--ignore-errors']
     if getattr(args, 'default_download', False):
         lang_code = args.language if args.language else 'en'
-        command_list.extend(['-f', f"bv*+ba[language={lang_code}]/b*", '--embed-thumbnail', '--merge-output-format', 'mp4', '--write-thumbnail'])
+        command_list.extend(['-f', f"bv*+ba[language={lang_code}]/b*", '--merge-output-format', 'mp4', '--write-thumbnail'])
         command_list.extend(add_subtitle_commands(lang_code))
         command_list.append('--write-info-json')
     else:
