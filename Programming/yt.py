@@ -1,3 +1,164 @@
+"""
+=================================================
+Ultimate YouTube Batch Uploader & Manager
+=================================================
+
+Version: 1.1
+Date: 2025-10-09
+Author: [Your Name Here]
+
+---
+### DESCRIPTION ###
+---
+This script provides a comprehensive solution for batch uploading new videos and managing existing videos on a YouTube channel through a graphical user interface (GUI) built with Tkinter. It leverages the YouTube Data API v3 to interact with YouTube services.
+
+The application operates in two primary modes:
+1.  **Update Mode:** Fetches a list of existing videos from your channel, allowing you to batch-update their metadata (title, description, tags, category, schedule, visibility, etc.). It can automatically match local description (.txt) and subtitle (.srt) files to your existing videos based on the video's original title.
+2.  **Upload Mode:** Scans the local directory for video files (.mp4, .mkv, etc.) and prepares them for batch uploading. It automatically finds matching description and subtitle files for each video, calculates a staggered upload schedule, and allows for bulk metadata assignment before starting the upload process.
+
+---
+### FEATURES ###
+---
+- **GUI-Based Operation:** Easy-to-use interface for all functions.
+- **Dual Modes:** Seamlessly switch between managing existing videos and uploading new ones.
+- **Google OAuth2 Authentication:** Securely authenticates with your YouTube account using the official Google Auth library. Tokens are stored locally and automatically revoked on exit for security.
+- **Batch Metadata Updates:** Modify titles, descriptions, tags, categories, privacy status, and more for multiple videos at once.
+- **Automated Scheduling:** Automatically calculate and assign staggered publishing times for a batch of videos based on a start time and interval.
+- **Batch Uploading:** Upload multiple videos from your local machine in a single operation.
+- **Automatic File Matching:**
+    - Associates `.txt` files with videos for descriptions.
+    - Associates `.srt` (and other subtitle formats) with videos for captions.
+- **Advanced Description Parsing:** Can parse a JSON object within a `.txt` file to set title, description, tags, and hashtags, falling back to plain text if no JSON is found.
+- **Dynamic Category Loading:** Fetches the available video categories directly from your YouTube channel.
+- **Advanced Filtering:** In Update Mode, filter the video list by privacy status, scheduling, aspect ratio (horizontal/vertical), and whether they have matching local files.
+- **Dry Run Mode:** Test your updates without making any actual changes to your YouTube videos.
+- **Resumable Uploads:** Robustly handles video uploads, capable of resuming interrupted uploads.
+- **Logging:** All operations are logged to the console and can be saved to a file (`yt_manager.log`) upon exit.
+
+---
+### PREREQUISITES & SETUP ###
+---
+1.  **Python 3.x:** Must be installed on your system.
+2.  **Required Libraries:** Install using pip:
+    ```
+    pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 requests
+    ```
+3.  **`client_secrets.json`:**
+    - You MUST obtain your own `client_secrets.json` file from the Google Cloud Platform.
+    - Create a new project in the Google Cloud Console.
+    - Enable the "YouTube Data API v3".
+    - Create OAuth 2.0 Client ID credentials for a "Desktop app".
+    - Download the JSON file and place it in the same directory as this script, or be prepared to select it via the file dialog on first run.
+
+---
+### HOW TO USE (GUI WORKFLOW) ###
+---
+1.  **Authentication:**
+    - Run the script (`python your_script_name.py`).
+    - Click the "1. Select client_secrets.json & Authenticate" button.
+    - Select your `client_secrets.json` file.
+    - Your web browser will open, asking you to authorize the application. Grant the requested permissions.
+    - After successful authentication, a `token.json` file will be created, and the app will load your channel's video categories.
+
+2.  **Choose a Mode:**
+    - **To Manage Existing Videos (Update Mode):**
+        - Click the "2. Load Existing Videos" button.
+        - The script will fetch videos from your channel and display them in the list. It will also try to find matching local files.
+    - **To Upload New Videos (Upload Mode):**
+        - Click the "OR: Load Files for Upload" button.
+        - The script will scan the current directory for video files and display them.
+
+3.  **Select Videos/Files:**
+    - Click on items in the list to select them. Use Ctrl-Click or Shift-Click to select multiple items.
+    - Use the "Select All Visible" and "Deselect All" buttons for convenience.
+
+4.  **Configure Settings:**
+    - **Scheduling & Visibility (Update & Upload):**
+        - Set a start date and time for the first video.
+        - Define the interval (in hours and minutes) between subsequent videos.
+        - To apply the schedule, ensure the "Update Schedule" checkbox is checked. This automatically sets videos to "Private" until their scheduled time.
+        - In Update Mode, you can also set a static visibility (Private, Unlisted, Public) if not scheduling.
+    - **Metadata (Update & Upload):**
+        - **Description/Tags:** You can enter a description or tags that will OVERRIDE the data from any matched `.txt` files for all selected videos. Leave blank to use the data from files or existing data.
+        - **Category, Language, etc.:** Set other metadata fields as needed. "Don't Change" will preserve the existing value for that field (Update Mode only).
+        - **Playlist ID:** Provide a playlist ID to add all processed videos to that playlist.
+    - **Execution Options:**
+        - **Dry Run:** Check this to simulate the process and see the log output without making any changes.
+        - **Skip Subtitle Uploads:** Check this to prevent the script from uploading any found subtitle files.
+        - **Save log on exit:** Check this to save the console output to `yt_manager.log` when you close the app.
+
+5.  **Process:**
+    - Click the "PROCESS SELECTED VIDEOS" or "UPLOAD SELECTED FILES" button to start the operation.
+    - Monitor the console output for detailed progress and any errors. The GUI will remain responsive.
+
+---
+### FILE NAMING & DESCRIPTION FORMAT ###
+---
+- **Matching Logic:** The script matches files by comparing the video's title (or local video filename) with the filename of `.txt` or `.srt` files. It normalizes text by making it lowercase and removing special characters.
+    - Example: A video titled "My Awesome Vacation!" will match a file named `my_awesome_vacation.txt`.
+
+- **Description `.txt` File Format:**
+    - **Plain Text:** If the file contains only plain text, the entire content will be used as the video description.
+    - **JSON Format (for more control):** To set title, description, tags, and hashtags, format the `.txt` file with a JSON object. The script will automatically find and parse it.
+    ```json
+    {
+      "title": "My New Video Title from File",
+      "description": "This is the main description of the video.\nIt can span multiple lines.",
+      "tags": ["tag1", "youtube api", "python", "automation"],
+      "hashtags": ["#coding", "#tutorial"]
+    }
+    ```
+    The script will append the hashtags to the end of the description.
+
+---
+### CODE BREAKDOWN ###
+---
+
+#### IMPORTS & CONSTANTS
+- **Imports:** Includes standard libraries, Google API libraries, and Tkinter for the GUI.
+- **SCOPES:** Defines the permissions the script requests from the user's Google account (upload, read, manage).
+- **File/Folder Names:** Constants for token file, failed updates folder, and log file.
+- **API Settings:** Default port for OAuth, API timeout.
+- **File Patterns:** Glob patterns to find local video and subtitle files.
+- **YouTube Limits:** Constants for max tag length, tag count, and title length.
+- **Data Maps:** Dictionaries to map user-friendly language and category names to the IDs required by the YouTube API.
+
+#### LOGGER SETUP
+- Configures a global logger to print formatted messages to the console (stdout).
+- A custom `ListHandler` stores all log records in memory so they can be written to a file on exit if the user chooses.
+
+#### HELPER, AUTH & DATA MODELS
+- **`revoke_token()` & `setup_revocation_on_exit()`:** Security functions. `revoke_token` invalidates the refresh token with Google's servers. `setup_revocation_on_exit` ensures this function is called automatically when the application is closed or terminated.
+- **`get_authenticated_service()`:** Handles the entire OAuth2 authentication flow. It first tries to use a saved `token.json`, refreshes it if it's expired, and only if necessary, runs the new user authorization flow.
+- **`normalize_for_matching()` & `sanitize_*()` functions:** A set of helper functions to clean and format text data to be compliant with the YouTube API (e.g., removing invalid characters, truncating to max length).
+- **`VideoData` Class:** A data model to represent an **existing** video fetched from YouTube. It stores all relevant details like ID, title, snippet, status, and paths to any matched local description/subtitle files.
+- **`VideoEntry` Class:** A data model to represent a **local video file** intended for upload. In its constructor, it automatically searches for and parses corresponding `.txt` and `.srt` files.
+- **`calculate_default_start_time()`:** A utility to provide a sensible default start time for scheduling (the next available 2.4-hour interval, at least 1 hour in the future).
+
+#### MainApp CLASS (The GUI)
+- **`__init__()`:** The constructor initializes the main Tkinter window, sets up the token revocation, and calls `build_gui()`.
+- **`build_gui()`:** Constructs the entire user interface by creating and arranging Tkinter widgets (buttons, labels, a Treeview for the list, etc.) into logical frames.
+- **`_update_gui_for_mode()`:** Dynamically changes GUI elements (button text, list headers) when switching between "Update" and "Upload" modes.
+- **`_update_ui_states()`:** Manages the enabled/disabled state of widgets based on user selections. For example, it disables the manual visibility radio buttons if "Update Schedule" is checked.
+- **`_sort_column()`:** Implements clickable column headers in the Treeview to sort the video list.
+- **`apply_filters()` & `clear_filters()`:** Implements the filtering logic in Update Mode. It rebuilds the list of displayed videos based on the active filter checkboxes.
+- **`_populate_treeview()`:** Clears and repopulates the Treeview widget with the current list of videos to be displayed.
+- **`on_video_select_display_info()`:** An event handler that runs when a user selects a video in the list. It populates the metadata entry fields with the data from the selected video, making it easy to see and edit.
+- **`select_credentials_and_auth()`:** The callback for the authentication button.
+- **`load_channel_categories()`:** Fetches and populates the category dropdown menu after successful authentication.
+- **`gui_load_existing_videos()` & `gui_load_files_for_upload()`:** Callbacks for the "Load" buttons. They set the application mode and start the loading process in a separate thread.
+- **Threading Functions (`run_video_load`, `start_processing_thread`, etc.):** These functions are designed to be run in background threads (`threading.Thread`). This is crucial for preventing the GUI from freezing during long-running tasks like API calls or file I/O. They perform the core work and then use `self.root.after()` to safely schedule a GUI update on the main thread once their work is done.
+- **`fetch_all_videos_from_api()`:** The core function for "Update Mode". It retrieves the user's uploaded videos via the API, paginating through results. It then iterates through these videos and attempts to match them with local description/subtitle files. It uses a dictionary with the video ID as the key to prevent duplicate entries, which resolves potential Tkinter errors.
+- **`on_exit()`:** The callback for closing the window. It handles saving the log file if requested and then destroys the Tkinter root window.
+
+#### CORE LOGIC FUNCTIONS (Outside the MainApp Class)
+- **`update_videos_on_youtube()`:** Contains the logic for processing videos in "Update Mode". It iterates through the selected `VideoData` objects, builds the API request body based on user settings and file data, and calls the `service.videos().update()` endpoint. It includes logic for dry runs and adding videos to a playlist.
+- **`upload_new_videos()`:** Contains the logic for "Upload Mode". It iterates through the selected `VideoEntry` objects, constructs the metadata `snippet` and `status` parts of the request, and uses `MediaFileUpload` to handle the actual video upload. After a successful video upload, it proceeds to upload the subtitle file (if available) and add the new video to a playlist (if requested).
+
+#### SCRIPT ENTRY POINT
+- **`if __name__ == '__main__':`:** This is standard Python practice. The code inside this block only runs when the script is executed directly. It creates an instance of the `MainApp` class, which starts the GUI and the application's event loop.
+"""
+
 import os
 import sys
 import json
@@ -324,7 +485,7 @@ class MainApp:
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     def fetch_all_videos_from_api(self, max_videos_to_fetch=0):
-        all_video_data, video_ids = [], []; next_page_token = None
+        all_video_data_map, video_ids = {}, []; next_page_token = None # <-- FIX: Use a dictionary to prevent duplicates
         try:
             uploads_id = self.service.channels().list(part="contentDetails", mine=True).execute()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
             while True:
@@ -337,15 +498,18 @@ class MainApp:
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i+50, len(video_ids))}/{len(video_ids)})"); videos_resp = self.service.videos().list(id=",".join(video_ids[i:i+50]), part="snippet,status,fileDetails").execute()
                 for item in videos_resp.get("items", []):
-                    vd_obj = VideoData(item["id"], item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails")); normalized_title = normalize_for_matching(vd_obj.original_title)
+                    video_id = item["id"]
+                    if video_id in all_video_data_map: continue # <-- FIX: Skip if already processed
+                    
+                    vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails")); normalized_title = normalize_for_matching(vd_obj.original_title)
                     for file_path in local_files:
                         if normalize_for_matching(file_path.stem).startswith(normalized_title):
                             ext = file_path.suffix.lower()
                             if ext == '.txt' and not vd_obj.description_file_path: vd_obj.description_file_path, vd_obj.description_filename = str(file_path), file_path.name
                             elif ext in SUBTITLE_PATTERNS and not vd_obj.subtitle_file_path: vd_obj.subtitle_file_path, vd_obj.subtitle_filename = str(file_path), file_path.name
-                    all_video_data.append(vd_obj)
+                    all_video_data_map[video_id] = vd_obj # <-- FIX: Add to dictionary
         except Exception as e: logger.error(f"Error fetching videos: {e}", exc_info=True)
-        return all_video_data
+        return list(all_video_data_map.values()) # <-- FIX: Return a list of unique values
     def start_processing_thread(self):
         selected_iids = self.tree.selection()
         if not selected_iids: return self.update_status("Error: No items selected.")
