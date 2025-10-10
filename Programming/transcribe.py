@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 ================================================================================================
-transcribe.py - Advanced Transcription and Diarization with Faster Whisper XXL
+transcribe.py - Advanced Transcription and Diarization with Faster Whisper
 ================================================================================================
 
 DESCRIPTION:
-This script provides a powerful command-line interface (CLI) wrapper for the `faster-whisper-xxl`
-transcription tool. It is designed to be a dual-purpose tool for both maximum readability
+This script provides a powerful command-line interface (CLI) for the `faster-whisper`
+transcription library. It is designed to be a dual-purpose tool for both maximum readability
 and maximum precision. The default behavior is optimized for READABILITY, creating well-formatted,
 sentence-based subtitle entries suitable for viewing. For maximum TIMING PRECISION, an advanced
 word-level timestamp mode (-wt) is available.
@@ -14,6 +14,9 @@ word-level timestamp mode (-wt) is available.
 This script has been specifically engineered to solve common and difficult problems with
 AI-generated timestamps, such as "lingering" subtitles and words appearing too early,
 by implementing an advanced, multi-layered correction strategy.
+
+This version uses the faster-whisper Python API directly for increased stability and does
+not rely on any external CLI subprocesses.
 
 ------------------------------------------------------------------------------------------------
 CORE FEATURES:
@@ -42,31 +45,22 @@ CORE FEATURES:
 - Full Formatting Control: Allows customization of line width (-w) and line count (-n) for
   standard subtitles to ensure they are well-formatted for any display.
 
-- Speaker Diarization, Controllable Audio Filters, and Flexible Input.
+- Speaker Diarization and Flexible Input.
 
 ------------------------------------------------------------------------------------------------
 WORKFLOW & PHILOSOPHY: THE TWO-LAYER SOLUTION TO TIMESTAMP ACCURACY
 ------------------------------------------------------------------------------------------------
-The core challenge in automated transcription is the inherent inaccuracy of AI-generated
-timestamps, which often results in subtitles that linger too long or appear out of sync.
-This script solves this with a two-layer approach:
-
 1. PROACTIVE CONTROL (Pre-processing with VAD):
    The script uses Voice Activity Detection (VAD) as its first line of defense. The `-vsc`
    (VAD Silence Cutoff) flag allows you to tell the VAD how sensitive it should be to
-   pauses in speech. By setting a low value for word-level mode, you instruct the VAD to
-   "pre-chop" the audio into very small, clean segments whenever it detects a short
-   silence. Feeding the AI these smaller chunks dramatically prevents it from "smearing"
-   timestamps across silent gaps. This is our preventative care.
+   pauses in speech. Feeding the AI smaller chunks dramatically prevents it from "smearing"
+   timestamps across silent gaps.
 
 2. REACTIVE CORRECTION (Post-processing Sanity Check in -wt mode):
-   Sometimes, even with a well-configured VAD, the AI makes a mistake, especially with
-   a word that appears just before a long pause. It may create a timestamp that starts
-   far too early. The `-mwd` (Max Word Duration) flag is our second line of defense.
+   The `-mwd` (Max Word Duration) flag is our second line of defense.
    It runs *after* transcription and inspects the data. If it finds a word with an
    impossibly long duration, it intelligently corrects the timestamp by assuming the
-   `end` time is the reliable anchor and adjusting the `start` time. This is our
-   emergency surgery, fixing the specific errors the VAD couldn't prevent.
+   `end` time is the reliable anchor and adjusting the `start` time.
 
 This combination of proactive audio segmentation and reactive data correction provides
 a robust, state-of-the-art solution to achieving the most accurate timestamps possible.
@@ -75,65 +69,18 @@ a robust, state-of-the-art solution to achieving the most accurate timestamps po
 USAGE EXAMPLES:
 ------------------------------------------------------------------------------------------------
 1. For READABLE, SENTENCE-LEVEL subtitles (Default Behavior):
-   # This will create subtitles with up to 2 lines, a max width of 42 characters,
-   # and a new subtitle will be created after a 1-second (1000ms) pause.
    python3 transcribe.py "my_video.mp4"
 
 2. For the MOST PRECISE word-by-word subtitles:
-   # This automatically uses a hyper-sensitive VAD (150ms) and the post-processing fix.
    python3 transcribe.py -wt "my_video.mp4"
 
 3. For TIGHTER sentence-level subtitles with less lingering:
-   # We lower the VAD cutoff to create breaks on shorter pauses.
    python3 transcribe.py -vsc 500 "my_video.mp4"
-
-4. TROUBLESHOOTING: If all subtitles seem consistently late by a fraction of a second:
-   # This disables the audio normalization filter, which can introduce latency.
-   python3 transcribe.py -wt --no-ff_speechnorm "my_video.mp4"
-
-------------------------------------------------------------------------------------------------
-COMMAND-LINE ARGUMENTS:
-------------------------------------------------------------------------------------------------
-[Input/Output]
-  files                 : One or more media files, directories, or wildcard patterns.
-                          If no files are provided, the script will scan the current
-                          directory and all subdirectories for media files.
-  -o, --output_dir      : Directory to save output files. (Default: same as input)
-  --srt                 : Force generation of an SRT file. (Default: on)
-  --text                : Generate a plain text file in addition to the SRT.
-
-[Core Transcription]
-  -m, --model           : Whisper model to use. (Default: 'large-v3')
-  -l, --lang            : Language code (e.g., 'en', 'es'). (Default: auto-detect)
-  --task                : 'transcribe' or 'translate'. (Default: 'transcribe')
-
-[VAD & Timestamp Control]
-  -vsc, --vad_silence_cutoff : Universal VAD silence cutoff in ms. This is the main control
-                          for subtitle timing. Shorter values create more/smaller subtitle
-                          segments. (Default: 1000ms)
-  -wt, --word_timestamps: Enable precise word-level mode. This overrides the main -vsc
-                          setting with a more sensitive internal value (150ms) and
-                          enables post-processing.
-  -mwd, --max_word_duration: Sanity check to cap word duration in ms (used only with -wt).
-                          (Default: 1500ms)
-
-[Formatting (Ignored in -wt mode)]
-  --sentence / --no-sentence : Enable/disable Whisper's sentence splitting logic.
-  -w, --width           : Max characters per subtitle line. (Default: 42)
-  -n, --max_line_count  : Max number of lines per subtitle block. (Default: 2)
-
-[Audio Filters]
-  --ff_rnndn_xiph       : Enable/disable rnndn-based noise reduction filter.
-  --ff_speechnorm       : Enable/disable speechnorm-based audio normalization filter.
-
-[Diarization]
-  -d, --diarization     : Enable speaker diarization (requires GPU and HF_TOKEN).
-
 """
 
-# --- MODIFICATION START: Removed tkinter import ---
-import sys, os, subprocess, argparse, glob, re, json
-# --- MODIFICATION END ---
+import sys, os, argparse, glob, re, json, textwrap
+from faster_whisper import WhisperModel
+import torch
 
 # ==============================================================================================
 # --- DEFAULT CONFIGURATION ---
@@ -142,20 +89,17 @@ DEFAULT_MODEL = "large-v3"
 DEFAULT_TASK = "transcribe"
 DEFAULT_LANGUAGE = None
 DEFAULT_ENABLE_DIARIZATION = False
-DEFAULT_VAD_SILENCE_CUTOFF = 150
+DEFAULT_VAD_SILENCE_CUTOFF = 1000
 DEFAULT_MIN_SILENCE_DURATION_WT = 150
-DEFAULT_MAX_WORD_DURATION = 500
+DEFAULT_MAX_WORD_DURATION = 1500
 DEFAULT_SENTENCE_MODE = True
 DEFAULT_MAX_LINE_LENGTH = 42
 DEFAULT_MAX_LINE_COUNT = 2
-DEFAULT_ENABLE_FF_RNNDN_XIPH = True
-DEFAULT_ENABLE_FF_SPEECHNORM = True
 # ==============================================================================================
 
 HF_TOKEN = os.getenv("HF_TOKEN")
-ENABLE_DIARIZATION_METHOD = "pyannote_v3.1"
+transcription_model = None # Global variable to hold the loaded model
 
-# (All helper functions remain unchanged)
 def is_media_file(filepath: str) -> bool:
     SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma",
                             ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v"}
@@ -181,7 +125,6 @@ def get_files_from_args(args: list) -> list:
             else: print(f"Warning: {arg} does not exist, skipping...")
     return collected_files
 
-# --- MODIFICATION START: Replaced prompt_user_for_files_or_folder with a new scanning function ---
 def scan_current_directory_recursively() -> list:
     """Scans the current working directory and all subdirectories for media files."""
     print("ℹ️ No input files provided. Scanning current directory and subdirectories...")
@@ -192,14 +135,11 @@ def scan_current_directory_recursively() -> list:
             filepath = os.path.join(root, filename)
             if is_media_file(filepath):
                 media_files.append(filepath)
-    
     if media_files:
         print(f"✅ Found {len(media_files)} media file(s) to process.")
     else:
         print("⚠️ No media files found in the current directory or its subdirectories.")
-        
     return media_files
-# --- MODIFICATION END ---
 
 def format_srt_time(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
@@ -234,78 +174,120 @@ def convert_data_to_word_level_srt(data: dict, srt_path: str):
         print(f"✅ Word-level SRT file created: {os.path.basename(srt_path)}")
     except Exception as e: print(f"❌ An unexpected error occurred during data to SRT conversion: {e}")
 
-def run_whisper_xxl_transcription(
-    file_path: str, enable_diarization: bool, language: str, model: str, task: str,
-    output_dir: str, sentence: bool, max_line_length: int, max_line_count: int,
-    word_timestamps: bool, vad_silence_cutoff: int, max_word_duration: int, 
-    ff_rnndn_xiph: bool, ff_speechnorm: bool
-) -> str:
-    file_directory = output_dir if output_dir else os.path.dirname(file_path)
+def convert_segments_to_sentence_srt(segments, srt_path, max_line_length, max_line_count):
+    """Generates a standard sentence-based SRT file from transcription segments."""
+    try:
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            counter = 1
+            for segment in segments:
+                start_time = format_srt_time(segment.start)
+                end_time = format_srt_time(segment.end)
+                text = segment.text.strip()
+                
+                # Use textwrap to format lines
+                wrapped_lines = textwrap.wrap(
+                    text,
+                    width=max_line_length,
+                    expand_tabs=False,
+                    replace_whitespace=False,
+                    drop_whitespace=True,
+                    break_long_words=False,
+                    break_on_hyphens=False
+                )
+                
+                # Ensure we don't exceed the max line count
+                formatted_text = "\n".join(wrapped_lines[:max_line_count])
+                
+                f.write(f"{counter}\n{start_time} --> {end_time}\n{formatted_text}\n\n")
+                counter += 1
+        print(f"✅ Sentence-based SRT file created: {os.path.basename(srt_path)}")
+    except Exception as e: print(f"❌ An unexpected error occurred during SRT generation: {e}")
+
+def run_transcription(file_path: str, args: argparse.Namespace) -> str:
+    """
+    Runs transcription on a single file using the faster-whisper API.
+    """
+    global transcription_model
+    
+    # Load the model only if it hasn't been loaded yet
+    if transcription_model is None:
+        print(f"🔥 Loading Whisper model '{args.model}'...")
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            transcription_model = WhisperModel(args.model, device=device, compute_type=compute_type)
+            print(f"✅ Model loaded successfully on device: {device}")
+        except Exception as e:
+            print(f"❌ Failed to load model: {e}")
+            return ""
+
+    file_directory = args.output_dir if args.output_dir else os.path.dirname(file_path)
     base_name = os.path.splitext(os.path.basename(file_path))[0]
-    output_format = "json" if word_timestamps else "srt"
-    temp_output_path = os.path.join(file_directory, f"{base_name}.{output_format}")
     final_srt_path = os.path.join(file_directory, f"{base_name}.srt")
 
-    if os.path.exists(temp_output_path): print(f"⚠️ Warning: Intermediate file '{os.path.basename(temp_output_path)}' will be overwritten.")
+    actual_vad_cutoff = DEFAULT_MIN_SILENCE_DURATION_WT if args.word_timestamps else args.vad_silence_cutoff
+    print(f"\n🔥 Transcribing: {os.path.basename(file_path)} (VAD: {actual_vad_cutoff}ms)")
 
-    command = ["faster-whisper-xxl", file_path, "--model", model, "--output_format", output_format, "--output_dir", file_directory]
-    if language: command.extend(["--language", language])
-    command.extend(["--task", task])
-
-    actual_vad_cutoff = DEFAULT_MIN_SILENCE_DURATION_WT if word_timestamps else vad_silence_cutoff
-    print(f"ℹ️ Using VAD silence cutoff of {actual_vad_cutoff}ms.")
-    command.extend(["--vad_min_silence_duration_ms", str(actual_vad_cutoff)])
-
-    if not word_timestamps:
-        if sentence: command.append("--sentence")
-        command.extend(["--max_line_width", str(max_line_length)])
-        command.extend(["--max_line_count", str(max_line_count)])
-
-    if enable_diarization:
-        if not HF_TOKEN: print("❌ Error: Diarization requires the HF_TOKEN environment variable."); return ""
-        command.extend(["--diarize", ENABLE_DIARIZATION_METHOD])
-
-    if word_timestamps: command.extend(["--word_timestamps", "True"])
-    if ff_rnndn_xiph: command.append("--ff_rnndn_xiph")
-    if ff_speechnorm: command.append("--ff_speechnorm")
-
-    print(f"\n🔥 Transcribing: {os.path.basename(file_path)}")
-    
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        while True:
-            line = process.stdout.readline()
-            if not line and process.poll() is not None: break
-            if line: print(line.strip())
-        if os.path.exists(temp_output_path):
-            print(f"\n✅ Transcription output created: {os.path.basename(temp_output_path)}")
-            if word_timestamps:
-                try:
-                    with open(temp_output_path, 'r', encoding='utf-8') as f: transcription_data = json.load(f)
-                    cleaned_data = post_process_word_timestamps(transcription_data, max_word_duration)
-                    convert_data_to_word_level_srt(cleaned_data, final_srt_path)
-                    os.remove(temp_output_path); print(f"ℹ️ Intermediate JSON file removed: {os.path.basename(temp_output_path)}")
-                except Exception as e: print(f"❌ Error during post-processing or conversion: {e}"); return ""
-            return final_srt_path
-        else: print(f"\n❌ Error: Expected transcription output not found: {temp_output_path}"); return ""
-    except FileNotFoundError: print("❌ Faster Whisper XXL CLI not found. Please ensure it is installed in your PATH."); sys.exit(1)
-    except Exception as e: print(f"❌ Unexpected error during transcription: {e}"); return ""
+        diarize_options = {}
+        if args.diarization:
+            if not HF_TOKEN:
+                print("❌ Error: Diarization requires the HF_TOKEN environment variable.")
+                return ""
+            diarize_options = {"diarize": True, "hf_token": HF_TOKEN}
+
+        segments, info = transcription_model.transcribe(
+            file_path,
+            language=args.lang,
+            task=args.task,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": actual_vad_cutoff},
+            word_timestamps=True if args.word_timestamps else False,
+            **diarize_options
+        )
+        
+        print(f"✅ Transcription complete. Detected language: {info.language} (Confidence: {info.language_probability:.2f})")
+
+        if args.word_timestamps:
+            # Build a dictionary to be compatible with existing post-processing functions
+            results_data = {"segments": []}
+            for segment in segments:
+                seg_dict = {"start": segment.start, "end": segment.end, "text": segment.text}
+                if segment.words:
+                    seg_dict["words"] = [{"start": w.start, "end": w.end, "word": w.word} for w in segment.words]
+                results_data["segments"].append(seg_dict)
+
+            cleaned_data = post_process_word_timestamps(results_data, args.max_word_duration)
+            convert_data_to_word_level_srt(cleaned_data, final_srt_path)
+        else:
+            # For sentence mode, we can directly generate the SRT
+            convert_segments_to_sentence_srt(segments, final_srt_path, args.max_line_length, args.max_line_count)
+        
+        return final_srt_path
+
+    except Exception as e:
+        print(f"❌ An unexpected error occurred during transcription: {e}")
+        return ""
 
 def convert_srt_to_plaintext(srt_path: str) -> str:
     plaintext_lines = []
     timestamp_pattern = re.compile(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}')
-    with open(srt_path, "r", encoding="utf-8", errors="replace") as infile:
-        for line in infile:
-            line = line.strip()
-            if line.isdigit() or timestamp_pattern.match(line) or line == "": continue
-            plaintext_lines.append(line)
+    try:
+        with open(srt_path, "r", encoding="utf-8", errors="replace") as infile:
+            for line in infile:
+                line = line.strip()
+                if line.isdigit() or timestamp_pattern.match(line) or line == "": continue
+                plaintext_lines.append(line)
+    except FileNotFoundError:
+        print(f"⚠️ Could not find SRT file to convert to text: {srt_path}")
+        return ""
     return " ".join(plaintext_lines)
 
 def main():
     parser = argparse.ArgumentParser(
         prog="transcribe.py", 
-        description="Advanced Transcription and Diarization with Faster Whisper XXL. If no files are provided, scans the current directory tree.", 
-        formatter_class=argparse.RawTextHelpFormatter # Use RawTextHelpFormatter to preserve help text formatting
+        description="Advanced Transcription and Diarization with Faster Whisper. If no files are provided, scans the current directory tree.", 
+        formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("files", nargs="*", help="One or more media files, directories, or wildcard patterns.")
     parser.add_argument("-o", "--output_dir", type=str, default=None, help="Directory to save output files.")
@@ -316,31 +298,16 @@ def main():
     parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"])
     parser.add_argument("-d", "--diarization", action="store_true", default=DEFAULT_ENABLE_DIARIZATION, help="Enable speaker diarization.")
     
-    # VAD & Timestamp Arguments
     parser.add_argument("-vsc", "--vad_silence_cutoff", type=int, default=DEFAULT_VAD_SILENCE_CUTOFF, help="VAD silence cutoff in ms for standard (segment) mode.")
     parser.add_argument("-wt", "--word_timestamps", action="store_true", help="Enable precise word-level timestamps. Overrides -vsc with a more sensitive internal value and enables post-processing.")
     parser.add_argument("-mwd", "--max_word_duration", type=int, default=DEFAULT_MAX_WORD_DURATION, help="Sanity check to cap word duration in ms (used only with -wt).")
 
-    # Formatting Arguments
-    parser.add_argument("--sentence", dest="sentence", action="store_true", help="Enable sentence splitting (ignored if -wt is used).")
-    parser.add_argument("--no-sentence", dest="sentence", action="store_false")
-    parser.set_defaults(sentence=DEFAULT_SENTENCE_MODE)
     parser.add_argument("-w", "--width", dest="max_line_length", type=int, default=DEFAULT_MAX_LINE_LENGTH, help="Max characters per line (ignored if -wt is used).")
     parser.add_argument("-n", "--max_line_count", type=int, default=DEFAULT_MAX_LINE_COUNT, help="Max number of lines per subtitle block (ignored if -wt is used).")
     
-    # Filter Arguments
-    parser.add_argument("--ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_true", help="Enable rnndn-based noise reduction filter.")
-    parser.add_argument("--no-ff_rnndn_xiph", dest="ff_rnndn_xiph", action="store_false")
-    parser.set_defaults(ff_rnndn_xiph=DEFAULT_ENABLE_FF_RNNDN_XIPH)
-    parser.add_argument("--ff_speechnorm", dest="ff_speechnorm", action="store_true", help="Enable speechnorm-based audio normalization filter.")
-    parser.add_argument("--no-ff_speechnorm", dest="ff_speechnorm", action="store_false")
-    parser.set_defaults(ff_speechnorm=DEFAULT_ENABLE_FF_SPEECHNORM)
-
     args = parser.parse_args()
     
-    # --- MODIFICATION START: Updated file collection logic ---
     files = get_files_from_args(args.files) if args.files else scan_current_directory_recursively()
-    # --- MODIFICATION END ---
     
     if not files: 
         print("No media files found to process. Exiting.")
@@ -350,26 +317,21 @@ def main():
     produce_text = args.text
     
     for file_path in files:
-        srt_path = run_whisper_xxl_transcription(
-            file_path=file_path, enable_diarization=args.diarization, language=args.lang,
-            model=args.model, task=args.task, output_dir=args.output_dir, sentence=args.sentence,
-            max_line_length=args.max_line_length, max_line_count=args.max_line_count,
-            word_timestamps=args.word_timestamps, vad_silence_cutoff=args.vad_silence_cutoff,
-            max_word_duration=args.max_word_duration, ff_rnndn_xiph=args.ff_rnndn_xiph,
-            ff_speechnorm=args.ff_speechnorm
-        )
+        srt_path = run_transcription(file_path, args)
+        
         if not srt_path: 
             print(f"⚠️ Skipping file due to transcription failure: {os.path.basename(file_path)}")
             continue
             
         if produce_text:
             plain_text = convert_srt_to_plaintext(srt_path)
-            txt_path = os.path.splitext(srt_path)[0] + ".txt"
-            try:
-                with open(txt_path, "w", encoding="utf-8") as f: f.write(plain_text)
-                print(f"✅ Plain text output created: {os.path.basename(txt_path)}")
-            except Exception as e: 
-                print(f"❌ Failed to write plain text file: {e}")
+            if plain_text:
+                txt_path = os.path.splitext(srt_path)[0] + ".txt"
+                try:
+                    with open(txt_path, "w", encoding="utf-8") as f: f.write(plain_text)
+                    print(f"✅ Plain text output created: {os.path.basename(txt_path)}")
+                except Exception as e: 
+                    print(f"❌ Failed to write plain text file: {e}")
                 
         if not produce_srt and os.path.exists(srt_path):
             try:
