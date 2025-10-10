@@ -451,9 +451,7 @@ class VideoProcessorApp:
         cmd.extend(["--vbr", str(bitrate_kbps), "--gop-len", str(gop_len)])
         audio_streams = get_audio_stream_info(file_path)
         if len(audio_streams) > 0:
-            cmd.extend(["--audio-codec", "aac", "--audio-samplerate", "48000", "--audio-bitrate", "512"])
-            if len(audio_streams) >= 2: cmd.extend(["--audio-stream", "1?1:stereo", "--audio-stream", "2?2:5.1"])
-            else: cmd.extend(["--audio-stream", "1?1:stereo", "--audio-stream", "2?1:5.1"])
+            cmd.extend(["--audio-codec", "copy"])
         if is_hdr_output: cmd.extend(["--codec", "hevc", "--profile", "main10", "--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc", "--dhdr10-info", "pass"])
         else:
             cmd.extend(["--codec", "h264", "--profile", "high", "--output-depth", "8", "--bframes", "2", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
