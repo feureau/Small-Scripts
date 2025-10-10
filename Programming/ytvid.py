@@ -34,7 +34,12 @@ above all else.
          Minimal builds have a more restricted feature set.
 
     To solve these challenges, each "Aspect Handling" mode uses a distinct method:
-
+    -   **"Original with Upscale" Mode (v3.5+):**
+        -   **Method:** Uses `--output-res` with automatic aspect ratio preservation.
+            The encoder maintains the source aspect ratio while resizing to the target
+            resolution, applying letterboxing/pillarboxing as needed.
+        -   **Rationale:** Provides automatic aspect-ratio-safe upscaling while
+            preserving the original composition and leveraging AI enhancement.
     -   **"Crop (Fill)" Mode uses a "Crop then Resize" Method:**
         -   **Method:** Uses `--crop` to trim the source, then `--output-res` to resize.
         -   **Rationale:** Stable and efficient for filling a frame.
@@ -65,14 +70,18 @@ above all else.
 ----------------------------------------------------------------------------------------------------
                                         CHANGELOG
 ----------------------------------------------------------------------------------------------------
-
 v3.5 (2025-10-08) - Gemini/User Collaboration
   - FEATURE: Added "Original" orientation mode. This mode preserves the source video's
-    exact dimensions and aspect ratio, bypassing all crop/pad/resize logic.
+    exact aspect ratio while allowing resolution upscaling via AI algorithms.
   - FEATURE: When "Original" mode is active, the bitrate is automatically selected
-    based on the source resolution (e.g., a 1080p source uses the "HD" bitrate).
-  - UI/UX: The "Resolution" and "Upscale Algo" GUI controls are now disabled when
-    "Original" orientation is selected, as they are not applicable.
+    based on the target resolution (e.g., 4K target uses 4K bitrate).
+  - UI/UX: The "Aspect Handling" GUI controls (Crop/Pad/Stretch) are disabled when
+    "Original" orientation is selected, as aspect ratio preservation is automatic.
+  - UI/UX: Resolution and Upscale Algo controls remain active in Original mode to 
+    enable AI upscaling while maintaining aspect ratio.
+  - BEHAVIOR: The encoder automatically preserves the source aspect ratio while 
+    applying AI upscaling to the target resolution, using letterboxing/pillarboxing
+    as needed.
 
 v3.4 (2025-10-07) - Gemini/User Collaboration
   - REFACTOR: Implemented new settings logic. If no files are selected, changes apply
@@ -309,10 +318,18 @@ class VideoProcessorApp:
             self.vertical_rb_frame.pack(fill="x")
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
-            # Disable irrelevant controls for "Original" mode
-            for widget_list in [resolution_widgets, upscale_widgets, aspect_handling_widgets]:
-                for widget in widget_list:
-                    widget.config(state="disabled")
+            # For "Original" mode, only disable aspect handling controls
+            for widget in aspect_handling_widgets:
+                widget.config(state="disabled")
+            # Keep resolution and upscale controls enabled
+            for widget in resolution_widgets:
+                widget.config(state="normal")
+            for widget in upscale_widgets:
+                widget.config(state="normal")
+
+
+
+
 
         self.apply_gui_options_to_selected_files()
 
