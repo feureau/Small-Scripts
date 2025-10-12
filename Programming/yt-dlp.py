@@ -900,35 +900,49 @@ def run_download_task(task_type, identifier, title, args, original_url):
     try:
         process = subprocess.Popen(
             command_list,
-            stdout=subprocess.PIPE if not args.verbose else None,
-            stderr=subprocess.PIPE if not args.verbose else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace'
         )
         with process_lock:
             running_processes.add(process)
         
-        # We don't parse progress in this model for simplicity, but the code could be added here
         stdout, stderr = process.communicate()
+
+        if args.verbose:
+            with print_lock:
+                print("--- YTDLP STDOUT ---")
+                print(stdout)
+                print("--- YTDLP STDERR ---")
+                print(stderr)
+                print("--------------------")
         
         if process.returncode == 0:
             return ("SUCCESS", f"Finished {tool_name}: {display_title}")
         else:
             error_message = stderr.strip().replace('\n', ' ')
-            # Treat these as warnings, not fatal errors
+            
+            # Check for indicators of a successful file save in stdout
+            download_successful = "[Merger] Merging formats into" in stdout or \
+                                  "[download] Destination:" in stdout or \
+                                  "has already been downloaded" in stdout
+            
             non_fatal_patterns = [
-                "HTTP Error 429",                        # subtitle rate-limit
+                "HTTP Error 429",
                 "Too Many Requests",
                 "Unable to download video subtitles",
                 "Postprocessing: Supported filetypes for thumbnail embedding",
                 "Supported filetypes for thumbnail embedding",
-                "already been downloaded and merged"
             ]
-            if any(p.lower() in error_message.lower() for p in non_fatal_patterns):
-                return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}")
-            return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}")
-
-
             
+            is_non_fatal_error = any(p.lower() in error_message.lower() for p in non_fatal_patterns)
+            
+            # A non-fatal error is only a "SUCCESS with warnings" if a file was actually created.
+            if is_non_fatal_error and download_successful:
+                return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}")
+            else:
+                return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}")
+
     except Exception as e:
         return ("FAILURE", f"Error running {tool_name} for {display_title}: {e}")
     finally:
@@ -1005,30 +1019,41 @@ def get_tasks_from_url(url):
 def build_ytdlp_command(video_id, args):
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     command_list = [YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
-    if not args.verbose:
-        command_list.extend(['--progress', '--progress-template', 'YTDLP_PROGRESS_JSON:%(progress)j'])
+
+    # This is the custom format and options block based on your config.
+    # It will be applied for default downloads (--default_download) or explicit video downloads (--video).
+    if getattr(args, 'default_download', False) or args.video:
+        # Your custom format selection string - REMOVED [ext=m4a] for better compatibility
+        custom_format_string = "bestvideo[vcodec^=av01]+bestaudio/bestvideo+bestaudio"
+        
+        command_list.extend([
+            '--audio-multistreams',
+            '-f', custom_format_string,
+            '--progress',
+            '--audio-format', 'aac',
+            '--embed-thumbnail',
+            '--add-metadata',
+            '--merge-output-format', 'mp4',
+            '--write-thumbnail',
+            '--write-auto-sub',
+            '--sub-lang', 'en',
+            '--convert-subs', 'srt'
+        ])
+    
+    # The original logic for other specific flags remains, in case you use them separately.
     else:
-        command_list.append('--progress')
-    def add_subtitle_commands(lang_code):
-        return ['--write-auto-subs', '--sub-langs', lang_code, '--convert-subs', 'srt', '--ignore-errors']
-    if getattr(args, 'default_download', False):
-        lang_code = args.language if args.language else 'en'
-        command_list.extend(['-f', f"bv*+ba[language={lang_code}]/b*", '--merge-output-format', 'mp4', '--write-thumbnail'])
-        command_list.extend(add_subtitle_commands(lang_code))
-        command_list.append('--write-info-json')
-    else:
-        if args.video:
-            lang_code = args.language if args.language else ''
-            command_list.extend(['-f', f'bv*+ba[language={lang_code}]/b*' if lang_code else 'b*', '--merge-output-format', 'mp4'])
         if args.audio_only:
             lang_code = args.language if args.language else ''
             command_list.extend(['-f', f'ba[language={lang_code}]/ba' if lang_code else 'ba', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
         if args.srt:
             sub_lang = args.language if args.language else 'en'
-            command_list.extend(add_subtitle_commands(sub_lang))
+            command_list.extend(['--write-auto-subs', '--sub-langs', sub_lang, '--convert-subs', 'srt', '--ignore-errors'])
             if not any([args.video, args.audio_only]): command_list.append("--skip-download")
-        if args.thumbnail: command_list.extend(["--write-thumbnail", "--skip-download"])
-        if args.metadata: command_list.extend(["--write-info-json", "--skip-download"])
+        if args.thumbnail: 
+            command_list.extend(["--write-thumbnail", "--skip-download"])
+        if args.metadata: 
+            command_list.extend(["--write-info-json", "--skip-download"])
+
     command_list.append(video_url)
     return command_list
 
