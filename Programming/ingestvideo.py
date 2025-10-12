@@ -1,7 +1,7 @@
 # =================================================================================================
 #
 #                                  NVEncC AV1 Batch Processor
-#                                          Version: 5.2 (Bugfix Update)
+#                                          Version: 5.3 (Feature & Fix Update)
 #
 # =================================================================================================
 """
@@ -63,8 +63,8 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 - Multiprocessing: Can run multiple encoding jobs in parallel to leverage multi-core CPUs and
   significantly reduce the total processing time for large batches.
 - VFR Handling: Dynamically detects the source frame rate and instructs the encoder to resample
-  the video (using --fps for compatibility with NVEncC 9.x and older), fixing audio sync issues
-  with Variable Frame Rate (VFR) sources.
+  the video. The detected frame rate is now user-editable in the GUI to handle detection
+  failures or to allow for manual overrides.
 
 ---------------------------------------------------------------------------------------------------
  III. PREREQUISITES
@@ -104,28 +104,31 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
      It allocates more bits to complex, detailed areas of a frame (spatial AQ) and across
      frames (temporal AQ), which humans are more likely to notice.
    - `--fps`: This command is critical for stability. It forces the output to a constant frame
-     rate matching the detected source rate. This is the primary fix for audio desynchronization
-     issues found in Variable Frame Rate (VFR) source files. The `--fps` flag is used specifically
-     for compatibility with older NVEncC versions (e.g., 9.x), as newer versions use `--vpp-fps`.
-   - **`--profile main` Omission (v5.2 Workaround):** Through extensive testing, a bug was
-     identified in the pre-release NVEncC v9.03 executable. When `--profile main` is explicitly
-     set on the command line for an HDR AV1 encode, it forces the entire video processing pipeline
-     into a faulty 8-bit mode (evidenced by a `cspconv(p010 -> yv12)` filter). By **omitting** this
-     flag, NVEncC's auto-detection logic correctly selects the `main` profile while engaging the
-     proper 10-bit pipeline (using a high-precision 16-bit intermediate for filters). Therefore,
-     this flag has been removed from the command to ensure correct 10-bit HDR output with the
-     affected NVEncC version.
+     rate matching the user-defined rate (pre-filled by auto-detection). This is the primary fix for
+     audio desynchronization issues found in Variable Frame Rate (VFR) source files.
 
 4. SAMPLE GENERATION:
-   - To guarantee samples are accurate previews, the script first uses FFmpeg to create a
-     temporary, 10-second clip via a lossless stream copy (`-c copy`). This ensures the sample
-     is not a re-encode of a re-encode, and that the clip fed to NVEncC is identical in quality
-     to the original source file.
+   - To guarantee samples are accurate previews, they are now subjected to the **exact same processing**
+     as a full encode. This includes applying the selected crop parameters and processing all selected
+     audio streams. The script first uses FFmpeg to create a temporary, 10-second clip via a lossless
+     stream copy (`-c copy`) to ensure the source for all samples is identical to the original file.
 
 ---------------------------------------------------------------------------------------------------
  V. CHANGE HISTORY
 ---------------------------------------------------------------------------------------------------
-- **v5.2 (Current - Bugfix):**
+- **v5.3 (Current - Feature & Fix Update):**
+    - **Feature:** Implemented a user-editable frame rate field in the GUI. The script now
+      populates this field with the auto-detected value, but allows the user to override it.
+      This makes handling of VFR sources or mis-detected files more robust. The frame rate
+      detection now gracefully fails to a user-visible default instead of a hardcoded value.
+    - **Bug Fix:** Corrected sample generation logic to ensure samples are accurate previews.
+      Samples are now created with the **exact same crop and audio settings** as a full encode,
+      resolving a major logical flaw.
+    - **Bug Fix:** Defined the missing GUI helper functions (`add_files`, `delete_selected`, `move_up`,
+      `move_down`), fixing the `NameError` exceptions that occurred in the GUI.
+    - Updated documentation to reflect all changes.
+
+- **v5.2 (Bugfix):**
     - Removed explicit `--profile main` flag from the NVEncC command.
     - **Reason:** A bug was discovered in the user's pre-release NVEncC v9.03 executable where
       explicitly setting this flag incorrectly forced 10-bit HDR video into an 8-bit conversion
@@ -175,7 +178,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "5.2"
+SCRIPT_VERSION = "5.3"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -276,7 +279,7 @@ def get_video_frame_rate(video_file):
             return output
     except (subprocess.CalledProcessError, json.JSONDecodeError):
         pass
-    return "24000/1001"
+    return None
 
 # ---------------------------------------------------------------------
 # Step 2: Automatic Crop Detection
@@ -338,6 +341,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     inner_frame.columnconfigure(1, weight=1, minsize=350)
     
     # --- Tkinter Variables ---
+    frame_rate_var = tk.StringVar(value=frame_rate)
     decoding_mode = tk.StringVar(value="Hardware")
     output_color_mode = tk.StringVar(value="Auto (Match Source)")
     ai_upscale_enable = tk.BooleanVar(value=False)
@@ -359,6 +363,42 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     step_size = tk.StringVar(value="3")
 
     # --- GUI Helper Functions (defined before use) ---
+    def add_files(listbox):
+        new_files = filedialog.askopenfilenames(
+            title="Select Video Files",
+            filetypes=[("Video Files", "*.mkv *.mp4 *.mov *.avi *.ts *.m2ts"), ("All files", "*.*")]
+        )
+        for f in new_files:
+            if f not in listbox.get(0, 'end'):
+                listbox.insert('end', f)
+
+    def delete_selected(listbox):
+        selected_indices = list(listbox.curselection())
+        selected_indices.sort(reverse=True)
+        for i in selected_indices:
+            listbox.delete(i)
+
+    def move_up(listbox):
+        selected_indices = list(listbox.curselection())
+        if not selected_indices: return
+        for i in selected_indices:
+            if i > 0:
+                text = listbox.get(i)
+                listbox.delete(i)
+                listbox.insert(i - 1, text)
+                listbox.selection_set(i - 1)
+
+    def move_down(listbox):
+        selected_indices = list(listbox.curselection())
+        selected_indices.sort(reverse=True)
+        if not selected_indices: return
+        for i in selected_indices:
+            if i < listbox.size() - 1:
+                text = listbox.get(i)
+                listbox.delete(i)
+                listbox.insert(i + 1, text)
+                listbox.selection_set(i + 1)
+
     def update_metadata_display(selected_file):
         if not selected_file:
             meta_text.config(state='normal'); meta_text.delete("1.0", "end"); meta_text.insert("1.0", "No file selected."); meta_text.config(state='disabled')
@@ -414,6 +454,11 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     tk.Label(proc_frame, text="Max Processes:").pack(side='left')
     tk.Entry(proc_frame, textvariable=max_processes, width=3).pack(side='left', padx=5)
     
+    fr_frame = tk.Frame(options_frame)
+    fr_frame.pack(anchor='w', pady=5, padx=5)
+    tk.Label(fr_frame, text="Output Frame Rate:").pack(side='left')
+    tk.Entry(fr_frame, textvariable=frame_rate_var, width=12).pack(side='left', padx=5)
+
     color_frame = tk.LabelFrame(options_frame, text="Output Color Space")
     color_frame.pack(fill='x', padx=5, pady=5)
     auto_radio = tk.Radiobutton(color_frame, text="Auto (Match Source)", variable=output_color_mode, value="Auto (Match Source)")
@@ -586,7 +631,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
             "crop_params": {"crop_w":w, "crop_h":h, "crop_x":x, "crop_y":y},
             "audio_tracks": tracks, "sleep_after_processing": sleep_enable.get(),
             "bracket_steps": bracket_steps.get(), "step_size": step_size.get(),
-            "frame_rate": frame_rate
+            "frame_rate": frame_rate_var.get()
         }
         action_function(settings)
         
@@ -619,7 +664,7 @@ def format_bytes(byte_count):
     s = round(byte_count / p, 2)
     return f"{s} {size_name[i]}"
 
-def execute_nvencc(input_file, output_file, settings, is_sample=False):
+def execute_nvencc(input_file, output_file, settings):
     h, w = get_video_resolution(input_file)
     if not h:
         return False, "", f"Could not get resolution for {input_file}. Skipping."
@@ -659,7 +704,7 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
         command.extend(["--fps", settings["frame_rate"]])
 
     crop = settings["crop_params"]
-    if not is_sample and not (crop["crop_w"] == w and crop["crop_h"] == h):
+    if not (crop["crop_w"] == w and crop["crop_h"] == h):
         right, bottom = w - (crop["crop_x"] + crop["crop_w"]), h - (crop["crop_y"] + crop["crop_h"])
         command.extend(["--crop", f'{crop["crop_x"]},{crop["crop_y"]},{max(0, right)},{max(0, bottom)}'])
 
@@ -675,11 +720,10 @@ def execute_nvencc(input_file, output_file, settings, is_sample=False):
         algo = "algo=nvvfx-superres,superres-mode=0" if ow > cw or oh > ch else "algo=spline36"
         command.extend(["--vpp-resize", algo, "--output-res", f"{ow}x{oh}"])
     
-    if not is_sample:
-        copy = [s["track_number"] for s in settings["audio_tracks"] if not s.get("convert_to_ac3")]
-        conv = [s["track_number"] for s in settings["audio_tracks"] if s.get("convert_to_ac3")]
-        if copy: command.extend(["--audio-copy", ",".join(map(str, copy))])
-        for t in conv: command.extend([f"--audio-codec", f"{t}?ac3", f"--audio-bitrate", f"{t}?{AUDIO_CONVERT_BITRATE}"])
+    copy = [s["track_number"] for s in settings["audio_tracks"] if not s.get("convert_to_ac3")]
+    conv = [s["track_number"] for s in settings["audio_tracks"] if s.get("convert_to_ac3")]
+    if copy: command.extend(["--audio-copy", ",".join(map(str, copy))])
+    for t in conv: command.extend([f"--audio-codec", f"{t}?ac3", f"--audio-bitrate", f"{t}?{AUDIO_CONVERT_BITRATE}"])
 
     if settings["rate_control_mode"] == "CQP":
         command.extend(["--cqp", f'{settings["cqp_i"]}:{settings["cqp_p"]}:{settings["cqp_b"]}'])
@@ -772,7 +816,7 @@ def generate_samples(settings):
             sample_settings.update(task)
             output_file = os.path.join(output_dir, f"{base_name}_Sample_{task['name']}.mp4")
             
-            success, _, _ = execute_nvencc(temp_clip, output_file, sample_settings, is_sample=True)
+            success, _, _ = execute_nvencc(temp_clip, output_file, sample_settings)
 
             if success and os.path.exists(output_file):
                 sample_size = os.path.getsize(output_file)
@@ -874,7 +918,11 @@ if __name__ == "__main__":
     if h is None: print(f"Error: Could not get resolution for {first_file}. Exiting."); sys.exit()
 
     frame_rate = get_video_frame_rate(first_file)
-    print(f"Detected source frame rate: {frame_rate}")
+    if frame_rate is None:
+        print("WARNING: Could not automatically detect frame rate. Defaulting to 24000/1001. Please verify in the GUI.")
+        frame_rate = "24000/1001"
+    else:
+        print(f"Detected source frame rate: {frame_rate}")
 
     color_info = get_video_color_info(first_file)
     is_sdr = color_info.get("is_hdr") == False
