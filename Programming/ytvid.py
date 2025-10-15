@@ -1,26 +1,83 @@
-"""
+
+r"""
 ====================================================================================================
                             YouTube Batch Video Processing Tool
 ====================================================================================================
 
+====================================================================================================
+                                       SCRIPT DOCUMENTATION
+====================================================================================================
+
 ----------------------------------------------------------------------------------------------------
-                            PURPOSE AND DESIGN PHILOSOPHY
+                                    PART 1: HIGH-LEVEL OVERVIEW
 ----------------------------------------------------------------------------------------------------
 
 PURPOSE:
 This script provides a Graphical User Interface (GUI) to batch process video files,
 optimizing them for upload to YouTube and other social media platforms. It offers full control
-over output orientation and aspect ratio handling for both horizontal and vertical formats.
-It acts as a front-end for the powerful NVIDIA hardware-accelerated encoder, NVEncC.
+over output orientation, aspect ratio handling, and advanced subtitle burning for both
+horizontal and vertical formats. It acts as a front-end for the powerful NVIDIA
+hardware-accelerated encoder, NVEncC. For a full list of NVEncC's own command-line
+options, please refer to the official documentation on its GitHub repository.
 
-DESIGN HISTORY AND TECHNICAL RATIONALE:
+CORE FEATURES:
+  - Batch Processing: Process multiple video files in a single session.
+  - Hardware Acceleration: Leverages NVIDIA's NVENC for high-speed encoding.
+  - Full Geometric Control: Independently set orientation (Horizontal, Vertical, Original) and
+    aspect ratio handling (Crop, Pad, Stretch).
+  - Advanced Subtitle Burning: Automatically detects sidecar SRT files and provides a full
+    styling suite (font, size, color, alignment, margin) for burning them into the video.
+  - Format Flexibility: Output to SDR (H.264) or HDR (HEVC) with automatic bitrate selection.
+  - AI Upscaling: Integrates NVIDIA's Super Resolution and VSR for high-quality upscaling.
+  - Self-Contained: Includes this detailed documentation about the script's own logic.
+
+----------------------------------------------------------------------------------------------------
+                        PART 2: DESIGN PHILOSOPHY & TECHNICAL RATIONALE
+----------------------------------------------------------------------------------------------------
+
 This script is the result of an iterative, empirical development process. Many of the
 core design decisions were made in direct response to the specific, often non-obvious,
 quirks and limitations discovered in the NVEncC encoder and its video processing (VPP)
 filter chain. The primary goal of the current design is **stability and predictability**
 above all else.
 
-1.  **Aspect Ratio Geometry - The Core Technical Challenge:**
+1.  **SUBTITLE HANDLING - The Second Core Challenge (v3.6+)**
+    The implementation of subtitle burning was a significant development challenge. The final
+    design was chosen after initial, simpler methods failed due to the specific constraints
+    of the NVEncC toolchain.
+
+    -   **Historical Reason - The Failed Approach:** The first attempt involved passing style
+        overrides directly to the `--vpp-subburn` filter using a `force_style` parameter.
+        This is a common and valid method in standard ffmpeg. However, extensive testing and
+        debugging revealed that **NVEncC's `--vpp-subburn` implementation does NOT support the
+        `force_style` parameter**. All attempts to pass style information on the command line,
+        regardless of quoting or escaping, resulted in a parser error. This is a crucial
+        limitation of the NVEncC tool itself.
+
+    -   **Final, Robust Solution - On-the-Fly SRT-to-ASS Conversion (v3.8.0+):**
+        To provide full styling control in a way that is 100% compatible with NVEncC,
+        the script now uses a more sophisticated back-end process. This is the only
+        reliable method.
+        -   **Method:** When subtitle burning is enabled for a video with a detected `.srt`
+            file, the script dynamically creates a temporary, styled `.ass` (Advanced
+            SubStation Alpha) file in memory just before encoding.
+        -   **Style Implementation:** All settings configured in the "Subtitle Styling"
+            GUI (Font Family, Size, Colors, Bold, Italic, Alignment, and Vertical Margin)
+            are written into the `[V4+ Styles]` header of this temporary `.ass` file. This
+            embeds the styling information directly into the subtitle data.
+        -   **Conversion:** The script then parses the simple text and timings from the
+            original `.srt` file and converts each line into a styled `Dialogue:` event
+            in the `.ass` format.
+        -   **Execution:** This temporary, self-contained `.ass` file is then passed to
+            NVEncC's `--vpp-subburn` filter using the standard `filename=` parameter. Because
+            all styling is embedded within the file, the renderer processes it flawlessly.
+        -   **Rationale:** This approach is the definitive and most reliable method. It
+            leverages the native styling power of the `.ass` format, sidesteps the
+            limitations of `NVEncC`'s filter parameters, and gives the user complete
+            visual control over the final burned-in subtitles. The temporary file is
+            automatically deleted after the encode is complete.
+
+2.  **ASPECT RATIO GEOMETRY - The First Core Challenge**
     The most complex part of this script is its handling of aspect ratio conversions.
     The final implementation was chosen after extensive testing revealed the following
     critical constraints of the NVEncC toolchain:
@@ -31,71 +88,125 @@ above all else.
          cause a hard failure.
       c. Build Dependencies: The available VPP filters and their syntax depend heavily
          on whether NVEncC was compiled with all optional libraries (NPP, libplacebo).
-         Minimal builds have a more restricted feature set.
 
     To solve these challenges, each "Aspect Handling" mode uses a distinct method:
     -   **"Original with Upscale" Mode (v3.5+):**
         -   **Method:** Uses `--output-res` with automatic aspect ratio preservation.
-            The encoder maintains the source aspect ratio while resizing to the target
-            resolution, applying letterboxing/pillarboxing as needed.
-        -   **Rationale:** Provides automatic aspect-ratio-safe upscaling while
-            preserving the original composition and leveraging AI enhancement.
+        -   **Rationale:** The simplest, most direct way to upscale while letting the
+            encoder handle letter/pillarboxing automatically.
     -   **"Crop (Fill)" Mode uses a "Crop then Resize" Method:**
         -   **Method:** Uses `--crop` to trim the source, then `--output-res` to resize.
         -   **Rationale:** Stable and efficient for filling a frame.
-
     -   **"Pad (Fit)" Mode uses a "Pad then Final Resize" Method (v3.1+):**
-        -   **Method:** This method is tailored for minimal NVEncC builds that lack
-          `width`/`height` controls in `--vpp-resize`. The script applies `--vpp-pad`
-          first and then sets the final, correct dimensions with `--output-res`.
-        -   **Rationale & History:** This counter-intuitive "Pad then Resize" order is the
-          only one that works reliably on limited NVEncC builds. The encoder engine is
-          smart enough to see the final resolution and automatically perform an implicit
-          "letterbox" resize *before* applying the explicit `--vpp-pad` filter, resulting
-          in the correct output. This implicit resize uses the encoder's internal,
-          non-configurable scaler (e.g., Bicubic).
-
+        -   **Method:** Applies `--vpp-pad` first and then sets the final dimensions with `--output-res`.
+        -   **Historical Rationale:** This counter-intuitive order is the only one that works
+            reliably on limited NVEncC builds. The encoder engine is smart enough to see the
+            final resolution from `--output-res` and performs an implicit "letterbox" resize
+            *before* applying the explicit `--vpp-pad` filter, resulting in the correct output.
     -   **"Stretch" Mode uses a "Direct Resize" Method:**
         -   **Method:** Uses a single `--output-res` command.
-        -   **Rationale:** The simplest approach when aspect ratio is not preserved.
+        -   **Rationale:** The simplest approach when aspect ratio preservation is not needed.
 
-2.  **GUI Layout and User Experience:**
+3.  **GUI & WORKFLOW**
     -   **Rationale (v2.2+):** Redesigned into a two-column format for a more logical
-      workflow on modern widescreen monitors.
-
-3.  **Default File Scanning:**
-    -   **Rationale (v2.5+):** Upgraded to use `os.walk()` for a "deep scan" of the
-      entire directory tree, a more convenient default for a batch tool.
+        workflow on modern widescreen monitors (Files on left, Options on right).
+    -   **Rationale (v3.4+):** The settings logic was updated so that if no files are
+        selected, any change in the GUI applies globally to all files in the list. If one
+        or more files are selected, changes only apply to the selection. This provides
+        both batch and per-file flexibility.
 
 ----------------------------------------------------------------------------------------------------
-                                        CHANGELOG
+                            PART 3: CODE ANNOTATION & EXPLANATION
 ----------------------------------------------------------------------------------------------------
-v3.5 (2025-10-08) - Gemini/User Collaboration
-  - FEATURE: Added "Original" orientation mode. This mode preserves the source video's
-    exact aspect ratio while allowing resolution upscaling via AI algorithms.
-  - FEATURE: When "Original" mode is active, the bitrate is automatically selected
-    based on the target resolution (e.g., 4K target uses 4K bitrate).
-  - UI/UX: The "Aspect Handling" GUI controls (Crop/Pad/Stretch) are disabled when
-    "Original" orientation is selected, as aspect ratio preservation is automatic.
-  - UI/UX: Resolution and Upscale Algo controls remain active in Original mode to 
-    enable AI upscaling while maintaining aspect ratio.
-  - BEHAVIOR: The encoder automatically preserves the source aspect ratio while 
-    applying AI upscaling to the target resolution, using letterboxing/pillarboxing
-    as needed.
 
-v3.4 (2025-10-07) - Gemini/User Collaboration
-  - REFACTOR: Implemented new settings logic. If no files are selected, changes apply
-    globally. If files are selected, changes apply only to the selection.
-  - UI/UX: App now starts with no files selected to support the new global settings mode.
-  - UI/UX: The "Pad (Fit)" mode no longer forces the upscaler GUI to "Auto".
+This section explains the purpose of the main components of the Python script.
+
+1.  **USER CONFIGURATION BLOCK**
+    This block at the top of the script contains all default values for the GUI.
+    -   `DEFAULT_...`: Each of these variables sets the initial state of a GUI element, such
+        as the default resolution, font, or color. This makes it easy to customize the
+        application's starting configuration without digging into the main code.
+    -   `BITRATES`: A dictionary defining the target video bitrates in kilobits per second (kbps).
+        It is structured to provide different values based on the output format (SDR/HDR),
+        frame rate (Normal/High FPS), and resolution (HD/4k/8k). This allows for nuanced
+        quality control that aligns with YouTube's recommendations.
+
+2.  **CORE FUNCTIONS**
+    -   `hex_to_libass_color()`: A helper function that converts a standard HTML hex color
+        (e.g., `#FFFF00`) into the specific `&H00BBGGRR` format required by the ASS subtitle
+        standard.
+    -   `create_temporary_ass_file()`: The core of the modern subtitle system. It takes an
+        SRT file path and the GUI options, constructs a complete, styled ASS file as a string,
+        and writes it to a temporary file on disk, returning the path to that file.
+    -   `get_video_info()`: Uses `ffprobe` (part of the ffmpeg suite) to inspect a video file
+        and extract essential metadata. This data (resolution, frame rate, HDR status) is
+        critical for making automatic decisions later, such as calculating the correct
+        aspect ratio for cropping or selecting the appropriate bitrate.
+    -   `VideoProcessorApp` Class: The main class that encapsulates the entire GUI application.
+        -   `__init__()`: Initializes all Tkinter variables that link the GUI widgets to
+            the script's internal state.
+        -   `setup_gui()`: Contains all the code for creating and arranging the visual
+            elements (buttons, labels, checkboxes) of the application window.
+        -   `populate_fonts()`: Scans the user's operating system for available fonts and
+            populates the font selection dropdown, making any installed font usable.
+        -   `apply_gui_options_to_selected_files()`: The central logic for saving settings.
+            It reads the current state of all GUI widgets and saves them to the `file_options`
+            dictionary, keyed by the video file path.
+        -   `construct_nvencc_command()`: This is the "brain" of the operation. It takes a
+            file path and its associated options and builds the final command-line string to
+            be executed. It logically adds arguments for geometry, quality, codecs, and,
+            most importantly, points to the temporary `.ass` file for subtitle burning.
+        -   `start_processing()`: The main execution loop. When the "Start" button is clicked,
+            this function iterates through each file in the list. For each file, it creates
+            the temporary `.ass` subtitle file (if needed), calls the command constructor,
+            runs the `NVEncC64.exe` process, and then—crucially—cleans up the temporary
+            subtitle file in a `finally` block to ensure no garbage is left behind, even if
+            an error occurs.
+        -   `run_nvenc_command()`: A helper function that uses Python's `subprocess` module to
+            execute the generated NVEncC command. It captures the command's output in real-time
+            and prints it to the console, so the user can see the progress.
+    -   `if __name__ == "__main__":` Block: This is the entry point of the script.
+        -   It uses `argparse` to handle command-line arguments (like `--output-mode`).
+        -   If no files are provided via the command line, it performs a "deep scan" using
+            `os.walk()` to find all video files in the current directory and its subdirectories,
+            making it convenient for batch work.
+        -   Finally, it creates the main application window and starts the Tkinter event loop.
+
+----------------------------------------------------------------------------------------------------
+                                        PART 4: CHANGELOG
+----------------------------------------------------------------------------------------------------
+v3.9.1 (2025-10-16) - Gemini/User Collaboration
+  - FIX: Corrected a `SyntaxError` within the documentation text itself by rephrasing a
+    changelog entry to avoid using characters that would conflict with the docstring parser.
+
+v3.9.0 (2025-10-16) - Gemini/User Collaboration
+  - DOCS: Revised and streamlined the internal documentation. The full NVEncC command-line
+    documentation appendix has been removed to significantly reduce file size and improve
+    readability. The script's own detailed technical and historical rationale is preserved.
+
+v3.8.2 (2025-10-16) - Gemini/User Collaboration
+  - FIX: Corrected a fatal `SyntaxError: (unicode error)` on script startup by converting the
+    main documentation block into a raw string by prefixing it with an 'r'.
+
+v3.8.1 (2025-10-16) - Gemini/User Collaboration
+  - FEATURE: Added a "Vertical Margin" input field to the GUI for precise subtitle positioning.
+  - BEHAVIOR: The `MarginV` value is now written into the temporary .ass style definition.
+
+v3.8.0 (2025-10-16) - Gemini/User Collaboration
+  - REFACTOR: Overhauled the subtitle burning mechanism to use on-the-fly SRT-to-ASS conversion.
+  - FIX: Corrected the fundamental flaw of trying to use the unsupported `force_style` parameter.
+  
+
 """
+
+
 
 import os
 import subprocess
 import shutil
 import json
 import tkinter as tk
-from tkinter import filedialog, messagebox, font
+from tkinter import ttk, filedialog, messagebox, font, colorchooser
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import unicodedata
 from ftfy import fix_text
@@ -103,6 +214,8 @@ import threading
 import sys
 import math
 import argparse
+import tempfile
+import re
 
 # ----------------------------------------------------------------------------------------------------
 #                                     --- USER CONFIGURATION ---
@@ -117,8 +230,20 @@ DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
+DEFAULT_BURN_SUBTITLES = False
+
+# --- Default subtitle style settings ---
+DEFAULT_SUBTITLE_FONT = "Helvetica World"
+DEFAULT_SUBTITLE_FONT_SIZE = "64"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
-DEFAULT_SUBTITLE_FONT_SIZE = "24"
+DEFAULT_SUBTITLE_BOLD = False
+DEFAULT_SUBTITLE_ITALIC = False
+DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFF00"  # Yellow
+DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000" # Black
+DEFAULT_SUBTITLE_SHADOW_COLOR = "#808080"  # Gray
+# --- MODIFICATION: Add default for Vertical Margin ---
+DEFAULT_SUBTITLE_MARGIN_V = "115"
+
 
 # --- CUSTOMIZABLE BITRATES (in kbps) ---
 BITRATES = {
@@ -131,6 +256,71 @@ BITRATES = {
 
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
+
+def hex_to_libass_color(hex_color):
+    if not hex_color or not hex_color.startswith("#"): return "&H00000000"
+    hex_val = hex_color.lstrip('#')
+    if len(hex_val) != 6: return "&H00000000"
+    r, g, b = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+def create_temporary_ass_file(srt_path, options):
+    try:
+        with open(srt_path, 'r', encoding='utf-8', errors='replace') as f:
+            srt_content = f.read()
+    except Exception as e:
+        print(f"[ERROR] Could not read SRT file {srt_path}: {e}")
+        return None
+
+    style_name = "CustomStyle"
+    font_name = options.get('subtitle_font', DEFAULT_SUBTITLE_FONT)
+    font_size = options.get('subtitle_font_size', DEFAULT_SUBTITLE_FONT_SIZE)
+    primary_color = hex_to_libass_color(options.get('subtitle_primary_color', DEFAULT_SUBTITLE_PRIMARY_COLOR))
+    outline_color = hex_to_libass_color(options.get('subtitle_outline_color', DEFAULT_SUBTITLE_OUTLINE_COLOR))
+    shadow_color = hex_to_libass_color(options.get('subtitle_shadow_color', DEFAULT_SUBTITLE_SHADOW_COLOR))
+    bold_flag = "-1" if options.get('subtitle_bold', False) else "0"
+    italic_flag = "-1" if options.get('subtitle_italic', False) else "0"
+    # --- MODIFICATION: Get MarginV from options ---
+    margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
+    
+    align_map = {"top": 8, "middle": 5, "bottom": 2}
+    alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
+    
+    header = f"""[Script Info]
+Title: Temporary Subtitle File
+ScriptType: v4.00+
+WrapStyle: 0
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: {style_name},{font_name},{font_size},{primary_color},&H000000FF,{outline_color},{shadow_color},{bold_flag},{italic_flag},0,0,100,100,0,0,1,2,1,{alignment},10,10,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    
+    dialogue_lines = []
+    srt_blocks = re.findall(r'(\d+)\s*\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s*\n(.*?)(?=\n\n|\Z)', srt_content, re.DOTALL)
+
+    for block in srt_blocks:
+        _, start_time, end_time, text = block
+        start_ass = start_time.replace(',', '.')[:-1]
+        end_ass = end_time.replace(',', '.')[:-1]
+        text_ass = text.strip().replace('\n', '\\N')
+        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},{style_name},,0,0,0,,{text_ass}")
+
+    full_ass_content = header + "\n".join(dialogue_lines)
+
+    try:
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.ass', encoding='utf-8')
+        temp_file.write(full_ass_content)
+        temp_file.close()
+        return temp_file.name
+    except Exception as e:
+        print(f"[ERROR] Could not create temporary ASS file: {e}")
+        return None
 
 def get_video_info(file_path):
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,r_frame_rate,height,width,color_transfer,color_primaries", "-of", "json", file_path]
@@ -174,8 +364,7 @@ class VideoProcessorApp:
         self.root = root; self.root.title("Video Processing Tool")
         self.lut_file = LUT_FILE_PATH
         self.output_mode = output_mode
-        self.subtitles_by_file = {}; self.file_list = []
-        self.subtitle_id_counter = 0; self.current_subtitle_checkbuttons = []
+        self.file_list = []
         self.file_options = {}
 
         self.output_mode_var = tk.StringVar(value=output_mode)
@@ -188,22 +377,31 @@ class VideoProcessorApp:
         self.vertical_aspect_var = tk.StringVar(value=DEFAULT_VERTICAL_ASPECT)
         self.fruc_var = tk.BooleanVar(value=DEFAULT_FRUC)
         self.fruc_fps_var = tk.StringVar(value=DEFAULT_FRUC_FPS)
-        self.alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
-        self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.generate_log_var = tk.BooleanVar(value=False)
+        self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
+        
+        self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
+        self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
+        self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+        self.subtitle_bold_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_BOLD)
+        self.subtitle_italic_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_ITALIC)
+        self.subtitle_primary_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_PRIMARY_COLOR)
+        self.subtitle_outline_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_OUTLINE_COLOR)
+        self.subtitle_shadow_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_SHADOW_COLOR)
+        # --- MODIFICATION: Add variable for MarginV ---
+        self.subtitle_margin_v_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_V)
+
         self.root.drop_target_register(DND_FILES); self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
         
         self.setup_gui()
         self.update_file_list(initial_files)
-    
+
     def setup_gui(self):
-        # --- Main Window Structure ---
         self.root.columnconfigure(0, weight=1); self.root.columnconfigure(1, weight=1)
         main_frame = tk.Frame(self.root); main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         left_frame = tk.Frame(main_frame); left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         right_frame = tk.Frame(main_frame); right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
-        # --- LEFT COLUMN: Input Panel ---
         file_group = tk.LabelFrame(left_frame, text="Files", padx=10, pady=10); file_group.pack(fill=tk.BOTH, expand=True)
         listbox_frame = tk.Frame(file_group); listbox_frame.pack(fill=tk.BOTH, expand=True)
         self.file_listbox = tk.Listbox(listbox_frame, selectmode=tk.EXTENDED); self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -219,14 +417,6 @@ class VideoProcessorApp:
         tk.Button(file_buttons_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=5)
         tk.Button(file_buttons_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
 
-        subtitle_group = tk.LabelFrame(left_frame, text="Burn Subtitle Tracks", padx=10, pady=10); subtitle_group.pack(fill=tk.X, pady=(10, 0))
-        self.subtitle_tracks_buttons_frame = tk.Frame(subtitle_group); self.subtitle_tracks_buttons_frame.pack(fill=tk.X, pady=5)
-        tk.Button(self.subtitle_tracks_buttons_frame, text="Load Embedded", command=self.load_embedded_srt_all).pack(side=tk.LEFT)
-        tk.Button(self.subtitle_tracks_buttons_frame, text="Add External", command=self.add_external_srt).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.subtitle_tracks_buttons_frame, text="Remove Selected", command=self.remove_selected_srt).pack(side=tk.LEFT)
-        self.subtitle_tracks_list_frame = tk.Frame(subtitle_group); self.subtitle_tracks_list_frame.pack(fill=tk.X, pady=5)
-
-        # --- RIGHT COLUMN: Settings Panel ---
         geometry_group = tk.LabelFrame(right_frame, text="Output & Geometry", padx=10, pady=10); geometry_group.pack(fill=tk.X)
         orientation_frame = tk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
         tk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
@@ -251,7 +441,7 @@ class VideoProcessorApp:
         self.rb_pad = tk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options); self.rb_pad.pack(side=tk.LEFT)
         self.rb_stretch = tk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options); self.rb_stretch.pack(side=tk.LEFT)
 
-        quality_group = tk.LabelFrame(right_frame, text="Format & Quality", padx=10, pady=10); quality_group.pack(fill=tk.X, pady=10)
+        quality_group = tk.LabelFrame(right_frame, text="Format & Quality", padx=10, pady=10); quality_group.pack(fill=tk.X, pady=5)
         resolution_options_frame = tk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
         tk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
         self.rb_hd = tk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=self.apply_gui_options_to_selected_files); self.rb_hd.pack(side=tk.LEFT)
@@ -270,93 +460,156 @@ class VideoProcessorApp:
         tk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
         tk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT)
 
-        other_opts_group = tk.LabelFrame(right_frame, text="Other Options", padx=10, pady=10); other_opts_group.pack(fill=tk.X)
-        sub_opts_frame = tk.Frame(other_opts_group); sub_opts_frame.pack(fill=tk.X)
-        tk.Label(sub_opts_frame, text="Subtitle Align:").pack(side=tk.LEFT)
-        tk.Radiobutton(sub_opts_frame, text="Top", variable=self.alignment_var, value="top", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        tk.Radiobutton(sub_opts_frame, text="Middle", variable=self.alignment_var, value="middle", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        tk.Radiobutton(sub_opts_frame, text="Bottom", variable=self.alignment_var, value="bottom", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        tk.Label(sub_opts_frame, text="Font Size:").pack(side=tk.LEFT, padx=(10,5))
-        self.subtitle_font_size_entry = tk.Entry(sub_opts_frame, textvariable=self.subtitle_font_size_var, width=5); self.subtitle_font_size_entry.pack(side=tk.LEFT)
+        subtitle_style_group = tk.LabelFrame(right_frame, text="Subtitle Styling", padx=10, pady=10)
+        subtitle_style_group.pack(fill=tk.X, pady=5)
+        
+        font_frame = tk.Frame(subtitle_style_group); font_frame.pack(fill=tk.X, pady=2)
+        tk.Label(font_frame, text="Font Family:").pack(side=tk.LEFT, padx=(0, 5))
+        self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=20)
+        self.font_combo.pack(side=tk.LEFT, padx=5)
+        self.font_combo.bind("<<ComboboxSelected>>", self.apply_gui_options_to_selected_files)
+        self.populate_fonts()
+        tk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
+        self.subtitle_font_size_entry = tk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
+        self.subtitle_font_size_entry.pack(side=tk.LEFT)
         self.subtitle_font_size_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+
+        style_frame = tk.Frame(subtitle_style_group); style_frame.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var, command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        tk.Checkbutton(style_frame, text="Italic", variable=self.subtitle_italic_var, command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT, padx=10)
+        
+        align_frame = tk.Frame(subtitle_style_group); align_frame.pack(fill=tk.X, pady=2)
+        tk.Label(align_frame, text="Align:").pack(side=tk.LEFT)
+        tk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        tk.Radiobutton(align_frame, text="Middle", variable=self.subtitle_alignment_var, value="middle", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        tk.Radiobutton(align_frame, text="Bottom", variable=self.subtitle_alignment_var, value="bottom", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        # --- MODIFICATION: Add GUI elements for Vertical Margin ---
+        tk.Label(align_frame, text="Vertical Margin (pixels):").pack(side=tk.LEFT, padx=(10, 5))
+        self.subtitle_margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
+        self.subtitle_margin_v_entry.pack(side=tk.LEFT)
+        self.subtitle_margin_v_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+
+
+        color_frame = tk.Frame(subtitle_style_group); color_frame.pack(fill=tk.X, pady=5)
+        tk.Label(color_frame, text="Text Color:").pack(side=tk.LEFT)
+        self.primary_color_swatch = tk.Label(color_frame, text="    ", bg=self.subtitle_primary_color_var.get(), relief="sunken")
+        self.primary_color_swatch.pack(side=tk.LEFT, padx=5)
+        tk.Button(color_frame, text="Choose...", command=lambda: self.choose_color(self.subtitle_primary_color_var, self.primary_color_swatch)).pack(side=tk.LEFT)
+        tk.Label(color_frame, text="Outline:").pack(side=tk.LEFT, padx=(10, 0))
+        self.outline_color_swatch = tk.Label(color_frame, text="    ", bg=self.subtitle_outline_color_var.get(), relief="sunken")
+        self.outline_color_swatch.pack(side=tk.LEFT, padx=5)
+        tk.Button(color_frame, text="Choose...", command=lambda: self.choose_color(self.subtitle_outline_color_var, self.outline_color_swatch)).pack(side=tk.LEFT)
+        tk.Label(color_frame, text="Shadow:").pack(side=tk.LEFT, padx=(10, 0))
+        self.shadow_color_swatch = tk.Label(color_frame, text="    ", bg=self.subtitle_shadow_color_var.get(), relief="sunken")
+        self.shadow_color_swatch.pack(side=tk.LEFT, padx=5)
+        tk.Button(color_frame, text="Choose...", command=lambda: self.choose_color(self.subtitle_shadow_color_var, self.shadow_color_swatch)).pack(side=tk.LEFT)
+        
+        other_opts_group = tk.LabelFrame(right_frame, text="Other Options", padx=10, pady=10); other_opts_group.pack(fill=tk.X, pady=5)
+        misc_frame = tk.Frame(other_opts_group); misc_frame.pack(fill=tk.X)
+        tk.Checkbutton(misc_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
         fruc_frame = tk.Frame(other_opts_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
         tk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self.apply_gui_options_to_selected_files()]).pack(side=tk.LEFT)
         tk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
         self.fruc_fps_entry = tk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
         self.fruc_fps_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
 
-        # --- BOTTOM BAR ---
         bottom_frame = tk.Frame(self.root); bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.start_button = tk.Button(bottom_frame, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = tk.Checkbutton(bottom_frame, text="Generate Log File", variable=self.generate_log_var, command=self.apply_gui_options_to_selected_files); self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
         self._toggle_orientation_options(); self._toggle_upscale_options()
 
+    def populate_fonts(self):
+        try:
+            fonts = sorted(list(font.families()))
+            self.font_combo['values'] = fonts
+            if DEFAULT_SUBTITLE_FONT in fonts:
+                self.subtitle_font_var.set(DEFAULT_SUBTITLE_FONT)
+            elif fonts:
+                self.subtitle_font_var.set(fonts[0])
+        except Exception as e:
+            print(f"[WARN] Could not load system fonts: {e}")
+            self.font_combo['values'] = [DEFAULT_SUBTITLE_FONT]
+            self.subtitle_font_var.set(DEFAULT_SUBTITLE_FONT)
+
+    def choose_color(self, color_var, swatch_label):
+        initial_color = color_var.get()
+        color_code = colorchooser.askcolor(title="Choose color", initialcolor=initial_color)
+        if color_code and color_code[1]:
+            hex_color = color_code[1]
+            color_var.set(hex_color)
+            swatch_label.config(bg=hex_color)
+            self.apply_gui_options_to_selected_files()
+
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
         self.horizontal_rb_frame.pack_forget()
         self.vertical_rb_frame.pack_forget()
-
-        # Define lists of widgets to manage
         resolution_widgets = [self.rb_hd, self.rb_4k, self.rb_8k]
         upscale_widgets = [self.rb_superres, self.rb_vsr, self.rb_auto]
         aspect_handling_widgets = [self.rb_crop, self.rb_pad, self.rb_stretch]
-
-        # Default state: enable all controls
         for widget_list in [resolution_widgets, upscale_widgets, aspect_handling_widgets]:
             for widget in widget_list:
                 widget.config(state="normal")
-        
-        if orientation == "horizontal":
-            self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio")
-            self.horizontal_rb_frame.pack(fill="x")
-        elif orientation == "vertical":
-            self.aspect_ratio_frame.config(text="Vertical Aspect Ratio")
-            self.vertical_rb_frame.pack(fill="x")
-        elif orientation == "horizontal + vertical":
-            self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)")
-            self.horizontal_rb_frame.pack(fill="x", pady=(0, 5))
-            self.vertical_rb_frame.pack(fill="x")
+        if orientation == "horizontal": self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio"); self.horizontal_rb_frame.pack(fill="x")
+        elif orientation == "vertical": self.aspect_ratio_frame.config(text="Vertical Aspect Ratio"); self.vertical_rb_frame.pack(fill="x")
+        elif orientation == "horizontal + vertical": self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)"); self.horizontal_rb_frame.pack(fill="x", pady=(0, 5)); self.vertical_rb_frame.pack(fill="x")
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
-            # For "Original" mode, only disable aspect handling controls
-            for widget in aspect_handling_widgets:
-                widget.config(state="disabled")
-            # Keep resolution and upscale controls enabled
-            for widget in resolution_widgets:
-                widget.config(state="normal")
-            for widget in upscale_widgets:
-                widget.config(state="normal")
-
-
-
-
-
+            for widget in aspect_handling_widgets: widget.config(state="disabled")
+            for widget in resolution_widgets: widget.config(state="normal")
+            for widget in upscale_widgets: widget.config(state="normal")
         self.apply_gui_options_to_selected_files()
 
-    def _toggle_upscale_options(self):
-        self.apply_gui_options_to_selected_files()
+    def _toggle_upscale_options(self): self.apply_gui_options_to_selected_files()
 
     def apply_gui_options_to_selected_files(self, event=None):
         selected_indices = self.file_listbox.curselection()
         options_state = {
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
             "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
-            "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(),
-            "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(),
+            "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "horizontal_aspect": self.horizontal_aspect_var.get(),
-            "vertical_aspect": self.vertical_aspect_var.get()
+            "vertical_aspect": self.vertical_aspect_var.get(),
+            "burn_subtitles": self.burn_subtitles_var.get(),
+            "subtitle_font": self.subtitle_font_var.get(),
+            "subtitle_font_size": self.subtitle_font_size_var.get(),
+            "subtitle_alignment": self.subtitle_alignment_var.get(),
+            "subtitle_bold": self.subtitle_bold_var.get(),
+            "subtitle_italic": self.subtitle_italic_var.get(),
+            "subtitle_primary_color": self.subtitle_primary_color_var.get(),
+            "subtitle_outline_color": self.subtitle_outline_color_var.get(),
+            "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
+            # --- MODIFICATION: Save MarginV setting ---
+            "subtitle_margin_v": self.subtitle_margin_v_var.get()
         }
         target_indices = selected_indices if selected_indices else range(len(self.file_list))
-        for index in target_indices:
-            self.file_options[self.file_list[index]] = options_state
+        for index in target_indices: self.file_options[self.file_list[index]].update(options_state)
 
     def update_file_list(self, files):
         for file_path in files:
             if file_path not in self.file_list:
-                self.file_list.append(file_path); self.file_listbox.insert(tk.END, os.path.basename(file_path)); self.subtitles_by_file[file_path] = []
+                self.file_list.append(file_path); self.file_listbox.insert(tk.END, os.path.basename(file_path))
+                self.file_options[file_path] = {
+                    "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
+                    "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
+                    "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
+                    "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+                    "horizontal_aspect": self.horizontal_aspect_var.get(),
+                    "vertical_aspect": self.vertical_aspect_var.get(),
+                    "burn_subtitles": self.burn_subtitles_var.get(), "subtitle_file": None,
+                    "subtitle_font": self.subtitle_font_var.get(),
+                    "subtitle_font_size": self.subtitle_font_size_var.get(),
+                    "subtitle_alignment": self.subtitle_alignment_var.get(),
+                    "subtitle_bold": self.subtitle_bold_var.get(),
+                    "subtitle_italic": self.subtitle_italic_var.get(),
+                    "subtitle_primary_color": self.subtitle_primary_color_var.get(),
+                    "subtitle_outline_color": self.subtitle_outline_color_var.get(),
+                    "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
+                    # --- MODIFICATION: Initialize MarginV for new file ---
+                    "subtitle_margin_v": self.subtitle_margin_v_var.get()
+                }
                 self.detect_subtitle_tracks(file_path)
-                self.file_options[file_path] = { "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(), "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(), "fruc_fps": self.fruc_fps_var.get(), "alignment": self.alignment_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(), "generate_log": self.generate_log_var.get(), "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(), "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get() }
 
     def on_file_select(self, event):
         sel = self.file_listbox.curselection()
@@ -364,14 +617,26 @@ class VideoProcessorApp:
             selected_file = self.file_list[sel[0]]
             if selected_file in self.file_options:
                 options = self.file_options[selected_file]
-                self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT)); self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)); self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.alignment_var.set(options.get("alignment", DEFAULT_SUBTITLE_ALIGNMENT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS)); self.generate_log_var.set(options.get("generate_log", False))
+                self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT)); self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)); self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS)); self.generate_log_var.set(options.get("generate_log", False))
+                self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES))
+                self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT))
+                self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE))
+                self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
+                self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD))
+                self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC))
+                self.subtitle_primary_color_var.set(options.get("subtitle_primary_color", DEFAULT_SUBTITLE_PRIMARY_COLOR))
+                self.subtitle_outline_color_var.set(options.get("subtitle_outline_color", DEFAULT_SUBTITLE_OUTLINE_COLOR))
+                self.subtitle_shadow_color_var.set(options.get("subtitle_shadow_color", DEFAULT_SUBTITLE_SHADOW_COLOR))
+                # --- MODIFICATION: Update MarginV GUI on selection ---
+                self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
+                self.primary_color_swatch.config(bg=self.subtitle_primary_color_var.get())
+                self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
+                self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
                 self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options()
-        self.refresh_subtitle_list()
 
     def build_nvenc_command_and_run(self, file_path, orientation, ass_burn=None):
         options = self.file_options.get(file_path, {})
-        resolution_mode = options.get("resolution", DEFAULT_RESOLUTION)
-        output_format = options.get("output_format", DEFAULT_OUTPUT_FORMAT)
+        resolution_mode = options.get("resolution", DEFAULT_RESOLUTION); output_format = options.get("output_format", DEFAULT_OUTPUT_FORMAT)
         folder_name = f"{resolution_mode}_{output_format.upper()}"
         if orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
         elif orientation == "original": folder_name += "_Original"
@@ -394,7 +659,6 @@ class VideoProcessorApp:
 
     def construct_nvencc_command(self, file_path, output_file, orientation, ass_burn, options):
         info = get_video_info(file_path); cmd = ["NVEncC64", "--avhw", "--preset", "p1", "--log-level", "info"]
-        
         if orientation != "original":
             aspect_mode = options.get("aspect_mode"); resolution_key = options.get('resolution'); upscale_algo = options.get("upscale_algo")
             if orientation == "vertical":
@@ -434,10 +698,7 @@ class VideoProcessorApp:
                 resize_params = f"algo={upscale_algo}";
                 if upscale_algo == "ngx-vsr": resize_params += ",vsr-quality=1"
                 cmd.extend(["--vpp-resize", resize_params])
-
-        # --- Standard Encoder Settings ---
         output_format = options.get("output_format"); is_hdr_output = output_format == 'hdr'
-        
         if orientation == "original":
             if info["height"] <= 1080: bitrate_res_key = "HD"
             elif info["height"] <= 2160: bitrate_res_key = "4k"
@@ -445,13 +706,11 @@ class VideoProcessorApp:
         else:
             resolution_key = options.get('resolution', DEFAULT_RESOLUTION)
             bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
-
         bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
         cmd.extend(["--vbr", str(bitrate_kbps), "--gop-len", str(gop_len)])
         audio_streams = get_audio_stream_info(file_path)
-        if len(audio_streams) > 0:
-            cmd.extend(["--audio-codec", "copy"])
+        if len(audio_streams) > 0: cmd.extend(["--audio-codec", "copy"])
         if is_hdr_output: cmd.extend(["--codec", "hevc", "--profile", "main10", "--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc", "--dhdr10-info", "pass"])
         else:
             cmd.extend(["--codec", "h264", "--profile", "high", "--output-depth", "8", "--bframes", "2", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
@@ -459,7 +718,10 @@ class VideoProcessorApp:
         cmd.extend(["--vpp-deinterlace", "adaptive"])
         if options.get("fruc"): cmd.extend(["--vpp-fruc", f"fps={options.get('fruc_fps')}"])
         if options.get("generate_log"): cmd.extend(["--log", "log.log", "--log-level", "debug"])
-        if ass_burn: cmd.extend(["--vpp-subburn", f"filename={ass_burn},charcode=utf-8"])
+        
+        if ass_burn:
+            cmd.extend(["--vpp-subburn", f"filename={ass_burn}"])
+
         cmd.extend(["--output", output_file, "-i", file_path])
         return cmd
 
@@ -468,19 +730,34 @@ class VideoProcessorApp:
         self.output_mode = self.output_mode_var.get()
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
         self.root.destroy()
+        
         for file_path in self.file_list:
             options = self.file_options.get(file_path, {})
             orientation_mode = options.get("orientation", "horizontal")
             base_name = os.path.basename(file_path)
-            print("-" * 80)
-            print(f"Processing: {base_name} (Mode: {orientation_mode})")
-            if orientation_mode == "horizontal + vertical":
-                print(f"\n--- Processing HORIZONTAL for: {base_name} ---")
-                self.build_nvenc_command_and_run(file_path, "horizontal")
-                print(f"\n--- Processing VERTICAL for: {base_name} ---")
-                self.build_nvenc_command_and_run(file_path, "vertical")
-            else:
-                self.build_nvenc_command_and_run(file_path, orientation_mode)
+            
+            temp_ass_path = None
+            try:
+                if options.get("burn_subtitles") and options.get("subtitle_file"):
+                    print(f"[INFO] Creating styled subtitle file for {base_name}...")
+                    temp_ass_path = create_temporary_ass_file(options["subtitle_file"], options)
+                    if temp_ass_path:
+                        print(f"[INFO] Subtitle burning enabled for {base_name}.")
+                
+                print("-" * 80); print(f"Processing: {base_name} (Mode: {orientation_mode})")
+                if orientation_mode == "horizontal + vertical":
+                    print(f"\n--- Processing HORIZONTAL for: {base_name} ---")
+                    self.build_nvenc_command_and_run(file_path, "horizontal", ass_burn=temp_ass_path)
+                    print(f"\n--- Processing VERTICAL for: {base_name} ---")
+                    self.build_nvenc_command_and_run(file_path, "vertical", ass_burn=temp_ass_path)
+                else:
+                    self.build_nvenc_command_and_run(file_path, orientation_mode, ass_burn=temp_ass_path)
+            
+            finally:
+                if temp_ass_path and os.path.exists(temp_ass_path):
+                    os.remove(temp_ass_path)
+                    print(f"[INFO] Cleaned up temporary subtitle file.")
+                    
         print("\n================== Processing Complete. ==================")
 
     def run_nvenc_command(self, cmd):
@@ -508,33 +785,26 @@ class VideoProcessorApp:
         finally: print("-" * 80)
     
     def apply_gui_options_to_selected_files_event(self, event): self.apply_gui_options_to_selected_files()
-    def load_embedded_srt_all(self): pass
-    def add_files(self):
-        files = filedialog.askopenfilenames(title="Select Video Files", filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")])
-        self.update_file_list(files)
-    def handle_file_drop(self, event):
-        files = self.root.tk.splitlist(event.data); self.update_file_list(files)
+    def add_files(self): files = filedialog.askopenfilenames(title="Select Video Files", filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")]); self.update_file_list(files)
+    def handle_file_drop(self, event): files = self.root.tk.splitlist(event.data); self.update_file_list(files)
     def remove_selected(self):
         selected_indices = list(self.file_listbox.curselection())
         for index in reversed(selected_indices):
             file_to_remove = self.file_list[index]
-            del self.subtitles_by_file[file_to_remove], self.file_options[file_to_remove], self.file_list[index]
+            del self.file_options[file_to_remove]
+            del self.file_list[index]
             self.file_listbox.delete(index)
-        self.refresh_subtitle_list()
-    def clear_all(self):
-        self.file_list.clear(); self.file_listbox.delete(0, tk.END); self.subtitles_by_file.clear(); self.file_options.clear(); self.refresh_subtitle_list()
-    def select_all_files(self):
-        self.file_listbox.select_set(0, tk.END); self.on_file_select(None)
-    def clear_file_selection(self):
-        self.file_listbox.select_clear(0, tk.END); self.on_file_select(None)
-    def detect_subtitle_tracks(self, file_path): pass
-    def add_external_srt(self): pass
-    def remove_selected_srt(self): pass
-    def refresh_subtitle_list(self): pass
-    def on_subtitle_check(self, sub, var): pass
+    def clear_all(self): self.file_list.clear(); self.file_listbox.delete(0, tk.END); self.file_options.clear()
+    def select_all_files(self): self.file_listbox.select_set(0, tk.END); self.on_file_select(None)
+    def clear_file_selection(self): self.file_listbox.select_clear(0, tk.END); self.on_file_select(None)
+    def detect_subtitle_tracks(self, file_path):
+        base_name, _ = os.path.splitext(file_path)
+        srt_path = base_name + ".srt"
+        if os.path.exists(srt_path) and os.path.getsize(srt_path) > 0:
+            self.file_options[file_path]["subtitle_file"] = srt_path
+            print(f"[INFO] Found valid subtitle file for {os.path.basename(file_path)}")
+        else: self.file_options[file_path]["subtitle_file"] = None
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
-    def extract_embedded_subtitle_to_ass(self, input_file, output_ass, sub_track_id, final_width, final_height): pass
-    def extract_subtitle_to_srt(self, input_file, output_srt, sub_track_id=None): pass
 
 if __name__ == "__main__":
     import glob
