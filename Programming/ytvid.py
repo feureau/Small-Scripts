@@ -1,3 +1,4 @@
+
 r"""
 ====================================================================================================
                             YouTube Batch Video Processing Tool
@@ -15,129 +16,186 @@ PURPOSE:
 This script provides a Graphical User Interface (GUI) to batch process video files,
 optimizing them for upload to YouTube and other social media platforms. It offers full control
 over output orientation, aspect ratio handling, and advanced subtitle burning for both
-horizontal and vertical formats. It functions as a powerful front-end for a highly optimized,
-hybrid GPU/CPU FFmpeg pipeline that uses NVIDIA's CUDA for hardware acceleration.
+horizontal and vertical formats. It acts as a front-end for the powerful NVIDIA
+hardware-accelerated encoder, NVEncC. For a full list of NVEncC's own command-line
+options, please refer to the official documentation on its GitHub repository.
 
 CORE FEATURES:
-  - Batch Processing: Add, remove, and manage multiple video files in a single session,
-    including support for drag-and-drop.
-  - Optimized Hardware Acceleration: Leverages NVIDIA's CUDA for the most demanding tasks
-    (decoding, scaling, encoding) while intelligently using the CPU for filters not
-    available on the GPU, resulting in a stable and high-performance workflow.
-  - Full Geometric Control: Independently configure output orientation (Horizontal, Vertical,
-    or both) and aspect ratio handling (Crop, Pad, Stretch) for each file or for the
-    entire batch.
-  - Advanced Subtitle Burning: Automatically detects sidecar SRT files and provides a complete
-    styling suite (font, size, color, alignment, margins). It generates a temporary, fully
-    styled Advanced SubStation Alpha (.ass) file to ensure subtitles are rendered with
-    maximum legibility and positioned correctly, even within padded black bars.
-  - Format and Quality Flexibility: Output to standard SDR (H.264) or HDR (HEVC/H.265) with
-    automatic bitrate selection tailored to YouTube's recommendations based on resolution,
-    frame rate, and dynamic range.
-  - Self-Contained & Fully Documented: This documentation is embedded directly within the script,
-    providing a complete, single-file reference for its internal logic, design choices, and
-    historical evolution.
+  - Batch Processing: Process multiple video files in a single session.
+  - Hardware Acceleration: Leverages NVIDIA's NVENC for high-speed encoding.
+  - Full Geometric Control: Independently set orientation (Horizontal, Vertical, Original) and
+    aspect ratio handling (Crop, Pad, Stretch).
+  - Advanced Subtitle Burning: Automatically detects sidecar SRT files and provides a full
+    styling suite (font, size, color, alignment, margin) for burning them into the video.
+  - Format Flexibility: Output to SDR (H.264) or HDR (HEVC) with automatic bitrate selection.
+  - AI Upscaling: Integrates NVIDIA's Super Resolution and VSR for high-quality upscaling.
+  - Self-Contained: Includes this detailed documentation about the script's own logic.
 
 ----------------------------------------------------------------------------------------------------
                         PART 2: DESIGN PHILOSOPHY & TECHNICAL RATIONALE
 ----------------------------------------------------------------------------------------------------
 
-This script is the result of an iterative, empirical development process. The current design was
-forged through extensive testing and debugging to overcome the specific, often non-obvious,
-limitations of various command-line encoders. The primary goal of the current design is
-**stability, performance, and predictability** above all else.
+This script is the result of an iterative, empirical development process. Many of the
+core design decisions were made in direct response to the specific, often non-obvious,
+quirks and limitations discovered in the NVEncC encoder and its video processing (VPP)
+filter chain. The primary goal of the current design is **stability and predictability**
+above all else.
 
-1.  **THE ENCODING BACKEND: A ROBUST HYBRID FFMPEG PIPELINE (v4.3+)**
-    The script's core was refacgtored from its original NVEncC backend to a modern, more flexible
-    FFmpeg pipeline. This was not a simple replacement but a move to a sophisticated hybrid
-    GPU/CPU model to achieve results that are impossible with a pure GPU filter chain.
+1.  **SUBTITLE HANDLING - The Second Core Challenge (v3.6+)**
+    The implementation of subtitle burning was a significant development challenge. The final
+    design was chosen after initial, simpler methods failed due to the specific constraints
+    of the NVEncC toolchain.
 
-    -   **The Problem:** Many essential FFmpeg filters—`pad`, `crop`, `lut3d`, `minterpolate`, and
-        most importantly, `subtitles`—do not have CUDA-accelerated versions. A purely GPU-based
-        filter chain (`-vf "scale_cuda, pad_cuda, ..."`) will fail with a "No such filter" error.
+    -   **Historical Reason - The Failed Approach:** The first attempt involved passing style
+        overrides directly to the `--vpp-subburn` filter using a `force_style` parameter.
+        This is a common and valid method in standard ffmpeg. However, extensive testing and
+        debugging revealed that **NVEncC's `--vpp-subburn` implementation does NOT support the
+        `force_style` parameter**. All attempts to pass style information on the command line,
+        regardless of quoting or escaping, resulted in a parser error. This is a crucial
+        limitation of the NVEncC tool itself.
 
-    -   **The Solution: The `hwdownload`/`hwupload` Sandwich:** The script follows NVIDIA's
-        official best practice for building hybrid filter chains. The process for a single
-        video frame is as follows:
-        1.  **Decode (GPU):** The input video is decoded directly into GPU memory (`-hwaccel cuda`).
-        2.  **Process (GPU):** Computationally heavy filters that *do* have CUDA versions, like
-            deinterlacing (`yadif_cuda`) and resizing/format conversion (`scale_cuda`), are
-            run first. The frame never leaves the GPU.
-        3.  **Download (GPU -> CPU):** The script then inserts `hwdownload,format=nv12`. This
-            efficiently copies the processed frame from the GPU to main system memory (CPU),
-            explicitly converting it to the `nv12` pixel format, which is highly compatible.
-        4.  **Process (CPU):** All CPU-only filters are now run in sequence (e.g., `pad`, `crop`,
-            `subtitles`). Because the frame is in standard system memory, these filters work
-            flawlessly.
-        5.  **Upload (CPU -> GPU):** The script then inserts `format=nv12,hwupload_cuda`. This
-            crucial step ensures the frame is in the correct pixel format before efficiently
-            copying it *back* to GPU memory for encoding.
-        6.  **Encode (GPU):** The final, fully processed frame is sent to the `h264_nvenc` or
-            `hevc_nvenc` encoder, which processes it directly from GPU memory.
+    -   **Final, Robust Solution - On-the-Fly SRT-to-ASS Conversion (v3.8.0+):**
+        To provide full styling control in a way that is 100% compatible with NVEncC,
+        the script now uses a more sophisticated back-end process. This is the only
+        reliable method.
+        -   **Method:** When subtitle burning is enabled for a video with a detected `.srt`
+            file, the script dynamically creates a temporary, styled `.ass` (Advanced
+            SubStation Alpha) file in memory just before encoding.
+        -   **Style Implementation:** All settings configured in the "Subtitle Styling"
+            GUI (Font Family, Size, Colors, Bold, Italic, Alignment, and Vertical Margin)
+            are written into the `[V4+ Styles]` header of this temporary `.ass` file. This
+            embeds the styling information directly into the subtitle data.
+        -   **Conversion:** The script then parses the simple text and timings from the
+            original `.srt` file and converts each line into a styled `Dialogue:` event
+            in the `.ass` format.
+        -   **Execution:** This temporary, self-contained `.ass` file is then passed to
+            NVEncC's `--vpp-subburn` filter using the standard `filename=` parameter. Because
+            all styling is embedded within the file, the renderer processes it flawlessly.
+        -   **Rationale:** This approach is the definitive and most reliable method. It
+            leverages the native styling power of the `.ass` format, sidesteps the
+            limitations of `NVEncC`'s filter parameters, and gives the user complete
+            visual control over the final burned-in subtitles. The temporary file is
+            automatically deleted after the encode is complete.
 
-    -   **Critical Implementation Details:**
-        -   **Hardware Device Initialization:** The command begins with `-init_hw_device cuda=gpu:0`
-            and `-filter_hw_device gpu`. This is a non-negotiable requirement for stable
-            hardware filtering, as it creates a persistent CUDA context for the filtergraph.
-        -   **Omission of `-pix_fmt`:** The removal of the `-pix_fmt` flag from the encoder
-            settings prevents FFmpeg from failing when the filter chain delivers a native
-            GPU hardware surface (`cuda`) to the encoder.
-        -   **GPU-Accelerated 10-bit to 8-bit Conversion:** For SDR (H.264) output from a 10-bit
-            source, the script now uses the GPU-native `scale_cuda=format=nv12` filter. This
-            is the correct, high-performance method to convert the color format. It prevents
-            both the "10 bit encode not supported" error and the "Impossible to convert"
-            filterchain error that occurs when mixing GPU and CPU filters incorrectly.
+2.  **ASPECT RATIO GEOMETRY - The First Core Challenge**
+    The most complex part of this script is its handling of aspect ratio conversions.
+    The final implementation was chosen after extensive testing revealed the following
+    critical constraints of the NVEncC toolchain:
+      a. YUV420 Colorspace: Most standard video requires dimensions (for crops, pads,
+         and resolutions) to be even numbers. Odd numbers will cause a crash.
+      b. Hardware Limits: The NVIDIA encoder has a maximum texture resolution, typically
+         4096x4096 pixels. Any intermediate video stream that exceeds this limit will
+         cause a hard failure.
+      c. Build Dependencies: The available VPP filters and their syntax depend heavily
+         on whether NVEncC was compiled with all optional libraries (NPP, libplacebo).
 
-2.  **SUBTITLE HANDLING: ON-THE-FLY SRT-TO-ASS CONVERSION**
-    The script's subtitle system is designed for maximum quality and control.
-    -   **Method:** Instead of passing a simple `.srt` file, the script dynamically generates
-        a temporary, fully styled Advanced SubStation Alpha (`.ass`) file.
-    -   **Integration:** The `subtitles` filter is placed in the CPU portion of the hybrid
-        pipeline, which allows the text to be rendered *after* any padding is applied,
-        ensuring subtitles appear correctly in black bars.
+    To solve these challenges, each "Aspect Handling" mode uses a distinct method:
+    -   **"Original with Upscale" Mode (v3.5+):**
+        -   **Method:** Uses `--output-res` with automatic aspect ratio preservation.
+        -   **Rationale:** The simplest, most direct way to upscale while letting the
+            encoder handle letter/pillarboxing automatically.
+    -   **"Crop (Fill)" Mode uses a "Crop then Resize" Method:**
+        -   **Method:** Uses `--crop` to trim the source, then `--output-res` to resize.
+        -   **Rationale:** Stable and efficient for filling a frame.
+    -   **"Pad (Fit)" Mode uses a "Pad then Final Resize" Method (v3.1+):**
+        -   **Method:** Applies `--vpp-pad` first and then sets the final dimensions with `--output-res`.
+        -   **Historical Rationale:** This counter-intuitive order is the only one that works
+            reliably on limited NVEncC builds. The encoder engine is smart enough to see the
+            final resolution from `--output-res` and performs an implicit "letterbox" resize
+            *before* applying the explicit `--vpp-pad` filter, resulting in the correct output.
+    -   **"Stretch" Mode uses a "Direct Resize" Method:**
+        -   **Method:** Uses a single `--output-res` command.
+        -   **Rationale:** The simplest approach when aspect ratio preservation is not needed.
+
+3.  **GUI & WORKFLOW**
+    -   **Rationale (v2.2+):** Redesigned into a two-column format for a more logical
+        workflow on modern widescreen monitors (Files on left, Options on right).
+    -   **Rationale (v3.4+):** The settings logic was updated so that if no files are
+        selected, any change in the GUI applies globally to all files in the list. If one
+        or more files are selected, changes only apply to the selection. This provides
+        both batch and per-file flexibility.
 
 ----------------------------------------------------------------------------------------------------
                             PART 3: CODE ANNOTATION & EXPLANATION
 ----------------------------------------------------------------------------------------------------
-(Code annotation section is unchanged and remains accurate)
+
+This section explains the purpose of the main components of the Python script.
+
+1.  **USER CONFIGURATION BLOCK**
+    This block at the top of the script contains all default values for the GUI.
+    -   `DEFAULT_...`: Each of these variables sets the initial state of a GUI element, such
+        as the default resolution, font, or color. This makes it easy to customize the
+        application's starting configuration without digging into the main code.
+    -   `BITRATES`: A dictionary defining the target video bitrates in kilobits per second (kbps).
+        It is structured to provide different values based on the output format (SDR/HDR),
+        frame rate (Normal/High FPS), and resolution (HD/4k/8k). This allows for nuanced
+        quality control that aligns with YouTube's recommendations.
+
+2.  **CORE FUNCTIONS**
+    -   `hex_to_libass_color()`: A helper function that converts a standard HTML hex color
+        (e.g., `#FFFF00`) into the specific `&H00BBGGRR` format required by the ASS subtitle
+        standard.
+    -   `create_temporary_ass_file()`: The core of the modern subtitle system. It takes an
+        SRT file path and the GUI options, constructs a complete, styled ASS file as a string,
+        and writes it to a temporary file on disk, returning the path to that file.
+    -   `get_video_info()`: Uses `ffprobe` (part of the ffmpeg suite) to inspect a video file
+        and extract essential metadata. This data (resolution, frame rate, HDR status) is
+        critical for making automatic decisions later, such as calculating the correct
+        aspect ratio for cropping or selecting the appropriate bitrate.
+    -   `VideoProcessorApp` Class: The main class that encapsulates the entire GUI application.
+        -   `__init__()`: Initializes all Tkinter variables that link the GUI widgets to
+            the script's internal state.
+        -   `setup_gui()`: Contains all the code for creating and arranging the visual
+            elements (buttons, labels, checkboxes) of the application window.
+        -   `populate_fonts()`: Scans the user's operating system for available fonts and
+            populates the font selection dropdown, making any installed font usable.
+        -   `apply_gui_options_to_selected_files()`: The central logic for saving settings.
+            It reads the current state of all GUI widgets and saves them to the `file_options`
+            dictionary, keyed by the video file path.
+        -   `construct_nvencc_command()`: This is the "brain" of the operation. It takes a
+            file path and its associated options and builds the final command-line string to
+            be executed. It logically adds arguments for geometry, quality, codecs, and,
+            most importantly, points to the temporary `.ass` file for subtitle burning.
+        -   `start_processing()`: The main execution loop. When the "Start" button is clicked,
+            this function iterates through each file in the list. For each file, it creates
+            the temporary `.ass` subtitle file (if needed), calls the command constructor,
+            runs the `NVEncC64.exe` process, and then—crucially—cleans up the temporary
+            subtitle file in a `finally` block to ensure no garbage is left behind, even if
+            an error occurs.
+        -   `run_nvenc_command()`: A helper function that uses Python's `subprocess` module to
+            execute the generated NVEncC command. It captures the command's output in real-time
+            and prints it to the console, so the user can see the progress.
+    -   `if __name__ == "__main__":` Block: This is the entry point of the script.
+        -   It uses `argparse` to handle command-line arguments (like `--output-mode`).
+        -   If no files are provided via the command line, it performs a "deep scan" using
+            `os.walk()` to find all video files in the current directory and its subdirectories,
+            making it convenient for batch work.
+        -   Finally, it creates the main application window and starts the Tkinter event loop.
+
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
-v4.6.0 (2025-10-18) - Gemini/User Collaboration
-  - FIX: Replaced the incorrect CPU `format=nv12` filter with the GPU-accelerated
-    `scale_cuda=format=nv12` for 10-bit to 8-bit SDR conversion. This is the correct,
-    high-performance method that keeps the conversion on the GPU.
-  - FIX: This change resolves the "Impossible to convert between formats" filterchain error
-    caused by linking a CUDA filter directly to a CPU filter. The entire pipeline is now
-    hardware-correct.
-  - DOCS: Updated technical rationale to document the new GPU-native conversion method.
+v3.9.1 (2025-10-16) - Gemini/User Collaboration
+  - FIX: Corrected a `SyntaxError` within the documentation text itself by rephrasing a
+    changelog entry to avoid using characters that would conflict with the docstring parser.
 
-v4.5.0 (2025-10-18) - Gemini/User Collaboration
-  - FIX: Added automatic 10-bit to 8-bit (format=nv12) color conversion for all SDR (H.264)
-    outputs. This resolves the "10 bit encode not supported" error when processing modern
-    10-bit source files (e.g., AV1 from OBS) with the h264_nvenc encoder.
-  - FIX: Corrected a typo (`add_gument` -> `add_argument`) in the command-line argument parser.
-  - DOCS: Updated technical rationale to document the new 10-to-8 bit conversion logic.
+v3.9.0 (2025-10-16) - Gemini/User Collaboration
+  - DOCS: Revised and streamlined the internal documentation. The full NVEncC command-line
+    documentation appendix has been removed to significantly reduce file size and improve
+    readability. The script's own detailed technical and historical rationale is preserved.
 
-v4.4.0 (2025-10-17) - Gemini/User Collaboration
-  - DOCS: Performed a complete and exhaustive documentation update. Every part of the script's
-    logic, design rationale, and history is now explained in this embedded comment block.
-  - REFACTOR: Moved all hardcoded subtitle style settings to the `USER CONFIGURATION` block.
-  - CONFIG: Changed the default primary subtitle color to `#FFAA00`.
+v3.8.2 (2025-10-16) - Gemini/User Collaboration
+  - FIX: Corrected a fatal `SyntaxError: (unicode error)` on script startup by converting the
+    main documentation block into a raw string by prefixing it with an 'r'.
 
-v4.3.0 (2025-10-17) - Gemini/User Collaboration
-  - FIX: Removed the `-pix_fmt` argument from the encoder command sections.
+v3.8.1 (2025-10-16) - Gemini/User Collaboration
+  - FEATURE: Added a "Vertical Margin" input field to the GUI for precise subtitle positioning.
+  - BEHAVIOR: The `MarginV` value is now written into the temporary .ass style definition.
 
-v4.2.0 (2025-10-17) - Gemini/User Collaboration
-  - FIX: Added explicit CUDA hardware device initialization (`-init_hw_device`).
-  - FIX: Corrected a filter chain error by explicitly adding `format=nv12` before `hwupload_cuda`.
-
-v4.1.0 (2025-10-17) - Gemini/User Collaboration
-  - FIX: Replaced non-existent `_cuda` filters with their standard CPU counterparts.
-
-v4.0.0 (2025-10-17) - Gemini/User Collaboration
-  - REFACTOR: Replaced the entire NVEncC64 backend with a modern, FFmpeg pipeline.
-  - DEPRECATION: All logic related to NVEncC has been removed.
+v3.8.0 (2025-10-16) - Gemini/User Collaboration
+  - REFACTOR: Overhauled the subtitle burning mechanism to use on-the-fly SRT-to-ASS conversion.
+  - FIX: Corrected the fundamental flaw of trying to use the unsupported `force_style` parameter.
+  
 
 """
 
@@ -180,27 +238,11 @@ DEFAULT_SUBTITLE_FONT_SIZE = "64"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
 DEFAULT_SUBTITLE_BOLD = False
 DEFAULT_SUBTITLE_ITALIC = False
-DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFAA00"  # Vibrant Orange-Yellow
+DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFF00"  # Yellow
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000" # Black
-DEFAULT_SUBTITLE_SHADOW_COLOR = "#202020"  # Gray
+DEFAULT_SUBTITLE_SHADOW_COLOR = "#808080"  # Gray
+# --- MODIFICATION: Add default for Vertical Margin ---
 DEFAULT_SUBTITLE_MARGIN_V = "115"
-
-# --- Advanced ASS (Advanced SubStation Alpha) Style Overrides ---
-# These settings control the finer details of the subtitle appearance.
-# For a full explanation of these parameters, see the ASS specification.
-DEFAULT_SUBTITLE_BORDERSTYLE = "1"      # 1 = Outline + Drop Shadow, 3 = Opaque Box.
-DEFAULT_SUBTITLE_OUTLINE_WIDTH = "6"    # Width of the text border in pixels.
-DEFAULT_SUBTITLE_SHADOW_DEPTH = "3"     # Depth of the drop shadow in pixels.
-DEFAULT_SUBTITLE_MARGIN_L = "10"        # Left margin in pixels.
-DEFAULT_SUBTITLE_MARGIN_R = "10"        # Right margin in pixels.
-DEFAULT_SUBTITLE_ENCODING = "1"         # ASS font encoding. 1 is the standard for Unicode.
-DEFAULT_SUBTITLE_SECONDARY_COLOR = "&H000000FF" # Color for karaoke effects.
-DEFAULT_SUBTITLE_UNDERLINE = "0"        # 0 = Off, -1 = On.
-DEFAULT_SUBTITLE_STRIKEOUT = "0"        # 0 = Off, -1 = On.
-DEFAULT_SUBTITLE_SCALE_X = "100"        # Horizontal text scaling in percent.
-DEFAULT_SUBTITLE_SCALE_Y = "100"        # Vertical text scaling in percent.
-DEFAULT_SUBTITLE_SPACING = "0"          # Extra space between characters in pixels.
-DEFAULT_SUBTITLE_ANGLE = "0"            # Text rotation in degrees.
 
 
 # --- CUSTOMIZABLE BITRATES (in kbps) ---
@@ -238,6 +280,7 @@ def create_temporary_ass_file(srt_path, options):
     shadow_color = hex_to_libass_color(options.get('subtitle_shadow_color', DEFAULT_SUBTITLE_SHADOW_COLOR))
     bold_flag = "-1" if options.get('subtitle_bold', False) else "0"
     italic_flag = "-1" if options.get('subtitle_italic', False) else "0"
+    # --- MODIFICATION: Get MarginV from options ---
     margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
     
     align_map = {"top": 8, "middle": 5, "bottom": 2}
@@ -252,7 +295,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: {style_name},{font_name},{font_size},{primary_color},{DEFAULT_SUBTITLE_SECONDARY_COLOR},{outline_color},{shadow_color},{bold_flag},{italic_flag},{DEFAULT_SUBTITLE_UNDERLINE},{DEFAULT_SUBTITLE_STRIKEOUT},{DEFAULT_SUBTITLE_SCALE_X},{DEFAULT_SUBTITLE_SCALE_Y},{DEFAULT_SUBTITLE_SPACING},{DEFAULT_SUBTITLE_ANGLE},{DEFAULT_SUBTITLE_BORDERSTYLE},{DEFAULT_SUBTITLE_OUTLINE_WIDTH},{DEFAULT_SUBTITLE_SHADOW_DEPTH},{alignment},{DEFAULT_SUBTITLE_MARGIN_L},{DEFAULT_SUBTITLE_MARGIN_R},{margin_v},{DEFAULT_SUBTITLE_ENCODING}
+Style: {style_name},{font_name},{font_size},{primary_color},&H000000FF,{outline_color},{shadow_color},{bold_flag},{italic_flag},0,0,100,100,0,0,1,2,1,{alignment},10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -345,6 +388,7 @@ class VideoProcessorApp:
         self.subtitle_primary_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_PRIMARY_COLOR)
         self.subtitle_outline_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_OUTLINE_COLOR)
         self.subtitle_shadow_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_SHADOW_COLOR)
+        # --- MODIFICATION: Add variable for MarginV ---
         self.subtitle_margin_v_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_V)
 
         self.root.drop_target_register(DND_FILES); self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
@@ -439,6 +483,7 @@ class VideoProcessorApp:
         tk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
         tk.Radiobutton(align_frame, text="Middle", variable=self.subtitle_alignment_var, value="middle", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
         tk.Radiobutton(align_frame, text="Bottom", variable=self.subtitle_alignment_var, value="bottom", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        # --- MODIFICATION: Add GUI elements for Vertical Margin ---
         tk.Label(align_frame, text="Vertical Margin (pixels):").pack(side=tk.LEFT, padx=(10, 5))
         self.subtitle_margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         self.subtitle_margin_v_entry.pack(side=tk.LEFT)
@@ -535,6 +580,7 @@ class VideoProcessorApp:
             "subtitle_primary_color": self.subtitle_primary_color_var.get(),
             "subtitle_outline_color": self.subtitle_outline_color_var.get(),
             "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
+            # --- MODIFICATION: Save MarginV setting ---
             "subtitle_margin_v": self.subtitle_margin_v_var.get()
         }
         target_indices = selected_indices if selected_indices else range(len(self.file_list))
@@ -560,6 +606,7 @@ class VideoProcessorApp:
                     "subtitle_primary_color": self.subtitle_primary_color_var.get(),
                     "subtitle_outline_color": self.subtitle_outline_color_var.get(),
                     "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
+                    # --- MODIFICATION: Initialize MarginV for new file ---
                     "subtitle_margin_v": self.subtitle_margin_v_var.get()
                 }
                 self.detect_subtitle_tracks(file_path)
@@ -580,13 +627,14 @@ class VideoProcessorApp:
                 self.subtitle_primary_color_var.set(options.get("subtitle_primary_color", DEFAULT_SUBTITLE_PRIMARY_COLOR))
                 self.subtitle_outline_color_var.set(options.get("subtitle_outline_color", DEFAULT_SUBTITLE_OUTLINE_COLOR))
                 self.subtitle_shadow_color_var.set(options.get("subtitle_shadow_color", DEFAULT_SUBTITLE_SHADOW_COLOR))
+                # --- MODIFICATION: Update MarginV GUI on selection ---
                 self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
                 self.primary_color_swatch.config(bg=self.subtitle_primary_color_var.get())
                 self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
                 self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
                 self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options()
 
-    def build_ffmpeg_command_and_run(self, file_path, orientation, ass_burn=None):
+    def build_nvenc_command_and_run(self, file_path, orientation, ass_burn=None):
         options = self.file_options.get(file_path, {})
         resolution_mode = options.get("resolution", DEFAULT_RESOLUTION); output_format = options.get("output_format", DEFAULT_OUTPUT_FORMAT)
         folder_name = f"{resolution_mode}_{output_format.upper()}"
@@ -599,8 +647,8 @@ class VideoProcessorApp:
         output_dir = os.path.join(base_dir, folder_name); os.makedirs(output_dir, exist_ok=True)
         base_name, _ = os.path.splitext(os.path.basename(file_path))
         output_file = os.path.join(output_dir, f"{base_name}_temp.mp4")
-        cmd = self.construct_ffmpeg_command(file_path, output_file, orientation, ass_burn, options)
-        ret = self.run_ffmpeg_command(cmd)
+        cmd = self.construct_nvencc_command(file_path, output_file, orientation, ass_burn, options)
+        ret = self.run_nvenc_command(cmd)
         if ret == 0:
             final_name = output_file.replace("_temp.mp4", ".mp4")
             try:
@@ -609,85 +657,48 @@ class VideoProcessorApp:
             except Exception as e: print(f"[ERROR] Could not rename temp file {output_file}: {e}")
         else: print(f"[ERROR] Error encoding {file_path}: return code {ret}")
 
-    def construct_ffmpeg_command(self, file_path, output_file, orientation, ass_burn, options):
-        info = get_video_info(file_path)
-        
-        cmd = [
-            "ffmpeg", "-y", "-hide_banner",
-            "-hwaccel", "cuda",
-            "-hwaccel_output_format", "cuda",
-            "-extra_hw_frames", "8",
-            "-init_hw_device", "cuda=gpu:0",
-            "-filter_hw_device", "gpu",
-            "-i", file_path
-        ]
-        
-        vf_filters = ["yadif_cuda"]
-        cpu_filters = []
-        output_format = options.get("output_format")
-        is_hdr_output = output_format == 'hdr'
-        
-        # This string will be appended to scale_cuda filters to perform GPU-native format conversion.
-        sdr_format_conversion_str = "" if is_hdr_output else ":format=nv12"
-
+    def construct_nvencc_command(self, file_path, output_file, orientation, ass_burn, options):
+        info = get_video_info(file_path); cmd = ["NVEncC64", "--avhw", "--preset", "p1", "--log-level", "info"]
         if orientation != "original":
-            aspect_mode = options.get("aspect_mode")
-            resolution_key = options.get('resolution')
-
+            aspect_mode = options.get("aspect_mode"); resolution_key = options.get('resolution'); upscale_algo = options.get("upscale_algo")
             if orientation == "vertical":
                 aspect_str = options.get('vertical_aspect'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
                 target_width = width_map.get(resolution_key, 1080)
                 try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
                 except: target_height = int(target_width * 16 / 9)
-            else: # horizontal
+            else:
                 aspect_str = options.get('horizontal_aspect'); width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
                 target_width = width_map.get(resolution_key, 1920)
                 try: num, den = map(int, aspect_str.split(':')); target_height = int(target_width * den / num)
                 except: target_height = int(target_width * 9 / 16)
-            
-            target_width = (target_width // 2) * 2
-            target_height = (target_height // 2) * 2
-
+            target_width = (target_width // 2) * 2; target_height = (target_height // 2) * 2
             if aspect_mode == 'pad':
-                vf_filters.append(f"scale_cuda=w={target_width}:h={target_height}:force_original_aspect_ratio=decrease{sdr_format_conversion_str}")
-                cpu_filters.append(f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black")
-            elif aspect_mode == 'crop':
-                vf_filters.append(f"scale_cuda=w={target_width}:h={target_height}:force_original_aspect_ratio=increase{sdr_format_conversion_str}")
-                cpu_filters.append(f"crop={target_width}:{target_height}")
-            elif aspect_mode == 'stretch':
-                vf_filters.append(f"scale_cuda=w={target_width}:h={target_height}{sdr_format_conversion_str}")
-        
-        else: # orientation is "original"
-            # If output is SDR, we still need to convert 10-bit to 8-bit, even if not resizing.
-            if not is_hdr_output:
-                vf_filters.append(f"scale_cuda=format=nv12")
-
-        if info["is_hdr"] and not is_hdr_output and os.path.exists(self.lut_file):
-            lut_path_escaped = self.lut_file.replace('\\', '/')
-            cpu_filters.append(f"lut3d=file='{lut_path_escaped}':interp=trilinear")
-        
-        if options.get("fruc"):
-            cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
-
-        if ass_burn:
-            subtitle_path_escaped = ass_burn.replace('\\', '/').replace(':', '\\:')
-            cpu_filters.append(f"subtitles=filename='{subtitle_path_escaped}'")
-        
-        if cpu_filters:
-            vf_filters.append("hwdownload,format=nv12")
-            vf_filters.append(",".join(cpu_filters))
-            vf_filters.append("format=nv12,hwupload_cuda")
-        
-        if vf_filters:
-            vf_string = ",".join(vf_filters)
-            cmd.extend(["-vf", vf_string])
-
-        audio_streams = get_audio_stream_info(file_path)
-        if len(audio_streams) > 0:
-            cmd.extend(["-c:a", "copy"])
-        else:
-            cmd.extend(["-an"])
-
+                if info['height'] > 0 and info['width'] > 0:
+                    source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height
+                    if source_aspect > target_aspect: resized_w = target_width; resized_h = int(target_width / source_aspect)
+                    else: resized_h = target_height; resized_w = int(target_height * source_aspect)
+                    sanitized_w = resized_w - (resized_w % 2); sanitized_h = resized_h - (resized_h % 2)
+                    total_pad_w = target_width - sanitized_w; total_pad_h = target_height - sanitized_h
+                    pad_l = (total_pad_w // 2) - ((total_pad_w // 2) % 2); pad_r = total_pad_w - pad_l
+                    pad_t = (total_pad_h // 2) - ((total_pad_h // 2) % 2); pad_b = total_pad_h - pad_t
+                    if pad_l > 0 or pad_t > 0 or pad_r > 0 or pad_b > 0: cmd.extend(["--vpp-pad", f"{pad_l},{pad_t},{pad_r},{pad_b}"])
+                cmd.extend(["--output-res", f"{target_width}x{target_height}"])
+            else:
+                cmd.extend(["--output-res", f"{target_width}x{target_height}"])
+                if aspect_mode == 'crop':
+                    if info['height'] > 0 and info['width'] > 0:
+                        source_aspect = info['width'] / info['height']; target_aspect = target_width / target_height; crop_str = "0,0,0,0"
+                        if source_aspect > target_aspect:
+                            new_width_in_source = int(info['height'] * target_aspect); crop_val = (info['width'] - new_width_in_source) // 2
+                            if (crop_val := crop_val - crop_val % 2) > 0: crop_str = f"{crop_val},0,{crop_val},0"
+                        elif source_aspect < target_aspect:
+                            new_height_in_source = int(info['width'] / target_aspect); crop_val = (info['height'] - new_height_in_source) // 2
+                            if (crop_val := crop_val - crop_val % 2) > 0: crop_str = f"0,{crop_val},0,{crop_val}"
+                        if crop_str != "0,0,0,0": cmd.extend(["--crop", crop_str])
+                resize_params = f"algo={upscale_algo}";
+                if upscale_algo == "ngx-vsr": resize_params += ",vsr-quality=1"
+                cmd.extend(["--vpp-resize", resize_params])
+        output_format = options.get("output_format"); is_hdr_output = output_format == 'hdr'
         if orientation == "original":
             if info["height"] <= 1080: bitrate_res_key = "HD"
             elif info["height"] <= 2160: bitrate_res_key = "4k"
@@ -695,24 +706,23 @@ class VideoProcessorApp:
         else:
             resolution_key = options.get('resolution', DEFAULT_RESOLUTION)
             bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
-
         bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
-        
-        if is_hdr_output:
-            cmd.extend([
-                "-c:v", "hevc_nvenc", "-preset", "p1", "-profile:v", "main10",
-                "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len),
-                "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"
-            ])
+        cmd.extend(["--vbr", str(bitrate_kbps), "--gop-len", str(gop_len)])
+        audio_streams = get_audio_stream_info(file_path)
+        if len(audio_streams) > 0: cmd.extend(["--audio-codec", "copy"])
+        if is_hdr_output: cmd.extend(["--codec", "hevc", "--profile", "main10", "--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc", "--dhdr10-info", "pass"])
         else:
-            cmd.extend([
-                "-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high",
-                "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len),
-                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"
-            ])
+            cmd.extend(["--codec", "h264", "--profile", "high", "--output-depth", "8", "--bframes", "2", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
+            if info["is_hdr"] and os.path.exists(self.lut_file): cmd.extend(["--vpp-colorspace", f"lut3d={self.lut_file},lut3d_interp=trilinear"])
+        cmd.extend(["--vpp-deinterlace", "adaptive"])
+        if options.get("fruc"): cmd.extend(["--vpp-fruc", f"fps={options.get('fruc_fps')}"])
+        if options.get("generate_log"): cmd.extend(["--log", "log.log", "--log-level", "debug"])
+        
+        if ass_burn:
+            cmd.extend(["--vpp-subburn", f"filename={ass_burn}"])
 
-        cmd.extend(["-f", "mp4", output_file])
+        cmd.extend(["--output", output_file, "-i", file_path])
         return cmd
 
     def start_processing(self):
@@ -737,11 +747,11 @@ class VideoProcessorApp:
                 print("-" * 80); print(f"Processing: {base_name} (Mode: {orientation_mode})")
                 if orientation_mode == "horizontal + vertical":
                     print(f"\n--- Processing HORIZONTAL for: {base_name} ---")
-                    self.build_ffmpeg_command_and_run(file_path, "horizontal", ass_burn=temp_ass_path)
+                    self.build_nvenc_command_and_run(file_path, "horizontal", ass_burn=temp_ass_path)
                     print(f"\n--- Processing VERTICAL for: {base_name} ---")
-                    self.build_ffmpeg_command_and_run(file_path, "vertical", ass_burn=temp_ass_path)
+                    self.build_nvenc_command_and_run(file_path, "vertical", ass_burn=temp_ass_path)
                 else:
-                    self.build_ffmpeg_command_and_run(file_path, orientation_mode, ass_burn=temp_ass_path)
+                    self.build_nvenc_command_and_run(file_path, orientation_mode, ass_burn=temp_ass_path)
             
             finally:
                 if temp_ass_path and os.path.exists(temp_ass_path):
@@ -750,8 +760,8 @@ class VideoProcessorApp:
                     
         print("\n================== Processing Complete. ==================")
 
-    def run_ffmpeg_command(self, cmd):
-        print("Running FFmpeg command:\n" + " ".join(f'"{c}"' if " " in c else c for c in cmd))
+    def run_nvenc_command(self, cmd):
+        print("Running NVEnc command:\n" + " ".join(f'"{c}"' if " " in c else c for c in cmd))
         process = subprocess.Popen(cmd,stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True,encoding='utf-8',errors='replace',bufsize=1)
         while True:
             line = process.stdout.readline();
@@ -759,7 +769,7 @@ class VideoProcessorApp:
             if line:
                 if "\r" in line: progress = line.split("\r")[-1].strip(); sys.stdout.write("\r" + progress); sys.stdout.flush()
                 else: sys.stdout.write(line); sys.stdout.flush()
-        process.stdout.close(); ret = process.wait(); print("\nFFmpeg conversion finished."); return ret
+        process.stdout.close(); ret = process.wait(); print("\nNVEnc conversion finished."); return ret
 
     def verify_output_file(self, file_path):
         print("-" * 80 + f"\n--- Verifying output file: {os.path.basename(file_path)} ---")
