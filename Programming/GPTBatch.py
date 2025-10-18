@@ -584,11 +584,12 @@ def main():
         for pattern in args.files:
             filepaths.extend(glob.glob(pattern, recursive=True))
     else:
-        print("No input files specified. Searching current directory for supported files...")
+        print("No input files specified. Searching current directory and all subdirectories for supported files...")
         current_directory = os.getcwd()
         for ext in ALL_SUPPORTED_EXTENSIONS:
-            filepaths.extend(glob.glob(os.path.join(current_directory, f"*{ext}")))
-        
+            # The '**' pattern combined with 'recursive=True' enables searching in subfolders.
+            search_pattern = os.path.join(current_directory, f"**/*{ext}")
+            filepaths.extend(glob.glob(search_pattern, recursive=True))
         if filepaths:
             print(f"Found {len(filepaths)} supported files to process.")
         else:
