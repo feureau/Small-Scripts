@@ -14,16 +14,16 @@ r"""
 PURPOSE:
 This script provides a Graphical User Interface (GUI) to batch process video files,
 optimizing them for upload to YouTube and other social media platforms. It offers full control
-over output orientation, aspect ratio handling, and advanced subtitle burning for both
-horizontal and vertical formats. It functions as a powerful front-end for a highly optimized,
-fully hardware-accelerated, hybrid GPU/CPU FFmpeg pipeline that uses NVIDIA's CUDA.
+over output orientation, aspect ratio handling, advanced subtitle burning, and audio normalization
+for both horizontal and vertical formats. It functions as a powerful front-end for a highly
+optimized, fully hardware-accelerated, hybrid GPU/CPU FFmpeg pipeline that uses NVIDIA's CUDA.
 
 CORE FEATURES:
   - Batch Processing: Add, remove, and manage multiple video files in a single session,
     including support for drag-and-drop.
   - Optimized Hardware Acceleration: Leverages NVIDIA's CUDA for the entire video pipeline,
-    from decoding to scaling and encoding. For filters that are CPU-only (like subtitles),
-    it intelligently and efficiently transfers frames between the GPU and CPU.
+    from decoding to scaling and encoding. For filters that are CPU-only (like subtitles or
+    audio processing), it intelligently and efficiently transfers frames between the GPU and CPU.
   - Full Geometric Control: Independently configure output orientation (Horizontal, Vertical,
     or both) and aspect ratio handling (Crop, Pad, Stretch) for each file or for the
     entire batch.
@@ -31,6 +31,9 @@ CORE FEATURES:
     styling suite (font, size, color, alignment, margins). It generates a temporary, fully
     styled Advanced SubStation Alpha (.ass) file to ensure subtitles are rendered with
     maximum legibility and positioned correctly, even within padded black bars.
+  - Audio Normalization: Implements FFmpeg's sophisticated 'loudnorm' filter, which acts
+    as an all-in-one normalizer, compressor, and true-peak limiter. It brings audio to a
+    consistent, loud, and broadcast-ready level suitable for social media.
   - Format and Quality Flexibility: Output to standard SDR (H.264) or HDR (HEVC/H.265) with
     automatic bitrate selection tailored to YouTube's recommendations based on resolution,
     frame rate, and dynamic range.
@@ -91,6 +94,22 @@ limitations of various command-line encoders. The primary goal of the current de
         pipeline. This allows the text to be rendered *after* any padding has been applied,
         ensuring subtitles appear correctly inside the black bars of a padded video.
 
+3.  **AUDIO PROCESSING: BROADCAST-STANDARD NORMALIZATION (v4.8+)**
+    The optional audio normalization feature uses FFmpeg's `loudnorm` filter, which adheres
+    to the modern EBU R128 standard for perceived loudness.
+    -   **Method:** This is a sophisticated, single-filter solution that acts as a combined
+        normalizer, compressor, and true-peak limiter. It is far more effective than chaining
+        simpler filters like `volume` or `acompressor`.
+    -   **Key Parameters:**
+        - **Integrated Loudness (I):** The target perceived loudness in LUFS (Loudness Units
+          Full Scale). Social media platforms often benefit from "hotter" levels like -9 LUFS
+          to stand out on mobile devices.
+        - **Loudness Range (LRA):** Controls dynamic range compression. A lower value (e.g., 7)
+          reduces the difference between loud and quiet sounds, creating a more compressed,
+          consistently loud track.
+        - **True Peak (TP):** A brick-wall limiter that prevents digital clipping. A value of
+          -1.0 dBTP is a safe and common ceiling.
+
 ----------------------------------------------------------------------------------------------------
                             PART 3: CODE ANNOTATION & EXPLANATION
 ----------------------------------------------------------------------------------------------------
@@ -98,6 +117,15 @@ limitations of various command-line encoders. The primary goal of the current de
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
+v4.8.0 (2025-10-19) - Gemini/User Collaboration
+  - FEATURE: Added an "Audio Processing" section to the GUI with an option to enable
+    audio normalization via FFmpeg's `loudnorm` filter.
+  - FEATURE: Added configurable parameters for Integrated Loudness (LUFS), Loudness Range
+    (LRA), and True Peak (dBTP) to give users full control over the audio output.
+  - REFACTOR: Modified the FFmpeg command builder to intelligently switch between copying
+    the audio stream (`-c:a copy`) and re-encoding it with the `loudnorm` filter (`-af loudnorm...`).
+  - DOCS: Updated technical rationale to document the new audio normalization feature.
+
 v4.7.0 (2025-10-19) - Gemini/User Collaboration
   - REFACTOR: Implemented a full, end-to-end hardware-accelerated pipeline. The script now
     intelligently selects the correct CUDA decoder (e.g., av1_cuvid) and uses the
@@ -181,16 +209,22 @@ DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = False
 
+# --- Audio normalization settings ---
+DEFAULT_NORMALIZE_AUDIO = False
+DEFAULT_LOUDNESS_TARGET = "-9"
+DEFAULT_LOUDNESS_RANGE = "7"
+DEFAULT_TRUE_PEAK = "-1.0"
+
 # --- Default subtitle style settings ---
 DEFAULT_SUBTITLE_FONT = "Impact"
 DEFAULT_SUBTITLE_FONT_SIZE = "64"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
-DEFAULT_SUBTITLE_BOLD = False
+DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFAA00"  # Vibrant Orange-Yellow
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000" # Black
 DEFAULT_SUBTITLE_SHADOW_COLOR = "#202020"  # Gray
-DEFAULT_SUBTITLE_MARGIN_V = "115"
+DEFAULT_SUBTITLE_MARGIN_V = "65"
 
 # --- Advanced ASS (Advanced SubStation Alpha) Style Overrides ---
 # These settings control the finer details of the subtitle appearance.
@@ -345,6 +379,11 @@ class VideoProcessorApp:
         self.generate_log_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         
+        self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
+        self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
+        self.loudness_range_var = tk.StringVar(value=DEFAULT_LOUDNESS_RANGE)
+        self.true_peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
+        
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
@@ -473,8 +512,32 @@ class VideoProcessorApp:
         tk.Button(color_frame, text="Choose...", command=lambda: self.choose_color(self.subtitle_shadow_color_var, self.shadow_color_swatch)).pack(side=tk.LEFT)
         
         other_opts_group = tk.LabelFrame(right_frame, text="Other Options", padx=10, pady=10); other_opts_group.pack(fill=tk.X, pady=5)
-        misc_frame = tk.Frame(other_opts_group); misc_frame.pack(fill=tk.X)
-        tk.Checkbutton(misc_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
+        tk.Checkbutton(other_opts_group, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=self.apply_gui_options_to_selected_files).pack(anchor="w")
+
+        audio_group = tk.LabelFrame(other_opts_group, text="Audio Processing", padx=5, pady=5); audio_group.pack(fill=tk.X, pady=5)
+        tk.Checkbutton(audio_group, text="Normalize Audio", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
+        
+        self.audio_norm_frame = tk.Frame(audio_group)
+        self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0))
+        
+        lufs_frame = tk.Frame(self.audio_norm_frame); lufs_frame.pack(fill=tk.X, pady=1)
+        tk.Label(lufs_frame, text="Loudness Target (LUFS):").pack(side=tk.LEFT)
+        self.loudness_target_entry = tk.Entry(lufs_frame, textvariable=self.loudness_target_var, width=6)
+        self.loudness_target_entry.pack(side=tk.LEFT, padx=5)
+        self.loudness_target_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+        
+        lra_frame = tk.Frame(self.audio_norm_frame); lra_frame.pack(fill=tk.X, pady=1)
+        tk.Label(lra_frame, text="Loudness Range (LRA):   ").pack(side=tk.LEFT)
+        self.loudness_range_entry = tk.Entry(lra_frame, textvariable=self.loudness_range_var, width=6)
+        self.loudness_range_entry.pack(side=tk.LEFT, padx=5)
+        self.loudness_range_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+        
+        peak_frame = tk.Frame(self.audio_norm_frame); peak_frame.pack(fill=tk.X, pady=1)
+        tk.Label(peak_frame, text="True Peak (dBTP):            ").pack(side=tk.LEFT)
+        self.true_peak_entry = tk.Entry(peak_frame, textvariable=self.true_peak_var, width=6)
+        self.true_peak_entry.pack(side=tk.LEFT, padx=5)
+        self.true_peak_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+        
         fruc_frame = tk.Frame(other_opts_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
         tk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self.apply_gui_options_to_selected_files()]).pack(side=tk.LEFT)
         tk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
@@ -484,7 +547,7 @@ class VideoProcessorApp:
         bottom_frame = tk.Frame(self.root); bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.start_button = tk.Button(bottom_frame, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = tk.Checkbutton(bottom_frame, text="Generate Log File", variable=self.generate_log_var, command=self.apply_gui_options_to_selected_files); self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
-        self._toggle_orientation_options(); self._toggle_upscale_options()
+        self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
 
     def populate_fonts(self):
         try:
@@ -530,6 +593,12 @@ class VideoProcessorApp:
 
     def _toggle_upscale_options(self): self.apply_gui_options_to_selected_files()
 
+    def _toggle_audio_norm_options(self):
+        state = "normal" if self.normalize_audio_var.get() else "disabled"
+        for widget in [self.loudness_target_entry, self.loudness_range_entry, self.true_peak_entry]:
+            widget.config(state=state)
+        self.apply_gui_options_to_selected_files()
+
     def apply_gui_options_to_selected_files(self, event=None):
         selected_indices = self.file_listbox.curselection()
         options_state = {
@@ -540,6 +609,10 @@ class VideoProcessorApp:
             "horizontal_aspect": self.horizontal_aspect_var.get(),
             "vertical_aspect": self.vertical_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(),
+            "normalize_audio": self.normalize_audio_var.get(),
+            "loudness_target": self.loudness_target_var.get(),
+            "loudness_range": self.loudness_range_var.get(),
+            "true_peak": self.true_peak_var.get(),
             "subtitle_font": self.subtitle_font_var.get(),
             "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(),
@@ -565,6 +638,10 @@ class VideoProcessorApp:
                     "horizontal_aspect": self.horizontal_aspect_var.get(),
                     "vertical_aspect": self.vertical_aspect_var.get(),
                     "burn_subtitles": self.burn_subtitles_var.get(), "subtitle_file": None,
+                    "normalize_audio": self.normalize_audio_var.get(),
+                    "loudness_target": self.loudness_target_var.get(),
+                    "loudness_range": self.loudness_range_var.get(),
+                    "true_peak": self.true_peak_var.get(),
                     "subtitle_font": self.subtitle_font_var.get(),
                     "subtitle_font_size": self.subtitle_font_size_var.get(),
                     "subtitle_alignment": self.subtitle_alignment_var.get(),
@@ -585,6 +662,10 @@ class VideoProcessorApp:
                 options = self.file_options[selected_file]
                 self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT)); self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)); self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS)); self.generate_log_var.set(options.get("generate_log", False))
                 self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES))
+                self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO))
+                self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
+                self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE))
+                self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK))
                 self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT))
                 self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE))
                 self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
@@ -597,7 +678,7 @@ class VideoProcessorApp:
                 self.primary_color_swatch.config(bg=self.subtitle_primary_color_var.get())
                 self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
                 self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
-                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options()
+                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
 
     def build_ffmpeg_command_and_run(self, file_path, orientation, ass_burn=None):
         options = self.file_options.get(file_path, {})
@@ -682,7 +763,7 @@ class VideoProcessorApp:
                 vf_filters.append(f"scale_cuda=format=nv12")
 
         if info["is_hdr"] and not is_hdr_output and os.path.exists(self.lut_file):
-            lut_path_escaped = self.lut_file.replace('\\', '/')
+            lut_path_escaped = self.lut_file.replace('\\', '/').replace(':', '\\:')
             cpu_filters.append(f"lut3d=file='{lut_path_escaped}':interp=trilinear")
         
         if options.get("fruc"):
@@ -707,10 +788,16 @@ class VideoProcessorApp:
             cmd.extend(["-vf", vf_string])
 
         audio_streams = get_audio_stream_info(file_path)
-        if len(audio_streams) > 0:
-            cmd.extend(["-c:a", "copy"])
-        else:
+        if not audio_streams:
             cmd.extend(["-an"])
+        elif options.get("normalize_audio"):
+            lufs = options.get('loudness_target', DEFAULT_LOUDNESS_TARGET)
+            lra = options.get('loudness_range', DEFAULT_LOUDNESS_RANGE)
+            peak = options.get('true_peak', DEFAULT_TRUE_PEAK)
+            audio_filter = f"loudnorm=i={lufs}:lra={lra}:tp={peak}"
+            cmd.extend(["-af", audio_filter, "-c:a", "aac", "-b:a", "192k"])
+        else:
+            cmd.extend(["-c:a", "copy"])
 
         if orientation == "original":
             if info["height"] <= 1080: bitrate_res_key = "HD"
