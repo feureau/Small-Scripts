@@ -1,4 +1,3 @@
-
 r"""
 ====================================================================================================
                             YouTube Batch Video Processing Tool
@@ -27,6 +26,8 @@ CORE FEATURES:
     aspect ratio handling (Crop, Pad, Stretch).
   - Advanced Subtitle Burning: Automatically detects sidecar SRT files and provides a full
     styling suite (font, size, color, alignment, margin) for burning them into the video.
+  - Audio Normalization: Integrates the 'loudnorm' filter to normalize audio to modern
+    loudness standards (LUFS), apply dynamic range compression, and prevent clipping.
   - Format Flexibility: Output to SDR (H.264) or HDR (HEVC) with automatic bitrate selection.
   - AI Upscaling: Integrates NVIDIA's Super Resolution and VSR for high-quality upscaling.
   - Self-Contained: Includes this detailed documentation about the script's own logic.
@@ -154,8 +155,8 @@ This section explains the purpose of the main components of the Python script.
             dictionary, keyed by the video file path.
         -   `construct_nvencc_command()`: This is the "brain" of the operation. It takes a
             file path and its associated options and builds the final command-line string to
-            be executed. It logically adds arguments for geometry, quality, codecs, and,
-            most importantly, points to the temporary `.ass` file for subtitle burning.
+            be executed. It logically adds arguments for geometry, quality, codecs, audio filters,
+            and, most importantly, points to the temporary `.ass` file for subtitle burning.
         -   `start_processing()`: The main execution loop. When the "Start" button is clicked,
             this function iterates through each file in the list. For each file, it creates
             the temporary `.ass` subtitle file (if needed), calls the command constructor,
@@ -175,6 +176,14 @@ This section explains the purpose of the main components of the Python script.
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
+v4.0.0 (2025-10-16) - Gemini/User Collaboration
+  - FEATURE: Added a full Audio Normalization suite. Users can now enable the 'loudnorm'
+    filter to normalize audio to modern LUFS standards, apply dynamic range compression (LRA),
+    and set a true-peak limiter (TP) to prevent clipping. This is implemented via a new
+    GUI section.
+  - BEHAVIOR: When audio normalization is active, the script automatically switches from
+    copying the audio stream to re-encoding it with the AAC codec to apply the filter.
+
 v3.9.1 (2025-10-16) - Gemini/User Collaboration
   - FIX: Corrected a `SyntaxError` within the documentation text itself by rephrasing a
     changelog entry to avoid using characters that would conflict with the docstring parser.
@@ -241,8 +250,13 @@ DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFAA00"  # Vibrant Orange-Yellow
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000" # Black
 DEFAULT_SUBTITLE_SHADOW_COLOR = "#808080"  # Gray
-# --- MODIFICATION: Add default for Vertical Margin ---
-DEFAULT_SUBTITLE_MARGIN_V = "115"
+DEFAULT_SUBTITLE_MARGIN_V = "65"
+
+# --- MODIFICATION: Add defaults for Audio Normalization ---
+DEFAULT_NORMALIZE_AUDIO = False
+DEFAULT_LOUDNESS_TARGET = "-9"
+DEFAULT_LRA = "7"
+DEFAULT_TRUE_PEAK = "-1.0"
 
 
 # --- CUSTOMIZABLE BITRATES (in kbps) ---
@@ -280,7 +294,6 @@ def create_temporary_ass_file(srt_path, options):
     shadow_color = hex_to_libass_color(options.get('subtitle_shadow_color', DEFAULT_SUBTITLE_SHADOW_COLOR))
     bold_flag = "-1" if options.get('subtitle_bold', False) else "0"
     italic_flag = "-1" if options.get('subtitle_italic', False) else "0"
-    # --- MODIFICATION: Get MarginV from options ---
     margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
     
     align_map = {"top": 8, "middle": 5, "bottom": 2}
@@ -388,8 +401,14 @@ class VideoProcessorApp:
         self.subtitle_primary_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_PRIMARY_COLOR)
         self.subtitle_outline_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_OUTLINE_COLOR)
         self.subtitle_shadow_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_SHADOW_COLOR)
-        # --- MODIFICATION: Add variable for MarginV ---
         self.subtitle_margin_v_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_V)
+
+        # --- MODIFICATION: Add variables for Audio Normalization ---
+        self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
+        self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
+        self.lra_var = tk.StringVar(value=DEFAULT_LRA)
+        self.peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
+
 
         self.root.drop_target_register(DND_FILES); self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
         
@@ -483,7 +502,6 @@ class VideoProcessorApp:
         tk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
         tk.Radiobutton(align_frame, text="Middle", variable=self.subtitle_alignment_var, value="middle", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
         tk.Radiobutton(align_frame, text="Bottom", variable=self.subtitle_alignment_var, value="bottom", command=self.apply_gui_options_to_selected_files).pack(side=tk.LEFT)
-        # --- MODIFICATION: Add GUI elements for Vertical Margin ---
         tk.Label(align_frame, text="Vertical Margin (pixels):").pack(side=tk.LEFT, padx=(10, 5))
         self.subtitle_margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         self.subtitle_margin_v_entry.pack(side=tk.LEFT)
@@ -513,10 +531,32 @@ class VideoProcessorApp:
         self.fruc_fps_entry = tk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
         self.fruc_fps_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
 
+        # --- MODIFICATION: Add Audio Normalization GUI ---
+        audio_norm_group = tk.LabelFrame(other_opts_group, text="Audio Normalization", padx=10, pady=5); audio_norm_group.pack(fill=tk.X, pady=(5,0))
+        audio_norm_check_frame = tk.Frame(audio_norm_group); audio_norm_check_frame.pack(fill=tk.X)
+        tk.Checkbutton(audio_norm_check_frame, text="Normalize Audio (Loudness, Compression, Limiter)", variable=self.normalize_audio_var, command=self.toggle_audio_norm_options).pack(anchor="w")
+        
+        self.audio_norm_params_frame = tk.Frame(audio_norm_group); self.audio_norm_params_frame.pack(fill=tk.X, pady=5)
+        tk.Label(self.audio_norm_params_frame, text="Loudness (LUFS):").pack(side=tk.LEFT, padx=(0, 5))
+        self.loudness_entry = tk.Entry(self.audio_norm_params_frame, textvariable=self.loudness_target_var, width=6)
+        self.loudness_entry.pack(side=tk.LEFT)
+        self.loudness_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+        
+        tk.Label(self.audio_norm_params_frame, text="LRA:").pack(side=tk.LEFT, padx=(10, 5))
+        self.lra_entry = tk.Entry(self.audio_norm_params_frame, textvariable=self.lra_var, width=4)
+        self.lra_entry.pack(side=tk.LEFT)
+        self.lra_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+
+        tk.Label(self.audio_norm_params_frame, text="True Peak (dBTP):").pack(side=tk.LEFT, padx=(10, 5))
+        self.peak_entry = tk.Entry(self.audio_norm_params_frame, textvariable=self.peak_var, width=6)
+        self.peak_entry.pack(side=tk.LEFT)
+        self.peak_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+
+
         bottom_frame = tk.Frame(self.root); bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.start_button = tk.Button(bottom_frame, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = tk.Checkbutton(bottom_frame, text="Generate Log File", variable=self.generate_log_var, command=self.apply_gui_options_to_selected_files); self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
-        self._toggle_orientation_options(); self._toggle_upscale_options()
+        self._toggle_orientation_options(); self._toggle_upscale_options(); self.toggle_audio_norm_options()
 
     def populate_fonts(self):
         try:
@@ -561,6 +601,14 @@ class VideoProcessorApp:
         self.apply_gui_options_to_selected_files()
 
     def _toggle_upscale_options(self): self.apply_gui_options_to_selected_files()
+    
+    # --- MODIFICATION: Add function to toggle audio norm options ---
+    def toggle_audio_norm_options(self):
+        state = "normal" if self.normalize_audio_var.get() else "disabled"
+        self.loudness_entry.config(state=state)
+        self.lra_entry.config(state=state)
+        self.peak_entry.config(state=state)
+        self.apply_gui_options_to_selected_files()
 
     def apply_gui_options_to_selected_files(self, event=None):
         selected_indices = self.file_listbox.curselection()
@@ -580,8 +628,12 @@ class VideoProcessorApp:
             "subtitle_primary_color": self.subtitle_primary_color_var.get(),
             "subtitle_outline_color": self.subtitle_outline_color_var.get(),
             "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
-            # --- MODIFICATION: Save MarginV setting ---
-            "subtitle_margin_v": self.subtitle_margin_v_var.get()
+            "subtitle_margin_v": self.subtitle_margin_v_var.get(),
+            # --- MODIFICATION: Save Audio Normalization settings ---
+            "normalize_audio": self.normalize_audio_var.get(),
+            "loudness_target": self.loudness_target_var.get(),
+            "lra": self.lra_var.get(),
+            "true_peak": self.peak_var.get(),
         }
         target_indices = selected_indices if selected_indices else range(len(self.file_list))
         for index in target_indices: self.file_options[self.file_list[index]].update(options_state)
@@ -606,8 +658,12 @@ class VideoProcessorApp:
                     "subtitle_primary_color": self.subtitle_primary_color_var.get(),
                     "subtitle_outline_color": self.subtitle_outline_color_var.get(),
                     "subtitle_shadow_color": self.subtitle_shadow_color_var.get(),
-                    # --- MODIFICATION: Initialize MarginV for new file ---
-                    "subtitle_margin_v": self.subtitle_margin_v_var.get()
+                    "subtitle_margin_v": self.subtitle_margin_v_var.get(),
+                    # --- MODIFICATION: Initialize Audio Normalization settings for new file ---
+                    "normalize_audio": self.normalize_audio_var.get(),
+                    "loudness_target": self.loudness_target_var.get(),
+                    "lra": self.lra_var.get(),
+                    "true_peak": self.peak_var.get(),
                 }
                 self.detect_subtitle_tracks(file_path)
 
@@ -627,12 +683,18 @@ class VideoProcessorApp:
                 self.subtitle_primary_color_var.set(options.get("subtitle_primary_color", DEFAULT_SUBTITLE_PRIMARY_COLOR))
                 self.subtitle_outline_color_var.set(options.get("subtitle_outline_color", DEFAULT_SUBTITLE_OUTLINE_COLOR))
                 self.subtitle_shadow_color_var.set(options.get("subtitle_shadow_color", DEFAULT_SUBTITLE_SHADOW_COLOR))
-                # --- MODIFICATION: Update MarginV GUI on selection ---
                 self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
+                
+                # --- MODIFICATION: Update Audio Normalization GUI on selection ---
+                self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO))
+                self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
+                self.lra_var.set(options.get("lra", DEFAULT_LRA))
+                self.peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK))
+                
                 self.primary_color_swatch.config(bg=self.subtitle_primary_color_var.get())
                 self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
                 self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
-                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options()
+                self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self.toggle_audio_norm_options()
 
     def build_nvenc_command_and_run(self, file_path, orientation, ass_burn=None):
         options = self.file_options.get(file_path, {})
@@ -709,8 +771,23 @@ class VideoProcessorApp:
         bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
         cmd.extend(["--vbr", str(bitrate_kbps), "--gop-len", str(gop_len)])
+        
+        # --- MODIFICATION: Updated Audio Handling Logic ---
         audio_streams = get_audio_stream_info(file_path)
-        if len(audio_streams) > 0: cmd.extend(["--audio-codec", "copy"])
+        if len(audio_streams) > 0:
+            if options.get("normalize_audio"):
+                print("[INFO] Audio Normalization enabled. Re-encoding audio.")
+                loudness = options.get('loudness_target', DEFAULT_LOUDNESS_TARGET)
+                lra = options.get('lra', DEFAULT_LRA)
+                peak = options.get('true_peak', DEFAULT_TRUE_PEAK)
+                # Use uppercase params as is standard for ffmpeg command line filters
+                audio_filter_string = f"loudnorm=I={loudness}:LRA={lra}:TP={peak}"
+                cmd.extend(["--af", audio_filter_string])
+                cmd.extend(["--audio-codec", "aac", "--audio-bitrate", "192k"])
+            else:
+                # Original behavior: copy audio if no filter is applied
+                cmd.extend(["--audio-codec", "copy"])
+
         if is_hdr_output: cmd.extend(["--codec", "hevc", "--profile", "main10", "--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc", "--dhdr10-info", "pass"])
         else:
             cmd.extend(["--codec", "h264", "--profile", "high", "--output-depth", "8", "--bframes", "2", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
