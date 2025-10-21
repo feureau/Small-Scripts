@@ -782,7 +782,7 @@ class VideoProcessorApp:
                 peak = options.get('true_peak', DEFAULT_TRUE_PEAK)
                 # Use uppercase params as is standard for ffmpeg command line filters
                 audio_filter_string = f"loudnorm=I={loudness}:LRA={lra}:TP={peak}"
-                cmd.extend(["--af", audio_filter_string])
+                cmd.extend(["--audio-filter", audio_filter_string])
                 cmd.extend(["--audio-codec", "aac", "--audio-bitrate", "192k"])
             else:
                 # Original behavior: copy audio if no filter is applied
