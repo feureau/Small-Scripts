@@ -94,7 +94,7 @@ def post_process_word_timestamps(data: dict, max_duration_ms: int) -> dict:
     return data
 
 def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
-                                     base_gap_s: float = 0.30,
+                                     base_gap_s: float = 0.10,
                                      orphan_merge_max_s: float = 0.90,
                                      orphan_max_words: int = 2):
     try:
