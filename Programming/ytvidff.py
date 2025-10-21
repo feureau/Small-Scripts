@@ -37,7 +37,8 @@ CORE FEATURES:
     source file, preserving multi-channel and multi-language setups.
   - Format and Quality Flexibility: Output to standard SDR (H.264) or HDR (HEVC/H.265) with
     automatic bitrate selection tailored to YouTube's recommendations based on resolution,
-    frame rate, and dynamic range.
+    frame rate, and dynamic range. It also includes an expert option to manually override
+    the bitrate for any file.
   - Self-Contained & Fully Documented: This documentation is embedded directly within the script,
     providing a complete, single-file reference for its internal logic, design choices, and
     historical evolution.
@@ -123,6 +124,17 @@ limitations of various command-line encoders. The primary goal of the current de
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
+v4.9.0 (2025-10-21) - Gemini/User Collaboration
+  - FEATURE: Added a manual bitrate override option. A new checkbox in the "Format & Quality"
+    section allows the user to enable a text box and input a custom bitrate in kbps.
+  - GUI: The bitrate box is read-only by default and displays the automatically calculated
+    bitrate based on resolution, framerate, and format. Checking the "Override" box makes
+    it writable.
+  - REFACTOR: Modified the FFmpeg command builder to use the manual bitrate if the
+    override is active for a given file.
+  - REFACTOR: Implemented new functions (_update_bitrate_display, _toggle_bitrate_override)
+    to manage the GUI state and data flow for the new feature.
+
 v4.8.1 (2025-10-21) - Gemini/User Collaboration
   - FIX: Corrected FFmpeg's default audio stream selection behavior. The script now
     preserves all audio tracks from the input file by default when copying.
@@ -321,7 +333,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start_ass = start_time.replace(',', '.')[:-1]
         end_ass = end_time.replace(',', '.')[:-1]
         text_ass = text.strip().replace('\n', '\\N')
-        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},{style_name},,0,0,0,,{text_ass}")
+        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},{style_name},,0,0,0,,  {text_ass}")
 
     full_ass_content = header + "\n".join(dialogue_lines)
 
@@ -393,6 +405,9 @@ class VideoProcessorApp:
         self.generate_log_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         
+        self.override_bitrate_var = tk.BooleanVar(value=False)
+        self.manual_bitrate_var = tk.StringVar()
+
         self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
         self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
         self.loudness_range_var = tk.StringVar(value=DEFAULT_LOUDNESS_RANGE)
@@ -482,6 +497,13 @@ class VideoProcessorApp:
         tk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
         tk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT)
 
+        bitrate_frame = tk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
+        tk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
+        self.manual_bitrate_entry = tk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled")
+        self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
+        self.manual_bitrate_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
+        tk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
+
         subtitle_style_group = tk.LabelFrame(right_frame, text="Subtitle Styling", padx=10, pady=10)
         subtitle_style_group.pack(fill=tk.X, pady=5)
         
@@ -561,7 +583,9 @@ class VideoProcessorApp:
         bottom_frame = tk.Frame(self.root); bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         self.start_button = tk.Button(bottom_frame, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = tk.Checkbutton(bottom_frame, text="Generate Log File", variable=self.generate_log_var, command=self.apply_gui_options_to_selected_files); self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+        
         self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
+        self._update_bitrate_display()
 
     def populate_fonts(self):
         try:
@@ -584,6 +608,32 @@ class VideoProcessorApp:
             color_var.set(hex_color)
             swatch_label.config(bg=hex_color)
             self.apply_gui_options_to_selected_files()
+
+    def _toggle_bitrate_override(self):
+        is_override = self.override_bitrate_var.get()
+        new_state = "normal" if is_override else "disabled"
+        self.manual_bitrate_entry.config(state=new_state)
+        if not is_override:
+            self._update_bitrate_display()
+        self.apply_gui_options_to_selected_files()
+
+    def _update_bitrate_display(self):
+        if self.override_bitrate_var.get():
+            return
+
+        selected_indices = self.file_listbox.curselection()
+        ref_file = None
+        if selected_indices:
+            ref_file = self.file_list[selected_indices[0]]
+        elif self.file_list:
+            ref_file = self.file_list[0]
+        
+        if ref_file:
+            info = get_video_info(ref_file)
+            resolution_key = self.resolution_var.get()
+            is_hdr = self.output_format_var.get() == 'hdr'
+            bitrate = get_bitrate(resolution_key, info["framerate"], is_hdr)
+            self.manual_bitrate_var.set(str(bitrate))
 
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
@@ -614,6 +664,7 @@ class VideoProcessorApp:
         self.apply_gui_options_to_selected_files()
 
     def apply_gui_options_to_selected_files(self, event=None):
+        self._update_bitrate_display()
         selected_indices = self.file_listbox.curselection()
         options_state = {
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
@@ -623,6 +674,8 @@ class VideoProcessorApp:
             "horizontal_aspect": self.horizontal_aspect_var.get(),
             "vertical_aspect": self.vertical_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(),
+            "override_bitrate": self.override_bitrate_var.get(),
+            "manual_bitrate": self.manual_bitrate_var.get(),
             "normalize_audio": self.normalize_audio_var.get(),
             "loudness_target": self.loudness_target_var.get(),
             "loudness_range": self.loudness_range_var.get(),
@@ -652,6 +705,8 @@ class VideoProcessorApp:
                     "horizontal_aspect": self.horizontal_aspect_var.get(),
                     "vertical_aspect": self.vertical_aspect_var.get(),
                     "burn_subtitles": self.burn_subtitles_var.get(), "subtitle_file": None,
+                    "override_bitrate": self.override_bitrate_var.get(),
+                    "manual_bitrate": self.manual_bitrate_var.get(),
                     "normalize_audio": self.normalize_audio_var.get(),
                     "loudness_target": self.loudness_target_var.get(),
                     "loudness_range": self.loudness_range_var.get(),
@@ -667,6 +722,7 @@ class VideoProcessorApp:
                     "subtitle_margin_v": self.subtitle_margin_v_var.get()
                 }
                 self.detect_subtitle_tracks(file_path)
+        self._update_bitrate_display()
 
     def on_file_select(self, event):
         sel = self.file_listbox.curselection()
@@ -676,6 +732,8 @@ class VideoProcessorApp:
                 options = self.file_options[selected_file]
                 self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT)); self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)); self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS)); self.generate_log_var.set(options.get("generate_log", False))
                 self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES))
+                self.override_bitrate_var.set(options.get("override_bitrate", False))
+                self.manual_bitrate_var.set(options.get("manual_bitrate", "0"))
                 self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO))
                 self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
                 self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE))
@@ -692,6 +750,8 @@ class VideoProcessorApp:
                 self.primary_color_swatch.config(bg=self.subtitle_primary_color_var.get())
                 self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
                 self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
+
+                self._toggle_bitrate_override() # Syncs the entry box state and updates value if needed
                 self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
 
     def build_ffmpeg_command_and_run(self, file_path, orientation, ass_burn=None):
@@ -835,15 +895,23 @@ class VideoProcessorApp:
             cmd.extend(["-map", "0:a?"]) # The '?' prevents errors if no audio exists.
             cmd.extend(["-c:a", "copy"])
 
-        if orientation == "original":
-            if info["height"] <= 1080: bitrate_res_key = "HD"
-            elif info["height"] <= 2160: bitrate_res_key = "4k"
-            else: bitrate_res_key = "8k"
+        if options.get("override_bitrate", False):
+            try:
+                bitrate_kbps = int(options.get("manual_bitrate"))
+                print(f"[INFO] Manual bitrate override active: {bitrate_kbps} kbps")
+            except (ValueError, TypeError):
+                print(f"[WARN] Invalid manual bitrate value. Falling back to automatic calculation.")
+                bitrate_kbps = get_bitrate("HD", info["framerate"], is_hdr_output) # Fallback
         else:
-            resolution_key = options.get('resolution', DEFAULT_RESOLUTION)
-            bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
+            if orientation == "original":
+                if info["height"] <= 1080: bitrate_res_key = "HD"
+                elif info["height"] <= 2160: bitrate_res_key = "4k"
+                else: bitrate_res_key = "8k"
+            else:
+                resolution_key = options.get('resolution', DEFAULT_RESOLUTION)
+                bitrate_res_key = "HD" if resolution_key == "HD" else resolution_key.lower()
+            bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
 
-        bitrate_kbps = get_bitrate(bitrate_res_key, info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
         
         if is_hdr_output:
