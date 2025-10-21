@@ -14,8 +14,25 @@ DEFAULT_MIN_SILENCE_DURATION_WT = 100
 DEFAULT_MAX_WORD_DURATION = 750
 
 transcription_model = None
+nlp = None # Stanza pipeline
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma", ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v"}
+
+def initialize_stanza():
+    """Initializes the Stanza pipeline if not already loaded."""
+    global nlp
+    if nlp is not None:
+        return
+
+    try:
+        import stanza
+        print("🧠 Initializing Stanza for linguistic phrase splitting...")
+        stanza.download('en', processors='tokenize,pos,lemma,depparse', verbose=False)
+        nlp = stanza.Pipeline('en', processors='tokenize,pos,lemma,depparse', use_gpu=torch.cuda.is_available())
+        print("✅ Stanza initialized.")
+    except (ImportError, Exception) as e:
+        print(f"⚠️ Could not initialize Stanza, falling back to default splitting. Error: {e}")
+        nlp = False
 
 def is_media_file(filepath: str) -> bool:
     return os.path.splitext(filepath)[1].lower() in SUPPORTED_EXTENSIONS
@@ -94,10 +111,16 @@ def post_process_word_timestamps(data: dict, max_duration_ms: int) -> dict:
     return data
 
 def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
-                                     base_gap_s: float = 0.10,
+                                     base_gap_s: float = 0.20,
                                      orphan_merge_max_s: float = 0.90,
                                      orphan_max_words: int = 2):
+    """
+    Enhanced phrase-level conversion using a refined cost-based Stanza model.
+    Balances grammatical rules, timing, and line length for the most natural subtitles.
+    """
     try:
+        initialize_stanza()
+
         all_words = [
             (w['start'], w['end'], w['word'].strip())
             for seg in data.get('segments', [])
@@ -109,47 +132,104 @@ def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
             return
         all_words.sort(key=lambda x: x[0])
 
+        split_costs = [0] * len(all_words)
+
+        if nlp:
+            print("🧠 Using refined cost-based Stanza model for linguistic phrase splitting.")
+            full_text = " ".join(w[2] for w in all_words)
+            char_to_word_idx = []
+            current_pos = 0
+            for i, (_, _, word_text) in enumerate(all_words):
+                start_char = full_text.find(word_text, current_pos)
+                if start_char != -1:
+                    end_char = start_char + len(word_text)
+                    char_to_word_idx.extend([i] * (end_char - len(char_to_word_idx)))
+                    current_pos = end_char
+
+            def get_word_idx(char_pos):
+                if char_pos < len(char_to_word_idx):
+                    return char_to_word_idx[char_pos]
+                return len(all_words) - 1
+
+            doc = nlp(full_text)
+            
+            # --- Assign costs and benefits to potential split points ---
+            for sentence in doc.sentences:
+                for word in sentence.words:
+                    word_idx = get_word_idx(word.start_char)
+                    head_idx = get_word_idx(sentence.words[word.head - 1].start_char) if word.head > 0 else -1
+
+                    # --- Forbidden Splits (Infinite Cost) ---
+                    # Never split after prepositions, determiners, possessives, or within compound/fixed expressions.
+                    if word.deprel in {'case', 'det', 'nmod:poss', 'fixed', 'compound', 'mwe'}:
+                        split_costs[word_idx] = float('inf')
+                    # Never split a verb from its direct object.
+                    if word.deprel in {'obj', 'iobj'}:
+                        if head_idx != -1: split_costs[head_idx] = float('inf')
+
+                    # --- High-Cost Splits (Strongly Discouraged) ---
+                    # Penalize splitting after auxiliaries, copulas, or adjectives.
+                    if word.deprel in {'aux', 'cop', 'amod'}:
+                        split_costs[word_idx] += 150
+                    # Penalize splitting a verb from its subject or adverbial modifier.
+                    if word.deprel in {'nsubj', 'advmod', 'appos'}:
+                        if head_idx != -1: split_costs[head_idx] += 100
+                    # Penalize splitting after a relative pronoun to prevent dangling.
+                    if word.upos == 'PRON' and word.deprel.startswith('acl'):
+                        split_costs[word_idx] += 200
+
+                    # --- Ideal Splits (Benefit) ---
+                    # Encourage splitting BEFORE major clause boundaries (markers, conjunctions).
+                    if word.deprel in {'mark', 'cc'} or word.deprel.startswith('acl'):
+                        if word_idx > 0: split_costs[word_idx - 1] -= 100
+                    # Encourage splitting after commas.
+                    if word.text == ',' and word.upos == 'PUNCT':
+                        split_costs[word_idx] -= 50
+        else:
+            print("ℹ️ Using default punctuation-based phrase splitting.")
+
+        # --- Final Grouping Loop ---
         phrases = []
         phrase_words = []
-        phrase_start = None
-        phrase_end = None
-        prev_end = None
-        prev_text = ""
+        phrase_start, phrase_end, prev_end = None, None, None
 
-        for start, end, text in all_words:
-            gap = start - prev_end if prev_end is not None else 0
+        for i, (start, end, text) in enumerate(all_words):
             split_here = False
-
-            if prev_end is not None:
-                # Determine punctuation-based thresholds
-                if prev_text.endswith((",", ";", ":")):
-                    threshold = base_gap_s * 0.5
-                elif prev_text.endswith((".", "?", "!")):
-                    threshold = 0  # force split
-                else:
-                    threshold = base_gap_s
-
-                # Split either if timing gap exceeds threshold or punctuation forces it
-                if gap > threshold or threshold == 0:
+            if i > 0:
+                prev_word_idx = i - 1
+                prev_text = all_words[prev_word_idx][2]
+                gap = start - prev_end if prev_end is not None else 0
+                
+                # --- Dynamic Split Decision ---
+                current_cost = split_costs[prev_word_idx]
+                
+                # Add pressure to split as the line gets longer.
+                if len(phrase_words) > 7: current_cost -= 30
+                if len(phrase_words) > 10: current_cost -= 60
+                
+                # Add a strong benefit to splitting at significant pauses.
+                if gap > 0.5: current_cost -= 100
+                elif gap > 0.25: current_cost -= 50
+                
+                if prev_text.endswith((".", "?", "!")):
+                    split_here = True
+                elif current_cost < 0:
                     split_here = True
 
             if split_here and phrase_words:
                 phrases.append({'start': phrase_start, 'end': phrase_end, 'words': phrase_words})
-                phrase_words = []
-                phrase_start = None
+                phrase_words, phrase_start = [], None
 
             if phrase_start is None:
                 phrase_start = start
             phrase_end = end
             phrase_words.append(text)
-
             prev_end = end
-            prev_text = text
 
         if phrase_words:
             phrases.append({'start': phrase_start, 'end': phrase_end, 'words': phrase_words})
 
-        # Merge short orphan phrases forward if needed
+        # Merge short orphans, but not if they end in a comma (likely intentional list items).
         merged_phrases = []
         i = 0
         while i < len(phrases):
@@ -159,24 +239,25 @@ def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
                 gap = nxt['start'] - cur['end']
                 if (len(cur['words']) <= orphan_max_words and
                     gap <= orphan_merge_max_s and
-                    not cur['words'][-1].endswith((",", ".", "?", "!", ";", ":"))):
+                    not cur['words'][-1].strip().endswith((".", "?", "!", ";", ":", ","))):
                     nxt['start'] = min(cur['start'], nxt['start'])
                     nxt['words'] = cur['words'] + nxt['words']
-                    nxt['end'] = max(nxt['end'], cur['end'], nxt['end'])
+                    nxt['end'] = max(cur['end'], nxt['end'])
                     i += 1
                     continue
             merged_phrases.append(cur)
             i += 1
-
+        
         with open(srt_path, 'w', encoding='utf-8') as f:
             for idx, p in enumerate(merged_phrases, start=1):
-                text = ' '.join(p['words'])
+                text = ' '.join(p['words']).strip()
+                if not text: continue
                 f.write(
                     f"{idx}\n"
                     f"{format_srt_time(p['start'])} --> {format_srt_time(p['end'])}\n"
                     f"{text}\n\n"
                 )
-        print(f"✅ Phrase-level SRT created: {os.path.basename(srt_path)}")
+        print(f"✅ Enhanced phrase-level SRT created: {os.path.basename(srt_path)}")
 
     except Exception as e:
         print(f"❌ Error in phrase conversion: {e}")
