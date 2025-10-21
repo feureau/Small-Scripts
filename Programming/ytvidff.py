@@ -31,9 +31,10 @@ CORE FEATURES:
     styling suite (font, size, color, alignment, margins). It generates a temporary, fully
     styled Advanced SubStation Alpha (.ass) file to ensure subtitles are rendered with
     maximum legibility and positioned correctly, even within padded black bars.
-  - Audio Normalization: Implements FFmpeg's sophisticated 'loudnorm' filter, which acts
-    as an all-in-one normalizer, compressor, and true-peak limiter. It brings audio to a
-    consistent, loud, and broadcast-ready level suitable for social media.
+  - Multi-Track Audio Normalization: Implements FFmpeg's sophisticated 'loudnorm' filter,
+    acting as an all-in-one normalizer, compressor, and true-peak limiter. It brings audio to
+    a consistent, broadcast-ready level and correctly processes ALL audio tracks from the
+    source file, preserving multi-channel and multi-language setups.
   - Format and Quality Flexibility: Output to standard SDR (H.264) or HDR (HEVC/H.265) with
     automatic bitrate selection tailored to YouTube's recommendations based on resolution,
     frame rate, and dynamic range.
@@ -109,6 +110,11 @@ limitations of various command-line encoders. The primary goal of the current de
           consistently loud track.
         - **True Peak (TP):** A brick-wall limiter that prevents digital clipping. A value of
           -1.0 dBTP is a safe and common ceiling.
+    -   **Multi-Track Handling (v4.8.1+):** The script now correctly handles files with multiple
+        audio tracks (e.g., stereo and 5.1 surround). When normalization is enabled, it
+        intelligently applies the `loudnorm` filter to *each audio track individually*,
+        preserving the original channel layout and track order in the final output. When
+        normalization is disabled, it maps and copies all audio tracks without modification.
 
 ----------------------------------------------------------------------------------------------------
                             PART 3: CODE ANNOTATION & EXPLANATION
@@ -117,6 +123,14 @@ limitations of various command-line encoders. The primary goal of the current de
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
+v4.8.1 (2025-10-21) - Gemini/User Collaboration
+  - FIX: Corrected FFmpeg's default audio stream selection behavior. The script now
+    preserves all audio tracks from the input file by default when copying.
+  - FEATURE: Enhanced the audio normalization logic to process and re-encode ALL
+    audio tracks individually, instead of just the first one.
+  - REFACTOR: Implemented explicit stream mapping (`-map 0:v:0`, `-map 0:a?`) for
+    robust and predictable handling of multi-stream files.
+
 v4.8.0 (2025-10-19) - Gemini/User Collaboration
   - FEATURE: Added an "Audio Processing" section to the GUI with an option to enable
     audio normalization via FFmpeg's `loudnorm` filter.
@@ -783,20 +797,42 @@ class VideoProcessorApp:
             vf_filters.append(",".join(cpu_filters))
             vf_filters.append("format=nv12,hwupload_cuda")
         
+        # By adding any -map option, we disable FFmpeg's default stream selection.
+        # Therefore, we must explicitly map every stream type we want to keep.
+        cmd.extend(["-map", "0:v:0"]) # Map the first (primary) video stream.
+
         if vf_filters:
             vf_string = ",".join(vf_filters)
             cmd.extend(["-vf", vf_string])
 
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams:
+            # No audio streams detected, ensure the output has no audio.
             cmd.extend(["-an"])
         elif options.get("normalize_audio"):
+            # Normalization is enabled. We will map and process ALL audio streams individually.
+            num_audio_streams = len(audio_streams)
+            print(f"[INFO] Audio Normalization enabled. Processing all {num_audio_streams} audio track(s).")
+            
+            # Map all available audio streams from the input.
+            cmd.extend(["-map", "0:a?"])
+            
+            # Get the normalization parameters once.
             lufs = options.get('loudness_target', DEFAULT_LOUDNESS_TARGET)
             lra = options.get('loudness_range', DEFAULT_LOUDNESS_RANGE)
             peak = options.get('true_peak', DEFAULT_TRUE_PEAK)
             audio_filter = f"loudnorm=i={lufs}:lra={lra}:tp={peak}"
-            cmd.extend(["-af", audio_filter, "-c:a", "aac", "-b:a", "192k"])
+            
+            # Loop through each audio stream and apply the settings using per-stream specifiers.
+            for i in range(num_audio_streams):
+                cmd.extend([
+                    f"-af:a:{i}", audio_filter,  # Apply the loudnorm filter to this specific stream (e.g., -af:a:0, -af:a:1)
+                    f"-c:a:{i}", "aac",          # Set the codec for this specific stream
+                    f"-b:a:{i}", "192k"           # Set the bitrate for this specific stream
+                ])
         else:
+            # Normalization is disabled. Map and copy ALL available audio streams without re-encoding.
+            cmd.extend(["-map", "0:a?"]) # The '?' prevents errors if no audio exists.
             cmd.extend(["-c:a", "copy"])
 
         if orientation == "original":
