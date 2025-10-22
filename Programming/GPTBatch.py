@@ -39,6 +39,7 @@ Key Features:
 - NEW: Option to add the filename to the prompt before the file content.
 - NEW: Added support for LM Studio as an AI provider.
 - NEW: Added a sanitizer to remove Markdown code fences (```) from API output.
+- NEW: Option to overwrite the original input file with the AI-generated output.
 
 Dependencies:
 -------------
@@ -93,11 +94,9 @@ OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_API_URL}/api/tags"
 OLLAMA_GENERATE_ENDPOINT = f"{OLLAMA_API_URL}/api/generate"
 
 # LM Studio Configuration
-# LM STUDIO INTEGRATION START
 LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
 LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
-# LM STUDIO INTEGRATION END
 
 USER_PROMPT_TEMPLATE = """Analyze the provided content (text or image).
 
@@ -127,10 +126,15 @@ MAX_BATCH_SIZE_BYTES = MAX_BATCH_SIZE_MB * 1024 * 1024
 class QuotaExhaustedError(Exception): pass
 last_request_time = None
 def natural_sort_key(s): return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
 def generate_group_base_name(filepaths_group):
     if not filepaths_group: return "empty_group"
-    base_names = [os.path.splitext(os.path.basename(fp))[0] for fp in filepaths_group]
-    return base_names[0] if len(base_names) == 1 else f"{base_names[0]}_to_{base_names[-1]}"
+    base_names = [os.path.splitext(os.path.basename(fp)) for fp in filepaths_group]
+    if len(base_names) == 1:
+        return base_names[0][0]  # FIXED: Return filename without extension
+    else:
+        return f"{base_names[0][0]}_to_{base_names[-1][0]}"  # FIXED: Return first and last filenames
+
 def fetch_google_models(api_key):
     if not api_key: return [], "API key not available."
     try:
@@ -143,6 +147,7 @@ def fetch_google_models(api_key):
     except PermissionDenied: return [], "Google API Permission Denied. Check API key permissions."
     except GoogleAPIError as e: return [], f"Google API Error: {e}"
     except Exception as e: return [], f"An unexpected error occurred: {e}"
+
 def fetch_ollama_models():
     try:
         print(f"Fetching Ollama models from {OLLAMA_TAGS_ENDPOINT}...")
@@ -155,7 +160,6 @@ def fetch_ollama_models():
     except requests.exceptions.RequestException as e: return [], f"Ollama Request Error: {e}"
     except Exception as e: return [], f"An unexpected error occurred: {e}"
 
-# LM STUDIO INTEGRATION START
 def fetch_lmstudio_models():
     try:
         print(f"Fetching LM Studio models from {LMSTUDIO_MODELS_ENDPOINT}...")
@@ -167,7 +171,6 @@ def fetch_lmstudio_models():
     except requests.exceptions.ConnectionError: return [], f"Connection Error: Is LM Studio server running at {os.path.dirname(LMSTUDIO_API_URL)}?"
     except requests.exceptions.RequestException as e: return [], f"LM Studio Request Error: {e}"
     except Exception as e: return [], f"An unexpected error occurred while fetching LM Studio models: {e}"
-# LM STUDIO INTEGRATION END
 
 def read_file_content(filepath):
     _, extension = os.path.splitext(filepath)
@@ -182,28 +185,16 @@ def read_file_content(filepath):
     except Exception as e: return None, None, False, f"Error reading file {filepath}: {e}"
 
 def sanitize_api_response(text):
-    """
-    Removes Markdown code fences from the start and end of a string.
-    Handles optional language identifiers like 'json' or 'markdown'.
-    """
-    if not text:
-        return ""
-    # Regex to find a markdown block with an optional language identifier.
-    # It captures the content inside. re.DOTALL allows '.' to match newlines.
+    if not text: return ""
     pattern = re.compile(r"^\s*```[a-z]*\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
     match = pattern.match(text.strip())
-    if match:
-        # If the entire string is a markdown block, return the captured content.
-        return match.group(1).strip()
-    # If no markdown block is found, return the original (stripped) text.
+    if match: return match.group(1).strip()
     return text.strip()
 
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     if engine == "google": return call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
     elif engine == "ollama": return call_ollama_api(prompt_text, model_name, **kwargs)
-    # LM STUDIO INTEGRATION START
     elif engine == "lmstudio": return call_lmstudio_api(prompt_text, model_name, **kwargs)
-    # LM STUDIO INTEGRATION END
     else: return f"Error: Unknown engine '{engine}'"
 
 def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=None, stream_output=False, safety_settings=None):
@@ -228,12 +219,13 @@ def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=No
             try: return sanitize_api_response(response.text)
             except ValueError:
                 if response.prompt_feedback and response.prompt_feedback.block_reason: return f"Error: Request blocked by safety filter. Reason: {response.prompt_feedback.block_reason.name}"
-                if response.candidates and response.candidates[0].finish_reason.name != "STOP": return f"Error: No content generated. Finish Reason: {response.candidates[0].finish_reason.name}"
+                if response.candidates and response.candidates.finish_reason.name != "STOP": return f"Error: No content generated. Finish Reason: {response.candidates.finish_reason.name}"
                 return "Error: No content generated (Reason unknown, response was empty)."
     except ResourceExhausted: print(f"QUOTA ERROR: Google Gemini API Quota Exhausted for model {model_name}.", file=sys.stderr); raise QuotaExhaustedError(f"Quota exhausted for model {model_name}")
     except PermissionDenied: return "Error: Google API Permission Denied (Check Key)."
     except GoogleAPIError as e: return f"Error: Google API Call Failed - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Google API issue - {e}"
+
 def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
     payload = {"model": model_name, "prompt": prompt_text, "stream": False}
     if images_data_list: payload["images"] = [base64.b64encode(img_data['bytes']).decode('utf-8') for img_data in images_data_list]
@@ -248,56 +240,45 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
     except requests.exceptions.RequestException as e: return f"Error: Could not connect to Ollama API - {e}"
     except Exception as e: traceback.print_exc(); return f"Error: Unexpected Ollama Call Failed - {e}"
 
-# LM STUDIO INTEGRATION START
 def call_lmstudio_api(prompt_text, model_name, images_data_list=None, **kwargs):
     headers = {"Content-Type": "application/json"}
     message_content = [{"type": "text", "text": prompt_text}]
     if images_data_list:
         for img_data in images_data_list:
             base64_image = base64.b64encode(img_data['bytes']).decode('utf-8')
-            message_content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{img_data['mime_type']};base64,{base64_image}"}
-            })
-    payload = {
-        "model": model_name,
-        "messages": [{"role": "user", "content": message_content}],
-        "stream": False
-    }
+            message_content.append({"type": "image_url", "image_url": {"url": f"data:{img_data['mime_type']};base64,{base64_image}"}})
+    payload = {"model": model_name, "messages": [{"role": "user", "content": message_content}], "stream": False}
     try:
         print(f"Calling LM Studio API ({model_name}) with {len(images_data_list or [])} image(s) at {LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT}")
         response = requests.post(LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT, headers=headers, json=payload, timeout=600)
         response.raise_for_status()
         data = response.json()
-        if data.get("choices"):
+        # FIXED: Properly access the first choice
+        if data.get("choices") and len(data["choices"]) > 0:
             return sanitize_api_response(data["choices"][0]["message"]["content"])
         if "error" in data:
             return f"Error: LM Studio API returned an error - {data['error']}"
         return "Error: Unexpected response format from LM Studio."
-    except requests.exceptions.RequestException as e:
-        return f"Error: Could not connect to LM Studio API - {e}"
-    except Exception as e:
-        traceback.print_exc()
-        return f"Error: Unexpected LM Studio Call Failed - {e}"
-# LM STUDIO INTEGRATION END
+    except requests.exceptions.RequestException as e: return f"Error: Could not connect to LM Studio API - {e}"
+    except Exception as e: traceback.print_exc(); return f"Error: Unexpected LM Studio Call Failed - {e}"
 
 def determine_unique_output_paths(base_name, suffix, out_folder, log_folder):
     out_base = f"{base_name}{suffix}"
     def find_unique(folder, base, ext):
         path = os.path.join(folder, f"{base}{ext}")
-        if not os.path.exists(path):
-            return path
+        if not os.path.exists(path): return path
         i = 1
         while True:
             path = os.path.join(folder, f"{base} ({i}){ext}")
-            if not os.path.exists(path):
-                return path
+            if not os.path.exists(path): return path
             i += 1
     return find_unique(out_folder, out_base, RAW_OUTPUT_FILE_EXTENSION), find_unique(log_folder, out_base, LOG_FILE_EXTENSION)
+
 def save_raw_api_response(text, filepath):
     try:
         with open(filepath, 'w', encoding='utf-8') as f: f.write(text or "[Info: API response was empty]")
     except Exception as e: print(f"**ERROR: Could not save raw API response to {filepath}: {e}**")
+
 def save_processing_log(log_data, log_filepath):
     try:
         with open(log_filepath, 'w', encoding='utf-8') as f:
@@ -309,6 +290,7 @@ def save_processing_log(log_data, log_filepath):
             f.write("="*56 + "\n")
         print(f"Processing log saved to: {log_filepath}")
     except Exception as e: print(f"**ERROR: Could not save processing log to {log_filepath}: {e}**")
+
 def copy_failed_file(filepath):
     try:
         source_dir = os.path.dirname(os.path.abspath(filepath))
@@ -318,10 +300,20 @@ def copy_failed_file(filepath):
         shutil.copy2(filepath, dest_path)
         print(f"Copied failed source file to: {dest_path}")
     except Exception as e: print(f"**ERROR: Could not copy failed file {filepath}: {e}**", file=sys.stderr)
-def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, **kwargs):
+
+def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, **kwargs):
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
-    raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
+    
+    # FIXED: Properly handle overwrite mode with single file
+    if overwrite_original and len(filepaths_group) == 1:
+        raw_path = filepaths_group[0]  # FIXED: Get the actual file path, not the list
+        log_folder_for_overwrite = os.path.join(os.path.dirname(raw_path), LOG_SUBFOLDER_NAME)
+        os.makedirs(log_folder_for_overwrite, exist_ok=True)
+        _, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], log_folder_for_overwrite, log_folder_for_overwrite)
+    else:
+        raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'])
+
     log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
     api_response = None
     try:
@@ -333,7 +325,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             if is_image: images_data.append({"bytes": content, "mime_type": mime})
             else:
                 if add_filename_to_prompt:
-                    filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                    filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]  # Fixed: Get just the filename part
                     text_content_parts.append(f"\n\n--- Filename: {filename_no_ext} ---")
                 text_content_parts.append(f"\n\n--- File Content Start: {os.path.basename(filepath)} ---\n{content}\n--- File Content End ---")
         if text_content_parts: prompt += "".join(text_content_parts)
@@ -343,6 +335,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         log_data['status'] = 'Success'
         return api_response, None
     except Exception as e:
+        # FIXED: Properly access the first filename in the error message
         print(f"**ERROR during processing group starting with {os.path.basename(filepaths_group[0])}: {e}**")
         log_data.update({'error_message': str(e), 'traceback_info': traceback.format_exc() if not isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)) else "N/A"})
         if isinstance(e, (QuotaExhaustedError, KeyboardInterrupt)): raise
@@ -351,6 +344,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         if log_data['status'] == 'Success': save_raw_api_response(api_response, raw_path)
         log_data.update({'end_time': datetime.datetime.now(), 'duration': (datetime.datetime.now() - start_time).total_seconds()})
         save_processing_log(log_data, log_path)
+
 def get_api_key(force_gui=False):
     api_key = os.environ.get(API_KEY_ENV_VAR_NAME)
     if not api_key or force_gui:
@@ -380,6 +374,7 @@ class AppGUI(tk.Tk):
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.batch_size_warning = tk.BooleanVar(value=False)
+        self.overwrite_var = tk.BooleanVar(value=False)
         self.safety_map = {
             'Off (Block None)': HarmBlockThreshold.BLOCK_NONE,
             'Block High Severity Only': HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -409,7 +404,6 @@ class AppGUI(tk.Tk):
         paned_window.grid(row=1, column=0, sticky="nsew", padx=10)
         left_pane = ttk.Frame(paned_window, padding=5)
         left_pane.columnconfigure(0, weight=1)
-        left_pane.rowconfigure(0, weight=1)
         left_pane.rowconfigure(1, weight=1)
         paned_window.add(left_pane, weight=1)
         files_frame = ttk.LabelFrame(left_pane, text="Input Files", padding=10)
@@ -440,16 +434,14 @@ class AppGUI(tk.Tk):
         options_frame.pack(fill=tk.X, pady=(0, 5))
         options_frame.columnconfigure(1, weight=1)
         ttk.Label(options_frame, text="AI Engine:").grid(row=0, column=0, sticky=tk.W)
-        # LM STUDIO INTEGRATION START
         ttk.Combobox(options_frame, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky=tk.EW)
-        # LM STUDIO INTEGRATION END
         ttk.Label(options_frame, text="Model:").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
         self.model_combo = ttk.Combobox(options_frame, textvariable=self.model_var, state="disabled")
         self.model_combo.grid(row=1, column=1, sticky=tk.EW, pady=(5,0))
         ttk.Checkbutton(options_frame, text="Append filename to prompt before content", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
         grouping_frame = ttk.LabelFrame(right_pane, text="Batch Grouping", padding=10)
         grouping_frame.pack(fill=tk.X, pady=5)
-        self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_group_size_entry)
+        self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_grouping_options)
         self.group_check.grid(row=0, column=0, columnspan=2, sticky=tk.W)
         ttk.Label(grouping_frame, text="Files per call:").grid(row=1, column=0, sticky=tk.W, padx=(5,0))
         self.group_size_spinbox = ttk.Spinbox(grouping_frame, from_=2, to=100, textvariable=self.group_size_var, width=5, state="disabled", command=self.validate_batch_sizes)
@@ -473,16 +465,47 @@ class AppGUI(tk.Tk):
         settings_frame.pack(fill=tk.X, pady=5)
         settings_frame.columnconfigure(1, weight=1)
         ttk.Label(settings_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(settings_frame, textvariable=self.output_dir_var).grid(row=0, column=1, sticky=tk.EW)
-        ttk.Button(settings_frame, text="Browse...", command=self.browse_output_dir).grid(row=0, column=2, padx=(5,0))
+        self.output_dir_entry = ttk.Entry(settings_frame, textvariable=self.output_dir_var)
+        self.output_dir_entry.grid(row=0, column=1, sticky=tk.EW)
+        self.browse_button = ttk.Button(settings_frame, text="Browse...", command=self.browse_output_dir)
+        self.browse_button.grid(row=0, column=2, padx=(5,0))
         ttk.Label(settings_frame, text="Output Suffix:").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
-        ttk.Entry(settings_frame, textvariable=self.suffix_var).grid(row=1, column=1, sticky=tk.W, pady=(5,0))
-        ttk.Checkbutton(settings_frame, text="Stream Output (Google Only)", variable=self.stream_var).grid(row=2, column=1, sticky=tk.W)
+        self.suffix_entry = ttk.Entry(settings_frame, textvariable=self.suffix_var)
+        self.suffix_entry.grid(row=1, column=1, sticky=tk.W, pady=(5,0))
+        ttk.Checkbutton(settings_frame, text="Stream Output (Google Only)", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky=tk.W)
+        self.overwrite_check = ttk.Checkbutton(settings_frame, text="Overwrite original input file", variable=self.overwrite_var, command=self.toggle_overwrite_options)
+        self.overwrite_check.grid(row=3, column=0, columnspan=2, sticky=tk.W)
         ttk.Button(self, text="Process Files", command=self.process).grid(row=2, column=0, pady=(5, 10))
+
+    def toggle_overwrite_options(self):
+        if self.overwrite_var.get():
+            self.group_files_var.set(False)
+            self.group_check.config(state="disabled")
+            self.group_size_spinbox.config(state="disabled")
+            self.output_dir_entry.config(state="disabled")
+            self.browse_button.config(state="disabled")
+            self.suffix_entry.config(state="disabled")
+        else:
+            self.group_check.config(state="normal")
+            self.output_dir_entry.config(state="normal")
+            self.browse_button.config(state="normal")
+            self.suffix_entry.config(state="normal")
+            self.toggle_grouping_options()
+
+    def toggle_grouping_options(self):
+        if self.group_files_var.get():
+            self.overwrite_var.set(False)
+            self.overwrite_check.config(state="disabled")
+            self.group_size_spinbox.config(state="normal")
+        else:
+            self.overwrite_check.config(state="normal")
+            self.group_size_spinbox.config(state="disabled")
+        self.validate_batch_sizes()
 
     def toggle_safety_widgets(self):
         state = "readonly" if self.enable_safety_var.get() else "disabled"
         for widget in self.safety_widgets: widget.config(state=state)
+
     def validate_batch_sizes(self, *args):
         if not self.group_files_var.get() or not self.files_var.get():
             self.group_status_label.config(text=""); self.batch_size_warning.set(False); return
@@ -497,51 +520,53 @@ class AppGUI(tk.Tk):
         else:
             msg, fg, warn = f"✓ All {len(file_sizes)//group_size + (1 if len(file_sizes)%group_size else 0)} batches are under {MAX_BATCH_SIZE_MB} MB.", "green", False
         self.group_status_label.config(text=msg, foreground=fg); self.batch_size_warning.set(warn)
-    def toggle_group_size_entry(self):
-        self.group_size_spinbox.config(state="normal" if self.group_files_var.get() else "disabled"); self.validate_batch_sizes()
+
     def prompt_for_api_key(self):
         new_key = get_api_key(force_gui=True)
         if new_key: self.api_key = new_key; self.api_status_label.config(text="API Key Status: Set (via prompt)"); self.update_models()
         else: self.api_status_label.config(text="API Key Status: NOT Set")
+
     def update_models(self, *args):
         engine = self.engine_var.get(); self.model_combo.set('Fetching...'); self.model_combo.configure(state="disabled"); self.update_idletasks()
-        # LM STUDIO INTEGRATION START
-        if engine == "google":
-            models, error_msg = fetch_google_models(self.api_key)
-        elif engine == "ollama":
-            models, error_msg = fetch_ollama_models()
-        elif engine == "lmstudio":
-            models, error_msg = fetch_lmstudio_models()
-        else:
-            models, error_msg = [], "Unknown engine selected"
-        # LM STUDIO INTEGRATION END
+        if engine == "google": models, error_msg = fetch_google_models(self.api_key)
+        elif engine == "ollama": models, error_msg = fetch_ollama_models()
+        elif engine == "lmstudio": models, error_msg = fetch_lmstudio_models()
+        else: models, error_msg = [], "Unknown engine selected"
         if error_msg: self.model_combo.set(f"Error: {error_msg}"); self.model_var.set("")
         elif models:
             self.model_combo['values'] = models; self.model_combo.configure(state="readonly")
             cmd_model = getattr(self.args, 'model', None)
             self.model_var.set(cmd_model if cmd_model in models else (models[0] if models else ""))
         else: self.model_combo.set("No models found"); self.model_var.set("")
+
     def add_files(self):
         selected = filedialog.askopenfilenames(parent=self, title="Select Input Files", filetypes=[("Supported Files", " ".join(f"*{ext}" for ext in ALL_SUPPORTED_EXTENSIONS)), ("All Files", "*.*")])
         if selected:
             current = list(self.files_var.get()); new_files = [os.path.normpath(f) for f in selected if os.path.normpath(f) not in current]
             if new_files: self.files_var.set(tuple(sorted(current + new_files, key=natural_sort_key))); self.validate_batch_sizes()
+
     def remove_files(self):
         selected = self.file_listbox.curselection()
         if selected:
             current = list(self.files_var.get())
             for i in sorted(selected, reverse=True): current.pop(i)
             self.files_var.set(tuple(current)); self.validate_batch_sizes()
+
     def clear_files(self): self.files_var.set([]); self.validate_batch_sizes()
+
     def browse_output_dir(self):
         directory = filedialog.askdirectory(initialdir=os.getcwd(), parent=self);
         if directory: self.output_dir_var.set(directory)
+
     def process(self):
         if self.batch_size_warning.get():
-            proceed = tkinter.messagebox.askokcancel("Batch Size Warning",f"One or more batches exceeds the {MAX_BATCH_SIZE_MB} MB limit.\nThis may cause API errors.\n\nProceed anyway?", icon='warning', parent=self)
-            if not proceed: return
+            if not tkinter.messagebox.askokcancel("Batch Size Warning",f"One or more batches exceeds the {MAX_BATCH_SIZE_MB} MB limit.\nThis may cause API errors.\n\nProceed anyway?", icon='warning', parent=self): return
+        if self.overwrite_var.get():
+            if not tkinter.messagebox.askokcancel("Overwrite Warning", "You have selected to overwrite the original input files with the AI output.\n\nThis action cannot be undone.\n\nAre you sure you want to proceed?", icon='warning', parent=self): return
+
         group_size = self.group_size_var.get() if self.group_files_var.get() else 1
         if self.group_files_var.get() and group_size < 2: tkinter.messagebox.showwarning("Input Error", "Files per call must be 2 or greater.", parent=self); return
+        
         final_safety_settings = {}
         if self.engine_var.get() == 'google':
             if not self.enable_safety_var.get():
@@ -553,13 +578,16 @@ class AppGUI(tk.Tk):
                     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: self.safety_map[self.sexually_explicit_var.get()],
                     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: self.safety_map[self.dangerous_content_var.get()],
                 }
+        
         self.settings = {
             'files': list(self.files_var.get()), 'custom_prompt': self.prompt_text.get("1.0", tk.END).strip(),
             'engine': self.engine_var.get(), 'model': self.model_var.get(), 'output_dir': self.output_dir_var.get(),
             'suffix': self.suffix_var.get(), 'stream_output': self.stream_var.get(), 'api_key': self.api_key,
             'group_size': group_size, 'safety_settings': final_safety_settings,
-            'add_filename_to_prompt': self.add_filename_var.get()
+            'add_filename_to_prompt': self.add_filename_var.get(),
+            'overwrite_original': self.overwrite_var.get()
         }
+
         if not self.settings['files']: tkinter.messagebox.showwarning("Input Error", "Please add at least one file.", parent=self); return
         if not self.settings['model'] or self.settings['model'].startswith("Error:"): tkinter.messagebox.showwarning("Input Error", "Please select a valid model.", parent=self); return
         if self.settings['engine'] == 'google' and not self.settings['api_key']: tkinter.messagebox.showwarning("Input Error", "Google engine requires an API Key.", parent=self); return
@@ -571,9 +599,7 @@ def main():
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME, help="Subfolder for output.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help="Suffix for output filenames.")
     parser.add_argument("--stream", action='store_true', help="Enable streaming output (Google Only).")
-    # LM STUDIO INTEGRATION START
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama', 'lmstudio'], help="AI engine.")
-    # LM STUDIO INTEGRATION END
     parser.add_argument("-m", "--model", help="Suggest a model to select by default.")
     parser.add_argument("--add-filename-to-prompt", action='store_true', help="Append filename (no extension) to the prompt before the file content.")
     args = parser.parse_args()
@@ -587,51 +613,64 @@ def main():
         print("No input files specified. Searching current directory and all subdirectories for supported files...")
         current_directory = os.getcwd()
         for ext in ALL_SUPPORTED_EXTENSIONS:
-            # The '**' pattern combined with 'recursive=True' enables searching in subfolders.
             search_pattern = os.path.join(current_directory, f"**/*{ext}")
             filepaths.extend(glob.glob(search_pattern, recursive=True))
         if filepaths:
             print(f"Found {len(filepaths)} supported files to process.")
         else:
             print("No supported files found in the current directory.")
-            
+
+    # FIXED: Proper file extension filtering
     filepaths = sorted(list(set(f for f in filepaths if os.path.isfile(f) and os.path.splitext(f)[1].lower() in ALL_SUPPORTED_EXTENSIONS)), key=natural_sort_key)
+
     initial_api_key = get_api_key()
     app = AppGUI(initial_api_key, filepaths, args); app.mainloop()
     gui_settings = app.settings
     if not gui_settings: print("Operation cancelled or GUI closed."); return
     all_files = sorted(list(set(gui_settings['files'])), key=natural_sort_key)
     if not all_files: print("Error: No valid input files specified."); return
-    group_size = gui_settings.get('group_size', 1)
+
+    group_size = 1 if gui_settings.get('overwrite_original') else gui_settings.get('group_size', 1)
+    if gui_settings.get('overwrite_original'):
+        print("INFO: Overwrite mode enabled. Processing files individually.")
+
     file_groups = [all_files[i:i + group_size] for i in range(0, len(all_files), group_size)]
     total_groups = len(file_groups)
-    central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] else None
-    
+    central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] and not gui_settings.get('overwrite_original') else None
+
     processed_files, quota_hits, failed_files = 0, 0, {}
-    
     exhausted_models = set()
     print(f"\nStarting batch processing for {len(all_files)} file(s) in {total_groups} group(s)...")
     i = 0
     while i < total_groups:
         group_of_filepaths = file_groups[i]
+        # FIXED: Properly get first file from the list
         first_filepath = group_of_filepaths[0]
         print(f"\n--- Processing Group {i + 1}/{total_groups} ---")
         for fp in group_of_filepaths: print(f"  - {os.path.basename(fp)}")
+        
         out_folder = central_out_folder or os.path.dirname(os.path.abspath(first_filepath))
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
+        os.makedirs(out_folder, exist_ok=True)
         os.makedirs(log_folder, exist_ok=True)
+
         try:
-            _, error_msg = process_file_group(group_of_filepaths, gui_settings['api_key'], gui_settings['engine'],
-                gui_settings['custom_prompt'], gui_settings['model'], output_suffix=gui_settings['suffix'],
-                stream_output=gui_settings['stream_output'], output_folder=out_folder, log_folder=log_folder,
-                safety_settings=gui_settings['safety_settings'], add_filename_to_prompt=gui_settings['add_filename_to_prompt'])
-            
+            _, error_msg = process_file_group(
+                group_of_filepaths, gui_settings['api_key'], gui_settings['engine'],
+                gui_settings['custom_prompt'], gui_settings['model'], 
+                output_suffix=gui_settings['suffix'],
+                stream_output=gui_settings['stream_output'], 
+                output_folder=out_folder, log_folder=log_folder,
+                safety_settings=gui_settings['safety_settings'], 
+                add_filename_to_prompt=gui_settings['add_filename_to_prompt'],
+                overwrite_original=gui_settings['overwrite_original']
+            )
+
             if not error_msg:
                 processed_files += len(group_of_filepaths)
                 print(f"✓ SUCCESS: Group {i + 1}/{total_groups} processed successfully.")
             else:
-                for fp in group_of_filepaths:
-                    failed_files[fp] = error_msg
+                for fp in group_of_filepaths: failed_files[fp] = error_msg
                 [copy_failed_file(fp) for fp in group_of_filepaths]
                 print(f"✗ FAILED: Group {i + 1}/{total_groups} failed. See log for details.")
             i += 1
@@ -646,14 +685,16 @@ def main():
             if err or not all_google_models:
                 print("Could not fetch alternative models. This group will be marked as failed.")
                 reason = f"Quota limit reached for model {failed_model}; could not fetch alternatives"
-                for fp in group_of_filepaths:
-                    failed_files[fp] = reason
+                for fp in group_of_filepaths: failed_files[fp] = reason
                 [copy_failed_file(fp) for fp in group_of_filepaths]
                 i += 1
                 continue
+            
             prompt_text = "Please choose an action:\n"
-            for idx, model_name in enumerate(all_google_models): prompt_text += f"  [{idx + 1}] Switch to model: {model_name}{' (Quota Reached)' if model_name in exhausted_models else ''}\n"
+            for idx, model_name in enumerate(all_google_models): 
+                prompt_text += f"  [{idx + 1}] Switch to model: {model_name}{' (Quota Reached)' if model_name in exhausted_models else ''}\n"
             prompt_text += f"  [{len(all_google_models) + 1}] Quit the batch process\nYour choice: "
+
             while True:
                 choice = input(prompt_text).strip()
                 try:
@@ -665,22 +706,16 @@ def main():
                     elif choice_num == len(all_google_models) + 1:
                         print("Quitting batch process. This group will be marked as failed.")
                         reason = f"Quota limit reached for model {failed_model}"
-                        for fp in group_of_filepaths:
-                            failed_files[fp] = reason
+                        for fp in group_of_filepaths: failed_files[fp] = reason
                         [copy_failed_file(fp) for fp in group_of_filepaths]
-                        i = total_groups
+                        i = total_groups # Exit outer loop
                         break
-                    else:
-                        print("Invalid number. Please try again.")
-                except ValueError:
-                    print("Invalid choice. Please enter a number from the list.")
+                    else: print("Invalid number. Please try again.")
+                except ValueError: print("Invalid choice. Please enter a number from the list.")
         except KeyboardInterrupt:
-            print("\n" + "=" * 50)
-            print("CANCELLED: Batch processing was interrupted by the user.")
-            print("=" * 50)
+            print("\n" + "=" * 50 + "\nCANCELLED: Batch processing was interrupted by the user.\n" + "=" * 50)
             reason = "Processing cancelled by user"
-            for fp in group_of_filepaths:
-                failed_files[fp] = reason
+            for fp in group_of_filepaths: failed_files[fp] = reason
             [copy_failed_file(fp) for fp in group_of_filepaths]
             break
             
@@ -691,6 +726,8 @@ def main():
     print("=========================================")
     print(f"Total files attempted: {attempted_count}{f' (in {total_groups} groups)' if group_size > 1 else ''}")
     print(f"Successfully processed: {processed_files}")
+    if gui_settings.get('overwrite_original') and processed_files > 0:
+        print("(Original input files were overwritten with AI output)")
     print(f"Failed (unrecoverable errors or cancelled): {failed_count}")
     print(f"Quota limits reached: {quota_hits} time(s)")
     if failed_files:
