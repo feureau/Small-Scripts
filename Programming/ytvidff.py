@@ -22,8 +22,9 @@ CORE FEATURES:
   - Job-Based Batch Processing: Add the same video multiple times to create different output
     versions. Each processing task is managed as a separate "job" with its own settings.
   - Automatic Subtitle Discovery: Automatically finds all sidecar SRT files that match a video's
-    basename (e.g., `video.en.srt`, `video-id.srt`) and creates a distinct processing job for each,
-    plus a job for no subtitles.
+    basename (e.g., `video.en.srt`, `video-id.srt`) and creates a distinct processing job for each.
+  - Conditional "No Subtitle" Job: A job without subtitles is only created by default if no
+    matching sidecar subtitle files are found for a given video.
   - Duplicate Jobs on Demand: A "Duplicate" button allows for instant cloning of any job,
     making it easy to create A/B tests (e.g., SDR vs HDR) or other variations.
   - Optimized Hardware Acceleration: Leverages NVIDIA's CUDA for the entire video pipeline,
@@ -115,6 +116,11 @@ limitations of various command-line encoders. The primary goal of the current de
 ----------------------------------------------------------------------------------------------------
                                         PART 4: CHANGELOG
 ----------------------------------------------------------------------------------------------------
+v5.1.0 (2025-10-22) - Gemini/User Collaboration
+  - BEHAVIOR CHANGE: Modified the job discovery logic. The script now only creates a "[No Subtitles]"
+    job for a video if no matching sidecar .srt files are found. If subtitles are present, only
+    jobs with subtitles will be created by default.
+
 v5.0.1 (2025-10-22) - Gemini/User Collaboration
   - FIX: Resolved a critical file overwriting bug where a job with no subtitles and a job
     with an exact-match subtitle (e.g., `video.srt`) would generate the same output filename.
@@ -687,16 +693,17 @@ class VideoProcessorApp:
             except Exception as e:
                 print(f"[WARN] Could not scan for subtitles in {dir_name}: {e}")
 
-            # 2. Create the "No Subtitles" job
-            job_no_sub = {
-                "job_id": f"job_{time.time()}", "video_path": video_path, "subtitle_path": None,
-                "display_name": f"{os.path.basename(video_path)} [No Subtitles]",
-                "options": copy.deepcopy(default_options)
-            }
-            self.processing_jobs.append(job_no_sub)
-            self.job_listbox.insert(tk.END, job_no_sub["display_name"])
+            # 2. If no subtitles were found, create the "No Subtitles" job.
+            if not matched_srts:
+                job_no_sub = {
+                    "job_id": f"job_{time.time()}", "video_path": video_path, "subtitle_path": None,
+                    "display_name": f"{os.path.basename(video_path)} [No Subtitles]",
+                    "options": copy.deepcopy(default_options)
+                }
+                self.processing_jobs.append(job_no_sub)
+                self.job_listbox.insert(tk.END, job_no_sub["display_name"])
 
-            # 3. Create a job for each found SRT
+            # 3. Create a job for each found SRT. This loop will not run if matched_srts is empty.
             for srt_path in sorted(matched_srts):
                 srt_basename, _ = os.path.splitext(os.path.basename(srt_path))
                 tag = srt_basename[len(video_basename):].strip(' .-_')
