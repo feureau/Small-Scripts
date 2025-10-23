@@ -210,8 +210,8 @@ DEFAULT_SUBTITLE_MARGIN_V = "65"
 
 # --- Advanced ASS (Advanced SubStation Alpha) Style Overrides ---
 DEFAULT_SUBTITLE_BORDERSTYLE = "1"      # 1 = Outline + Drop Shadow, 3 = Opaque Box.
-DEFAULT_SUBTITLE_OUTLINE_WIDTH = "6"    # Width of the text border in pixels.
-DEFAULT_SUBTITLE_SHADOW_DEPTH = "3"     # Depth of the drop shadow in pixels.
+DEFAULT_SUBTITLE_OUTLINE_WIDTH = "12"    # Width of the text border in pixels.
+DEFAULT_SUBTITLE_SHADOW_DEPTH = "6"     # Depth of the drop shadow in pixels.
 DEFAULT_SUBTITLE_MARGIN_L = "10"        # Left margin in pixels.
 DEFAULT_SUBTITLE_MARGIN_R = "10"        # Right margin in pixels.
 DEFAULT_SUBTITLE_ENCODING = "1"         # ASS font encoding. 1 is the standard for Unicode.
