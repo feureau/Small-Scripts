@@ -34,6 +34,7 @@ The application operates in two primary modes:
 - **Dry Run Mode:** Test your updates without making any actual changes to your YouTube videos.
 - **Resumable Uploads:** Robustly handles video uploads, capable of resuming interrupted uploads.
 - **Logging:** All operations are logged to the console and can be saved to a file (`yt_manager.log`) upon exit.
+- **File Management:** Automatically moves successfully uploaded files to organized folders (enabled by default).
 
 ---
 ### PREREQUISITES & SETUP ###
@@ -85,6 +86,7 @@ The application operates in two primary modes:
     - **Execution Options:**
         - **Dry Run:** Check this to simulate the process and see the log output without making any changes.
         - **Skip Subtitle Uploads:** Check this to prevent the script from uploading any found subtitle files.
+        - **Move files after successful upload:** Enabled by default - moves uploaded files to organized folders.
         - **Save log on exit:** Check this to save the console output to `yt_manager.log` when you close the app.
 
 5.  **Process:**
@@ -117,7 +119,7 @@ The application operates in two primary modes:
 #### IMPORTS & CONSTANTS
 - **Imports:** Includes standard libraries, Google API libraries, and Tkinter for the GUI.
 - **SCOPES:** Defines the permissions the script requests from the user's Google account (upload, read, manage).
-- **File/Folder Names:** Constants for token file, failed updates folder, and log file.
+- **File/Folder Names:** Constants for token file, failed updates folder, uploaded files folder, and log file.
 - **API Settings:** Default port for OAuth, API timeout.
 - **File Patterns:** Glob patterns to find local video and subtitle files.
 - **YouTube Limits:** Constants for max tag length, tag count, and title length.
@@ -134,6 +136,7 @@ The application operates in two primary modes:
 - **`VideoData` Class:** A data model to represent an **existing** video fetched from YouTube. It stores all relevant details like ID, title, snippet, status, and paths to any matched local description/subtitle files.
 - **`VideoEntry` Class:** A data model to represent a **local video file** intended for upload. In its constructor, it automatically searches for and parses corresponding `.txt` and `.srt` files.
 - **`calculate_default_start_time()`:** A utility to provide a sensible default start time for scheduling (the next available 2.4-hour interval, at least 1 hour in the future).
+- **File Management Functions:** Functions to generate batch IDs, safely move files, and organize uploaded files into folders.
 
 #### MainApp CLASS (The GUI)
 - **`__init__()`:** The constructor initializes the main Tkinter window, sets up the token revocation, and calls `build_gui()`.
@@ -153,7 +156,7 @@ The application operates in two primary modes:
 
 #### CORE LOGIC FUNCTIONS (Outside the MainApp Class)
 - **`update_videos_on_youtube()`:** Contains the logic for processing videos in "Update Mode". It iterates through the selected `VideoData` objects, builds the API request body based on user settings and file data, and calls the `service.videos().update()` endpoint. It includes logic for dry runs and adding videos to a playlist.
-- **`upload_new_videos()`:** Contains the logic for "Upload Mode". It iterates through the selected `VideoEntry` objects, constructs the metadata `snippet` and `status` parts of the request, and uses `MediaFileUpload` to handle the actual video upload. After a successful video upload, it proceeds to upload the subtitle file (if available) and add the new video to a playlist (if requested).
+- **`upload_new_videos()`:** Contains the logic for "Upload Mode". It iterates through the selected `VideoEntry` objects, constructs the metadata `snippet` and `status` parts of the request, and uses `MediaFileUpload` to handle the actual video upload. After a successful video upload, it proceeds to upload the subtitle file (if available) and add the new video to a playlist (if requested). It also handles moving files to organized folders after successful uploads.
 
 #### SCRIPT ENTRY POINT
 - **`if __name__ == '__main__':`:** This is standard Python practice. The code inside this block only runs when the script is executed directly. It creates an instance of the `MainApp` class, which starts the GUI and the application's event loop.
@@ -169,6 +172,7 @@ import logging
 import shutil
 import glob
 import math
+import random
 from pathlib import Path
 from datetime import datetime, timedelta, time, timezone
 import requests
@@ -189,7 +193,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube", "https://www.googleapis.com/auth/youtube.force-ssl"
 ]
-TOKEN_FILE = "token.json"; FAILED_UPDATES_FOLDER = "failed_updates"; LOG_FILE = "yt_manager.log"
+TOKEN_FILE = "token.json"; FAILED_UPDATES_FOLDER = "failed_updates"; UPLOADED_FOLDER = "uploaded"
+UPLOADED_VIDEOS_SUBFOLDER = "videos"; UPLOADED_DESCRIPTIONS_SUBFOLDER = "descriptions"
+UPLOADED_SUBTITLES_SUBFOLDER = "subtitles"; UPLOADED_LOGS_SUBFOLDER = "logs"
+LOG_FILE = "yt_manager.log"
 OAUTH_PORT = 0; API_TIMEOUT_SECONDS = 60
 VIDEO_PATTERNS = ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.wmv"]
 SUBTITLE_PATTERNS = ["*.srt", "*.sbv", "*.vtt", "*.scc", "*.ttml"]
@@ -275,6 +282,105 @@ def sanitize_and_parse_json(content: str) -> dict | None:
         json_str = re.sub(r'(".*?":\s*")(.*?)(")', escape_quotes, json_str, flags=re.DOTALL); json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         return json.loads(json_str)
     except Exception: return None
+
+# File Management Functions
+def generate_batch_id():
+    """Generate a unique batch ID for this upload session"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_str = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))
+    return f"batch_{timestamp}_{random_str}"
+
+def safe_move_file(source_path, destination_path):
+    """
+    Safely move file with conflict resolution
+    """
+    source = Path(source_path)
+    destination = Path(destination_path)
+    
+    if not source.exists():
+        logger.warning(f"Source file doesn't exist: {source}")
+        return False
+        
+    # Handle filename conflicts
+    counter = 1
+    original_dest = destination
+    while destination.exists():
+        stem = original_dest.stem
+        suffix = original_dest.suffix
+        destination = original_dest.parent / f"{stem}_{counter}{suffix}"
+        counter += 1
+    
+    try:
+        # Ensure destination directory exists
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+        logger.info(f"Moved: {source.name} → {destination}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to move {source.name}: {e}")
+        return False
+
+def move_uploaded_files(video_entry, batch_id, upload_success=True):
+    """
+    Move files to appropriate folders after upload
+    Returns: dict of original_path -> new_path mappings
+    """
+    moved_files = {}
+    
+    if upload_success:
+        base_folder = UPLOADED_FOLDER
+        # Create batch-specific subfolder: uploaded/2024-01-15_143022_batch123/
+        batch_folder = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{batch_id}"
+        target_dir = Path(base_folder) / batch_folder
+    else:
+        target_dir = Path(FAILED_UPDATES_FOLDER) / batch_id
+    
+    # Create directory structure
+    (target_dir / UPLOADED_VIDEOS_SUBFOLDER).mkdir(parents=True, exist_ok=True)
+    (target_dir / UPLOADED_DESCRIPTIONS_SUBFOLDER).mkdir(parents=True, exist_ok=True)
+    (target_dir / UPLOADED_SUBTITLES_SUBFOLDER).mkdir(parents=True, exist_ok=True)
+    
+    # Move video file
+    video_src = Path(video_entry.filepath)
+    video_dst = target_dir / UPLOADED_VIDEOS_SUBFOLDER / video_src.name
+    if safe_move_file(video_src, video_dst):
+        moved_files['video'] = (str(video_src), str(video_dst))
+    
+    # Move description file if exists and was used
+    if hasattr(video_entry, 'description_file_path') and video_entry.description_file_path:
+        desc_src = Path(video_entry.description_file_path)
+        desc_dst = target_dir / UPLOADED_DESCRIPTIONS_SUBFOLDER / desc_src.name
+        if safe_move_file(desc_src, desc_dst):
+            moved_files['description'] = (str(desc_src), str(desc_dst))
+    
+    # Move subtitle file if exists and was used  
+    if hasattr(video_entry, 'subtitle_path') and video_entry.subtitle_path:
+        sub_src = Path(video_entry.subtitle_path)
+        sub_dst = target_dir / UPLOADED_SUBTITLES_SUBFOLDER / sub_src.name
+        if safe_move_file(sub_src, sub_dst):
+            moved_files['subtitle'] = (str(sub_src), str(sub_dst))
+    
+    return moved_files
+
+def save_upload_log(batch_id, upload_data):
+    """Save JSON log of uploaded files for reference"""
+    log_file = Path(UPLOADED_FOLDER) / UPLOADED_LOGS_SUBFOLDER / f"{batch_id}.json"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    log_data = {
+        'batch_id': batch_id,
+        'upload_time': datetime.now().isoformat(),
+        'total_videos': len(upload_data),
+        'uploads': upload_data
+    }
+    
+    try:
+        with open(log_file, 'w', encoding='utf-8') as f:
+            json.dump(log_data, f, indent=2)
+        logger.info(f"Upload log saved: {log_file}")
+    except Exception as e:
+        logger.error(f"Failed to save upload log: {e}")
+
 class VideoData:
     def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None):
         self.video_id, self.original_title = video_id, video_title; self.video_snippet, self.video_status = video_snippet or {}, video_status or {}
@@ -284,14 +390,14 @@ class VideoData:
 
 class VideoEntry:
     def __init__(self, filepath):
-        p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []
+        p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []; self.description_file_path = None
         try:
             matching_txt_files = list(p.parent.glob(f"{p.stem}*.txt"))
             if matching_txt_files:
                 txt_file = matching_txt_files[0]; logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'."); content = txt_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
                 if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
                 else: self.description = content
-                self.description_source = txt_file.name
+                self.description_source = txt_file.name; self.description_file_path = str(txt_file)
         except Exception as e: logger.error(f"Error reading description file for '{p.name}': {e}")
         try:
             for pattern in SUBTITLE_PATTERNS:
@@ -380,7 +486,12 @@ class MainApp:
         skip_subs_cb = ttk.Checkbutton(action_frame, text="Skip Subtitle Uploads", variable=self.skip_subs_var)
         skip_subs_cb.pack(side=tk.LEFT, padx=(0, 15))
         
-        # 3. Save Log Checkbox: Saves console output to a file on exit.
+        # 3. Move Files Checkbox: Moves uploaded files to organized folders (enabled by default)
+        self.move_files_var = tk.BooleanVar(value=True)
+        move_files_cb = ttk.Checkbutton(action_frame, text="Move files to 'uploaded' folder after success", variable=self.move_files_var)
+        move_files_cb.pack(side=tk.LEFT, padx=(0, 15))
+        
+        # 4. Save Log Checkbox: Saves console output to a file on exit.
         self.save_log_var = tk.BooleanVar(value=False)
         save_log_cb = ttk.Checkbutton(action_frame, text="Save log on exit", variable=self.save_log_var)
         save_log_cb.pack(side=tk.LEFT)
@@ -530,13 +641,18 @@ class MainApp:
     def run_upload_processing(self, selected_videos):
         try:
             if not self.service: messagebox.showerror("Error", "Authentication is required to upload videos."); self.update_status("Error: Not authenticated."); return
-            desc_override = self.desc_txt.get('1.0', 'end-1c').strip(); tags_from_gui = sanitize_tags([t.strip() for t in self.tags_ent.get().split(',')]); cat_name = self.category_var.get(); cat_id = self.dynamic_category_map.get(cat_name, STATIC_CATEGORY_MAP.get(cat_name, '24')); vlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); dlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); rec = self.recording_date_var.get().strip(); notify = self.notify_subscribers_var.get(); kids = self.made_for_kids_var.get() == 'yes'; embed = self.allow_embedding_var.get(); stats = self.public_stats_var.get(); playlist_id = self.playlist_id_var.get().strip(); base_time = self.start_ent.get(); hrs = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get())
+            desc_override = self.desc_txt.get('1.0', 'end-1c').strip(); tags_from_gui = sanitize_tags([t.strip() for t in self.tags_ent.get().split(',')]); cat_name = self.category_var.get(); cat_id = self.dynamic_category_map.get(cat_name, STATIC_CATEGORY_MAP.get(cat_name, '24')); vlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); dlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); rec = self.recording_date_var.get().strip(); notify = self.notify_subscribers_var.get(); kids = self.made_for_kids_var.get() == 'yes'; embed = self.allow_embedding_var.get(); stats = self.public_stats_var.get(); playlist_id = self.playlist_id_var.get().strip(); base_time = self.start_ent.get(); hrs = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get()); move_files = self.move_files_var.get()  # Get the move files setting
+            
             utc_dt = datetime.strptime(base_time, '%Y-%m-%d %H:%M').astimezone(timezone.utc)
+            
             for i, e in enumerate(selected_videos):
                 if desc_override: e.description = desc_override
                 if tags_from_gui: e.tags = tags_from_gui
                 e.categoryId = cat_id; e.videoLanguage = vlang; e.defaultLanguage = dlang; e.recordingDate = rec; e.notifySubscribers = notify; e.madeForKids = kids; e.embeddable = embed; e.publicStatsViewable = stats; e.playlistId = playlist_id; e.publishAt = (utc_dt + timedelta(hours=hrs, minutes=mins) * i).strftime('%Y-%m-%dT%H:%M:%SZ')
-            upload_new_videos(self.service, selected_videos, self.skip_subs_var.get())
+            
+            # Pass move_files flag to upload function
+            upload_new_videos(self.service, selected_videos, self.skip_subs_var.get(), move_files)
+            
         except Exception as e: logger.error(f"Overall upload process failed: {e}", exc_info=True); self.update_status("Upload process failed.")
         finally: self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL)); self.root.after(100, lambda: self.update_status("Upload process complete."))
     def on_exit(self):
@@ -590,34 +706,104 @@ def update_videos_on_youtube(service, processing_data):
         except Exception as e: logger.error(f"An unexpected error occurred for '{vd.original_title}': {e}", exc_info=True)
     logger.info("--- Update processing complete. ---")
 
-def upload_new_videos(service, video_entries, skip_subtitles):
+def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
     logger.info(f"--- Starting to UPLOAD {len(video_entries)} videos ---")
+    
+    # Generate batch ID for this upload session
+    batch_id = generate_batch_id()
+    uploaded_log = []
+    
     for e in video_entries:
-        try: media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
-        except FileNotFoundError: logger.error(f"File not found, skipping: {e.filepath}"); continue
+        video_success = False
+        try:
+            media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
+        except FileNotFoundError:
+            logger.error(f"File not found, skipping: {e.filepath}")
+            continue
+            
         snippet = {'title': e.title, 'categoryId': e.categoryId, 'defaultLanguage': e.defaultLanguage, 'defaultAudioLanguage': e.videoLanguage}
         if e.description: snippet['description'] = sanitize_description(e.description)
         if e.tags: snippet['tags'] = sanitize_tags(e.tags)
         if e.recordingDate:
-            try: rec_dt = datetime.strptime(e.recordingDate, '%Y-%m-%d'); snippet['recordingDetails'] = {'recordingDate': rec_dt.isoformat("T") + "Z"}
-            except (ValueError, TypeError): logger.warning(f"-> Invalid recording date for '{e.title}'. Skipping.")
+            try: 
+                rec_dt = datetime.strptime(e.recordingDate, '%Y-%m-%d')
+                snippet['recordingDetails'] = {'recordingDate': rec_dt.isoformat("T") + "Z"}
+            except (ValueError, TypeError): 
+                logger.warning(f"-> Invalid recording date for '{e.title}'. Skipping.")
+                
         status = {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids, 'license': 'youtube', 'embeddable': e.embeddable, 'publicStatsViewable': e.publicStatsViewable}
-        body = {'snippet': snippet, 'status': status}; logger.info(f"Uploading {e.filepath} with title '{e.title}'"); req = service.videos().insert(part='snippet,status', body=body, media_body=media, notifySubscribers=e.notifySubscribers); resp = None
+        body = {'snippet': snippet, 'status': status}
+        
+        logger.info(f"Uploading {e.filepath} with title '{e.title}'")
+        req = service.videos().insert(part='snippet,status', body=body, media_body=media, notifySubscribers=e.notifySubscribers)
+        resp = None
+        
         try:
-            while resp is None: progress, resp = req.next_chunk()
-        except HttpError as upload_ex: logger.error(f"Upload failed for {e.filepath}: {upload_ex.reason}"); continue
-        if not resp: logger.error(f"Upload of {e.filepath} failed and was skipped."); continue
-        vid = resp['id']; logger.info(f"Successfully uploaded {e.filepath} -> https://youtu.be/{vid}")
+            while resp is None:
+                progress, resp = req.next_chunk()
+            video_success = True
+        except HttpError as upload_ex:
+            logger.error(f"Upload failed for {e.filepath}: {upload_ex.reason}")
+            # Move to failed folder if upload fails and moving is enabled
+            if move_files:
+                move_uploaded_files(e, batch_id, False)
+            continue
+            
+        if not resp:
+            logger.error(f"Upload of {e.filepath} failed and was skipped.")
+            if move_files:
+                move_uploaded_files(e, batch_id, False)
+            continue
+            
+        vid = resp['id']
+        logger.info(f"Successfully uploaded {e.filepath} -> https://youtu.be/{vid}")
+        
+        subtitle_success = True
+        # Handle subtitle upload
         if e.subtitle_path and not skip_subtitles:
             logger.info(f"  -> Uploading subtitle file: {e.subtitle_source}")
-            try: media_subtitle = MediaFileUpload(e.subtitle_path); request_body = {'snippet': {'videoId': vid, 'language': e.videoLanguage, 'name': Path(e.subtitle_path).stem, 'isDraft': False}}; service.captions().insert(part='snippet', body=request_body, media_body=media_subtitle).execute(); logger.info(f"  -> Subtitle upload successful for video {vid}")
-            except Exception as sub_ex: logger.error(f"  -> Subtitle upload FAILED for video {vid}: {sub_ex}")
+            try:
+                media_subtitle = MediaFileUpload(e.subtitle_path)
+                request_body = {'snippet': {'videoId': vid, 'language': e.videoLanguage, 'name': Path(e.subtitle_path).stem, 'isDraft': False}}
+                service.captions().insert(part='snippet', body=request_body, media_body=media_subtitle).execute()
+                logger.info(f"  -> Subtitle upload successful for video {vid}")
+            except Exception as sub_ex:
+                logger.error(f"  -> Subtitle upload FAILED for video {vid}: {sub_ex}")
+                subtitle_success = False
         elif e.subtitle_path and skip_subtitles:
             logger.info(f"  -> Skipping subtitle upload for: {e.subtitle_source}")
+        
+        # Handle playlist addition
+        playlist_success = True
         if e.playlistId:
             logger.info(f"  -> Adding to playlist {e.playlistId}")
-            try: service.playlistItems().insert(part='snippet', body={'snippet': {'playlistId': e.playlistId, 'resourceId': {'kind': 'youtube#video', 'videoId': vid}}}).execute(); logger.info(f"  -> Successfully added to playlist.")
-            except HttpError as ex: logger.error(f"  -> Playlist add FAILED: {ex.reason}")
+            try:
+                service.playlistItems().insert(part='snippet', body={'snippet': {'playlistId': e.playlistId, 'resourceId': {'kind': 'youtube#video', 'videoId': vid}}}).execute()
+                logger.info(f"  -> Successfully added to playlist.")
+            except HttpError as ex:
+                logger.error(f"  -> Playlist add FAILED: {ex.reason}")
+                playlist_success = False
+        
+        # Move files if upload was successful and moving is enabled
+        overall_success = video_success and subtitle_success and playlist_success
+        moved_files = {}
+        if move_files and overall_success:
+            moved_files = move_uploaded_files(e, batch_id, True)
+        
+        # Log this upload
+        uploaded_log.append({
+            'video_id': vid,
+            'original_title': e.title,
+            'file_path': e.filepath,
+            'success': overall_success,
+            'moved_files': moved_files,
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    # Save batch log if we have any uploads and moving is enabled
+    if move_files and uploaded_log:
+        save_upload_log(batch_id, uploaded_log)
+    
     logger.info("--- Batch upload process complete. ---")
 
 if __name__ == '__main__':
