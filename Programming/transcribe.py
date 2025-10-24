@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-transcribe.py - Transcription with Phrase-Level Grouping, True VAD, Punctuation-Aware Splitting, and Recursive File Discovery
+transcribe.py - Transcription with Netflix-Compliant Phrase Grouping, True VAD, and Recursive File Discovery
 """
 
 import sys, os, argparse, re, glob, torch
@@ -110,17 +110,87 @@ def post_process_word_timestamps(data: dict, max_duration_ms: int) -> dict:
         print(f"ℹ️ Corrected {corrected_count} overly long words.")
     return data
 
+def smart_line_break(text: str, max_chars: int):
+    """Break text into Netflix-compliant lines while keeping grammatical units together."""
+    words = text.split()
+    
+    # First, try to break at sentence boundaries
+    sentences = []
+    current_sentence = []
+    
+    for word in words:
+        current_sentence.append(word)
+        if word.endswith(('.', '?', '!')):
+            sentences.append(' '.join(current_sentence))
+            current_sentence = []
+    
+    if current_sentence:
+        sentences.append(' '.join(current_sentence))
+    
+    # If we have multiple sentences, handle each separately
+    if len(sentences) > 1:
+        all_lines = []
+        for sentence in sentences:
+            if len(sentence) <= max_chars:
+                all_lines.append(sentence)
+            else:
+                all_lines.extend(break_single_sentence(sentence, max_chars))
+        return all_lines
+    
+    # Single sentence case
+    return break_single_sentence(text, max_chars)
+
+def break_single_sentence(sentence: str, max_chars: int):
+    """Break a single sentence into Netflix-compliant lines."""
+    words = sentence.split()
+    
+    # Try to find natural break points
+    break_points = []
+    
+    for i, word in enumerate(words[:-1]):
+        next_word = words[i + 1]
+        
+        # Good break points (encourage breaks here)
+        if (word.endswith(',') or
+            word.lower() in {'and', 'but', 'or', 'so', 'because', 'although'} or
+            next_word[0].isupper() and i > 0):  # Likely proper noun or new clause
+            break_points.append(i)
+    
+    # If no natural break points, use middle
+    if not break_points:
+        mid_point = len(words) // 2
+        break_points = [mid_point - 1]  # Break before middle word
+    
+    # Try each break point
+    for break_at in break_points:
+        line1 = ' '.join(words[:break_at + 1])
+        line2 = ' '.join(words[break_at + 1:])
+        
+        if len(line1) <= max_chars and len(line2) <= max_chars:
+            return [line1, line2]
+    
+    # If no ideal break found, force break at best available point
+    for break_at in range(len(words) - 1, 0, -1):
+        line1 = ' '.join(words[:break_at + 1])
+        line2 = ' '.join(words[break_at + 1:])
+        
+        if len(line1) <= max_chars and len(line2) <= max_chars:
+            return [line1, line2]
+    
+    # Last resort: simple midpoint break
+    mid_point = len(words) // 2
+    line1 = ' '.join(words[:mid_point])
+    line2 = ' '.join(words[mid_point:])
+    return [line1, line2]
+
 def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
-                                     base_gap_s: float = 0.20,
-                                     orphan_merge_max_s: float = 0.90,
-                                     orphan_max_words: int = 2):
+                                   max_chars_per_line: int = 42,
+                                   max_phrase_duration: float = 7.0):
     """
-    Enhanced phrase-level conversion using a refined cost-based Stanza model.
-    Balances grammatical rules, timing, and line length for the most natural subtitles.
+    Netflix-compliant phrase grouping that focuses on natural speech patterns.
     """
     try:
-        initialize_stanza()
-
+        # Collect all words with timestamps
         all_words = [
             (w['start'], w['end'], w['word'].strip())
             for seg in data.get('segments', [])
@@ -132,135 +202,163 @@ def convert_data_to_phrase_level_srt(data: dict, srt_path: str,
             return
         all_words.sort(key=lambda x: x[0])
 
-        split_costs = [0] * len(all_words)
-
-        if nlp:
-            print("🧠 Using refined cost-based Stanza model for linguistic phrase splitting.")
-            full_text = " ".join(w[2] for w in all_words)
-            char_to_word_idx = []
-            current_pos = 0
-            for i, (_, _, word_text) in enumerate(all_words):
-                start_char = full_text.find(word_text, current_pos)
-                if start_char != -1:
-                    end_char = start_char + len(word_text)
-                    char_to_word_idx.extend([i] * (end_char - len(char_to_word_idx)))
-                    current_pos = end_char
-
-            def get_word_idx(char_pos):
-                if char_pos < len(char_to_word_idx):
-                    return char_to_word_idx[char_pos]
-                return len(all_words) - 1
-
-            doc = nlp(full_text)
-            
-            # --- Assign costs and benefits to potential split points ---
-            for sentence in doc.sentences:
-                for word in sentence.words:
-                    word_idx = get_word_idx(word.start_char)
-                    head_idx = get_word_idx(sentence.words[word.head - 1].start_char) if word.head > 0 else -1
-
-                    # --- Forbidden Splits (Infinite Cost) ---
-                    # Never split after prepositions, determiners, possessives, or within compound/fixed expressions.
-                    if word.deprel in {'case', 'det', 'nmod:poss', 'fixed', 'compound', 'mwe'}:
-                        split_costs[word_idx] = float('inf')
-                    # Never split a verb from its direct object.
-                    if word.deprel in {'obj', 'iobj'}:
-                        if head_idx != -1: split_costs[head_idx] = float('inf')
-
-                    # --- High-Cost Splits (Strongly Discouraged) ---
-                    # Penalize splitting after auxiliaries, copulas, or adjectives.
-                    if word.deprel in {'aux', 'cop', 'amod'}:
-                        split_costs[word_idx] += 150
-                    # Penalize splitting a verb from its subject or adverbial modifier.
-                    if word.deprel in {'nsubj', 'advmod', 'appos'}:
-                        if head_idx != -1: split_costs[head_idx] += 100
-                    # Penalize splitting after a relative pronoun to prevent dangling.
-                    if word.upos == 'PRON' and word.deprel.startswith('acl'):
-                        split_costs[word_idx] += 200
-
-                    # --- Ideal Splits (Benefit) ---
-                    # Encourage splitting BEFORE major clause boundaries (markers, conjunctions).
-                    if word.deprel in {'mark', 'cc'} or word.deprel.startswith('acl'):
-                        if word_idx > 0: split_costs[word_idx - 1] -= 100
-                    # Encourage splitting after commas.
-                    if word.text == ',' and word.upos == 'PUNCT':
-                        split_costs[word_idx] -= 50
-        else:
-            print("ℹ️ Using default punctuation-based phrase splitting.")
-
-        # --- Final Grouping Loop ---
+        # Step 1: Create initial phrases based on natural speech patterns
         phrases = []
-        phrase_words = []
-        phrase_start, phrase_end, prev_end = None, None, None
+        current_phrase = []
+        current_start = None
+        
+        for i, (start, end, word) in enumerate(all_words):
+            if current_start is None:
+                current_start = start
+            
+            current_phrase.append((start, end, word))
+            current_end = end
+            
+            # Check if we should break here
+            should_break = False
+            
+            # Break at strong punctuation
+            if word.endswith(('.', '?', '!')):
+                should_break = True
+            
+            # Break at natural pauses (long gaps)
+            if i < len(all_words) - 1:
+                next_start = all_words[i + 1][0]
+                gap = next_start - end
+                if gap > 0.8:  # Long pause
+                    should_break = True
+            
+            # Break if phrase is getting too long
+            current_text = ' '.join(w[2] for w in current_phrase)
+            if len(current_text) > max_chars_per_line * 1.5:  # Allow some overflow
+                should_break = True
+            
+            # Break if duration is too long
+            phrase_duration = current_end - current_start
+            if phrase_duration > max_phrase_duration:
+                should_break = True
+            
+            if should_break:
+                phrases.append({
+                    'start': current_start,
+                    'end': current_end,
+                    'words': [w[2] for w in current_phrase]
+                })
+                current_phrase = []
+                current_start = None
+        
+        # Add final phrase
+        if current_phrase:
+            phrases.append({
+                'start': current_start,
+                'end': current_end,
+                'words': [w[2] for w in current_phrase]
+            })
 
-        for i, (start, end, text) in enumerate(all_words):
-            split_here = False
-            if i > 0:
-                prev_word_idx = i - 1
-                prev_text = all_words[prev_word_idx][2]
-                gap = start - prev_end if prev_end is not None else 0
-                
-                # --- Dynamic Split Decision ---
-                current_cost = split_costs[prev_word_idx]
-                
-                # Add pressure to split as the line gets longer.
-                if len(phrase_words) > 7: current_cost -= 30
-                if len(phrase_words) > 10: current_cost -= 60
-                
-                # Add a strong benefit to splitting at significant pauses.
-                if gap > 0.5: current_cost -= 100
-                elif gap > 0.25: current_cost -= 50
-                
-                if prev_text.endswith((".", "?", "!")):
-                    split_here = True
-                elif current_cost < 0:
-                    split_here = True
-
-            if split_here and phrase_words:
-                phrases.append({'start': phrase_start, 'end': phrase_end, 'words': phrase_words})
-                phrase_words, phrase_start = [], None
-
-            if phrase_start is None:
-                phrase_start = start
-            phrase_end = end
-            phrase_words.append(text)
-            prev_end = end
-
-        if phrase_words:
-            phrases.append({'start': phrase_start, 'end': phrase_end, 'words': phrase_words})
-
-        # Merge short orphans, but not if they end in a comma (likely intentional list items).
-        merged_phrases = []
+        # Step 2: Post-process phrases to fix common issues
+        processed_phrases = []
         i = 0
         while i < len(phrases):
-            cur = phrases[i]
-            if i + 1 < len(phrases):
-                nxt = phrases[i + 1]
-                gap = nxt['start'] - cur['end']
-                if (len(cur['words']) <= orphan_max_words and
-                    gap <= orphan_merge_max_s and
-                    not cur['words'][-1].strip().endswith((".", "?", "!", ";", ":", ","))):
-                    nxt['start'] = min(cur['start'], nxt['start'])
-                    nxt['words'] = cur['words'] + nxt['words']
-                    nxt['end'] = max(cur['end'], nxt['end'])
-                    i += 1
+            current = phrases[i]
+            current_text = ' '.join(current['words'])
+            
+            # Check if current phrase is incomplete (starts with lowercase or ends with lowercase article/preposition)
+            is_incomplete = (
+                i < len(phrases) - 1 and
+                (current_text[0].islower() or 
+                 current['words'][-1].lower() in {'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'but'})
+            )
+            
+            if is_incomplete:
+                # Try to merge with next phrase
+                next_phrase = phrases[i + 1]
+                merged_text = current_text + ' ' + ' '.join(next_phrase['words'])
+                merged_duration = next_phrase['end'] - current['start']
+                
+                # Only merge if it makes sense (not too long and grammatically reasonable)
+                if (len(merged_text) <= max_chars_per_line * 2 and 
+                    merged_duration <= max_phrase_duration * 1.5):
+                    merged_phrase = {
+                        'start': current['start'],
+                        'end': next_phrase['end'],
+                        'words': current['words'] + next_phrase['words']
+                    }
+                    processed_phrases.append(merged_phrase)
+                    i += 2
                     continue
-            merged_phrases.append(cur)
+            
+            processed_phrases.append(current)
             i += 1
-        
+
+        # Step 3: Apply Netflix line breaking and text cleaning
+        final_subtitles = []
+        for phrase in processed_phrases:
+            text = ' '.join(phrase['words'])
+            
+            # Clean up text
+            text = re.sub(r'\s+([.,!?])', r'\1', text)  # Remove spaces before punctuation
+            text = text.capitalize()
+            
+            # Apply Netflix line breaking
+            if len(text) <= max_chars_per_line:
+                final_subtitles.append({
+                    'start': phrase['start'],
+                    'end': phrase['end'],
+                    'text': text
+                })
+            else:
+                lines = smart_line_break(text, max_chars_per_line)
+                final_subtitles.append({
+                    'start': phrase['start'],
+                    'end': phrase['end'], 
+                    'text': '\n'.join(lines)
+                })
+
+        # Step 4: Final cleanup - merge very short subtitles
+        cleaned_subtitles = []
+        i = 0
+        while i < len(final_subtitles):
+            current = final_subtitles[i]
+            
+            if i + 1 < len(final_subtitles):
+                next_sub = final_subtitles[i + 1]
+                current_duration = current['end'] - current['start']
+                current_text = current['text'].replace('\n', ' ')
+                next_text = next_sub['text'].replace('\n', ' ')
+                merged_text = current_text + ' ' + next_text
+                
+                # Merge if current subtitle is very short and merging makes sense
+                should_merge = (
+                    current_duration < 2.0 and  # Very short
+                    len(merged_text) <= max_chars_per_line * 1.8 and  # Won't be too long
+                    not current_text.endswith(('.', '?', '!'))  # Not a complete sentence
+                )
+                
+                if should_merge:
+                    cleaned_subtitles.append({
+                        'start': current['start'],
+                        'end': next_sub['end'],
+                        'text': merged_text
+                    })
+                    i += 2
+                    continue
+            
+            cleaned_subtitles.append(current)
+            i += 1
+
+        # Step 5: Write SRT file
         with open(srt_path, 'w', encoding='utf-8') as f:
-            for idx, p in enumerate(merged_phrases, start=1):
-                text = ' '.join(p['words']).strip()
-                if not text: continue
+            for idx, sub in enumerate(cleaned_subtitles, start=1):
                 f.write(
                     f"{idx}\n"
-                    f"{format_srt_time(p['start'])} --> {format_srt_time(p['end'])}\n"
-                    f"{text}\n\n"
+                    f"{format_srt_time(sub['start'])} --> {format_srt_time(sub['end'])}\n"
+                    f"{sub['text']}\n\n"
                 )
-        print(f"✅ Enhanced phrase-level SRT created: {os.path.basename(srt_path)}")
+        
+        print(f"✅ Netflix-compliant SRT created: {os.path.basename(srt_path)}")
 
     except Exception as e:
-        print(f"❌ Error in phrase conversion: {e}")
+        print(f"❌ Error in Netflix phrase conversion: {e}")
 
 def run_transcription(file_path: str, args: argparse.Namespace) -> str:
     global transcription_model
@@ -312,7 +410,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> str:
     return final_srt_path
 
 def main():
-    parser = argparse.ArgumentParser(description="Transcription with VAD and punctuation-aware phrase grouping")
+    parser = argparse.ArgumentParser(description="Transcription with Netflix-compliant phrase grouping and VAD")
     parser.add_argument("files", nargs="*", help="Audio/video files or patterns to transcribe")
     parser.add_argument("-o", "--output_dir", type=str, default=None)
     parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL)
@@ -327,8 +425,9 @@ def main():
         sys.exit(0)
 
     for file_path in files_to_process:
+        print(f"🎯 Processing: {os.path.basename(file_path)}")
         srt_path = run_transcription(file_path, args)
-        print(f"✅ Output saved: {srt_path}")
+        print(f"✅ Output saved: {srt_path}\n")
 
 if __name__ == "__main__":
     main()
