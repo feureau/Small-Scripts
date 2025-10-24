@@ -147,6 +147,13 @@ Developer Notes
 Version History
 -------------------------------------------------------------------------------
 
+v2.2 - Enhanced Subtitle Management (2025-10-24)
+    • Added per-job subtitle file management with dropdown selector
+    • Implemented Browse and Remove subtitle functionality
+    • Maintained auto-discovery as default behavior
+    • Added support for custom subtitle file additions
+    • Enhanced multiple job selection support for subtitle operations
+
 v2.1 - Full YouTube Audio Compliance Update (2025-10-24)
     • Added detailed developer documentation covering YouTube audio standards.
     • Introduced `build_audio_segment()` helper for modular audio handling.
@@ -521,9 +528,24 @@ class VideoProcessorApp:
         self.manual_bitrate_entry.bind("<FocusOut>", self.apply_gui_options_to_selected_files_event)
         tk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
 
-        subtitle_style_group = tk.LabelFrame(right_frame, text="Subtitle Styling", padx=10, pady=10)
+        subtitle_style_group = tk.LabelFrame(right_frame, text="Subtitle Management & Styling", padx=10, pady=10)
         subtitle_style_group.pack(fill=tk.X, pady=5)
         
+        # New Subtitle File Management Section
+        subtitle_file_frame = tk.Frame(subtitle_style_group); subtitle_file_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(subtitle_file_frame, text="Subtitle File:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.subtitle_combobox = ttk.Combobox(subtitle_file_frame, state="readonly", width=30)
+        self.subtitle_combobox.pack(side=tk.LEFT, padx=5)
+        self.subtitle_combobox.bind("<<ComboboxSelected>>", self.on_subtitle_selected)
+        
+        self.browse_subtitle_btn = tk.Button(subtitle_file_frame, text="Browse...", command=self.browse_custom_subtitle)
+        self.browse_subtitle_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.remove_subtitle_btn = tk.Button(subtitle_file_frame, text="Remove", command=self.remove_subtitle)
+        self.remove_subtitle_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Existing subtitle styling controls
         font_frame = tk.Frame(subtitle_style_group); font_frame.pack(fill=tk.X, pady=2)
         tk.Label(font_frame, text="Font Family:").pack(side=tk.LEFT, padx=(0, 5))
         self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=20)
@@ -765,29 +787,31 @@ class VideoProcessorApp:
             except Exception as e:
                 print(f"[WARN] Could not scan for subtitles in {dir_name}: {e}")
 
-            # 2. If no subtitles were found, create the "No Subtitles" job.
-            if not matched_srts:
-                job_no_sub = {
-                    "job_id": f"job_{time.time()}", "video_path": video_path, "subtitle_path": None,
-                    "display_name": f"{os.path.basename(video_path)} [No Subtitles]",
+            # 2. Create a job for each found SRT + "No Subtitles" option
+            available_subtitles = [None]  # Start with "No Subtitles" option
+            available_subtitles.extend(sorted(matched_srts))
+            
+            for subtitle_path in available_subtitles:
+                job = {
+                    "job_id": f"job_{time.time()}_{len(self.processing_jobs)}",
+                    "video_path": video_path, 
+                    "subtitle_path": subtitle_path,
+                    "available_subtitles": copy.deepcopy(available_subtitles),
                     "options": copy.deepcopy(default_options)
                 }
-                self.processing_jobs.append(job_no_sub)
-                self.job_listbox.insert(tk.END, job_no_sub["display_name"])
-
-            # 3. Create a job for each found SRT. This loop will not run if matched_srts is empty.
-            for srt_path in sorted(matched_srts):
-                srt_basename, _ = os.path.splitext(os.path.basename(srt_path))
-                tag = srt_basename[len(video_basename):].strip(' .-_')
-                if not tag: tag = "(exact match)"
-
-                job_with_sub = {
-                    "job_id": f"job_{time.time()}", "video_path": video_path, "subtitle_path": srt_path,
-                    "display_name": f"{os.path.basename(video_path)} [Sub: {tag}]",
-                    "options": copy.deepcopy(default_options)
-                }
-                self.processing_jobs.append(job_with_sub)
-                self.job_listbox.insert(tk.END, job_with_sub["display_name"])
+                
+                # Generate display name
+                if subtitle_path is None:
+                    job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
+                else:
+                    srt_basename, _ = os.path.splitext(os.path.basename(subtitle_path))
+                    tag = srt_basename[len(video_basename):].strip(' .-_')
+                    if not tag: 
+                        tag = "(exact match)"
+                    job["display_name"] = f"{os.path.basename(video_path)} [Sub: {tag}]"
+                
+                self.processing_jobs.append(job)
+                self.job_listbox.insert(tk.END, job["display_name"])
         
         self._update_bitrate_display()
 
@@ -818,8 +842,156 @@ class VideoProcessorApp:
             self.outline_color_swatch.config(bg=self.subtitle_outline_color_var.get())
             self.shadow_color_swatch.config(bg=self.subtitle_shadow_color_var.get())
 
+            # Update subtitle combobox for selected job
+            self.update_subtitle_combobox(selected_job)
+
             self._toggle_bitrate_override()
             self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
+
+    def update_subtitle_combobox(self, job):
+        """Update the subtitle combobox with available subtitles for the selected job"""
+        if not job or 'available_subtitles' not in job:
+            return
+            
+        display_values = []
+        current_display = ""
+        
+        for sub_path in job['available_subtitles']:
+            if sub_path is None:
+                display = "No Subtitles"
+            else:
+                video_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+                srt_basename = os.path.splitext(os.path.basename(sub_path))[0]
+                tag = srt_basename[len(video_basename):].strip(' .-_')
+                if not tag:
+                    tag = "(exact match)"
+                display = f"{tag} ({os.path.basename(sub_path)})"
+            
+            display_values.append(display)
+            
+            # Find current selection
+            if sub_path == job['subtitle_path']:
+                current_display = display
+        
+        self.subtitle_combobox['values'] = display_values
+        if current_display:
+            self.subtitle_combobox.set(current_display)
+
+    def on_subtitle_selected(self, event):
+        """Handle subtitle selection from combobox"""
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+            
+        selected_display = self.subtitle_combobox.get()
+        
+        for index in selected_indices:
+            job = self.processing_jobs[index]
+            
+            # Find the subtitle path that matches the selected display
+            selected_sub_path = None
+            for i, sub_path in enumerate(job['available_subtitles']):
+                if sub_path is None:
+                    display = "No Subtitles"
+                else:
+                    video_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+                    srt_basename = os.path.splitext(os.path.basename(sub_path))[0]
+                    tag = srt_basename[len(video_basename):].strip(' .-_')
+                    if not tag:
+                        tag = "(exact match)"
+                    display = f"{tag} ({os.path.basename(sub_path)})"
+                
+                if display == selected_display:
+                    selected_sub_path = sub_path
+                    break
+            
+            if selected_sub_path is not None:
+                # Update job subtitle
+                job['subtitle_path'] = selected_sub_path
+                
+                # Update display name
+                video_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+                if selected_sub_path is None:
+                    job['display_name'] = f"{os.path.basename(job['video_path'])} [No Subtitles]"
+                else:
+                    srt_basename = os.path.splitext(os.path.basename(selected_sub_path))[0]
+                    tag = srt_basename[len(video_basename):].strip(' .-_')
+                    if not tag:
+                        tag = "(exact match)"
+                    job['display_name'] = f"{os.path.basename(job['video_path'])} [Sub: {tag}]"
+                
+                # Update listbox display
+                self.job_listbox.delete(index)
+                self.job_listbox.insert(index, job['display_name'])
+                self.job_listbox.selection_set(index)
+
+    def browse_custom_subtitle(self):
+        """Browse for a custom subtitle file and add it to selected jobs"""
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("No Selection", "Please select one or more jobs to add subtitles to.")
+            return
+            
+        file_path = filedialog.askopenfilename(
+            title="Select Subtitle File",
+            filetypes=[("Subtitle files", "*.srt"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+            
+        for index in selected_indices:
+            job = self.processing_jobs[index]
+            
+            # Add to available subtitles if not already present
+            if file_path not in job['available_subtitles']:
+                job['available_subtitles'].append(file_path)
+            
+            # Set as current subtitle
+            job['subtitle_path'] = file_path
+            
+            # Update display name
+            video_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+            srt_basename = os.path.splitext(os.path.basename(file_path))[0]
+            tag = srt_basename[len(video_basename):].strip(' .-_')
+            if not tag:
+                tag = "(exact match)"
+            job['display_name'] = f"{os.path.basename(job['video_path'])} [Sub: {tag}]"
+            
+            # Update listbox display
+            self.job_listbox.delete(index)
+            self.job_listbox.insert(index, job['display_name'])
+        
+        # Restore selection and update combobox
+        for index in selected_indices:
+            self.job_listbox.selection_set(index)
+        
+        if selected_indices:
+            self.update_subtitle_combobox(self.processing_jobs[selected_indices[0]])
+
+    def remove_subtitle(self):
+        """Remove subtitle from selected jobs (set to No Subtitles)"""
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+            
+        for index in selected_indices:
+            job = self.processing_jobs[index]
+            
+            # Set to no subtitles
+            job['subtitle_path'] = None
+            job['display_name'] = f"{os.path.basename(job['video_path'])} [No Subtitles]"
+            
+            # Update listbox display
+            self.job_listbox.delete(index)
+            self.job_listbox.insert(index, job['display_name'])
+        
+        # Restore selection and update combobox
+        for index in selected_indices:
+            self.job_listbox.selection_set(index)
+        
+        if selected_indices:
+            self.update_subtitle_combobox(self.processing_jobs[selected_indices[0]])
 
     # ---------------------- Audio helper (YouTube-compliant) ----------------------
     def build_audio_segment(self, file_path, options):
