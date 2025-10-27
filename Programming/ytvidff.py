@@ -22,6 +22,45 @@ The tool automates:
 Version History
 -------------------------------------------------------------------------------
 
+v5.3 - Final Encoder Compatibility Fix (2025-10-27)
+    • FIXED: The root cause of the "10 bit encode not supported" error from the
+      `h264_nvenc` encoder.
+    • ADDED: A conditional pixel format conversion to the video filter chain.
+      When the output format is SDR, the script now automatically adds a
+      `format=nv12` filter just before the final `hwupload_cuda` step.
+    • CHANGED: This ensures that 10-bit source video is correctly converted to
+      the 8-bit format required by the H.264 encoder, while still allowing
+      10-bit data to pass through for HDR (HEVC) encoding. This makes the
+      SDR pipeline robust for all input types (8-bit, 10-bit, HDR).
+
+v5.2 - Critical Filter Chain Fix (2025-10-27)
+    • FIXED: A major bug in the FFmpeg video filter chain that caused errors like
+      "Invalid output format p010le for hwframe download" when processing 10-bit
+      source videos.
+    • CHANGED: The script no longer prematurely converts 10-bit video to 8-bit
+      (`nv12`) during the `scale_cuda` operation. The high bit-depth is now
+      maintained throughout the processing pipeline for maximum quality.
+    • REWRITTEN: The logic for combining GPU and CPU filters has been streamlined.
+      The new filter chain correctly handles the `hwdownload` and `hwupload_cuda`
+      process, removing redundant format specifiers that contributed to the failure.
+
+v5.1 - Subtitle Reformatting and Line Wrapping (2025-10-27)
+    • ADDED: A "Line Formatting" section in the subtitle options.
+    • ADDED: A checkbox, "Reformat to Single Wrapped Line," which collapses
+      multi-line subtitle entries into a single line and then re-wraps them.
+    • ADDED: A text box to control the character limit for line wrapping,
+      defaulting to 42, giving users control over subtitle length.
+    • This feature uses Python's `textwrap` module for intelligent wrapping.
+
+v5.0 - Job Filtering and Management (2025-10-27)
+    • ADDED: Two new buttons in the "Input Files" panel for batch job removal:
+      - "Remove No Sub": Deletes all queued jobs that do not have an
+        associated subtitle (i.e., the "[No Subtitles]" entries).
+      - "Remove Sub": Deletes all queued jobs that have either an external
+        or embedded subtitle.
+    • This allows for much faster queue management when users only want to
+      process one category of jobs.
+
 v4.9 - Subtitle Content Sanitization (2025-10-27)
     • FIXED: Added a sanitization step within `create_temporary_ass_file` to
       remove any HTML-like tags (e.g., <font>, <i>) from the subtitle text
@@ -37,40 +76,6 @@ v4.8 - Unified Subtitle Styling Engine (2025-10-27)
     • FIXED: All subtitles, whether external or embedded, are now processed
       through the `create_temporary_ass_file` function, ensuring that all GUI
       styling options (font, color, shadow, etc.) are correctly applied.
-
-v4.7 - QoL Improvement for Subtitle Jobs (2025-10-27)
-    • CHANGED: When the script creates job entries for external or embedded
-      subtitles, the "Enable Subtitle Burning" option is now set to TRUE by
-      default for those specific jobs. "No Subtitle" jobs still default to FALSE.
-      This improves the workflow by reducing manual checkbox clicks.
-
-v4.6 - Job Creation and Embedded Subtitle Fixes (2025-10-27)
-    • FIXED: A critical bug in the FFmpeg command for burning embedded subtitles.
-      The script now correctly calculates the subtitle's relative stream index (si)
-      instead of using its global index, resolving the "Unable to locate subtitle
-      stream" error.
-    • REVERTED: The job creation logic has been reverted to the more powerful
-      "one job per subtitle variant" model. The script now automatically creates
-      separate listbox entries for "No Subtitles" and each discovered external
-      and embedded subtitle track for a given video file.
-    • REMOVED: The subtitle selection combobox has been removed to simplify the
-      GUI, as its functionality is now handled by the main job list.
-
-v4.5 - Embedded Subtitle Detection and Burning (2025-10-27)
-    • ADDED: The script now automatically detects embedded subtitle tracks (e.g.,
-      SRT, ASS) within video files using ffprobe.
-    • ADDED: Embedded subtitles are now listed as distinct jobs in the queue.
-    • CHANGED: The FFmpeg command logic was updated to handle both external and
-      embedded subtitle types.
-
-v4.4 - Final Multi-Selection and State Management Rewrite (2025-10-27)
-    • FIXED: A critical logic bug in the subtitle selection dropdown that has since
-      been removed in favor of a better job management model.
-
-v4.3 - Core Multi-Selection Logic Rewrite (2025-10-27)
-    • REWRITTEN: The core event handling for all GUI controls has been rewritten.
-      Changes are now applied with surgical precision, updating only the specific
-      setting that was modified across all selected jobs.
 
 """
 
@@ -92,6 +97,7 @@ import re
 import copy
 import time
 import glob
+import textwrap
 
 # -------------------------- Configuration / Constants --------------------------
 # If you have a custom ffmpeg binary, set environment variable FFMPEG_PATH to its path.
@@ -129,12 +135,14 @@ DEFAULT_AUDIO_MODE = "stereo+5.1"
 # --- Subtitle defaults (Multi-Layer Engine) ---
 # General settings that apply to all layers
 DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
-DEFAULT_SUBTITLE_FONT_SIZE = "64"
+DEFAULT_SUBTITLE_FONT_SIZE = "32"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
 DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_UNDERLINE = False
 DEFAULT_SUBTITLE_MARGIN_V = "35"
+DEFAULT_REFORMAT_SUBTITLES = False
+DEFAULT_WRAP_LIMIT = "42"
 
 
 # Layer 1: Fill (the main text)
@@ -289,6 +297,12 @@ def create_temporary_ass_file(srt_path, options):
     margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
     align_map = {"top": 8, "middle": 5, "bottom": 2}
     alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
+    
+    reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
+    try:
+        wrap_limit = int(options.get('wrap_limit', DEFAULT_WRAP_LIMIT))
+    except (ValueError, TypeError):
+        wrap_limit = int(DEFAULT_WRAP_LIMIT)
 
     # Component properties
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
@@ -333,14 +347,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for block in srt_blocks:
         _, start_time, end_time, text = block
         
-        # --- SANITIZE TEXT: STRIP ANY HTML-LIKE TAGS ---
+        # SANITIZE TEXT: STRIP ANY HTML-LIKE TAGS
         clean_text = re.sub(r'<[^>]+>', '', text)
         
         start_ass = start_time.replace(',', '.')[:-1]
         end_ass = end_time.replace(',', '.')[:-1]
         
-        # Use the cleaned text for ASS conversion
-        text_ass = clean_text.strip().replace('\n', '\\N')
+        if reformat_subs:
+            single_line_text = ' '.join(clean_text.strip().split())
+            wrapped_lines = textwrap.wrap(single_line_text, width=wrap_limit)
+            text_ass = '\\N'.join(wrapped_lines)
+        else:
+            text_ass = clean_text.strip().replace('\n', '\\N')
 
         tags = (
             f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"      # Fill alpha
@@ -355,7 +373,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     full_ass_content = header + "\n".join(dialogue_lines)
 
-    # Create a uniquely named file in the current working directory.
     filename = f"temp_subtitle_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(os.getcwd(), filename)
     
@@ -416,44 +433,35 @@ def extract_embedded_subtitle(video_path, subtitle_index):
     """
     Extracts an embedded subtitle stream to a temporary SRT file.
     """
+    temp_subtitle_path = ""
     try:
-        # Create a temporary file to store the extracted subtitle
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.srt', encoding='utf-8') as temp_f:
             temp_subtitle_path = temp_f.name
 
-        # Construct the FFmpeg command to extract the specified subtitle stream
         cmd = [
-            FFMPEG_CMD,
-            '-y', '-hide_banner',
-            '-i', video_path,
-            '-map', f'0:s:{subtitle_index}', # Map the specific subtitle stream
-            '-c:s', 'srt',                   # Convert to SRT format for consistency
-            temp_subtitle_path
+            FFMPEG_CMD, '-y', '-hide_banner',
+            '-i', video_path, '-map', f'0:s:{subtitle_index}',
+            '-c:s', 'srt', temp_subtitle_path
         ]
-
         print(f"[INFO] Extracting embedded subtitle stream {subtitle_index} to temporary file...")
-        # Use a simple subprocess run for this quick operation
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=env)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=env)
         
-        # Check if the file was created and is not empty
         if os.path.exists(temp_subtitle_path) and os.path.getsize(temp_subtitle_path) > 0:
             debug_print(f"Successfully extracted subtitle to {temp_subtitle_path}")
             return temp_subtitle_path
         else:
             print(f"[WARN] FFmpeg ran but the extracted subtitle file is empty or missing.")
-            os.remove(temp_subtitle_path) # Clean up empty file
+            if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
             return None
 
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] Failed to extract subtitle stream {subtitle_index} from {video_path}.")
         print(f"FFmpeg stderr: {e.stderr}")
-        if 'temp_subtitle_path' in locals() and os.path.exists(temp_subtitle_path):
-            os.remove(temp_subtitle_path)
+        if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
         return None
     except Exception as e:
         print(f"[ERROR] An unexpected error occurred during subtitle extraction: {e}")
-        if 'temp_subtitle_path' in locals() and os.path.exists(temp_subtitle_path):
-            os.remove(temp_subtitle_path)
+        if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
         return None
 
 def get_bitrate(output_resolution_key, framerate, is_hdr):
@@ -538,6 +546,8 @@ class VideoProcessorApp:
         self.shadow_offset_x_var = tk.StringVar(value=DEFAULT_SHADOW_OFFSET_X)
         self.shadow_offset_y_var = tk.StringVar(value=DEFAULT_SHADOW_OFFSET_Y)
         self.shadow_blur_var = tk.StringVar(value=DEFAULT_SHADOW_BLUR)
+        self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
+        self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
@@ -574,9 +584,13 @@ class VideoProcessorApp:
         self.job_scrollbar_v.config(command=self.job_listbox.yview)
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
         self.job_listbox.bind("<<ListboxSelect>>", self.on_input_file_select)
+        
         selection_buttons_frame = tk.Frame(file_group); selection_buttons_frame.pack(fill=tk.X, pady=(5, 0))
         tk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
         tk.Button(selection_buttons_frame, text="Clear Selection", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
+        tk.Button(selection_buttons_frame, text="Remove No Sub", command=self.remove_no_sub_jobs).pack(side=tk.LEFT, padx=(5,0))
+        tk.Button(selection_buttons_frame, text="Remove Sub", command=self.remove_sub_jobs).pack(side=tk.LEFT, padx=5)
+
         file_buttons_frame = tk.Frame(file_group); file_buttons_frame.pack(fill=tk.X, pady=(5, 0))
         tk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT, padx=(0,5))
         tk.Button(file_buttons_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=5)
@@ -645,7 +659,6 @@ class VideoProcessorApp:
         subtitle_group = tk.LabelFrame(parent, text="Subtitle Styling", padx=10, pady=10)
         subtitle_group.pack(fill=tk.X, pady=(0, 5), expand=True)
 
-        # --- General Styling ---
         general_style_frame = tk.LabelFrame(subtitle_group, text="General Style", padx=5, pady=5)
         general_style_frame.pack(fill=tk.X, pady=5)
         
@@ -675,7 +688,15 @@ class VideoProcessorApp:
         margin_v_entry.pack(side=tk.LEFT)
         margin_v_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "subtitle_margin_v"))
         
-        # --- Fill Properties ---
+        reformat_frame = tk.LabelFrame(subtitle_group, text="Line Formatting", padx=5, pady=5)
+        reformat_frame.pack(fill=tk.X, pady=5)
+        tk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles")).pack(side=tk.LEFT)
+        tk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
+        wrap_limit_entry = tk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
+        wrap_limit_entry.pack(side=tk.LEFT)
+        wrap_limit_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "wrap_limit"))
+        tk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
+        
         fill_props_frame = tk.LabelFrame(subtitle_group, text="Fill Properties", padx=5, pady=5)
         fill_props_frame.pack(fill=tk.X, pady=5)
         fill_props_frame.columnconfigure(3, weight=1)
@@ -686,7 +707,6 @@ class VideoProcessorApp:
         fill_alpha_scale.grid(row=0, column=3, sticky="ew")
         ToolTip(fill_alpha_scale, "Fill Alpha (Transparency)")
 
-        # --- Outline Properties ---
         outline_props_frame = tk.LabelFrame(subtitle_group, text="Outline Properties", padx=5, pady=5)
         outline_props_frame.pack(fill=tk.X, pady=5)
         outline_props_frame.columnconfigure(3, weight=1)
@@ -701,7 +721,6 @@ class VideoProcessorApp:
         outline_width_entry.grid(row=1, column=1, columnspan=2, sticky="w", pady=(5,0))
         outline_width_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "outline_width"))
 
-        # --- Shadow Properties ---
         shadow_props_frame = tk.LabelFrame(subtitle_group, text="Shadow Properties", padx=5, pady=5)
         shadow_props_frame.pack(fill=tk.X, pady=5)
         shadow_props_frame.columnconfigure(3, weight=1)
@@ -729,10 +748,8 @@ class VideoProcessorApp:
 
         action_frame = tk.Frame(subtitle_group)
         action_frame.pack(fill=tk.X, pady=(10,0))
-        
         tk.Checkbutton(action_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=lambda: self._update_selected_jobs("burn_subtitles")).pack(side=tk.LEFT)
         
-        # --- Audio Processing Section ---
         audio_group = tk.LabelFrame(parent, text="Audio Processing", padx=10, pady=10)
         audio_group.pack(fill=tk.X, pady=(5, 0))
         tk.Checkbutton(audio_group, text="Normalize Audio", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
@@ -876,6 +893,7 @@ class VideoProcessorApp:
             "shadow_color": self.shadow_color_var.get(), "shadow_alpha": self.shadow_alpha_var.get(),
             "shadow_offset_x": self.shadow_offset_x_var.get(), "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
+            "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
         }
 
     def add_video_files_and_discover_jobs(self, file_paths):
@@ -958,7 +976,9 @@ class VideoProcessorApp:
         self.outline_width_var.set(options.get("outline_width", DEFAULT_OUTLINE_WIDTH)); self.shadow_color_var.set(options.get("shadow_color", DEFAULT_SHADOW_COLOR))
         self.shadow_alpha_var.set(options.get("shadow_alpha", DEFAULT_SHADOW_ALPHA)); self.shadow_offset_x_var.set(options.get("shadow_offset_x", DEFAULT_SHADOW_OFFSET_X)); self.shadow_offset_y_var.set(options.get("shadow_offset_y", DEFAULT_SHADOW_OFFSET_Y))
         self.shadow_blur_var.set(options.get("shadow_blur", DEFAULT_SHADOW_BLUR)); self.lut_file_var.set(options.get("lut_file", DEFAULT_LUT_PATH))
-        
+        self.reformat_subtitles_var.set(options.get("reformat_subtitles", DEFAULT_REFORMAT_SUBTITLES))
+        self.wrap_limit_var.set(options.get("wrap_limit", DEFAULT_WRAP_LIMIT))
+
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options()
 
@@ -1044,7 +1064,7 @@ class VideoProcessorApp:
         output_file = os.path.join(output_dir, f"{base_name}.mp4")
         
         ass_burn_path = None
-        temp_extracted_srt_path = None # Keep track of the extracted SRT for cleanup
+        temp_extracted_srt_path = None
         
         try:
             if job['options'].get("burn_subtitles") and job.get('subtitle_path'):
@@ -1052,7 +1072,6 @@ class VideoProcessorApp:
                 subtitle_source_file = None
 
                 if sub_identifier.startswith("embedded:"):
-                    # Step 1: Extract the embedded subtitle to a temporary file
                     stream_index = int(sub_identifier.split(':')[1])
                     temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index)
                     if temp_extracted_srt_path:
@@ -1061,10 +1080,8 @@ class VideoProcessorApp:
                         print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'. Proceeding without subtitles.")
                 
                 elif os.path.exists(sub_identifier):
-                    # For external files, the source is the file itself
                     subtitle_source_file = sub_identifier
                 
-                # Step 2: If we have a source file (either external or extracted), create the styled ASS file
                 if subtitle_source_file:
                     ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
                     if not ass_burn_path:
@@ -1079,7 +1096,6 @@ class VideoProcessorApp:
                 raise VideoProcessingError(f"Error encoding {job['video_path']}")
         
         finally:
-            # Clean up ALL temporary files
             if ass_burn_path and os.path.exists(ass_burn_path):
                 try:
                     os.remove(ass_burn_path)
@@ -1113,13 +1129,13 @@ class VideoProcessorApp:
             
             scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo', DEFAULT_UPSCALE_ALGO)}"
             if options.get("aspect_mode") == 'pad':
-                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease" + ("" if is_hdr_output else ":format=nv12"))
+                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
                 cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
             elif options.get("aspect_mode") == 'crop':
-                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase" + ("" if is_hdr_output else ":format=nv12"))
+                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                 cpu_filters.append(f"crop={target_w}:{target_h}")
-            else: vf_filters.append(scale_base + ("" if is_hdr_output else ":format=nv12"))
-        elif not is_hdr_output and info["bit_depth"] == 10: vf_filters.append("scale_cuda=format=nv12")
+            else: # stretch
+                vf_filters.append(scale_base)
 
         lut_file = options.get("lut_file", DEFAULT_LUT_PATH)
         if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file):
@@ -1132,7 +1148,21 @@ class VideoProcessorApp:
         
         if cpu_filters:
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-            vf_filters.extend([f"hwdownload,format={cpu_pix_fmt}", ",".join(cpu_filters), f"format={cpu_pix_fmt},hwupload_cuda"])
+            
+            processing_chain = [f"hwdownload,format={cpu_pix_fmt}"]
+            processing_chain.extend(cpu_filters)
+
+            # --- [THE FIX] ---
+            # If the output is SDR, we MUST convert the pixel format to 8-bit (nv12)
+            # because h264_nvenc does not support 10-bit encoding.
+            # If the output is HDR, we skip this to preserve the 10-bit data for hevc_nvenc.
+            if not is_hdr_output:
+                processing_chain.append("format=nv12")
+            # --- [END FIX] ---
+
+            processing_chain.append("hwupload_cuda")
+            
+            vf_filters.append(",".join(processing_chain))
 
         cmd.extend(["-map", "0:v:0"])
         if vf_filters: cmd.extend(["-vf", ",".join(vf_filters)])
@@ -1242,6 +1272,32 @@ class VideoProcessorApp:
     def select_all_files(self): self.job_listbox.select_set(0, tk.END); self.on_input_file_select(None)
     def clear_file_selection(self): self.job_listbox.select_clear(0, tk.END)
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
+    
+    def remove_no_sub_jobs(self):
+        """Removes all jobs that do not have subtitles."""
+        indices_to_remove = [
+            i for i, job in enumerate(self.processing_jobs) 
+            if job.get('subtitle_path') is None
+        ]
+        
+        for index in sorted(indices_to_remove, reverse=True):
+            del self.processing_jobs[index]
+            self.job_listbox.delete(index)
+        
+        print(f"Removed {len(indices_to_remove)} jobs without subtitles.")
+
+    def remove_sub_jobs(self):
+        """Removes all jobs that have subtitles."""
+        indices_to_remove = [
+            i for i, job in enumerate(self.processing_jobs) 
+            if job.get('subtitle_path') is not None
+        ]
+        
+        for index in sorted(indices_to_remove, reverse=True):
+            del self.processing_jobs[index]
+            self.job_listbox.delete(index)
+            
+        print(f"Removed {len(indices_to_remove)} jobs with subtitles.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YouTube Batch Video Processing Tool", formatter_class=argparse.RawTextHelpFormatter)
