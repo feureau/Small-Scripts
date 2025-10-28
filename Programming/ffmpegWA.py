@@ -21,9 +21,9 @@ degree of flexibility without needing to modify the source code.
  II. KEY FEATURES
 -----------------------------------------------------------------------------------------
 - **Configurable via Flags:** Key parameters like target size, duration, and audio
-  loudness can be set using command-line arguments (e.g., -s 8).
+  loudness can be set using command-line arguments (e.g., -t 8).
 - **Automatic Video Splitting:** Videos longer than the maximum duration are automatically
-  cut into multiple, sequentially numbered parts. This can be overridden.
+  cut into multiple, sequentially numbered parts when --split is enabled. This can be overridden.
 - **Strict Target Size Compression:** Intelligently calculates the required bitrate and
   uses strict rate control (`maxrate`, `bufsize`) to ensure every output file reliably
   meets the target file size, even with variable-complexity content.
@@ -81,10 +81,15 @@ Use these flags to override the default settings. Run with `-h` or `--help` for 
     - Description: Path to a single video file. If omitted, batch mode is enabled.
     - Example: `python process_videos.py "path/to/my video.mov"`
 
-`-s, --target-mb`
+`-t, --target-mb`
     - Description: The target file size in Megabytes for each output video part.
     - Default: 9.3
-    - Example: `python process_videos.py -s 8`
+    - Example: `python process_videos.py -t 8`
+
+`-s, --split`
+    - Description: Split videos longer than --duration into multiple parts.
+    - Default: False (process full video)
+    - Example: `python process_videos.py -s -d 60`
 
 `-d, --duration`
     - Description: The maximum duration in seconds for each video part before splitting.
@@ -96,11 +101,6 @@ Use these flags to override the default settings. Run with `-h` or `--help` for 
     - Default: "compressed_videos"
     - Example: `python process_videos.py -o "Final Renders"`
     
-`-f, --full-video`
-    - Description: Encode the entire video without splitting, ignoring the --duration setting.
-    - Default: False
-    - Example: `python process_videos.py -f --target-mb 50 "My Long Movie.mp4"`
-
 `-l, --loudness`
     - Description: The integrated loudness target in LUFS. More negative numbers are
       quieter. -7 is very loud, -14 is standard for streaming.
@@ -299,11 +299,11 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
         print(f"   [UNEXPECTED ERROR] An unexpected error occurred: {e}", file=sys.stderr)
 
 
-def process_video(input_path, output_path, config, process_full_video=False):
+def process_video(input_path, output_path, config, split_video=False):
     """
-    Analyzes a video. If it's too long, it splits it into parts and calls the
+    Analyzes a video. If splitting is enabled and the video is too long, it splits it into parts and calls the
     encoding function for each part, passing along the configuration.
-    This behavior is overridden by the process_full_video flag.
+    This behavior is overridden by the split_video flag.
     """
     print(f"\n--- Analyzing: {os.path.basename(input_path)} ---")
 
@@ -319,18 +319,10 @@ def process_video(input_path, output_path, config, process_full_video=False):
         original_duration = float(probe['format']['duration'])
         max_duration = config['max_duration']
 
-        # If --full-video is used OR the video is already short enough, process as a single file.
-        if process_full_video or original_duration <= max_duration:
-            if process_full_video:
-                print("   [INFO] --full-video flag is set. Encoding the entire video as a single file.")
-                print(f"   [NOTE] Target size is {config['target_mb']}MB for the full {original_duration:.1f}s duration.")
-            else:
-                print("   [INFO] Video is within duration limit. Processing as a single file.")
-            _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None, config)
-        else:
-            # Otherwise, split the video into parts.
+        # If --split is used AND the video is longer than max_duration, split it
+        if split_video and original_duration > max_duration:
             num_parts = math.ceil(original_duration / max_duration)
-            print(f"   [INFO] Video is too long ({original_duration:.1f}s). Splitting into {num_parts} parts.")
+            print(f"   [INFO] --split enabled. Video is too long ({original_duration:.1f}s). Splitting into {num_parts} parts.")
             
             output_name, output_ext = os.path.splitext(output_path)
 
@@ -343,6 +335,13 @@ def process_video(input_path, output_path, config, process_full_video=False):
                 duration = min(max_duration, original_duration - start_time)
 
                 _encode_chunk(input_path, part_output_path, start_time, duration, audio_stream is not None, config)
+        else:
+            # Otherwise, process as a single file (default behavior)
+            if split_video:
+                print("   [INFO] --split enabled but video is within duration limit. Processing as a single file.")
+            else:
+                print("   [INFO] --split disabled. Processing entire video as a single file.")
+            _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None, config)
 
     except Exception as e:
         print(f"   [FATAL ERROR] An error occurred during video analysis: {e}", file=sys.stderr)
@@ -366,10 +365,10 @@ def main():
     )
     
     # --- Add arguments to override default config ---
-    parser.add_argument("-s", "--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
+    parser.add_argument("-t", "--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
+    parser.add_argument("-s", "--split", action='store_true', help="Split video into smaller parts based on duration. Default is to process full video.")
     parser.add_argument("-d", "--duration", type=int, default=DEFAULT_CONFIG['max_duration'], help="Maximum duration in seconds for each video part.")
     parser.add_argument("-o", "--output-folder", type=str, default=DEFAULT_CONFIG['output_folder'], help="Name of the directory to save processed files.")
-    parser.add_argument("-f", "--full-video", action='store_true', help="Encode the entire video without splitting, ignoring the --duration setting.")
     parser.add_argument("-l", "--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
     parser.add_argument("-r", "--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
     parser.add_argument("-p", "--peak", type=float, default=DEFAULT_CONFIG['true_peak'], help="True Peak ceiling in dBTP.")
@@ -398,7 +397,7 @@ def main():
             return
         base_name = os.path.basename(args.input_file)
         output_file = os.path.join(output_dir, base_name)
-        process_video(args.input_file, output_file, config, args.full_video)
+        process_video(args.input_file, output_file, config, args.split)
     else:
         # Batch Mode
         print(f"--- Mode: Batch processing all files in directory ---")
@@ -421,7 +420,7 @@ def main():
                 print(f"   Skipping file already in output directory: {base_name}")
                 continue
             output_file = os.path.join(output_dir, base_name)
-            process_video(input_file, output_file, config, args.full_video)
+            process_video(input_file, output_file, config, args.split)
 
     print("\n--- All tasks completed. ---")
 
