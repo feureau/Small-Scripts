@@ -1,3 +1,4 @@
+
 r"""
 
 ===============================================================================
@@ -17,65 +18,30 @@ The tool automates:
     • Bitrate, channel layout, and codec compliance for YouTube
     • Batch queue management through a Tkinter GUI
     • Advanced, multi-layer subtitle styling and burning
+    • Hybrid stacked video creation for vertical formats
 
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v6.6 - Final "At Seam" Fix Using Absolute Positioning (2025-10-29)
+    • FIXED: A fundamental flaw in the "At Seam" logic. Previous attempts to use
+      style alignments and margins were incorrect for this task.
+    • CHANGED: The script now uses the standard and correct method for absolute
+      positioning in ASS subtitles. It calculates the precise (x, y) coordinate
+      of the seam on the virtual canvas and injects a `{\an5\pos(x,y)}` override
+      tag into each subtitle line. This provides pixel-perfect vertical centering
+      on the seam, independent of style margins. This is the definitive fix.
 
-v5.3 - Final Encoder Compatibility Fix (2025-10-27)
-    • FIXED: The root cause of the "10 bit encode not supported" error from the
-      `h264_nvenc` encoder.
-    • ADDED: A conditional pixel format conversion to the video filter chain.
-      When the output format is SDR, the script now automatically adds a
-      `format=nv12` filter just before the final `hwupload_cuda` step.
-    • CHANGED: This ensures that 10-bit source video is correctly converted to
-      the 8-bit format required by the H.264 encoder, while still allowing
-      10-bit data to pass through for HDR (HEVC) encoding. This makes the
-      SDR pipeline robust for all input types (8-bit, 10-bit, HDR).
+v6.5 - Corrected "At Seam" Subtitle Alignment Strategy (2025-10-29)
+    • FIXED: A flaw in the "At Seam" alignment logic. Using a top-alignment
+      with an `{\an5}` override caused the margin to be miscalculated.
+    • CHANGED: The "At Seam" mode was changed to set the primary style's alignment
+      to `5` (Middle-Center) and calculate an offset margin. (Superseded by v6.6)
 
-v5.2 - Critical Filter Chain Fix (2025-10-27)
-    • FIXED: A major bug in the FFmpeg video filter chain that caused errors like
-      "Invalid output format p010le for hwframe download" when processing 10-bit
-      source videos.
-    • CHANGED: The script no longer prematurely converts 10-bit video to 8-bit
-      (`nv12`) during the `scale_cuda` operation. The high bit-depth is now
-      maintained throughout the processing pipeline for maximum quality.
-    • REWRITTEN: The logic for combining GPU and CPU filters has been streamlined.
-      The new filter chain correctly handles the `hwdownload` and `hwupload_cuda`
-      process, removing redundant format specifiers that contributed to the failure.
-
-v5.1 - Subtitle Reformatting and Line Wrapping (2025-10-27)
-    • ADDED: A "Line Formatting" section in the subtitle options.
-    • ADDED: A checkbox, "Reformat to Single Wrapped Line," which collapses
-      multi-line subtitle entries into a single line and then re-wraps them.
-    • ADDED: A text box to control the character limit for line wrapping,
-      defaulting to 42, giving users control over subtitle length.
-    • This feature uses Python's `textwrap` module for intelligent wrapping.
-
-v5.0 - Job Filtering and Management (2025-10-27)
-    • ADDED: Two new buttons in the "Input Files" panel for batch job removal:
-      - "Remove No Sub": Deletes all queued jobs that do not have an
-        associated subtitle (i.e., the "[No Subtitles]" entries).
-      - "Remove Sub": Deletes all queued jobs that have either an external
-        or embedded subtitle.
-    • This allows for much faster queue management when users only want to
-      process one category of jobs.
-
-v4.9 - Subtitle Content Sanitization (2025-10-27)
-    • FIXED: Added a sanitization step within `create_temporary_ass_file` to
-      remove any HTML-like tags (e.g., <font>, <i>) from the subtitle text
-      content before styling. This prevents these tags from being literally
-      burned into the video, resolving a common issue with embedded subtitles.
-
-v4.8 - Unified Subtitle Styling Engine (2025-10-27)
-    • ADDED: A new function, `extract_embedded_subtitle`, which uses FFmpeg to
-      extract any embedded subtitle track to a temporary .srt file on disk.
-    • CHANGED: The core processing logic in `build_ffmpeg_command_and_run` has
-      been rewritten. It now uses the new extraction function to treat embedded
-      subtitles exactly like external ones.
-    • FIXED: All subtitles, whether external or embedded, are now processed
-      through the `create_temporary_ass_file` function, ensuring that all GUI
-      styling options (font, color, shadow, etc.) are correctly applied.
+v6.4 - Final "At Seam" Subtitle Centering (2025-10-29)
+    • FIXED: The "At Seam" alignment positioned the top of the subtitle text on
+      the seam line, rather than its vertical center.
+    • CHANGED: Added an `{\an5}` alignment override tag. (Superseded by v6.6)
 
 """
 
@@ -141,7 +107,7 @@ DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_UNDERLINE = False
 DEFAULT_SUBTITLE_MARGIN_V = "35"
-DEFAULT_REFORMAT_SUBTITLES = False
+DEFAULT_REFORMAT_SUBTITLES = True # Now on by default
 DEFAULT_WRAP_LIMIT = "42"
 
 
@@ -270,16 +236,12 @@ def hex_to_libass_color(hex_color):
     return f"&H{b:02X}{g:02X}{r:02X}"
 
 def alpha_to_libass_alpha(alpha_val):
-    # In ASS, &HFF is transparent, &H00 is opaque.
     return f"&H{alpha_val:02X}"
 
 def create_temporary_ass_file(srt_path, options):
     """
-    [CORRECTED REWRITE - Single Layer]
-    This function has been completely rewritten to use a single, robust ASS style.
-    It correctly defines outline and shadow properties and uses override tags
-    for precise, per-line control of fill, outline, and shadow, including
-    separate X/Y offsets and blur. This is the standard, correct approach.
+    Creates a temporary ASS subtitle file with advanced styling.
+    Uses absolute positioning for "At Seam" mode.
     """
     try:
         with open(srt_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -288,23 +250,22 @@ def create_temporary_ass_file(srt_path, options):
         print(f"[ERROR] Could not read SRT file {srt_path}: {e}")
         return None
 
-    # --- 1. Gather all styling options from the GUI ---
     font_name = options.get('subtitle_font', DEFAULT_SUBTITLE_FONT)
     font_size = options.get('subtitle_font_size', DEFAULT_SUBTITLE_FONT_SIZE)
     bold_flag = "-1" if options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD) else "0"
     italic_flag = "-1" if options.get('subtitle_italic', DEFAULT_SUBTITLE_ITALIC) else "0"
     underline_flag = "-1" if options.get('subtitle_underline', DEFAULT_SUBTITLE_UNDERLINE) else "0"
-    margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
-    align_map = {"top": 8, "middle": 5, "bottom": 2}
-    alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
     
+    margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
+    align_map = {"top": 8, "middle": 5, "bottom": 2, "seam": 2} # Default seam to bottom align style
+    alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
+
     reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
     try:
         wrap_limit = int(options.get('wrap_limit', DEFAULT_WRAP_LIMIT))
     except (ValueError, TypeError):
         wrap_limit = int(DEFAULT_WRAP_LIMIT)
 
-    # Component properties
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
     fill_alpha_val = options.get('fill_alpha', DEFAULT_FILL_ALPHA)
     outline_color_hex = options.get('outline_color', DEFAULT_OUTLINE_COLOR)
@@ -316,13 +277,12 @@ def create_temporary_ass_file(srt_path, options):
     shadow_offset_y = float(options.get('shadow_offset_y', DEFAULT_SHADOW_OFFSET_Y))
     shadow_blur = float(options.get('shadow_blur', DEFAULT_SHADOW_BLUR))
 
-    # --- 2. Define a single, powerful style ---
     style_main = (
         f"Style: Main,{font_name},{font_size},"
-        f"{hex_to_libass_color(fill_color_hex)},"      # PrimaryColour (Fill)
-        "&HFF000000,"                                 # SecondaryColour (Transparent)
-        f"{hex_to_libass_color(outline_color_hex)},"   # OutlineColour
-        f"{hex_to_libass_color(shadow_color_hex)},"    # BackColour (Shadow Color)
+        f"{hex_to_libass_color(fill_color_hex)},"
+        "&HFF000000,"
+        f"{hex_to_libass_color(outline_color_hex)},"
+        f"{hex_to_libass_color(shadow_color_hex)},"
         f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
         f"{outline_width},{shadow_offset_y},{alignment},10,10,{margin_v},1"
     )
@@ -346,10 +306,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     for block in srt_blocks:
         _, start_time, end_time, text = block
-        
-        # SANITIZE TEXT: STRIP ANY HTML-LIKE TAGS
         clean_text = re.sub(r'<[^>]+>', '', text)
-        
         start_ass = start_time.replace(',', '.')[:-1]
         end_ass = end_time.replace(',', '.')[:-1]
         
@@ -361,18 +318,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             text_ass = clean_text.strip().replace('\n', '\\N')
 
         tags = (
-            f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"      # Fill alpha
-            f"\\3a{alpha_to_libass_alpha(outline_alpha_val)}"   # Outline alpha
-            f"\\4a{alpha_to_libass_alpha(shadow_alpha_val)}"    # Shadow alpha
-            f"\\xshad{shadow_offset_x}"                         # Shadow X offset
-            f"\\yshad{shadow_offset_y}"                         # Shadow Y offset
-            f"\\blur{shadow_blur}"                              # Blur (applies to edges of all components)
+            f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"
+            f"\\3a{alpha_to_libass_alpha(outline_alpha_val)}"
+            f"\\4a{alpha_to_libass_alpha(shadow_alpha_val)}"
+            f"\\xshad{shadow_offset_x}"
+            f"\\yshad{shadow_offset_y}"
+            f"\\blur{shadow_blur}"
         )
         
-        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{text_ass}")
+        pos_override = ""
+        if options.get("subtitle_alignment") == "seam" and "calculated_pos" in options:
+            x, y = options["calculated_pos"]
+            pos_override = fr"{{\an5\pos({x},{y})}}"
+            debug_print(f"Applying position override: {pos_override}")
+
+        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
 
     full_ass_content = header + "\n".join(dialogue_lines)
-
     filename = f"temp_subtitle_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(os.getcwd(), filename)
     
@@ -419,7 +381,6 @@ def get_audio_stream_info(file_path):
         return []
 
 def get_subtitle_stream_info(file_path):
-    """Probes a video file for embedded subtitle streams."""
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "s", "-show_entries", 
            "stream=index,codec_name:stream_tags=title,language", "-of", "json", file_path]
     try:
@@ -430,19 +391,12 @@ def get_subtitle_stream_info(file_path):
         return []
 
 def extract_embedded_subtitle(video_path, subtitle_index):
-    """
-    Extracts an embedded subtitle stream to a temporary SRT file.
-    """
     temp_subtitle_path = ""
     try:
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.srt', encoding='utf-8') as temp_f:
             temp_subtitle_path = temp_f.name
 
-        cmd = [
-            FFMPEG_CMD, '-y', '-hide_banner',
-            '-i', video_path, '-map', f'0:s:{subtitle_index}',
-            '-c:s', 'srt', temp_subtitle_path
-        ]
+        cmd = [FFMPEG_CMD, '-y', '-hide_banner', '-i', video_path, '-map', f'0:s:{subtitle_index}', '-c:s', 'srt', temp_subtitle_path]
         print(f"[INFO] Extracting embedded subtitle stream {subtitle_index} to temporary file...")
         subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=env)
         
@@ -453,7 +407,6 @@ def extract_embedded_subtitle(video_path, subtitle_index):
             print(f"[WARN] FFmpeg ran but the extracted subtitle file is empty or missing.")
             if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
             return None
-
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] Failed to extract subtitle stream {subtitle_index} from {video_path}.")
         print(f"FFmpeg stderr: {e.stderr}")
@@ -529,6 +482,11 @@ class VideoProcessorApp:
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
 
+        self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
+        self.hybrid_top_mode_var = tk.StringVar(value="crop")
+        self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
+        self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
+
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
@@ -548,6 +506,8 @@ class VideoProcessorApp:
         self.shadow_blur_var = tk.StringVar(value=DEFAULT_SHADOW_BLUR)
         self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
+
+        self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
@@ -605,6 +565,8 @@ class VideoProcessorApp:
         tk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
         tk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
         tk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options).pack(side=tk.LEFT)
+        tk.Radiobutton(orientation_frame, text="Hybrid (Stacked)", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=(5,0))
+        
         self.aspect_ratio_frame = tk.LabelFrame(geometry_group, text="Aspect Ratio", padx=10, pady=5); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         self.horizontal_rb_frame = tk.Frame(self.aspect_ratio_frame)
         tk.Radiobutton(self.horizontal_rb_frame, text="16:9 (Widescreen)", variable=self.horizontal_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
@@ -614,18 +576,39 @@ class VideoProcessorApp:
         tk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.vertical_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
         tk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.vertical_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
         tk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.vertical_aspect_var, value="3:4", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
+        
+        self.hybrid_frame = tk.Frame(geometry_group)
+        self.top_video_frame = tk.LabelFrame(self.hybrid_frame, text="Top Video", padx=10, pady=5); self.top_video_frame.pack(fill=tk.X, pady=(5,0))
+        tk.Label(self.top_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        tk.Radiobutton(self.top_video_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.top_video_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.top_video_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        tk.Label(self.top_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        tk.Radiobutton(self.top_video_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.top_video_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
+
+        self.bottom_video_frame = tk.LabelFrame(self.hybrid_frame, text="Bottom Video", padx=10, pady=5); self.bottom_video_frame.pack(fill=tk.X, pady=5)
+        tk.Label(self.bottom_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        tk.Radiobutton(self.bottom_video_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.bottom_video_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.bottom_video_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        tk.Label(self.bottom_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        tk.Radiobutton(self.bottom_video_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
+        tk.Radiobutton(self.bottom_video_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
+
         aspect_handling_frame = tk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X)
         tk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
         tk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
         tk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT)
         tk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        
         quality_group = tk.LabelFrame(parent, text="Format & Quality", padx=10, pady=10); quality_group.pack(fill=tk.X, pady=(0, 5))
         resolution_options_frame = tk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
         tk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
         self.rb_hd = tk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=lambda: self._update_selected_jobs("resolution")); self.rb_hd.pack(side=tk.LEFT)
         self.rb_4k = tk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=lambda: self._update_selected_jobs("resolution")); self.rb_4k.pack(side=tk.LEFT)
         self.rb_8k = tk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
-        ToolTip(self.rb_hd, "HD: 1920x1080 resolution"); ToolTip(self.rb_4k, "4K: 3840x2160 resolution"); ToolTip(self.rb_8k, "8K: 7680x4320 resolution")
+        ToolTip(self.rb_hd, "HD: 1920x1080 (Horizontal) or 1080px wide (Hybrid)."); ToolTip(self.rb_4k, "4K: 3840x2160 (Horizontal) or 2160px wide (Hybrid)."); ToolTip(self.rb_8k, "8K: 7680x4320 (Horizontal) or 4320px wide (Hybrid).")
         upscale_frame = tk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         tk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
         tk.Radiobutton(upscale_frame, text="Lanczos (Sharp)", variable=self.upscale_algo_var, value="lanczos", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
@@ -683,6 +666,9 @@ class VideoProcessorApp:
         tk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
         tk.Radiobutton(align_frame, text="Mid", variable=self.subtitle_alignment_var, value="middle", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
         tk.Radiobutton(align_frame, text="Bot", variable=self.subtitle_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
+        self.seam_align_rb = tk.Radiobutton(align_frame, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
+        self.seam_align_rb.pack(side=tk.LEFT, padx=5)
+        self.seam_align_rb.config(state="disabled")
         tk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
         margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
@@ -829,12 +815,43 @@ class VideoProcessorApp:
 
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
-        self.horizontal_rb_frame.pack_forget(); self.vertical_rb_frame.pack_forget()
-        if orientation == "horizontal": self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio"); self.horizontal_rb_frame.pack(fill="x")
-        elif orientation == "vertical": self.aspect_ratio_frame.config(text="Vertical Aspect Ratio"); self.vertical_rb_frame.pack(fill="x")
-        elif orientation == "horizontal + vertical": self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)"); self.horizontal_rb_frame.pack(fill="x", pady=(0, 5)); self.vertical_rb_frame.pack(fill="x")
-        elif orientation == "original": self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
-        self._update_selected_jobs("orientation")
+        
+        current_alignment = self.subtitle_alignment_var.get()
+        if orientation == "hybrid (stacked)":
+            if current_alignment != "seam":
+                self.last_standard_alignment.set(current_alignment)
+                self.subtitle_alignment_var.set("seam")
+            self.seam_align_rb.config(state="normal")
+        else:
+            if current_alignment == "seam":
+                self.subtitle_alignment_var.set(self.last_standard_alignment.get())
+            self.seam_align_rb.config(state="disabled")
+
+        self.aspect_ratio_frame.pack_forget()
+        self.horizontal_rb_frame.pack_forget()
+        self.vertical_rb_frame.pack_forget()
+        self.hybrid_frame.pack_forget()
+
+        if orientation == "horizontal":
+            self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio")
+            self.horizontal_rb_frame.pack(fill="x")
+            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+        elif orientation == "vertical":
+            self.aspect_ratio_frame.config(text="Vertical Aspect Ratio")
+            self.vertical_rb_frame.pack(fill="x")
+            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+        elif orientation == "horizontal + vertical":
+            self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)")
+            self.horizontal_rb_frame.pack(fill="x", pady=(0, 5))
+            self.vertical_rb_frame.pack(fill="x")
+            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+        elif orientation == "hybrid (stacked)":
+            self.hybrid_frame.pack(fill=tk.X, pady=5)
+        elif orientation == "original":
+            self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
+            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+
+        self._update_selected_jobs("orientation", "subtitle_alignment")
 
     def _toggle_upscale_options(self): 
         self._update_selected_jobs("aspect_mode")
@@ -848,27 +865,17 @@ class VideoProcessorApp:
     def update_status(self, message): self.status_var.set(message); self.root.update_idletasks()
 
     def _update_selected_jobs_event(self, event, *keys_to_update):
-        """Helper for event bindings that call _update_selected_jobs."""
         self._update_selected_jobs(*keys_to_update)
 
     def _update_selected_jobs(self, *keys_to_update):
-        """
-        [CORRECTED LOGIC]
-        Applies only the specified GUI options to the selected jobs.
-        This prevents overwriting unrelated settings during bulk edits.
-        """
         selected_indices = self.job_listbox.curselection()
         if not selected_indices:
             return
-
         current_options = self.get_current_gui_options()
-        
         options_to_apply = {key: current_options[key] for key in keys_to_update if key in current_options}
-
         for index in selected_indices:
             job = self.processing_jobs[index]
             job['options'].update(options_to_apply)
-            
         debug_print(f"Applied {options_to_apply} to {len(selected_indices)} jobs.")
     
     def get_current_gui_options(self):
@@ -883,7 +890,8 @@ class VideoProcessorApp:
             "loudness_target": self.loudness_target_var.get(), "loudness_range": self.loudness_range_var.get(),
             "true_peak": self.true_peak_var.get(), "audio_mode": self.audio_mode_var.get(),
             "lut_file": self.lut_file_var.get(), 
-            
+            "hybrid_top_aspect": self.hybrid_top_aspect_var.get(), "hybrid_top_mode": self.hybrid_top_mode_var.get(),
+            "hybrid_bottom_aspect": self.hybrid_bottom_aspect_var.get(), "hybrid_bottom_mode": self.hybrid_bottom_mode_var.get(),
             "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(), "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(), "subtitle_underline": self.subtitle_underline_var.get(),
@@ -901,8 +909,6 @@ class VideoProcessorApp:
             video_path = os.path.abspath(video_path)
             dir_name, video_basename = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
             current_options = self.get_current_gui_options()
-
-            # Create and add the "No Subtitles" job first
             no_sub_job = {
                 "job_id": f"job_{time.time()}_{len(self.processing_jobs)}",
                 "video_path": video_path,
@@ -912,8 +918,6 @@ class VideoProcessorApp:
             no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
             self.processing_jobs.append(no_sub_job)
             self.job_listbox.insert(tk.END, no_sub_job["display_name"])
-
-            # Discover and add jobs for external .srt files
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
@@ -921,33 +925,28 @@ class VideoProcessorApp:
                         if srt_basename == video_basename or (srt_basename.startswith(video_basename) and len(srt_basename) > len(video_basename) and srt_basename[len(video_basename)] in [' ', '.', '-', '_']):
                             full_path = os.path.join(dir_name, item)
                             tag = srt_basename[len(video_basename):].strip(' .-_') or "(exact match)"
-                            
-                            sub_job = copy.deepcopy(no_sub_job) # Create job from base
+                            sub_job = copy.deepcopy(no_sub_job)
                             sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                             sub_job['subtitle_path'] = full_path
-                            sub_job['options']['burn_subtitles'] = True # Enable burn by default
+                            sub_job['options']['burn_subtitles'] = True
                             sub_job['display_name'] = f"{os.path.basename(video_path)} [Sub: {tag}]"
                             self.processing_jobs.append(sub_job)
                             self.job_listbox.insert(tk.END, sub_job['display_name'])
             except Exception as e:
                 print(f"[WARN] Could not scan for external subtitles in {dir_name}: {e}")
-
-            # Discover and add jobs for embedded subtitle streams
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
                 lang = tags.get("language", "und")
                 title = tags.get("title", f"Track {sub_stream.get('index')}")
                 codec = sub_stream.get('codec_name', 'sub').upper()
-                
-                sub_job = copy.deepcopy(no_sub_job) # Create job from base
+                sub_job = copy.deepcopy(no_sub_job)
                 sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
-                sub_job['subtitle_path'] = f"embedded:{relative_index}" # Store the CORRECT relative index
-                sub_job['options']['burn_subtitles'] = True # Enable burn by default
+                sub_job['subtitle_path'] = f"embedded:{relative_index}"
+                sub_job['options']['burn_subtitles'] = True
                 sub_job['display_name'] = f"{os.path.basename(video_path)} [Embedded: {lang.title()} - {title} ({codec})]"
                 self.processing_jobs.append(sub_job)
                 self.job_listbox.insert(tk.END, sub_job['display_name'])
-
         if self.processing_jobs:
             self.job_listbox.selection_clear(0, tk.END)
             self.job_listbox.selection_set(0)
@@ -969,6 +968,9 @@ class VideoProcessorApp:
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); self.audio_mode_var.set(options.get("audio_mode", DEFAULT_AUDIO_MODE))
         
+        self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
+        self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
+
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD)); self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC)); self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
         self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V)); self.fill_color_var.set(options.get("fill_color", DEFAULT_FILL_COLOR)); self.fill_alpha_var.set(options.get("fill_alpha", DEFAULT_FILL_ALPHA))
@@ -997,80 +999,57 @@ class VideoProcessorApp:
             offset += 1
 
     def build_audio_segment(self, file_path, options):
-        def normalize_layout(layout_raw: str) -> list:
-            s = layout_raw.replace('+', ' ').replace(',', ' ').lower()
-            return [t.strip() for t in re.sub(r'\b l \b', ' fl ', ' ' + s + ' ').replace(r'\b r \b', ' fr ').split() if t.strip()]
-        def generate_pan_expression(ch_count: int, layout_tokens: list, target: str) -> str:
-            tokens = ' '.join(layout_tokens)
-            if target == "stereo": return "pan=stereo|FL=c0|FR=c0" if ch_count == 1 else "pan=stereo|FL=c0|FR=c1"
-            if target == "5.1(side)":
-                if ch_count == 1: return "pan=5.1(side)|FL=c0|FR=c0|FC=c0|LFE=0.0|SL=c0|SR=c0"
-                if ch_count == 2: return "pan=5.1(side)|FL=c0|FR=c1|FC=0.707*c0+0.707*c1|LFE=0.118*c0+0.118*c1|SL=0.816*c0|SR=0.816*c1"
-                if ch_count >= 6:
-                    if all(x in tokens for x in ("fl", "fr", "fc", "lfe", "sl", "sr")): return "pan=5.1(side)|FL<FL|FR<FR|FC<FC|LFE<LFE|SL<SL|SR<SR"
-                    if all(x in tokens for x in ("c", "l", "r", "ls", "rs", "lfe")): return "pan=5.1(side)|FL<L|FR<R|FC<C|LFE<LFE|SL<Ls|SR<Rs"
-                    return "pan=5.1(side)|FL=c0|FR=c1|FC=c2|LFE=c3|SL=c4|SR=c5"
-                return "pan=5.1(side)|FL=c0|FR=c1|FC=c0|LFE=0.0|SL=c0|SR=c1"
-            return "pan=stereo|FL=c0|FR=c1"
-
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams: return ["-an"]
-        audio_mode, normalize_flag = options.get("audio_mode", DEFAULT_AUDIO_MODE), options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)
-        loudness_target, loudness_range, true_peak = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET), options.get("loudness_range", DEFAULT_LOUDNESS_RANGE), options.get("true_peak", DEFAULT_TRUE_PEAK)
+        
+        audio_mode = options.get("audio_mode", DEFAULT_AUDIO_MODE); normalize_flag = options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)
+        loudness_target = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET); loudness_range = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE); true_peak = options.get("true_peak", DEFAULT_TRUE_PEAK)
+        
         stereo_idx, surround_idx = None, None
         for s in audio_streams:
-            idx, ch, layout = int(s.get("index", 0)), int(s.get("channels", 0)), s.get("channel_layout", "").lower()
-            if stereo_idx is None and (ch == 2 or "stereo" in layout): stereo_idx = idx
-            if surround_idx is None and (ch == 6 or "5.1" in layout): surround_idx = idx
-        stereo_idx = stereo_idx if stereo_idx is not None else (surround_idx if surround_idx is not None else int(audio_streams[0].get("index", 0)))
+            idx, ch = int(s.get("index", 0)), int(s.get("channels", 0))
+            if stereo_idx is None and ch == 2: stereo_idx = idx
+            if surround_idx is None and ch >= 6: surround_idx = idx
+        if stereo_idx is None and surround_idx is None: stereo_idx = int(audio_streams[0].get("index", 0))
+        stereo_idx = stereo_idx if stereo_idx is not None else surround_idx
         surround_idx = surround_idx if surround_idx is not None else stereo_idx
-        
-        fc_parts = [f"[0:{stereo_idx}]anull,pan=stereo|FL=c0|FR=c1[a_stereo]"]
-        s_info = next((s for s in audio_streams if int(s.get("index", 0)) == surround_idx), {})
-        fc_parts.append(f"[0:{surround_idx}]{generate_pan_expression(int(s_info.get('channels', 0)), normalize_layout(s_info.get('channel_layout', '')), '5.1(side)')}[a_5ch]")
-        
+
+        fc_parts = [f"[0:{stereo_idx}]pan=stereo|FL=c0|FR=c1[a_stereo]", f"[0:{surround_idx}]pan=5.1(side)|FL=c0|FR=c1|FC=c2|LFE=c3|SL=c4|SR=c5[a_5ch]"]
         map_stereo, map_5ch = "a_stereo", "a_5ch"
         if normalize_flag:
             fc_parts.extend([f"[{map_stereo}]loudnorm=i={loudness_target}:lra={loudness_range}:tp={true_peak}[{map_stereo}_ln]", f"[{map_5ch}]loudnorm=i={loudness_target}:lra={loudness_range}:tp={true_peak}[{map_5ch}_ln]"])
             map_stereo, map_5ch = f"{map_stereo}_ln", f"{map_5ch}_ln"
         fc_parts.extend([f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]", f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"])
         map_stereo, map_5ch = f"{map_stereo}_r", f"{map_5ch}_r"
-
-        return ["-filter_complex", ";".join(fc_parts), "-map", f"[{map_stereo}]", "-map", f"[{map_5ch}]",
-                "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-ar:a:0", str(AUDIO_SAMPLE_RATE), "-ac:a:0", "2",
-                "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k", "-ar:a:1", str(AUDIO_SAMPLE_RATE), "-ac:a:1", "6",
-                "-channel_layout:a:1", "5.1(side)", "-disposition:a:0", "default", "-disposition:a:1", "0",
-                "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"]
+        
+        return ["-filter_complex", ";".join(fc_parts), "-map", f"[{map_stereo}]", "-map", f"[{map_5ch}]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k", "-disposition:a:0", "default", "-disposition:a:1", "0", "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"]
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = job['options']
         folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
-        if orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
+        if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
+        elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
         elif orientation == "original": folder_name += "_Original"
         else:
             h_aspect = options.get('horizontal_aspect').replace(':', 'x')
             if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
         
         base_name = os.path.splitext(os.path.basename(job['video_path']))[0]
-        
         tag_match = re.search(r'(\[.*\])', job['display_name'])
         tag = tag_match.group(1) if tag_match else "Subtitles"
         safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, folder_name, safe_subtitle_folder_name)
         os.makedirs(output_dir, exist_ok=True)
-        
         output_file = os.path.join(output_dir, f"{base_name}.mp4")
         
         ass_burn_path = None
         temp_extracted_srt_path = None
-        
         try:
-            if job['options'].get("burn_subtitles") and job.get('subtitle_path'):
+            _, temp_options = self.construct_ffmpeg_command(job, output_file, orientation)
+            if temp_options.get("burn_subtitles") and job.get('subtitle_path'):
                 sub_identifier = job.get('subtitle_path')
                 subtitle_source_file = None
-
                 if sub_identifier.startswith("embedded:"):
                     stream_index = int(sub_identifier.split(':')[1])
                     temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index)
@@ -1078,39 +1057,30 @@ class VideoProcessorApp:
                         subtitle_source_file = temp_extracted_srt_path
                     else:
                         print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'. Proceeding without subtitles.")
-                
                 elif os.path.exists(sub_identifier):
                     subtitle_source_file = sub_identifier
-                
                 if subtitle_source_file:
-                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
+                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, temp_options)
                     if not ass_burn_path:
                         raise VideoProcessingError(f"Failed to create styled ASS file from {subtitle_source_file}")
-
-            cmd = self.construct_ffmpeg_command(job['video_path'], output_file, orientation, ass_burn_path, options)
             
+            cmd, _ = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path)
             if self.run_ffmpeg_command(cmd) == 0:
                 print(f"File finalized => {output_file}")
                 self.verify_output_file(output_file, options)
             else:
                 raise VideoProcessingError(f"Error encoding {job['video_path']}")
-        
         finally:
             if ass_burn_path and os.path.exists(ass_burn_path):
-                try:
-                    os.remove(ass_burn_path)
-                    debug_print(f"Cleaned up temp styled ASS file: {ass_burn_path}")
-                except Exception as e:
-                    print(f"[WARN] Failed to clean up temp file {ass_burn_path}: {e}")
-            
+                try: os.remove(ass_burn_path); debug_print(f"Cleaned up temp styled ASS file: {ass_burn_path}")
+                except Exception as e: print(f"[WARN] Failed to clean up temp file {ass_burn_path}: {e}")
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path):
-                try:
-                    os.remove(temp_extracted_srt_path)
-                    debug_print(f"Cleaned up temp extracted SRT file: {temp_extracted_srt_path}")
-                except Exception as e:
-                    print(f"[WARN] Failed to clean up temp file {temp_extracted_srt_path}: {e}")
+                try: os.remove(temp_extracted_srt_path); debug_print(f"Cleaned up temp extracted SRT file: {temp_extracted_srt_path}")
+                except Exception as e: print(f"[WARN] Failed to clean up temp file {temp_extracted_srt_path}: {e}")
 
-    def construct_ffmpeg_command(self, file_path, output_file, orientation, ass_burn_path, options):
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None):
+        options = copy.deepcopy(job['options'])
+        file_path = job['video_path']
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
         decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid", "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
@@ -1119,54 +1089,92 @@ class VideoProcessorApp:
         
         cmd = [FFMPEG_CMD, "-y", "-hide_banner"] + (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
         
-        vf_filters, cpu_filters = [], []
-        is_hdr_output = options.get("output_format") == 'hdr'
-        if orientation != "original":
-            res_key, aspect_str = (options.get('resolution'), options.get('vertical_aspect')) if orientation == "vertical" else (options.get('resolution'), options.get('horizontal_aspect'))
-            width_map = {"HD": 1080, "4k": 2160, "8k": 4320} if orientation == "vertical" else {"HD": 1920, "4k": 3840, "8k": 7680}
-            target_w = width_map.get(res_key, 1920); num, den = map(int, aspect_str.split(':')); target_h = int(target_w * den / num)
-            target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
-            
-            scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo', DEFAULT_UPSCALE_ALGO)}"
-            if options.get("aspect_mode") == 'pad':
-                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
-                cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
-            elif options.get("aspect_mode") == 'crop':
-                vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
-                cpu_filters.append(f"crop={target_w}:{target_h}")
-            else: # stretch
-                vf_filters.append(scale_base)
+        filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        video_out_tag = "0:v:0"
+        
+        audio_cmd_parts = self.build_audio_segment(file_path, options)
+        audio_fc_str = ""
+        try:
+            audio_fc_index = audio_cmd_parts.index("-filter_complex")
+            audio_fc_str = audio_cmd_parts.pop(audio_fc_index + 1)
+            audio_cmd_parts.pop(audio_fc_index)
+        except ValueError: pass
 
-        lut_file = options.get("lut_file", DEFAULT_LUT_PATH)
-        if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file):
-            cpu_filters.append(f"lut3d=file='{lut_file.replace(':', '\\:').replace('\\\\', '/')}'")
-        if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
-        
-        if ass_burn_path:
-            safe_path = ass_burn_path.replace('\\', '/').replace(':', '\\:')
-            cpu_filters.append(f"subtitles=filename='{safe_path}'")
-        
-        if cpu_filters:
+        if orientation == "hybrid (stacked)":
+            res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+            target_w = width_map.get(res_key, 1080)
+            
+            def get_block_filters(aspect_str, mode, upscale_algo):
+                num, den = map(int, aspect_str.split(':')); target_h = (int(target_w * den / num) // 2) * 2
+                scale = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={upscale_algo}"
+                if mode == 'stretch': return scale, "", target_h
+                vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
+                cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black" if mode == 'pad' else f"crop={target_w}:{target_h}"
+                return vf, cpu, target_h
+            
+            top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), options.get('upscale_algo'))
+            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
+            
+            if options.get("subtitle_alignment") == "seam":
+                total_real_h = top_h + bot_h
+                if total_real_h > 0:
+                    seam_ratio = top_h / total_real_h
+                    virtual_canvas_h, virtual_canvas_w = 1080, 1920
+                    seam_y_on_canvas = int(seam_ratio * virtual_canvas_h)
+                    options["calculated_pos"] = (int(virtual_canvas_w / 2), seam_y_on_canvas)
+
+            video_fc_parts = ["[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]"]
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+            video_fc_parts.append(f"[v_top_out]hwdownload,format={cpu_pix_fmt},{top_cpu}[cpu_top]")
+            video_fc_parts.append(f"[v_bot_out]hwdownload,format={cpu_pix_fmt},{bot_cpu}[cpu_bot]")
+            video_fc_parts.append("[cpu_top][cpu_bot]vstack=inputs=2[stacked]")
             
-            processing_chain = [f"hwdownload,format={cpu_pix_fmt}"]
-            processing_chain.extend(cpu_filters)
+            cpu_chain = []
+            lut_file = options.get("lut_file", DEFAULT_LUT_PATH)
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file): cpu_chain.append(f"lut3d=file='{lut_file.replace(':', '\\:').replace('\\\\', '/')}'")
+            if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
+            if ass_burn_path: cpu_chain.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
+            if not is_hdr_output: cpu_chain.append("format=nv12")
+            cpu_chain.append("hwupload_cuda")
 
-            # --- [THE FIX] ---
-            # If the output is SDR, we MUST convert the pixel format to 8-bit (nv12)
-            # because h264_nvenc does not support 10-bit encoding.
-            # If the output is HDR, we skip this to preserve the 10-bit data for hevc_nvenc.
-            if not is_hdr_output:
-                processing_chain.append("format=nv12")
-            # --- [END FIX] ---
+            video_fc_parts.append(f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]")
+            filter_complex_parts.extend(video_fc_parts)
+            video_out_tag = "[v_out]"
+        
+        else:
+            vf_filters, cpu_filters = [], []
+            if orientation != "original":
+                res_key, aspect_str = (options.get('resolution'), options.get('vertical_aspect')) if orientation == "vertical" else (options.get('resolution'), options.get('horizontal_aspect'))
+                width_map = {"HD": 1080, "4k": 2160, "8k": 4320} if orientation == "vertical" else {"HD": 1920, "4k": 3840, "8k": 7680}
+                target_w = width_map.get(res_key, 1920); num, den = map(int, aspect_str.split(':')); target_h = int(target_w * den / num)
+                target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
+                
+                scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo', DEFAULT_UPSCALE_ALGO)}"
+                if options.get("aspect_mode") == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
+                elif options.get("aspect_mode") == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
+                else: vf_filters.append(scale_base)
 
-            processing_chain.append("hwupload_cuda")
+            lut_file = options.get("lut_file", DEFAULT_LUT_PATH);
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file): cpu_filters.append(f"lut3d=file='{lut_file.replace(':', '\\:').replace('\\\\', '/')}'")
+            if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
+            if ass_burn_path: cpu_filters.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             
-            vf_filters.append(",".join(processing_chain))
+            if vf_filters or cpu_filters:
+                if cpu_filters:
+                    cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                    processing_chain = [f"hwdownload,format={cpu_pix_fmt}"] + cpu_filters
+                    if not is_hdr_output: processing_chain.append("format=nv12")
+                    processing_chain.append("hwupload_cuda")
+                    vf_filters.append(','.join(processing_chain))
+                filter_complex_parts.append(f"[0:v]{','.join(vf_filters)}[v_out]")
+                video_out_tag = "[v_out]"
 
-        cmd.extend(["-map", "0:v:0"])
-        if vf_filters: cmd.extend(["-vf", ",".join(vf_filters)])
-        cmd.extend(self.build_audio_segment(file_path, options))
+        if filter_complex_parts or audio_fc_str:
+            full_fc = ";".join(filter_complex_parts + ([audio_fc_str] if audio_fc_str else []))
+            cmd.extend(["-filter_complex", full_fc])
+
+        cmd.extend(["-map", video_out_tag])
+        cmd.extend(audio_cmd_parts)
 
         bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution', DEFAULT_RESOLUTION), info["framerate"], is_hdr_output)
         gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
@@ -1174,7 +1182,8 @@ class VideoProcessorApp:
         if is_hdr_output: cmd.extend(["-c:v", "hevc_nvenc", "-preset", "p1", "-profile:v", "main10", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
         else: cmd.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
         cmd.extend(["-f", "mp4", output_file])
-        return cmd
+        
+        return cmd, options
 
     def validate_processing_settings(self):
         issues = []
@@ -1185,7 +1194,6 @@ class VideoProcessorApp:
             os.remove(test_file)
         except Exception as e:
             issues.append(f"Cannot write to working directory (for temp subtitle files): {e}")
-
         try:
             if not -70 <= float(self.loudness_target_var.get()) <= 0: issues.append("Loudness target should be between -70 and 0 LUFS")
         except ValueError: issues.append("Invalid loudness target value")
@@ -1199,30 +1207,21 @@ class VideoProcessorApp:
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
         successful, failed = 0, 0
         total_jobs = len(self.processing_jobs)
-
         for i, job in enumerate(self.processing_jobs):
             self.update_status(f"Processing {i + 1}/{total_jobs}: {job['display_name']}")
-            print("\n" + "-"*80)
-            print(f"Starting job {i + 1}/{total_jobs}: {job['display_name']}")
+            print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}")
             try:
                 orientation = job['options'].get("orientation", "horizontal")
-                
                 if orientation == "horizontal + vertical":
                     self.build_ffmpeg_command_and_run(job, "horizontal")
                     self.build_ffmpeg_command_and_run(job, "vertical")
                 else:
                     self.build_ffmpeg_command_and_run(job, orientation)
-                
-                successful += 1
-                print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
-
+                successful += 1; print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
             except (VideoProcessingError, Exception) as e:
-                failed += 1
-                print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
-        
+                failed += 1; print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
         final_message = f"Processing Complete: {successful} successful, {failed} failed"
-        print("\n" + "="*80 + "\n" + final_message)
-        self.update_status(final_message)
+        print("\n" + "="*80 + "\n" + final_message); self.update_status(final_message)
 
     def run_ffmpeg_command(self, cmd):
         print("Running FFmpeg command:")
@@ -1245,18 +1244,9 @@ class VideoProcessorApp:
             audio_info = json.loads(subprocess.run(cmd_audio, capture_output=True, text=True, check=True, env=env).stdout).get("streams", [])
             for i, s in enumerate(audio_info):
                 print(f"[AUDIO VER] Stream #{i}: channels={s.get('channels')}, layout='{s.get('channel_layout', 'None')}', samplerate={s.get('sample_rate')}")
-            
             if options and options.get("audio_mode") == "stereo+5.1":
-                is_layout_issue = False
-                for s in audio_info:
-                    if s.get('channels') == 6:
-                        layout = s.get('channel_layout')
-                        if layout is not None and layout != '5.1(side)':
-                            is_layout_issue = True
-                            break
-                if is_layout_issue:
+                if any(s.get('channels') == 6 and s.get('channel_layout') != '5.1(side)' for s in audio_info):
                     print("[WARN] 5.1 stream layout is not '5.1(side)', which YouTube requires.")
-
         except Exception as e: print(f"[WARN] Could not run audio verification: {e}")
     
     def add_files(self):
@@ -1274,29 +1264,12 @@ class VideoProcessorApp:
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
     
     def remove_no_sub_jobs(self):
-        """Removes all jobs that do not have subtitles."""
-        indices_to_remove = [
-            i for i, job in enumerate(self.processing_jobs) 
-            if job.get('subtitle_path') is None
-        ]
-        
-        for index in sorted(indices_to_remove, reverse=True):
-            del self.processing_jobs[index]
-            self.job_listbox.delete(index)
-        
+        indices_to_remove = [i for i, job in enumerate(self.processing_jobs) if job.get('subtitle_path') is None]
+        for index in sorted(indices_to_remove, reverse=True): del self.processing_jobs[index]; self.job_listbox.delete(index)
         print(f"Removed {len(indices_to_remove)} jobs without subtitles.")
-
     def remove_sub_jobs(self):
-        """Removes all jobs that have subtitles."""
-        indices_to_remove = [
-            i for i, job in enumerate(self.processing_jobs) 
-            if job.get('subtitle_path') is not None
-        ]
-        
-        for index in sorted(indices_to_remove, reverse=True):
-            del self.processing_jobs[index]
-            self.job_listbox.delete(index)
-            
+        indices_to_remove = [i for i, job in enumerate(self.processing_jobs) if job.get('subtitle_path') is not None]
+        for index in sorted(indices_to_remove, reverse=True): del self.processing_jobs[index]; self.job_listbox.delete(index)
         print(f"Removed {len(indices_to_remove)} jobs with subtitles.")
 
 if __name__ == "__main__":
@@ -1313,10 +1286,7 @@ if __name__ == "__main__":
     
     capabilities = check_ffmpeg_capabilities()
     if not capabilities['nvenc']:
-        messagebox.showwarning(
-            "NVENC Not Available",
-            "NVENC encoders not found in FFmpeg. Video encoding may fail.\nContinuing anyway..."
-        )
+        messagebox.showwarning("NVENC Not Available", "NVENC encoders not found in FFmpeg. Video encoding may fail.\nContinuing anyway...")
     
     root = TkinterDnD.Tk()
     initial_files = []
@@ -1324,10 +1294,11 @@ if __name__ == "__main__":
         for pattern in args.input_files: initial_files.extend(glob.glob(pattern))
     else:
         for root_dir, _, files in os.walk(os.getcwd()):
-            if not any(x in root_dir for x in ["_SDR", "_HDR", "_Vertical", "_Original"]):
+            if not any(x in root_dir for x in ["_SDR", "_HDR", "_Vertical", "_Original", "_Hybrid_Stacked"]):
                 for filename in files:
                     if os.path.splitext(filename)[1].lower() in ['.mp4', '.mkv', '.mov']:
                         initial_files.append(os.path.join(root_dir, filename))
     
     app = VideoProcessorApp(root, sorted(list(set(initial_files))), args.output_mode)
     root.mainloop()
+
