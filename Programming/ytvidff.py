@@ -460,6 +460,7 @@ class VideoProcessorApp:
         self.output_mode = output_mode
         self.processing_jobs = []
 
+        # --- CORE FIX: Set up traces for real-time updates on StringVars ---
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
@@ -470,16 +471,22 @@ class VideoProcessorApp:
         self.vertical_aspect_var = tk.StringVar(value=DEFAULT_VERTICAL_ASPECT)
         self.fruc_var = tk.BooleanVar(value=DEFAULT_FRUC)
         self.fruc_fps_var = tk.StringVar(value=DEFAULT_FRUC_FPS)
+        self.fruc_fps_var.trace_add('write', lambda *args: self._update_selected_jobs('fruc_fps'))
         self.generate_log_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         self.override_bitrate_var = tk.BooleanVar(value=False)
         self.manual_bitrate_var = tk.StringVar()
+        self.manual_bitrate_var.trace_add('write', lambda *args: self._update_selected_jobs('manual_bitrate'))
         self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
         self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
+        self.loudness_target_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_target'))
         self.loudness_range_var = tk.StringVar(value=DEFAULT_LOUDNESS_RANGE)
+        self.loudness_range_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_range'))
         self.true_peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
+        self.true_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('true_peak'))
         self.audio_mode_var = tk.StringVar(value=DEFAULT_AUDIO_MODE)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
+        self.lut_file_var.trace_add('write', lambda *args: self._update_selected_jobs('lut_file'))
         self.status_var = tk.StringVar(value="Ready")
 
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
@@ -489,23 +496,30 @@ class VideoProcessorApp:
 
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
+        self.subtitle_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_font_size'))
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         self.subtitle_bold_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_BOLD)
         self.subtitle_italic_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_ITALIC)
         self.subtitle_underline_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_UNDERLINE)
         self.subtitle_margin_v_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_V)
+        self.subtitle_margin_v_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_v'))
         self.fill_color_var = tk.StringVar(value=DEFAULT_FILL_COLOR)
         self.fill_alpha_var = tk.IntVar(value=DEFAULT_FILL_ALPHA)
         self.outline_color_var = tk.StringVar(value=DEFAULT_OUTLINE_COLOR)
         self.outline_alpha_var = tk.IntVar(value=DEFAULT_OUTLINE_ALPHA)
         self.outline_width_var = tk.StringVar(value=DEFAULT_OUTLINE_WIDTH)
+        self.outline_width_var.trace_add('write', lambda *args: self._update_selected_jobs('outline_width'))
         self.shadow_color_var = tk.StringVar(value=DEFAULT_SHADOW_COLOR)
         self.shadow_alpha_var = tk.IntVar(value=DEFAULT_SHADOW_ALPHA)
         self.shadow_offset_x_var = tk.StringVar(value=DEFAULT_SHADOW_OFFSET_X)
+        self.shadow_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_offset_x'))
         self.shadow_offset_y_var = tk.StringVar(value=DEFAULT_SHADOW_OFFSET_Y)
+        self.shadow_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_offset_y'))
         self.shadow_blur_var = tk.StringVar(value=DEFAULT_SHADOW_BLUR)
+        self.shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_blur'))
         self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
+        self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
 
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         
@@ -624,19 +638,16 @@ class VideoProcessorApp:
         lut_frame = tk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
         tk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
         self.lut_entry = tk.Entry(lut_frame, textvariable=self.lut_file_var, width=30); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.lut_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "lut_file"))
         tk.Button(lut_frame, text="Browse", command=self.browse_lut_file).pack(side=tk.LEFT)
         ToolTip(self.lut_entry, "Path to LUT file for HDR to SDR conversion")
         bitrate_frame = tk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
         tk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
         self.manual_bitrate_entry = tk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
-        self.manual_bitrate_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "manual_bitrate"))
         tk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
         fruc_frame = tk.Frame(quality_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
         tk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self._update_selected_jobs("fruc")]).pack(side=tk.LEFT)
         tk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
         self.fruc_fps_entry = tk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
-        self.fruc_fps_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "fruc_fps"))
 
     def setup_audio_column(self, parent):
         subtitle_group = tk.LabelFrame(parent, text="Subtitle Styling", padx=10, pady=10)
@@ -649,12 +660,11 @@ class VideoProcessorApp:
         tk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
         self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=20)
         self.font_combo.pack(side=tk.LEFT, padx=5)
-        self.font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs_event(e, "subtitle_font"))
+        self.font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("subtitle_font"))
         self.populate_fonts()
         tk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         font_size_entry = tk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
         font_size_entry.pack(side=tk.LEFT)
-        font_size_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "subtitle_font_size"))
 
         style_frame = tk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
         tk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var, command=lambda: self._update_selected_jobs("subtitle_bold")).pack(side=tk.LEFT)
@@ -672,7 +682,6 @@ class VideoProcessorApp:
         tk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
         margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
-        margin_v_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "subtitle_margin_v"))
         
         reformat_frame = tk.LabelFrame(subtitle_group, text="Line Formatting", padx=5, pady=5)
         reformat_frame.pack(fill=tk.X, pady=5)
@@ -680,7 +689,6 @@ class VideoProcessorApp:
         tk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
         wrap_limit_entry = tk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
         wrap_limit_entry.pack(side=tk.LEFT)
-        wrap_limit_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "wrap_limit"))
         tk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
         
         fill_props_frame = tk.LabelFrame(subtitle_group, text="Fill Properties", padx=5, pady=5)
@@ -705,7 +713,6 @@ class VideoProcessorApp:
         tk.Label(outline_props_frame, text="Width:").grid(row=1, column=0, sticky="w", pady=(5,0))
         outline_width_entry = tk.Entry(outline_props_frame, textvariable=self.outline_width_var, width=5)
         outline_width_entry.grid(row=1, column=1, columnspan=2, sticky="w", pady=(5,0))
-        outline_width_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "outline_width"))
 
         shadow_props_frame = tk.LabelFrame(subtitle_group, text="Shadow Properties", padx=5, pady=5)
         shadow_props_frame.pack(fill=tk.X, pady=5)
@@ -721,15 +728,12 @@ class VideoProcessorApp:
         tk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
         shadow_offset_x_entry = tk.Entry(offset_frame, textvariable=self.shadow_offset_x_var, width=5)
         shadow_offset_x_entry.pack(side=tk.LEFT, padx=(5,10))
-        shadow_offset_x_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "shadow_offset_x"))
         tk.Label(offset_frame, text="Y:").pack(side=tk.LEFT)
         shadow_offset_y_entry = tk.Entry(offset_frame, textvariable=self.shadow_offset_y_var, width=5)
         shadow_offset_y_entry.pack(side=tk.LEFT, padx=5)
-        shadow_offset_y_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "shadow_offset_y"))
         tk.Label(offset_frame, text="Edge Blur:").pack(side=tk.LEFT, padx=(10,5))
         shadow_blur_entry = tk.Entry(offset_frame, textvariable=self.shadow_blur_var, width=5)
         shadow_blur_entry.pack(side=tk.LEFT, padx=5)
-        shadow_blur_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "shadow_blur"))
         ToolTip(shadow_blur_entry, "Applies a blur to the edges of the text, outline, and shadow.")
 
         action_frame = tk.Frame(subtitle_group)
@@ -751,19 +755,16 @@ class VideoProcessorApp:
         tk.Label(lufs_frame, text="Loudness Target (LUFS):").pack(side=tk.LEFT)
         self.loudness_target_entry = tk.Entry(lufs_frame, textvariable=self.loudness_target_var, width=6)
         self.loudness_target_entry.pack(side=tk.LEFT, padx=5)
-        self.loudness_target_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "loudness_target"))
         
         lra_frame = tk.Frame(self.audio_norm_frame); lra_frame.pack(fill=tk.X, pady=1)
         tk.Label(lra_frame, text="Loudness Range (LRA):").pack(side=tk.LEFT)
         self.loudness_range_entry = tk.Entry(lra_frame, textvariable=self.loudness_range_var, width=6)
         self.loudness_range_entry.pack(side=tk.LEFT, padx=5)
-        self.loudness_range_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "loudness_range"))
         
         peak_frame = tk.Frame(self.audio_norm_frame); peak_frame.pack(fill=tk.X, pady=1)
         tk.Label(peak_frame, text="True Peak (dBTP):").pack(side=tk.LEFT)
         self.true_peak_entry = tk.Entry(peak_frame, textvariable=self.true_peak_var, width=6)
         self.true_peak_entry.pack(side=tk.LEFT, padx=5)
-        self.true_peak_entry.bind("<FocusOut>", lambda e: self._update_selected_jobs_event(e, "true_peak"))
 
     def setup_button_row(self, parent):
         self.start_button = tk.Button(parent, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
@@ -864,19 +865,20 @@ class VideoProcessorApp:
 
     def update_status(self, message): self.status_var.set(message); self.root.update_idletasks()
 
-    def _update_selected_jobs_event(self, event, *keys_to_update):
-        self._update_selected_jobs(*keys_to_update)
-
     def _update_selected_jobs(self, *keys_to_update):
         selected_indices = self.job_listbox.curselection()
         if not selected_indices:
             return
+        
         current_options = self.get_current_gui_options()
         options_to_apply = {key: current_options[key] for key in keys_to_update if key in current_options}
+        
+        # --- ENHANCEMENT: Log user interactions ---
+        print(f"[GUI ACTION] Applied {options_to_apply} to {len(selected_indices)} selected job(s).")
+        
         for index in selected_indices:
             job = self.processing_jobs[index]
             job['options'].update(options_to_apply)
-        debug_print(f"Applied {options_to_apply} to {len(selected_indices)} jobs.")
     
     def get_current_gui_options(self):
         return {
@@ -1025,7 +1027,7 @@ class VideoProcessorApp:
         return ["-filter_complex", ";".join(fc_parts), "-map", f"[{map_stereo}]", "-map", f"[{map_5ch}]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k", "-disposition:a:0", "default", "-disposition:a:1", "0", "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"]
 
     def build_ffmpeg_command_and_run(self, job, orientation):
-        options = job['options']
+        options = copy.deepcopy(job['options']) # Use a mutable copy for this job
         folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
         if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
         elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
@@ -1034,20 +1036,21 @@ class VideoProcessorApp:
             h_aspect = options.get('horizontal_aspect').replace(':', 'x')
             if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
         
-        base_name = os.path.splitext(os.path.basename(job['video_path']))[0]
+        unique_base_name = os.path.splitext(job['display_name'])[0]
+        safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", unique_base_name)
+        
         tag_match = re.search(r'(\[.*\])', job['display_name'])
         tag = tag_match.group(1) if tag_match else "Subtitles"
         safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, folder_name, safe_subtitle_folder_name)
         os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, f"{base_name}.mp4")
+        output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
         
         ass_burn_path = None
         temp_extracted_srt_path = None
         try:
-            _, temp_options = self.construct_ffmpeg_command(job, output_file, orientation)
-            if temp_options.get("burn_subtitles") and job.get('subtitle_path'):
+            if options.get("burn_subtitles") and job.get('subtitle_path'):
                 sub_identifier = job.get('subtitle_path')
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
@@ -1059,12 +1062,26 @@ class VideoProcessorApp:
                         print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'. Proceeding without subtitles.")
                 elif os.path.exists(sub_identifier):
                     subtitle_source_file = sub_identifier
+
                 if subtitle_source_file:
-                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, temp_options)
+                    if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
+                        res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                        target_w = width_map.get(res_key, 1080)
+                        num_top, den_top = map(int, options.get('hybrid_top_aspect').split(':')); top_h = (int(target_w * den_top / num_top) // 2) * 2
+                        num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect').split(':')); bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
+                        total_real_h = top_h + bot_h
+                        if total_real_h > 0:
+                            seam_ratio = top_h / total_real_h
+                            virtual_canvas_h, virtual_canvas_w = 1080, 1920
+                            seam_y_on_canvas = int(seam_ratio * virtual_canvas_h)
+                            options["calculated_pos"] = (int(virtual_canvas_w / 2), seam_y_on_canvas)
+
+                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
                     if not ass_burn_path:
                         raise VideoProcessingError(f"Failed to create styled ASS file from {subtitle_source_file}")
+
+            cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
             
-            cmd, _ = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path)
             if self.run_ffmpeg_command(cmd) == 0:
                 print(f"File finalized => {output_file}")
                 self.verify_output_file(output_file, options)
@@ -1078,8 +1095,10 @@ class VideoProcessorApp:
                 try: os.remove(temp_extracted_srt_path); debug_print(f"Cleaned up temp extracted SRT file: {temp_extracted_srt_path}")
                 except Exception as e: print(f"[WARN] Failed to clean up temp file {temp_extracted_srt_path}: {e}")
 
-    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None):
-        options = copy.deepcopy(job['options'])
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None):
+        if options is None:
+            options = job['options']
+        
         file_path = job['video_path']
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
@@ -1114,14 +1133,6 @@ class VideoProcessorApp:
             
             top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), options.get('upscale_algo'))
             bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
-            
-            if options.get("subtitle_alignment") == "seam":
-                total_real_h = top_h + bot_h
-                if total_real_h > 0:
-                    seam_ratio = top_h / total_real_h
-                    virtual_canvas_h, virtual_canvas_w = 1080, 1920
-                    seam_y_on_canvas = int(seam_ratio * virtual_canvas_h)
-                    options["calculated_pos"] = (int(virtual_canvas_w / 2), seam_y_on_canvas)
 
             video_fc_parts = ["[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]"]
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
@@ -1183,7 +1194,7 @@ class VideoProcessorApp:
         else: cmd.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
         cmd.extend(["-f", "mp4", output_file])
         
-        return cmd, options
+        return cmd
 
     def validate_processing_settings(self):
         issues = []
@@ -1201,6 +1212,10 @@ class VideoProcessorApp:
         return True
 
     def start_processing(self):
+        # --- ROBUSTNESS FIX: Force focus and process all pending GUI events before starting ---
+        self.root.focus_set()
+        self.root.update_idletasks()
+
         if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files."); return
         if not self.validate_processing_settings(): return
         self.output_mode = self.output_mode_var.get()
@@ -1209,9 +1224,27 @@ class VideoProcessorApp:
         total_jobs = len(self.processing_jobs)
         for i, job in enumerate(self.processing_jobs):
             self.update_status(f"Processing {i + 1}/{total_jobs}: {job['display_name']}")
-            print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}")
+
+            # --- ENHANCEMENT: Pre-flight check logging ---
+            opts = job['options']
+            info = get_video_info(job['video_path'])
+            bitrate_mode_str = f"Override ({opts.get('manual_bitrate')} kbps)" if opts.get('override_bitrate') else f"Automatic ({get_bitrate(opts.get('resolution'), info['framerate'], opts.get('output_format') == 'hdr')} kbps)"
+            audio_mode_str = f"True ({opts.get('loudness_target')} LUFS)" if opts.get('normalize_audio') else "False"
+            sub_mode_str = f"Burn Enabled (Font: {opts.get('subtitle_font')}, Size: {opts.get('subtitle_font_size')})" if opts.get('burn_subtitles') else "Burn Disabled"
+
+            print("\n" + "-"*80)
+            print(f"Starting job {i + 1}/{total_jobs}: {job['display_name']}")
+            print(f"    - Orientation:     {opts.get('orientation')}")
+            print(f"    - Resolution:      {opts.get('resolution')}")
+            print(f"    - Output Format:   {opts.get('output_format').upper()}")
+            print(f"    - Aspect Mode:     {opts.get('aspect_mode')}")
+            print(f"    - Bitrate Mode:    {bitrate_mode_str}")
+            print(f"    - Audio Normalize: {audio_mode_str}")
+            print(f"    - Subtitles:       {sub_mode_str}")
+            print("-" * 80)
+            
             try:
-                orientation = job['options'].get("orientation", "horizontal")
+                orientation = opts.get("orientation", "horizontal")
                 if orientation == "horizontal + vertical":
                     self.build_ffmpeg_command_and_run(job, "horizontal")
                     self.build_ffmpeg_command_and_run(job, "vertical")
