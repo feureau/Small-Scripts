@@ -1,9 +1,11 @@
+
 #!/usr/bin/env python3
 import sys
 import glob
 import subprocess
 import os
 import argparse
+import shutil # New import for moving files
 
 # List of standard layout names as reported by "ffmpeg -layouts"
 LAYOUTS = [
@@ -16,43 +18,14 @@ LAYOUTS = [
 
 # Predefined mapping for common layout names to channel counts.
 NAMED_LAYOUTS = {
-    "mono": 1,
-    "stereo": 2,
-    "2.1": 3,
-    "3.0": 3,
-    "3.0(back)": 3,
-    "4.0": 4,
-    "quad": 4,
-    "quad(side)": 4,
-    "3.1": 4,
-    "5.0": 5,
-    "5.0(side)": 5,
-    "4.1": 5,
-    "5.1": 6,
-    "5.1(side)": 6,
-    "6.0": 6,
-    "6.0(front)": 6,
-    "3.1.2": 6,
-    "hexagonal": 6,
-    "6.1": 7,
-    "6.1(back)": 7,
-    "6.1(front)": 7,
-    "7.0": 7,
-    "7.0(front)": 7,
-    "7.1": 8,
-    "7.1(wide)": 8,
-    "7.1(wide-side)": 8,
-    "5.1.2": 8,
-    "octagonal": 8,
-    "cube": 8,
-    "5.1.4": 10,
-    "7.1.2": 10,
-    "7.1.4": 10,
-    "7.2.3": 12,
-    "9.1.4": 14,
-    "hexadecagonal": 16,
-    "downmix": 2,
-    "22.2": 24
+    "mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "3.0(back)": 3, "4.0": 4,
+    "quad": 4, "quad(side)": 4, "3.1": 4, "5.0": 5, "5.0(side)": 5, "4.1": 5,
+    "5.1": 6, "5.1(side)": 6, "6.0": 6, "6.0(front)": 6, "3.1.2": 6,
+    "hexagonal": 6, "6.1": 7, "6.1(back)": 7, "6.1(front)": 7, "7.0": 7,
+    "7.0(front)": 7, "7.1": 8, "7.1(wide)": 8, "7.1(wide-side)": 8,
+    "5.1.2": 8, "octagonal": 8, "cube": 8, "5.1.4": 10, "7.1.2": 10,
+    "7.1.4": 10, "7.2.3": 12, "9.1.4": 14, "hexadecagonal": 16,
+    "downmix": 2, "22.2": 24
 }
 
 def calculate_channel_count(layout: str) -> int:
@@ -89,7 +62,8 @@ def parse_arguments():
             "the audio is converted to a specified codec at 640kbps with a given channel layout.\n\n"
             "Default encoder is AC3 for up to 6 channels; if more channels (up to 8) are requested, "
             "E-AC3 is used. Layouts requiring more than 8 channels are not supported by this script.\n\n"
-            "Possible layout values include: " + ", ".join(LAYOUTS)
+            "This script will create 'input' and 'output' subfolders in the working directory.\n"
+            "Processed files are moved to the 'input' folder, and new files are saved in 'output'."
         ),
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -104,8 +78,13 @@ def main():
     file_pattern = args.pattern
     desired_layout = args.layout
     channels = calculate_channel_count(desired_layout)
+
+    # --- New: Create input and output directories if they don't exist ---
+    input_dir = "input"
+    output_dir = "output"
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
-    # Check if the requested channel count is supported by our available encoders.
     if channels > 8:
         print(f"Error: Requested layout '{desired_layout}' implies {channels} channels, but maximum supported is 8 channels.")
         sys.exit(1)
@@ -125,32 +104,39 @@ def main():
     
     for file in files:
         print(f"Processing: {file}")
-        base, _ = os.path.splitext(file)
-        output_file = base + ".mp4"
         
-        # Build the ffmpeg command:
-        # - Copy first video stream.
-        # - Convert first audio stream using the chosen encoder, bitrate, and channel count.
-        # - Set metadata for channel_layout to the desired layout.
+        # --- Modified: Define output path in the 'output' subfolder ---
+        base, _ = os.path.splitext(os.path.basename(file))
+        output_file = os.path.join(output_dir, base + ".mp4")
+        
+        # Add '-y' to ffmpeg command to automatically overwrite if the output file already exists
         command = [
-            "ffmpeg",
+            "ffmpeg", "-y",
             "-i", file,
             "-map", "0:v:0",
             "-c:v", "copy",
             "-map", "0:a:0",
             "-c:a", audio_encoder,
             "-b:a", audio_bitrate,
-            "-ac:a", str(channels),
+            "-ac", str(channels), # '-ac' is a more universal alias for '-ac:a'
             "-metadata:s:a:0", f"channel_layout={desired_layout}",
             output_file
         ]
         
         print("Running command: " + " ".join(command))
         try:
-            subprocess.run(command, check=True)
-            print(f"Created: {output_file}")
+            # Add '-hide_banner' to reduce ffmpeg's console output verbosity
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            print(f"Successfully created: {output_file}")
+            
+            # --- New: Move the original file to the 'input' subfolder after success ---
+            shutil.move(file, os.path.join(input_dir, os.path.basename(file)))
+            print(f"Moved original file to: {os.path.join(input_dir, os.path.basename(file))}")
+
         except subprocess.CalledProcessError as e:
             print(f"Error processing {file}: {e}")
+            # Print stderr from ffmpeg to see the detailed error
+            print(f"FFmpeg Error Output:\n{e.stderr}")
 
 if __name__ == '__main__':
     main()
