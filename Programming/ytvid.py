@@ -997,81 +997,112 @@ class VideoProcessorApp:
     def build_audio_segment(self, file_path, options):
         audio_mode = options.get("audio_mode", "stereo+5.1")
         
-        # === PASSTHROUGH MODE ===
+        # === PASSTHROUGH MODE (No changes needed here) ===
         if audio_mode == "passthrough":
             audio_streams = get_audio_stream_info(file_path)
             if not audio_streams:
                 return ["-an"]
-            best_idx = audio_streams[0]["index"]
-            # Map first audio stream and copy
+            # Map the first audio stream and copy its codec
             return ["-map", f"0:a:0", "-c:a", "copy"]
         
-        # === STEREO + 5.1 MODE ===
+        # === STEREO + 5.1 MODE (Revised Logic) ===
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams:
-            return ["-an"]
+            return ["-an"] # Return if no audio streams exist
 
-        # Find surround stream (>=6 channels)
-        surround_idx = next((int(s["index"]) for s in audio_streams if int(s.get("channels", 0)) >= 6), None)
-        if surround_idx is None:
-            surround_idx = int(audio_streams[0]["index"])
+        # --- Path A: Source has a 5.1 (or greater) channel stream ---
+        # Find a suitable surround stream to use as the source
+        surround_stream = next((s for s in audio_streams if int(s.get("channels", 0)) >= 6), None)
 
-        fc_parts = []
+        if surround_stream:
+            print("[INFO] 5.1+ channel audio stream detected. Processing for Stereo and 5.1 output.")
+            surround_idx = int(surround_stream["index"])
+            
+            fc_parts = []
 
-        # Normalize to 5.1(side)
-        fc_parts.append(f"[0:{surround_idx}]channelmap=channel_layout=5.1(side)[a_5ch_raw]")
+            # Start with the surround stream and ensure it's mapped to a standard 5.1 layout
+            fc_parts.append(f"[0:{surround_idx}]channelmap=channel_layout=5.1(side)[a_5ch_raw]")
 
-        binaural_enabled = options.get("binaural_enabled", False)
-        if binaural_enabled:
-            sofa_path = options.get("sofa_file", "").strip()
-            if not sofa_path or not os.path.exists(sofa_path):
-                raise VideoProcessingError(f"SOFA file not found: {sofa_path}")
-            safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
-            sofalizer_params = (
-                f"sofalizer=sofa='{safe_sofa}':"
-                "normalize=enabled:"
-                #"gain=18:"
-                #"lfegain=24:"
-                "speakers=FL 26|FR 334|SL 100|SR 260|BL 142|BR 218"
-            )
-            fc_parts.append(f"[a_5ch_raw]{sofalizer_params}[a_stereo]")
-        else:
-            # Standard YouTube-compliant downmix
-            pan_expr = "pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3"
-            fc_parts.append(f"[a_5ch_raw]{pan_expr}[a_stereo]")
+            # Create the stereo downmix (either binaural or standard)
+            binaural_enabled = options.get("binaural_enabled", False)
+            if binaural_enabled:
+                sofa_path = options.get("sofa_file", "").strip()
+                if not sofa_path or not os.path.exists(sofa_path):
+                    raise VideoProcessingError(f"Binaural audio enabled, but SOFA file not found: {sofa_path}")
+                safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
+                sofalizer_params = (
+                    f"sofalizer=sofa='{safe_sofa}':"
+                    "normalize=enabled:"
+                    "speakers=FL 26|FR 334|SL 100|SR 260|BL 142|BR 218"
+                )
+                fc_parts.append(f"[a_5ch_raw]{sofalizer_params}[a_stereo]")
+            else:
+                # Standard YouTube-compliant downmix
+                pan_expr = "pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3"
+                fc_parts.append(f"[a_5ch_raw]{pan_expr}[a_stereo]")
 
-        # Keep 5.1 track
-        fc_parts.append("[a_5ch_raw]anull[a_5ch]")
+            # Keep a clean copy of the 5.1 track
+            fc_parts.append("[a_5ch_raw]anull[a_5ch]")
 
-        # Apply loudnorm and resample if needed
-        map_stereo, map_5ch = "a_stereo", "a_5ch"
-        if options.get("normalize_audio", False):
-            lt = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET)
-            lr = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
-            tp = options.get("true_peak", DEFAULT_TRUE_PEAK)
+            # Apply loudnorm to both streams if enabled
+            map_stereo, map_5ch = "a_stereo", "a_5ch"
+            if options.get("normalize_audio", False):
+                lt = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET)
+                lr = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
+                tp = options.get("true_peak", DEFAULT_TRUE_PEAK)
+                fc_parts.extend([
+                    f"[{map_stereo}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_stereo}_ln]",
+                    f"[{map_5ch}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_5ch}_ln]"
+                ])
+                map_stereo, map_5ch = f"{map_stereo}_ln", f"{map_5ch}_ln"
+
+            # Resample both final streams to the target sample rate
             fc_parts.extend([
-                f"[{map_stereo}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_stereo}_ln]",
-                f"[{map_5ch}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_5ch}_ln]"
+                f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]",
+                f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"
             ])
-            map_stereo, map_5ch = f"{map_stereo}_ln", f"{map_5ch}_ln"
+            map_stereo, map_5ch = f"{map_stereo}_r", f"{map_5ch}_r"
 
-        fc_parts.extend([
-            f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]",
-            f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"
-        ])
-        map_stereo, map_5ch = f"{map_stereo}_r", f"{map_5ch}_r"
+            # Return the full command for two audio tracks
+            return [
+                "-filter_complex", ";".join(fc_parts),
+                "-map", f"[{map_stereo}]", "-map", f"[{map_5ch}]",
+                "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k",
+                "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k",
+                "-disposition:a:0", "default", "-disposition:a:1", "0",
+                "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"
+            ]
+        
+        else:
+            # --- Path B: Source is Stereo or Mono. Process a single Stereo output. ---
+            print("[INFO] Stereo or mono audio stream detected. Processing for a single Stereo output.")
+            # Use the first audio stream as the source
+            source_idx = int(audio_streams[0]["index"])
+            
+            fc_parts = []
+            source_tag = f"[0:{source_idx}]"
+            
+            # Apply loudnorm if enabled, otherwise just pass it through
+            if options.get("normalize_audio", False):
+                lt = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET)
+                lr = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
+                tp = options.get("true_peak", DEFAULT_TRUE_PEAK)
+                fc_parts.append(f"{source_tag}loudnorm=i={lt}:lra={lr}:tp={tp}[a_proc]")
+            else:
+                fc_parts.append(f"{source_tag}anull[a_proc]")
 
-        return [
-            "-filter_complex", ";".join(fc_parts),
-            "-map", f"[{map_stereo}]",
-            "-map", f"[{map_5ch}]",
-            "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k",
-            "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k",
-            "-disposition:a:0", "default",
-            "-disposition:a:1", "0",
-            "-metadata:s:a:0", "title=Stereo",
-            "-metadata:s:a:1", "title=5.1 Surround"
-        ]
+            # Resample the final processed stream to the target sample rate
+            fc_parts.append(f"[a_proc]aresample={AUDIO_SAMPLE_RATE}[a_final]")
+            
+            # Return the command for a single, processed stereo audio track
+            return [
+                "-filter_complex", ";".join(fc_parts),
+                "-map", "[a_final]",
+                "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k",
+                "-disposition:a:0", "default",
+                "-metadata:s:a:0", "title=Stereo"
+            ]
+
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = copy.deepcopy(job['options'])
