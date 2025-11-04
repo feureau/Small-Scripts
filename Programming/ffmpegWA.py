@@ -22,8 +22,9 @@ degree of flexibility without needing to modify the source code.
 -----------------------------------------------------------------------------------------
 - **Configurable via Flags:** Key parameters like target size, duration, and audio
   loudness can be set using command-line arguments (e.g., -t 8).
-- **Automatic Video Splitting:** Videos longer than the maximum duration are automatically
-  cut into multiple, sequentially numbered parts when --split is enabled. This can be overridden.
+- **Automatic Video Splitting:** Videos can be automatically split into multiple, 
+  sequentially numbered parts using the -s flag. Split duration can be specified as
+  -s (default duration) or -s SECONDS for custom duration.
 - **Strict Target Size Compression:** Intelligently calculates the required bitrate and
   uses strict rate control (`maxrate`, `bufsize`) to ensure every output file reliably
   meets the target file size, even with variable-complexity content.
@@ -83,17 +84,19 @@ Use these flags to override the default settings. Run with `-h` or `--help` for 
 
 `-t, --target-mb`
     - Description: The target file size in Megabytes for each output video part.
-    - Default: 9.3
+    - Default: 8.7
     - Example: `python process_videos.py -t 8`
 
-`-s, --split`
-    - Description: Split videos longer than --duration into multiple parts.
-    - Default: False (process full video)
-    - Example: `python process_videos.py -s -d 60`
+`-s, --split [SECONDS]`
+    - Description: Split videos into chunks. Use -s alone for default duration (15s) 
+      or -s SECONDS for custom duration (e.g., -s 120 for 120-second chunks).
+    - Default: 15 seconds when -s is used without argument
+    - Example: `python process_videos.py -s` or `python process_videos.py -s 120`
 
 `-d, --duration`
     - Description: The maximum duration in seconds for each video part before splitting.
-    - Default: 90
+      (Deprecated: use -s SECONDS instead)
+    - Default: 15
     - Example: `python process_videos.py -d 60`
 
 `-o, --output-folder`
@@ -136,17 +139,20 @@ Use these flags to override the default settings. Run with `-h` or `--help` for 
   imported as a module into another script.
 
 [ Video Processing Rationale ]
-- **Splitting Logic:** For videos exceeding `max_duration`, `math.ceil()` is used to
-  calculate the total number of parts needed, ensuring the final partial segment is
-  included. A loop then iterates through each segment, calculating the precise `start_time`
-  and `duration` for each chunk. The `-ss` (seek start) parameter in FFmpeg is used
-  for this, as it is highly efficient for seeking within a file.
+- **Splitting Logic:** The modified `-s` argument uses `nargs='?'` with `const` to allow
+  both `-s` (default duration) and `-s SECONDS` (custom duration). When split_duration
+  is provided, `math.ceil()` calculates the total number of parts needed, ensuring the 
+  final partial segment is included. A loop iterates through each segment, calculating 
+  the precise `start_time` and `duration` for each chunk. The `-ss` (seek start) 
+  parameter in FFmpeg is used for this, as it is highly efficient for seeking within a file.
 - **Bitrate Calculation:** The formula `bitrate = (size_in_bits) / duration_in_seconds`
   is fundamental to video encoding. The script calculates the total bit budget for the
   target file size, subtracts a fixed budget for audio, and allocates the remainder
   to the video stream. This is the cornerstone of achieving a predictable file size.
 - **Strict Rate Control (`maxrate`, `bufsize`):** Simply targeting an average bitrate
   (`b:v`) is not enough. Video encoders use Variable Bitrate (VBR), allocating more
+  bits to complex scenes. Using `maxrate` and `bufsize` creates a buffer and hard limit,
+  ensuring the file size does not exceed the target, even with complex content.
 - **Resolution Capping (`scale`):** The `scale` filter uses `force_original_aspect_ratio='decrease'`
   which is the key to resizing the video to fit *inside* a 1080x1080 box without
   distortion. The `pad` filter was intentionally removed to prevent letterboxing,
@@ -192,47 +198,22 @@ import math
 import argparse
 
 # --- Default Script Configuration ---
-# These values are used if not overridden by command-line flags.
-
 DEFAULT_CONFIG = {
-    # Target file size in Megabytes.
     "target_mb": 8.7,
-    
-    # Maximum duration in seconds for each output part.
-    "max_duration": 15,
-    
-    # Name of the folder for processed videos.
+    "max_duration": 15,  # Default duration when -s is used without argument
     "output_folder": "compressed_videos",
-    
-    # --- Loudness & Compression Settings ---
-    # Integrated Loudness Target (LUFS). Louder = smaller negative number (e.g., -7 is louder than -14).
     "loudness_target": -9,
-    
-    # Loudness Range (LRA). Lower number = more compression, less dynamic range.
     "loudness_range": 7,
-    
-    # True Peak ceiling (dBTP). The maximum peak level. -1.0 is a safe, loud value.
     "true_peak": -1.0,
 }
 
-# Video extensions to look for in batch mode.
 VIDEO_EXTENSIONS = ["mp4", "mov", "mkv", "avi", "webm"]
 
-
-# --- Core Processing Functions ---
-
 def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_exists, config):
-    """
-    Encodes a specific time segment of a video file to the target specifications.
-    This is a helper function called by process_video.
-    """
     try:
         print(f"   [INFO] Encoding segment: start={start_time:.1f}s, duration={duration:.1f}s")
         
         target_size_bytes = config['target_mb'] * 1024 * 1024
-        
-        # 1. CALCULATE BITRATE
-        print("   [1/4] Calculating target bitrate...")
         audio_bitrate = 128 * 1000 if audio_stream_exists else 0
         total_bitrate = (target_size_bytes * 8) / duration
         video_bitrate = total_bitrate - audio_bitrate
@@ -243,8 +224,6 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
         
         print(f"   [INFO] Target video bitrate: {int(video_bitrate / 1000)} kbps")
 
-        # 2. BUILD FFMPEG COMMAND
-        print("   [2/4] Building FFmpeg command...")
         stream = ffmpeg.input(input_path, ss=start_time, t=duration)
         video = stream.video.filter('scale', w=1080, h=1080, force_original_aspect_ratio='decrease')
 
@@ -258,8 +237,6 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
                 tp=config['true_peak']
             )
 
-        # 3. EXECUTE
-        print("   [3/4] Starting GPU-accelerated encoding...")
         output_options = {
             'c:v': 'h264_nvenc',
             'b:v': int(video_bitrate),
@@ -282,8 +259,6 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
             .run(capture_stdout=True, capture_stderr=True)
         )
         
-        # 4. VERIFY
-        print("   [4/4] Verifying output...")
         final_size_bytes = os.path.getsize(output_path)
         final_size_mb = final_size_bytes / (1024 * 1024)
 
@@ -298,13 +273,7 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
     except Exception as e:
         print(f"   [UNEXPECTED ERROR] An unexpected error occurred: {e}", file=sys.stderr)
 
-
-def process_video(input_path, output_path, config, split_video=False):
-    """
-    Analyzes a video. If splitting is enabled and the video is too long, it splits it into parts and calls the
-    encoding function for each part, passing along the configuration.
-    This behavior is overridden by the split_video flag.
-    """
+def process_video(input_path, output_path, config, split_duration=None):
     print(f"\n--- Analyzing: {os.path.basename(input_path)} ---")
 
     try:
@@ -317,12 +286,12 @@ def process_video(input_path, output_path, config, split_video=False):
             return
 
         original_duration = float(probe['format']['duration'])
-        max_duration = config['max_duration']
-
-        # If --split is used AND the video is longer than max_duration, split it
-        if split_video and original_duration > max_duration:
+        
+        # If split_duration is provided (split mode), use it; otherwise process as single file
+        if split_duration is not None:
+            max_duration = split_duration
             num_parts = math.ceil(original_duration / max_duration)
-            print(f"   [INFO] --split enabled. Video is too long ({original_duration:.1f}s). Splitting into {num_parts} parts.")
+            print(f"   [INFO] Splitting video into {num_parts} parts of {max_duration}s each.")
             
             output_name, output_ext = os.path.splitext(output_path)
 
@@ -336,22 +305,14 @@ def process_video(input_path, output_path, config, split_video=False):
 
                 _encode_chunk(input_path, part_output_path, start_time, duration, audio_stream is not None, config)
         else:
-            # Otherwise, process as a single file (default behavior)
-            if split_video:
-                print("   [INFO] --split enabled but video is within duration limit. Processing as a single file.")
-            else:
-                print("   [INFO] --split disabled. Processing entire video as a single file.")
+            # Process entire video as single file
+            print("   [INFO] Processing entire video as a single file.")
             _encode_chunk(input_path, output_path, 0, original_duration, audio_stream is not None, config)
 
     except Exception as e:
         print(f"   [FATAL ERROR] An error occurred during video analysis: {e}", file=sys.stderr)
 
-
-# --- Main Execution Block ---
 def main():
-    """
-    Parses command-line arguments and starts the video processing.
-    """
     parser = argparse.ArgumentParser(
         description="GPU-accelerated video compression, splitting, and normalization script.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -359,15 +320,30 @@ def main():
     
     parser.add_argument(
         'input_file',
-        nargs='?', # Makes the argument optional
+        nargs='?',
         default=None,
         help="Path to a single video file to process. If omitted, script runs in Batch Mode."
     )
     
-    # --- Add arguments to override default config ---
+    # Modified -s argument to accept optional duration value
+    parser.add_argument(
+        "-s", "--split", 
+        nargs='?', 
+        const=DEFAULT_CONFIG['max_duration'],  # Default value when -s is used without argument
+        type=int, 
+        metavar='SECONDS',
+        help="Split video into chunks. Use -s alone for default duration or -s SECONDS for custom duration."
+    )
+    
+    # Keep -d for backward compatibility but make it override -s if both are used
+    parser.add_argument(
+        "-d", "--duration", 
+        type=int, 
+        default=DEFAULT_CONFIG['max_duration'], 
+        help="Maximum duration in seconds for each video part (deprecated: use -s SECONDS instead)."
+    )
+    
     parser.add_argument("-t", "--target-mb", type=float, default=DEFAULT_CONFIG['target_mb'], help="Target file size in Megabytes for each video part.")
-    parser.add_argument("-s", "--split", action='store_true', help="Split video into smaller parts based on duration. Default is to process full video.")
-    parser.add_argument("-d", "--duration", type=int, default=DEFAULT_CONFIG['max_duration'], help="Maximum duration in seconds for each video part.")
     parser.add_argument("-o", "--output-folder", type=str, default=DEFAULT_CONFIG['output_folder'], help="Name of the directory to save processed files.")
     parser.add_argument("-l", "--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
     parser.add_argument("-r", "--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
@@ -375,10 +351,16 @@ def main():
     
     args = parser.parse_args()
 
-    # Create a config dictionary from the parsed arguments
+    # Determine split duration: -s value takes precedence over -d, but -d is used if -s is not specified
+    split_duration = None
+    if args.split is not None:  # -s was used (with or without value)
+        split_duration = args.split
+    elif args.duration != DEFAULT_CONFIG['max_duration']:  # -d was explicitly set to non-default value
+        split_duration = args.duration
+
     config = {
         'target_mb': args.target_mb,
-        'max_duration': args.duration,
+        'max_duration': split_duration or DEFAULT_CONFIG['max_duration'],
         'output_folder': args.output_folder,
         'loudness_target': args.loudness,
         'loudness_range': args.lra,
@@ -390,16 +372,14 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     if args.input_file:
-        # Single File Mode
         print(f"--- Mode: Processing a single input file ---")
         if not os.path.isfile(args.input_file):
             print(f"Error: The file '{args.input_file}' does not exist.")
             return
         base_name = os.path.basename(args.input_file)
         output_file = os.path.join(output_dir, base_name)
-        process_video(args.input_file, output_file, config, args.split)
+        process_video(args.input_file, output_file, config, split_duration)
     else:
-        # Batch Mode
         print(f"--- Mode: Batch processing all files in directory ---")
         print(f"Searching for video files in '{current_working_dir}' and its subfolders...")
         video_files = []
@@ -415,15 +395,13 @@ def main():
         for i, input_file in enumerate(video_files):
             print(f"\n>>> Processing file {i + 1} of {len(video_files)}")
             base_name = os.path.basename(input_file)
-            # Exclude files that are already in the output directory
             if os.path.dirname(input_file) == output_dir:
                 print(f"   Skipping file already in output directory: {base_name}")
                 continue
             output_file = os.path.join(output_dir, base_name)
-            process_video(input_file, output_file, config, args.split)
+            process_video(input_file, output_file, config, split_duration)
 
     print("\n--- All tasks completed. ---")
-
 
 if __name__ == "__main__":
     main()
