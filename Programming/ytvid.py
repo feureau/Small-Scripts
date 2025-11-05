@@ -1033,7 +1033,7 @@ class VideoProcessorApp:
                 sofalizer_params = (
                     f"sofalizer=sofa='{safe_sofa}':"
                     "normalize=enabled:"
-                    "speakers=FL 26|FR 334|SL 100|SR 260|BL 142|BR 218"
+                    "speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218"
                 )
                 fc_parts.append(f"[a_5ch_raw]{sofalizer_params}[a_stereo]")
             else:
