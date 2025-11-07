@@ -1,10 +1,11 @@
+
 """
 =================================================
 Ultimate YouTube Batch Uploader & Manager
 =================================================
 
-Version: 1.1
-Date: 2025-10-09
+Version: 1.2 (Playlist Loading Update)
+Date: 2025-11-07
 Author: [Your Name Here]
 
 ---
@@ -21,6 +22,7 @@ The application operates in two primary modes:
 ---
 - **GUI-Based Operation:** Easy-to-use interface for all functions.
 - **Dual Modes:** Seamlessly switch between managing existing videos and uploading new ones.
+- **Load from Specific Playlist:** Load videos from a specific playlist ID, allowing you to manage private/unlisted videos easily.
 - **Google OAuth2 Authentication:** Securely authenticates with your YouTube account using the official Google Auth library. Tokens are stored locally and automatically revoked on exit for security.
 - **Batch Metadata Updates:** Modify titles, descriptions, tags, categories, privacy status, and more for multiple videos at once.
 - **Automated Scheduling:** Automatically calculate and assign staggered publishing times for a batch of videos based on a start time and interval.
@@ -63,8 +65,10 @@ The application operates in two primary modes:
 
 2.  **Choose a Mode:**
     - **To Manage Existing Videos (Update Mode):**
+        - **(Optional but recommended for private/unlisted videos):** Create a playlist on YouTube, add all the videos you want to manage to it, and copy its ID from the URL (the string after `list=`).
+        - Paste the ID into the **"From Playlist ID"** text box.
         - Click the "2. Load Existing Videos" button.
-        - The script will fetch videos from your channel and display them in the list. It will also try to find matching local files.
+        - The script will fetch videos from that playlist. If the box is empty, it will load from your public uploads.
     - **To Upload New Videos (Upload Mode):**
         - Click the "OR: Load Files for Upload" button.
         - The script will scan the current directory for video files and display them.
@@ -92,74 +96,6 @@ The application operates in two primary modes:
 5.  **Process:**
     - Click the "PROCESS SELECTED VIDEOS" or "UPLOAD SELECTED FILES" button to start the operation.
     - Monitor the console output for detailed progress and any errors. The GUI will remain responsive.
-
----
-### FILE NAMING & DESCRIPTION FORMAT ###
----
-- **Matching Logic:** The script matches files by comparing the video's title (or local video filename) with the filename of `.txt` or `.srt` files. It normalizes text by making it lowercase and removing special characters.
-    - Example: A video titled "My Awesome Vacation!" will match a file named `my_awesome_vacation.txt`.
-
-- **Description `.txt` File Format:**
-    - **Plain Text:** If the file contains only plain text, the entire content will be used as the video description.
-    - **JSON Format (for more control):** To set title, description, tags, and hashtags, format the `.txt` file with a JSON object. The script will automatically find and parse it.
-    ```json
-    {
-      "title": "My New Video Title from File",
-      "description": "This is the main description of the video.\nIt can span multiple lines.",
-      "tags": ["tag1", "youtube api", "python", "automation"],
-      "hashtags": ["#coding", "#tutorial"]
-    }
-    ```
-    The script will append the hashtags to the end of the description.
-
----
-### CODE BREAKDOWN ###
----
-
-#### IMPORTS & CONSTANTS
-- **Imports:** Includes standard libraries, Google API libraries, and Tkinter for the GUI.
-- **SCOPES:** Defines the permissions the script requests from the user's Google account (upload, read, manage).
-- **File/Folder Names:** Constants for token file, failed updates folder, uploaded files folder, and log file.
-- **API Settings:** Default port for OAuth, API timeout.
-- **File Patterns:** Glob patterns to find local video and subtitle files.
-- **YouTube Limits:** Constants for max tag length, tag count, and title length.
-- **Data Maps:** Dictionaries to map user-friendly language and category names to the IDs required by the YouTube API.
-
-#### LOGGER SETUP
-- Configures a global logger to print formatted messages to the console (stdout).
-- A custom `ListHandler` stores all log records in memory so they can be written to a file on exit if the user chooses.
-
-#### HELPER, AUTH & DATA MODELS
-- **`revoke_token()` & `setup_revocation_on_exit()`:** Security functions. `revoke_token` invalidates the refresh token with Google's servers. `setup_revocation_on_exit` ensures this function is called automatically when the application is closed or terminated.
-- **`get_authenticated_service()`:** Handles the entire OAuth2 authentication flow. It first tries to use a saved `token.json`, refreshes it if it's expired, and only if necessary, runs the new user authorization flow.
-- **`normalize_for_matching()` & `sanitize_*()` functions:** A set of helper functions to clean and format text data to be compliant with the YouTube API (e.g., removing invalid characters, truncating to max length).
-- **`VideoData` Class:** A data model to represent an **existing** video fetched from YouTube. It stores all relevant details like ID, title, snippet, status, and paths to any matched local description/subtitle files.
-- **`VideoEntry` Class:** A data model to represent a **local video file** intended for upload. In its constructor, it automatically searches for and parses corresponding `.txt` and `.srt` files.
-- **`calculate_default_start_time()`:** A utility to provide a sensible default start time for scheduling (the next available 2.4-hour interval, at least 1 hour in the future).
-- **File Management Functions:** Functions to generate batch IDs, safely move files, and organize uploaded files into folders.
-
-#### MainApp CLASS (The GUI)
-- **`__init__()`:** The constructor initializes the main Tkinter window, sets up the token revocation, and calls `build_gui()`.
-- **`build_gui()`:** Constructs the entire user interface by creating and arranging Tkinter widgets (buttons, labels, a Treeview for the list, etc.) into logical frames.
-- **`_update_gui_for_mode()`:** Dynamically changes GUI elements (button text, list headers) when switching between "Update" and "Upload" modes.
-- **`_update_ui_states()`:** Manages the enabled/disabled state of widgets based on user selections. For example, it disables the manual visibility radio buttons if "Update Schedule" is checked.
-- **`_sort_column()`:** Implements clickable column headers in the Treeview to sort the video list.
-- **`apply_filters()` & `clear_filters()`:** Implements the filtering logic in Update Mode. It rebuilds the list of displayed videos based on the active filter checkboxes.
-- **`_populate_treeview()`:** Clears and repopulates the Treeview widget with the current list of videos to be displayed.
-- **`on_video_select_display_info()`:** An event handler that runs when a user selects a video in the list. It populates the metadata entry fields with the data from the selected video, making it easy to see and edit.
-- **`select_credentials_and_auth()`:** The callback for the authentication button.
-- **`load_channel_categories()`:** Fetches and populates the category dropdown menu after successful authentication.
-- **`gui_load_existing_videos()` & `gui_load_files_for_upload()`:** Callbacks for the "Load" buttons. They set the application mode and start the loading process in a separate thread.
-- **Threading Functions (`run_video_load`, `start_processing_thread`, etc.):** These functions are designed to be run in background threads (`threading.Thread`). This is crucial for preventing the GUI from freezing during long-running tasks like API calls or file I/O. They perform the core work and then use `self.root.after()` to safely schedule a GUI update on the main thread once their work is done.
-- **`fetch_all_videos_from_api()`:** The core function for "Update Mode". It retrieves the user's uploaded videos via the API, paginating through results. It then iterates through these videos and attempts to match them with local description/subtitle files. It uses a dictionary with the video ID as the key to prevent duplicate entries, which resolves potential Tkinter errors.
-- **`on_exit()`:** The callback for closing the window. It handles saving the log file if requested and then destroys the Tkinter root window.
-
-#### CORE LOGIC FUNCTIONS (Outside the MainApp Class)
-- **`update_videos_on_youtube()`:** Contains the logic for processing videos in "Update Mode". It iterates through the selected `VideoData` objects, builds the API request body based on user settings and file data, and calls the `service.videos().update()` endpoint. It includes logic for dry runs and adding videos to a playlist.
-- **`upload_new_videos()`:** Contains the logic for "Upload Mode". It iterates through the selected `VideoEntry` objects, constructs the metadata `snippet` and `status` parts of the request, and uses `MediaFileUpload` to handle the actual video upload. After a successful video upload, it proceeds to upload the subtitle file (if available) and add the new video to a playlist (if requested). It also handles moving files to organized folders after successful uploads.
-
-#### SCRIPT ENTRY POINT
-- **`if __name__ == '__main__':`:** This is standard Python practice. The code inside this block only runs when the script is executed directly. It creates an instance of the `MainApp` class, which starts the GUI and the application's event loop.
 """
 
 import os
@@ -429,6 +365,14 @@ class MainApp:
         load_frame = ttk.Frame(frm); load_frame.pack(fill=tk.X, pady=5)
         self.load_existing_button = ttk.Button(load_frame, text='2. Load Existing Videos', command=self.gui_load_existing_videos, state=tk.DISABLED)
         self.load_existing_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # --- NEW: Playlist ID Entry ---
+        ttk.Label(load_frame, text='From Playlist ID:').pack(side=tk.LEFT, padx=(10, 2))
+        self.playlist_id_entry_var = tk.StringVar()
+        playlist_id_entry = ttk.Entry(load_frame, textvariable=self.playlist_id_entry_var, width=25)
+        playlist_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        # --- END NEW ---
+        
         self.load_for_upload_button = ttk.Button(load_frame, text='OR: Load Files for Upload', command=self.gui_load_files_for_upload, state=tk.NORMAL)
         self.load_for_upload_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Label(load_frame, text='Max to Load:').pack(side=tk.LEFT, padx=(10, 2))
@@ -586,8 +530,20 @@ class MainApp:
         self.app_mode = "update"; self._update_gui_for_mode()
         try: max_to_load = int(self.max_videos_var.get())
         except ValueError: max_to_load = 50
-        self.update_status(f"Loading up to {max_to_load or 'ALL'} videos..."); self.load_existing_button.config(state=tk.DISABLED); threading.Thread(target=self.run_video_load, args=(max_to_load,), daemon=True).start()
-    def run_video_load(self, max_to_load): self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load); self.root.after(100, self.finish_video_load)
+        
+        # --- MODIFICATION START ---
+        playlist_id = self.playlist_id_entry_var.get().strip()
+        # --- MODIFICATION END ---
+        
+        self.update_status(f"Loading up to {max_to_load or 'ALL'} videos..."); self.load_existing_button.config(state=tk.DISABLED)
+        # --- MODIFICATION START ---
+        threading.Thread(target=self.run_video_load, args=(max_to_load, playlist_id), daemon=True).start()
+        # --- MODIFICATION END ---
+    
+    def run_video_load(self, max_to_load, playlist_id=None): # <-- MODIFIED
+        self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load, playlist_id=playlist_id) # <-- MODIFIED
+        self.root.after(100, self.finish_video_load)
+
     def finish_video_load(self): self.apply_filters(); self.process_button.config(state=tk.NORMAL); self.filter_menubutton.config(state=tk.NORMAL); self.load_existing_button.config(state=tk.NORMAL); self.update_status(f"Loaded {len(self.videos_to_process)} videos.")
     def gui_load_files_for_upload(self):
         self.app_mode = "upload"; self._update_gui_for_mode(); self.videos_to_process = []; logger.info("Scanning for video files to upload...")
@@ -595,22 +551,55 @@ class MainApp:
             for f in glob.glob(pat):
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
-    def fetch_all_videos_from_api(self, max_videos_to_fetch=0):
-        all_video_data_map, video_ids = {}, []; next_page_token = None # <-- FIX: Use a dictionary to prevent duplicates
+    
+    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None): # <-- MODIFIED
+        all_video_data_map, video_ids = {}, []; next_page_token = None
         try:
-            uploads_id = self.service.channels().list(part="contentDetails", mine=True).execute()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            # --- MODIFICATION START ---
+            target_playlist_id = None
+            if playlist_id:
+                logger.info(f"Fetching videos from specified playlist ID: {playlist_id}")
+                target_playlist_id = playlist_id
+            else:
+                logger.info("No playlist ID provided, fetching from default 'Uploads' playlist.")
+                uploads_id_req = self.service.channels().list(part="contentDetails", mine=True).execute()
+                if uploads_id_req.get("items"):
+                    target_playlist_id = uploads_id_req["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+                else:
+                    logger.error("Could not find channel details for the authenticated user.")
+                    return []
+
+            if not target_playlist_id:
+                logger.error("Could not determine a playlist ID to fetch from.")
+                return []
+            # --- MODIFICATION END ---
+
             while True:
-                pl_resp = self.service.playlistItems().list(playlistId=uploads_id, part="contentDetails", maxResults=50, pageToken=next_page_token).execute(); video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp["items"]])
+                # This logic now uses the determined target_playlist_id
+                pl_resp = self.service.playlistItems().list(
+                    playlistId=target_playlist_id,
+                    part="contentDetails",
+                    maxResults=50,
+                    pageToken=next_page_token
+                ).execute()
+                video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp.get("items", [])]) # .get is safer
                 if max_videos_to_fetch and len(video_ids) >= max_videos_to_fetch: break
-                next_page_token = pl_resp.get("nextPageToken");
+                next_page_token = pl_resp.get("nextPageToken")
                 if not next_page_token: break
+
             if max_videos_to_fetch: video_ids = video_ids[:max_videos_to_fetch]
+            
+            if not video_ids:
+                logger.warning(f"No videos found in playlist: {target_playlist_id}")
+                return []
+
             logger.info("Scanning for local files to match..."); local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
             for i in range(0, len(video_ids), 50):
-                self.update_status(f"Fetching details... ({min(i+50, len(video_ids))}/{len(video_ids)})"); videos_resp = self.service.videos().list(id=",".join(video_ids[i:i+50]), part="snippet,status,fileDetails").execute()
+                self.update_status(f"Fetching details... ({min(i+50, len(video_ids))}/{len(video_ids)})")
+                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i+50]), part="snippet,status,fileDetails").execute()
                 for item in videos_resp.get("items", []):
                     video_id = item["id"]
-                    if video_id in all_video_data_map: continue # <-- FIX: Skip if already processed
+                    if video_id in all_video_data_map: continue
                     
                     vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails")); normalized_title = normalize_for_matching(vd_obj.original_title)
                     for file_path in local_files:
@@ -618,9 +607,15 @@ class MainApp:
                             ext = file_path.suffix.lower()
                             if ext == '.txt' and not vd_obj.description_file_path: vd_obj.description_file_path, vd_obj.description_filename = str(file_path), file_path.name
                             elif ext in SUBTITLE_PATTERNS and not vd_obj.subtitle_file_path: vd_obj.subtitle_file_path, vd_obj.subtitle_filename = str(file_path), file_path.name
-                    all_video_data_map[video_id] = vd_obj # <-- FIX: Add to dictionary
-        except Exception as e: logger.error(f"Error fetching videos: {e}", exc_info=True)
-        return list(all_video_data_map.values()) # <-- FIX: Return a list of unique values
+                    all_video_data_map[video_id] = vd_obj
+        except HttpError as e:
+            logger.error(f"An API error occurred: {e.reason}", exc_info=True)
+            if "playlistNotFound" in str(e.content):
+                messagebox.showerror("API Error", "Playlist Not Found. Please check the Playlist ID.")
+        except Exception as e:
+            logger.error(f"Error fetching videos: {e}", exc_info=True)
+        return list(all_video_data_map.values())
+
     def start_processing_thread(self):
         selected_iids = self.tree.selection()
         if not selected_iids: return self.update_status("Error: No items selected.")
