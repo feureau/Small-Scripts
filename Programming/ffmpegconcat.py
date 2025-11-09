@@ -349,7 +349,7 @@ def main():
             mux_command.extend(['-i', metadata_file])
 
         # Map streams
-        mux_command.extend(['-map', '0']) # Map all streams from concatenated video
+        mux_command.extend(['-map', '0:v', '-map', '0:a'])  # only video and audio
         if merged_srt_file:
             mux_command.extend(['-map', str(input_map_counter)])
             input_map_counter += 1
