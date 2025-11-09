@@ -552,10 +552,10 @@ class MainApp:
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     
-    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None): # <-- MODIFIED
-        all_video_data_map, video_ids = {}, []; next_page_token = None
+    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None):
+        all_video_data_map, video_ids = {}, []
+        next_page_token = None
         try:
-            # --- MODIFICATION START ---
             target_playlist_id = None
             if playlist_id:
                 logger.info(f"Fetching videos from specified playlist ID: {playlist_id}")
@@ -568,45 +568,71 @@ class MainApp:
                 else:
                     logger.error("Could not find channel details for the authenticated user.")
                     return []
-
+    
             if not target_playlist_id:
                 logger.error("Could not determine a playlist ID to fetch from.")
                 return []
-            # --- MODIFICATION END ---
-
+    
             while True:
-                # This logic now uses the determined target_playlist_id
                 pl_resp = self.service.playlistItems().list(
                     playlistId=target_playlist_id,
                     part="contentDetails",
                     maxResults=50,
                     pageToken=next_page_token
                 ).execute()
-                video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp.get("items", [])]) # .get is safer
+                video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp.get("items", [])])
                 if max_videos_to_fetch and len(video_ids) >= max_videos_to_fetch: break
                 next_page_token = pl_resp.get("nextPageToken")
                 if not next_page_token: break
-
+    
             if max_videos_to_fetch: video_ids = video_ids[:max_videos_to_fetch]
-            
+    
             if not video_ids:
                 logger.warning(f"No videos found in playlist: {target_playlist_id}")
                 return []
-
-            logger.info("Scanning for local files to match..."); local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
+    
+            logger.info("Scanning for local files to match...")
+            local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
             for i in range(0, len(video_ids), 50):
-                self.update_status(f"Fetching details... ({min(i+50, len(video_ids))}/{len(video_ids)})")
-                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i+50]), part="snippet,status,fileDetails").execute()
+                self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
+                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails").execute()
                 for item in videos_resp.get("items", []):
                     video_id = item["id"]
                     if video_id in all_video_data_map: continue
+    
+                    vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails"))
                     
-                    vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails")); normalized_title = normalize_for_matching(vd_obj.original_title)
+                    # --- MODIFICATION START ---
+                    # New logic: Extract leading number from the YouTube video title
+                    video_title_num_match = re.match(r'^(\d+)', vd_obj.original_title.strip())
+                    video_num = video_title_num_match.group(1) if video_title_num_match else None
+                    # --- MODIFICATION END ---
+                    
+                    # Skip matching if the video title doesn't start with a number
+                    if not video_num:
+                        all_video_data_map[video_id] = vd_obj
+                        continue
+                    
                     for file_path in local_files:
-                        if normalize_for_matching(file_path.stem).startswith(normalized_title):
+                        # --- MODIFICATION START ---
+                        # New logic: Extract leading number from the local filename
+                        file_name_num_match = re.match(r'^(\d+)', file_path.name.strip())
+                        file_num = file_name_num_match.group(1) if file_name_num_match else None
+                        
+                        # If the numbers match, we have a potential link
+                        if file_num and file_num == video_num:
+                        # --- MODIFICATION END ---
                             ext = file_path.suffix.lower()
-                            if ext == '.txt' and not vd_obj.description_file_path: vd_obj.description_file_path, vd_obj.description_filename = str(file_path), file_path.name
-                            elif ext in SUBTITLE_PATTERNS and not vd_obj.subtitle_file_path: vd_obj.subtitle_file_path, vd_obj.subtitle_filename = str(file_path), file_path.name
+                            if ext == '.txt' and not vd_obj.description_file_path:
+                                vd_obj.description_file_path = str(file_path)
+                                vd_obj.description_filename = file_path.name
+                                logger.info(f"Matched TXT '{file_path.name}' to video '{vd_obj.original_title}' based on number '{video_num}'.")
+                            # Check against SUBTITLE_PATTERNS constants
+                            elif any(ext in pattern for pattern in [p.replace('*','') for p in SUBTITLE_PATTERNS]) and not vd_obj.subtitle_file_path:
+                                vd_obj.subtitle_file_path = str(file_path)
+                                vd_obj.subtitle_filename = file_path.name
+                                logger.info(f"Matched SUBTITLE '{file_path.name}' to video '{vd_obj.original_title}' based on number '{video_num}'.")
+                    
                     all_video_data_map[video_id] = vd_obj
         except HttpError as e:
             logger.error(f"An API error occurred: {e.reason}", exc_info=True)
@@ -615,6 +641,7 @@ class MainApp:
         except Exception as e:
             logger.error(f"Error fetching videos: {e}", exc_info=True)
         return list(all_video_data_map.values())
+
 
     def start_processing_thread(self):
         selected_iids = self.tree.selection()
