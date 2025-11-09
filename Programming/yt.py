@@ -153,6 +153,22 @@ if not logger.handlers:
 
 
 # --- Helper, Auth & Data Models ---
+def extract_core_name(filename: str) -> str:
+    """
+    Strips leading numbers, trailing hashes (like 8-char alphanum), and extensions.
+    Returns a normalized 'core' name for matching.
+    Example:
+      '1_inspiring_Horz_70fba5ab.mp4' → 'inspiring_horz'
+      'amIwrong Horz 8f614a00'        → 'amiwrong_horz'
+    """
+    stem = Path(filename).stem
+    # Remove optional leading digits + separator (e.g., "1_", "123-")
+    stem = re.sub(r'^\d+[_\-]?', '', stem)
+    # Remove trailing 6–12 char hex-like suffix (case-insensitive)
+    stem = re.sub(r'[_\-]?[a-f0-9]{6,12}$', '', stem, flags=re.IGNORECASE)
+    # Normalize for matching
+    return normalize_for_matching(stem)
+
 def revoke_token():
     if not os.path.exists(TOKEN_FILE): return
     logger.info("Revoking token on exit...")
@@ -609,31 +625,57 @@ class MainApp:
                     # --- MODIFICATION END ---
                     
                     # Skip matching if the video title doesn't start with a number
-                    if not video_num:
-                        all_video_data_map[video_id] = vd_obj
-                        continue
+                    # Extract core name from YouTube video title
+                    video_core = extract_core_name(vd_obj.original_title)
+                    
+                    # Pre-group local files by their core name for efficiency
+                    local_files_by_core = {}
+                    for file_path in local_files:
+                        core = extract_core_name(file_path.name)
+                        local_files_by_core.setdefault(core, []).append(file_path)
+                    
+                    # Match using core name
+                    candidate_files = local_files_by_core.get(video_core, [])
+                    for file_path in candidate_files:
+                        ext = file_path.suffix.lower()
+                        if ext == '.txt' and not vd_obj.description_file_path:
+                            vd_obj.description_file_path = str(file_path)
+                            vd_obj.description_filename = file_path.name
+                            logger.info(f"Matched TXT '{file_path.name}' to video '{vd_obj.original_title}' via core name '{video_core}'.")
+                        elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS) and not vd_obj.subtitle_file_path:
+                            vd_obj.subtitle_file_path = str(file_path)
+                            vd_obj.subtitle_filename = file_path.name
+                            logger.info(f"Matched SUBTITLE '{file_path.name}' to video '{vd_obj.original_title}' via core name '{video_core}'.")
                     
                     for file_path in local_files:
-                        # --- MODIFICATION START ---
-                        # New logic: Extract leading number from the local filename
-                        file_name_num_match = re.match(r'^(\d+)', file_path.name.strip())
-                        file_num = file_name_num_match.group(1) if file_name_num_match else None
+                        # --- REPLACE the entire numeric prefix block with this ---
                         
-                        # If the numbers match, we have a potential link
-                        if file_num and file_num == video_num:
-                        # --- MODIFICATION END ---
-                            ext = file_path.suffix.lower()
-                            if ext == '.txt' and not vd_obj.description_file_path:
-                                vd_obj.description_file_path = str(file_path)
-                                vd_obj.description_filename = file_path.name
-                                logger.info(f"Matched TXT '{file_path.name}' to video '{vd_obj.original_title}' based on number '{video_num}'.")
-                            # Check against SUBTITLE_PATTERNS constants
-                            elif any(ext in pattern for pattern in [p.replace('*','') for p in SUBTITLE_PATTERNS]) and not vd_obj.subtitle_file_path:
-                                vd_obj.subtitle_file_path = str(file_path)
-                                vd_obj.subtitle_filename = file_path.name
-                                logger.info(f"Matched SUBTITLE '{file_path.name}' to video '{vd_obj.original_title}' based on number '{video_num}'.")
-                    
-                    all_video_data_map[video_id] = vd_obj
+                        # Normalize and extract base name from YouTube title (remove trailing 6-12 char hex)
+                        yt_clean = re.sub(r'[a-f0-9]{6,12}$', '', vd_obj.original_title.strip(), flags=re.IGNORECASE).strip()
+                        yt_base = normalize_for_matching(yt_clean)
+                        
+                        # Scan local files for matches
+                        for file_path in local_files:
+                            if not file_path.is_file():
+                                continue
+                            # Clean local filename: remove language suffixes like -en, _en, -es, etc.
+                            file_stem_clean = re.sub(r'[-_](?:en|es|fr|de|ja|zh|sub|srt|txt|subtitle).*?$', '', file_path.stem, flags=re.IGNORECASE)
+                            file_base = normalize_for_matching(file_stem_clean)
+                            
+                            # Match if base names are equal
+                            if yt_base == file_base:
+                                ext = file_path.suffix.lower()
+                                if ext == '.txt' and not vd_obj.description_file_path:
+                                    vd_obj.description_file_path = str(file_path)
+                                    vd_obj.description_filename = file_path.name
+                                    logger.info(f"Matched TXT '{file_path.name}' to video '{vd_obj.original_title}' via base name '{yt_base}'.")
+                                elif ext in ['.srt', '.vtt', '.sbv', '.ttml', '.scc'] and not vd_obj.subtitle_file_path:
+                                    vd_obj.subtitle_file_path = str(file_path)
+                                    vd_obj.subtitle_filename = file_path.name
+                                    logger.info(f"Matched SUB '{file_path.name}' to video '{vd_obj.original_title}' via base name '{yt_base}'.")
+                        all_video_data_map[video_id] = vd_obj
+
+                        
         except HttpError as e:
             logger.error(f"An API error occurred: {e.reason}", exc_info=True)
             if "playlistNotFound" in str(e.content):
