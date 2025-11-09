@@ -1,3 +1,4 @@
+
 r"""
 ===============================================================================
 YouTube-Compliant Video Encoding and Audio Processing Utility
@@ -18,14 +19,26 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
-v6.6 - Final "At Seam" Fix Using Absolute Positioning (2025-10-29)
-    • FIXED: A fundamental flaw in the "At Seam" logic. Previous attempts to use
-      style alignments and margins were incorrect for this task.
-    • CHANGED: The script now uses the standard and correct method for absolute
-      positioning in ASS subtitles. It calculates the precise (x, y) coordinate
-      of the seam on the virtual canvas and injects a `{\an5\pos(x,y)}` override
-      tag into each subtitle line. This provides pixel-perfect vertical centering
-      on the seam, independent of style margins. This is the definitive fix.
+v6.9 - GUI Style Fix for Themed Widgets (2025-11-09)
+    • FIXED: The "Start Processing" ttk.Button appeared with white text on a
+      white background on some system themes, making it invisible.
+    • CHANGED: The button styling in `setup_button_row` now uses `style.map()`
+      to explicitly define the foreground and background colors for different
+      widget states (`normal`, `active`, `pressed`). This is the robust method
+      for overriding system themes and ensures the button is always visible.
+
+v6.8 - GUI Bug Fixes and Portability Improvements (2025-11-08)
+    • FIXED: A critical crash (_tkinter.TclError) caused by using an invalid
+      'width' option in the .pack() geometry manager for audio tab labels.
+      Replaced the layout with the more appropriate .grid() manager.
+    • FIXED: A logic bug in `_toggle_binaural_options` that would incorrectly
+      force the "Enable Binaural" checkbox on, overriding the user's selection.
+    • CHANGED: Removed the hardcoded 'E:\...' path for the SOFA file to make the
+      script portable. The field now defaults to empty.
+    • ADDED: Validation logic in `validate_processing_settings` to ensure that
+      if binaural audio is enabled, a valid and existing SOFA file path is provided.
+    • REMOVED: Dead code methods (`remove_no_sub_jobs`, `remove_sub_jobs`) that
+      were left over from a previous GUI design.
 """
 import os
 import subprocess
@@ -175,7 +188,7 @@ def safe_ffprobe(cmd, operation="operation"):
 
 def safe_ffmpeg_execution(cmd, operation="encoding"):
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
         output_lines = []
         while True:
@@ -342,7 +355,7 @@ def get_audio_stream_info(file_path):
         return []
 
 def get_subtitle_stream_info(file_path):
-    cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "s", "-show_entries", 
+    cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "s", "-show_entries",
            "stream=index,codec_name:stream_tags=title,language", "-of", "json", file_path]
     try:
         result = safe_ffprobe(cmd, "subtitle stream info extraction")
@@ -440,13 +453,50 @@ class ToolTip:
             self.tip_window.destroy()
             self.tip_window = None
 
+class CollapsiblePane(ttk.Frame):
+    """A collapsible pane widget for tkinter."""
+    def __init__(self, parent, text="", initial_state='collapsed'):
+        super().__init__(parent, padding=5)
+        self.columnconfigure(0, weight=1)
+        self.text = text
+        self._is_collapsed = tk.BooleanVar(value=(initial_state == 'collapsed'))
+
+        self.header_frame = ttk.Frame(self, style='Header.TFrame')
+        self.header_frame.grid(row=0, column=0, sticky='ew')
+        self.header_frame.columnconfigure(1, weight=1)
+
+        self.toggle_button = ttk.Label(self.header_frame, text=f"{'►' if self._is_collapsed.get() else '▼'} {self.text}", style='Header.TLabel')
+        self.toggle_button.grid(row=0, column=0, sticky='w')
+        self.toggle_button.bind("<Button-1>", self._toggle)
+
+        self.container = ttk.Frame(self)
+        self.container.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
+
+        self.style = ttk.Style(self)
+        self.style.configure('Header.TFrame', background='lightgray')
+        self.style.configure('Header.TLabel', background='lightgray', font=('Arial', 10, 'bold'))
+
+        if self._is_collapsed.get():
+            self.container.grid_remove()
+
+    def _toggle(self, event=None):
+        self._is_collapsed.set(not self._is_collapsed.get())
+        if self._is_collapsed.get():
+            self.container.grid_remove()
+            self.toggle_button.config(text=f"► {self.text}")
+        else:
+            self.container.grid()
+            self.toggle_button.config(text=f"▼ {self.text}")
+
 class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
         self.root.title("Video Processing Tool")
+        self.root.geometry("1200x800") # Set a reasonable default size
         self.output_mode = output_mode
         self.processing_jobs = []
-        # --- CORE FIX: Set up traces for real-time updates on StringVars ---
+
+        # --- Initialize all tk Variables ---
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
@@ -506,241 +556,317 @@ class VideoProcessorApp:
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
         self.setup_gui()
         if initial_files: self.add_video_files_and_discover_jobs(initial_files)
 
     def setup_gui(self):
-        self.root.columnconfigure(0, weight=1, minsize=250)
-        self.root.columnconfigure(1, weight=2, minsize=400)
-        self.root.columnconfigure(2, weight=2, minsize=400)
-        input_frame = tk.Frame(self.root); input_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        video_frame = tk.Frame(self.root); video_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
-        audio_frame = tk.Frame(self.root); audio_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
-        button_frame = tk.Frame(self.root); button_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=10)
-        status_bar = tk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W); status_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=5, pady=2)
-        self.setup_input_column(input_frame)
-        self.setup_video_column(video_frame)
-        self.setup_audio_column(audio_frame)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        # --- Main Layout ---
+        main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        main_pane.grid(row=0, column=0, sticky="nsew")
+
+        input_frame = ttk.Frame(main_pane, padding=5)
+        main_pane.add(input_frame, weight=1)
+
+        settings_notebook = ttk.Notebook(main_pane)
+        main_pane.add(settings_notebook, weight=2)
+
+        # --- Bottom Bar ---
+        bottom_frame = ttk.Frame(self.root)
+        bottom_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        button_frame = ttk.Frame(bottom_frame)
+        button_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
+
+        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+
+        # --- Populate Panes and Tabs ---
+        self.setup_input_pane(input_frame)
+
+        video_tab = ttk.Frame(settings_notebook, padding=10)
+        audio_tab = ttk.Frame(settings_notebook, padding=10)
+        subtitle_tab = ttk.Frame(settings_notebook, padding=10)
+
+        settings_notebook.add(video_tab, text="Video")
+        settings_notebook.add(audio_tab, text="Audio")
+        settings_notebook.add(subtitle_tab, text="Subtitles")
+
+        self.setup_video_tab(video_tab)
+        self.setup_audio_tab(audio_tab)
+        self.setup_subtitle_tab(subtitle_tab)
         self.setup_button_row(button_frame)
+
+        # --- Initial State Updates ---
         self._toggle_orientation_options()
         self._toggle_upscale_options()
         self._toggle_audio_norm_options()
         self._update_bitrate_display()
 
-    def setup_input_column(self, parent):
-        file_group = tk.LabelFrame(parent, text="Input Files", padx=10, pady=10); file_group.pack(fill=tk.BOTH, expand=True)
-        listbox_container = tk.Frame(file_group); listbox_container.pack(fill=tk.BOTH, expand=True)
-        self.job_scrollbar_v = tk.Scrollbar(listbox_container, orient=tk.VERTICAL); self.job_scrollbar_v.pack(side=tk.RIGHT, fill=tk.Y)
-        self.job_scrollbar_h = tk.Scrollbar(listbox_container, orient=tk.HORIZONTAL); self.job_scrollbar_h.pack(side=tk.BOTTOM, fill=tk.X)
-        self.job_listbox = tk.Listbox(listbox_container, selectmode=tk.EXTENDED, exportselection=False, yscrollcommand=self.job_scrollbar_v.set, xscrollcommand=self.job_scrollbar_h.set); self.job_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    def setup_input_pane(self, parent):
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        file_group = ttk.LabelFrame(parent, text="Input Files / Queue", padding=10)
+        file_group.grid(row=0, column=0, sticky="nsew")
+        file_group.rowconfigure(0, weight=1)
+        file_group.columnconfigure(0, weight=1)
+
+        listbox_container = ttk.Frame(file_group)
+        listbox_container.grid(row=0, column=0, sticky="nsew", columnspan=2)
+        listbox_container.rowconfigure(0, weight=1)
+        listbox_container.columnconfigure(0, weight=1)
+
+        self.job_scrollbar_v = ttk.Scrollbar(listbox_container, orient=tk.VERTICAL)
+        self.job_scrollbar_v.grid(row=0, column=1, sticky="ns")
+        self.job_scrollbar_h = ttk.Scrollbar(listbox_container, orient=tk.HORIZONTAL)
+        self.job_scrollbar_h.grid(row=1, column=0, sticky="ew")
+        self.job_listbox = tk.Listbox(listbox_container, selectmode=tk.EXTENDED, exportselection=False, yscrollcommand=self.job_scrollbar_v.set, xscrollcommand=self.job_scrollbar_h.set)
+        self.job_listbox.grid(row=0, column=0, sticky="nsew")
         self.job_scrollbar_v.config(command=self.job_listbox.yview)
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
         self.job_listbox.bind("<<ListboxSelect>>", self.on_input_file_select)
-        selection_buttons_frame = tk.Frame(file_group); selection_buttons_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
-        tk.Button(selection_buttons_frame, text="Clear Selection", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
-        tk.Button(selection_buttons_frame, text="Remove No Sub", command=self.remove_no_sub_jobs).pack(side=tk.LEFT, padx=(5,0))
-        tk.Button(selection_buttons_frame, text="Remove Sub", command=self.remove_sub_jobs).pack(side=tk.LEFT, padx=5)
-        file_buttons_frame = tk.Frame(file_group); file_buttons_frame.pack(fill=tk.X, pady=(5, 0))
-        tk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT, padx=(0,5))
-        tk.Button(file_buttons_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=5)
-        tk.Button(file_buttons_frame, text="Duplicate Selected", command=self.duplicate_selected_jobs).pack(side=tk.LEFT, padx=5)
-        tk.Button(file_buttons_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
 
-    def setup_video_column(self, parent):
-        geometry_group = tk.LabelFrame(parent, text="Output & Geometry", padx=10, pady=10); geometry_group.pack(fill=tk.X, pady=(0, 5))
-        orientation_frame = tk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
-        tk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        tk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        tk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        tk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        tk.Radiobutton(orientation_frame, text="Hybrid (Stacked)", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=(5,0))
-        self.aspect_ratio_frame = tk.LabelFrame(geometry_group, text="Aspect Ratio", padx=10, pady=5); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        self.horizontal_rb_frame = tk.Frame(self.aspect_ratio_frame)
-        tk.Radiobutton(self.horizontal_rb_frame, text="16:9 (Widescreen)", variable=self.horizontal_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        tk.Radiobutton(self.horizontal_rb_frame, text="5:4", variable=self.horizontal_aspect_var, value="5:4", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        tk.Radiobutton(self.horizontal_rb_frame, text="4:3 (Classic TV)", variable=self.horizontal_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        self.vertical_rb_frame = tk.Frame(self.aspect_ratio_frame)
-        tk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.vertical_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
-        tk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.vertical_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
-        tk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.vertical_aspect_var, value="3:4", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
-        self.hybrid_frame = tk.Frame(geometry_group)
-        self.top_video_frame = tk.LabelFrame(self.hybrid_frame, text="Top Video", padx=10, pady=5); self.top_video_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Label(self.top_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(self.top_video_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.top_video_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.top_video_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        tk.Label(self.top_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        tk.Radiobutton(self.top_video_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.top_video_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
-        self.bottom_video_frame = tk.LabelFrame(self.hybrid_frame, text="Bottom Video", padx=10, pady=5); self.bottom_video_frame.pack(fill=tk.X, pady=5)
-        tk.Label(self.bottom_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(self.bottom_video_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.bottom_video_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.bottom_video_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        tk.Label(self.bottom_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        tk.Radiobutton(self.bottom_video_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
-        tk.Radiobutton(self.bottom_video_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
-        aspect_handling_frame = tk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X)
-        tk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        tk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        tk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        quality_group = tk.LabelFrame(parent, text="Format & Quality", padx=10, pady=10); quality_group.pack(fill=tk.X, pady=(0, 5))
-        resolution_options_frame = tk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
-        tk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
-        self.rb_hd = tk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=lambda: self._update_selected_jobs("resolution")); self.rb_hd.pack(side=tk.LEFT)
-        self.rb_4k = tk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=lambda: self._update_selected_jobs("resolution")); self.rb_4k.pack(side=tk.LEFT)
-        self.rb_8k = tk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
-        ToolTip(self.rb_hd, "HD: 1920x1080 (Horizontal) or 1080px wide (Hybrid)."); ToolTip(self.rb_4k, "4K: 3840x2160 (Horizontal) or 2160px wide (Hybrid)."); ToolTip(self.rb_8k, "8K: 7680x4320 (Horizontal) or 4320px wide (Hybrid).")
-        upscale_frame = tk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(upscale_frame, text="Lanczos (Sharp)", variable=self.upscale_algo_var, value="lanczos", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
-        tk.Radiobutton(upscale_frame, text="Bicubic (Balanced)", variable=self.upscale_algo_var, value="bicubic", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
-        tk.Radiobutton(upscale_frame, text="Bilinear (Fast)", variable=self.upscale_algo_var, value="bilinear", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
-        output_format_frame = tk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
-        tk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
-        tk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
-        tk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
-        tk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
-        tk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT)
-        lut_frame = tk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
-        self.lut_entry = tk.Entry(lut_frame, textvariable=self.lut_file_var, width=30); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        tk.Button(lut_frame, text="Browse", command=self.browse_lut_file).pack(side=tk.LEFT)
+        # --- Action Buttons ---
+        selection_buttons_frame = ttk.Frame(file_group)
+        selection_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
+        ttk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
+        ttk.Button(selection_buttons_frame, text="Clear", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(selection_buttons_frame, text="Select No Sub", command=self.select_all_no_sub).pack(side=tk.LEFT)
+        ttk.Button(selection_buttons_frame, text="Select Subbed", command=self.select_all_subbed).pack(side=tk.LEFT, padx=5)
+        ttk.Button(selection_buttons_frame, text="Invert", command=self.invert_selection).pack(side=tk.LEFT)
+
+        file_buttons_frame = ttk.Frame(file_group)
+        file_buttons_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        ttk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT)
+        ttk.Button(file_buttons_frame, text="Duplicate", command=self.duplicate_selected_jobs).pack(side=tk.LEFT, padx=5)
+        ttk.Button(file_buttons_frame, text="Remove Sel.", command=self.remove_selected).pack(side=tk.LEFT)
+        ttk.Button(file_buttons_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
+
+    def setup_video_tab(self, parent):
+        geometry_group = ttk.LabelFrame(parent, text="Output & Geometry", padding=10)
+        geometry_group.pack(fill=tk.X, pady=(0, 5))
+        orientation_frame = ttk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
+        ttk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options).pack(side=tk.LEFT)
+        ttk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
+        ttk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(orientation_frame, text="Hybrid", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=(5,0))
+
+        self.aspect_ratio_frame = ttk.LabelFrame(geometry_group, text="Aspect Ratio", padding=10); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+        self.horizontal_rb_frame = ttk.Frame(self.aspect_ratio_frame)
+        ttk.Radiobutton(self.horizontal_rb_frame, text="16:9 (Widescreen)", variable=self.horizontal_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
+        ttk.Radiobutton(self.horizontal_rb_frame, text="5:4", variable=self.horizontal_aspect_var, value="5:4", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
+        ttk.Radiobutton(self.horizontal_rb_frame, text="4:3 (Classic TV)", variable=self.horizontal_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
+        self.vertical_rb_frame = ttk.Frame(self.aspect_ratio_frame)
+        ttk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.vertical_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
+        ttk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.vertical_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
+        ttk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.vertical_aspect_var, value="3:4", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
+
+        self.hybrid_frame = ttk.Frame(geometry_group)
+        self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5); self.top_video_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Label(self.top_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(self.top_video_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.top_video_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.top_video_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(self.top_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        ttk.Radiobutton(self.top_video_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.top_video_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT, padx=5)
+        self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5); self.bottom_video_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(self.bottom_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(self.bottom_video_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.bottom_video_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.bottom_video_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(self.bottom_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        ttk.Radiobutton(self.bottom_video_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.bottom_video_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
+        aspect_handling_frame = ttk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        ttk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+
+        quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10); quality_group.pack(fill=tk.X, pady=(5, 5))
+        resolution_options_frame = ttk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
+        ttk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
+        self.rb_hd = ttk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=lambda: self._update_selected_jobs("resolution")); self.rb_hd.pack(side=tk.LEFT)
+        self.rb_4k = ttk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=lambda: self._update_selected_jobs("resolution")); self.rb_4k.pack(side=tk.LEFT, padx=5)
+        self.rb_8k = ttk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
+        ToolTip(self.rb_hd, "HD: 1920x1080 (H) or 1080px wide (V/Hybrid)."); ToolTip(self.rb_4k, "4K: 3840x2160 (H) or 2160px wide (V/Hybrid)."); ToolTip(self.rb_8k, "8K: 7680x4320 (H) or 4320px wide (V/Hybrid).")
+        upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(upscale_frame, text="Lanczos", variable=self.upscale_algo_var, value="lanczos", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
+        ttk.Radiobutton(upscale_frame, text="Bicubic", variable=self.upscale_algo_var, value="bicubic", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(upscale_frame, text="Bilinear", variable=self.upscale_algo_var, value="bilinear", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
+        output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
+        ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
+        ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
+        ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
+        lut_frame = ttk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
+        self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
         ToolTip(self.lut_entry, "Path to LUT file for HDR to SDR conversion")
-        bitrate_frame = tk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
-        self.manual_bitrate_entry = tk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
-        tk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
-        fruc_frame = tk.Frame(quality_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
-        tk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self._update_selected_jobs("fruc")]).pack(side=tk.LEFT)
-        tk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
-        self.fruc_fps_entry = tk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
+        bitrate_frame = ttk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
+        self.manual_bitrate_entry = ttk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
+        fruc_frame = ttk.Frame(quality_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self._update_selected_jobs("fruc")]).pack(side=tk.LEFT)
+        ttk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
+        self.fruc_fps_entry = ttk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
 
-    def setup_audio_column(self, parent):
-        subtitle_group = tk.LabelFrame(parent, text="Subtitle Styling", padx=10, pady=10)
-        subtitle_group.pack(fill=tk.X, pady=(0, 5), expand=True)
-        general_style_frame = tk.LabelFrame(subtitle_group, text="General Style", padx=5, pady=5)
+    def setup_audio_tab(self, parent):
+        audio_group = ttk.LabelFrame(parent, text="Audio Processing", padding=10)
+        audio_group.pack(fill=tk.X, pady=(5, 0))
+        ttk.Checkbutton(audio_group, text="Normalize Audio (EBU R128)", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
+        
+        self.audio_norm_frame = ttk.Frame(audio_group)
+        self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.audio_norm_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(self.audio_norm_frame, text="Loudness Target (LUFS):").grid(row=0, column=0, sticky="w", pady=2)
+        self.loudness_target_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_target_var, width=8)
+        self.loudness_target_entry.grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(self.audio_norm_frame, text="Loudness Range (LRA):").grid(row=1, column=0, sticky="w", pady=2)
+        self.loudness_range_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_range_var, width=8)
+        self.loudness_range_entry.grid(row=1, column=1, sticky="w", padx=5)
+
+        ttk.Label(self.audio_norm_frame, text="True Peak (dBTP):").grid(row=2, column=0, sticky="w", pady=2)
+        self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
+        self.true_peak_entry.grid(row=2, column=1, sticky="w", padx=5)
+
+        self.audio_mode_frame = ttk.Frame(audio_group)
+        self.audio_mode_frame.pack(fill=tk.X, pady=(10,0))
+        ttk.Label(self.audio_mode_frame, text="Output Mode:").pack(side=tk.LEFT)
+        ttk.Radiobutton(self.audio_mode_frame, text="Stereo + 5.1", variable=self.audio_mode_var, value="stereo+5.1", command=self._toggle_binaural_options).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(self.audio_mode_frame, text="Passthrough", variable=self.audio_mode_var, value="passthrough", command=self._toggle_binaural_options).pack(side=tk.LEFT)
+        self.binaural_checkbox = ttk.Checkbutton(
+            audio_group, text="Enable Binaural Stereo Downmix (for Headphones)",
+            variable=self.binaural_enabled_var,
+            command=self._toggle_binaural_options
+        )
+        self.binaural_checkbox.pack(anchor="w", padx=(20, 0), pady=5)
+        sofa_frame = ttk.Frame(audio_group)
+        sofa_frame.pack(fill=tk.X, padx=(20, 0))
+        ttk.Label(sofa_frame, text="SOFA File:").pack(side=tk.LEFT)
+        self.sofa_entry = ttk.Entry(sofa_frame, textvariable=self.sofa_file_var)
+        self.sofa_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.sofa_browse_btn = ttk.Button(sofa_frame, text="...", command=self.browse_sofa_file, width=4)
+        self.sofa_browse_btn.pack(side=tk.LEFT)
+
+    def setup_subtitle_tab(self, parent):
+        action_frame = ttk.Frame(parent)
+        action_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Checkbutton(action_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=lambda: self._update_selected_jobs("burn_subtitles")).pack(side=tk.LEFT)
+
+        main_style_group = ttk.LabelFrame(parent, text="Subtitle Styling", padding=10)
+        main_style_group.pack(fill=tk.BOTH, expand=True)
+
+        general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
         general_style_frame.pack(fill=tk.X, pady=5)
-        font_frame = tk.Frame(general_style_frame); font_frame.pack(fill=tk.X, pady=2)
-        tk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
-        self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=20)
+        font_frame = ttk.Frame(general_style_frame); font_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
+        self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=25)
         self.font_combo.pack(side=tk.LEFT, padx=5)
         self.font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("subtitle_font"))
         self.populate_fonts()
-        tk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
-        font_size_entry = tk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
+        ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
+        font_size_entry = ttk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
         font_size_entry.pack(side=tk.LEFT)
-        style_frame = tk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
-        tk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var, command=lambda: self._update_selected_jobs("subtitle_bold")).pack(side=tk.LEFT)
-        tk.Checkbutton(style_frame, text="Italic", variable=self.subtitle_italic_var, command=lambda: self._update_selected_jobs("subtitle_italic")).pack(side=tk.LEFT, padx=15)
-        tk.Checkbutton(style_frame, text="Underline", variable=self.subtitle_underline_var, command=lambda: self._update_selected_jobs("subtitle_underline")).pack(side=tk.LEFT)
-        align_frame = tk.Frame(general_style_frame); align_frame.pack(fill=tk.X, pady=2)
-        tk.Label(align_frame, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
-        tk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
-        tk.Radiobutton(align_frame, text="Mid", variable=self.subtitle_alignment_var, value="middle", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
-        tk.Radiobutton(align_frame, text="Bot", variable=self.subtitle_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
-        self.seam_align_rb = tk.Radiobutton(align_frame, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
+        style_frame = ttk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var, command=lambda: self._update_selected_jobs("subtitle_bold")).pack(side=tk.LEFT)
+        ttk.Checkbutton(style_frame, text="Italic", variable=self.subtitle_italic_var, command=lambda: self._update_selected_jobs("subtitle_italic")).pack(side=tk.LEFT, padx=15)
+        ttk.Checkbutton(style_frame, text="Underline", variable=self.subtitle_underline_var, command=lambda: self._update_selected_jobs("subtitle_underline")).pack(side=tk.LEFT)
+        align_frame = ttk.Frame(general_style_frame); align_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(align_frame, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
+        ttk.Radiobutton(align_frame, text="Mid", variable=self.subtitle_alignment_var, value="middle", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(align_frame, text="Bot", variable=self.subtitle_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
+        self.seam_align_rb = ttk.Radiobutton(align_frame, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
         self.seam_align_rb.pack(side=tk.LEFT, padx=5)
         self.seam_align_rb.config(state="disabled")
-        tk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        margin_v_entry = tk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
+        ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        margin_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
-        reformat_frame = tk.LabelFrame(subtitle_group, text="Line Formatting", padx=5, pady=5)
+        reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
-        tk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles")).pack(side=tk.LEFT)
-        tk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
-        wrap_limit_entry = tk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
+        ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles")).pack(side=tk.LEFT)
+        ttk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
+        wrap_limit_entry = ttk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
         wrap_limit_entry.pack(side=tk.LEFT)
-        tk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
-        fill_props_frame = tk.LabelFrame(subtitle_group, text="Fill Properties", padx=5, pady=5)
-        fill_props_frame.pack(fill=tk.X, pady=5)
-        fill_props_frame.columnconfigure(3, weight=1)
-        tk.Label(fill_props_frame, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
-        self.fill_swatch = tk.Label(fill_props_frame, text="    ", bg=self.fill_color_var.get(), relief="sunken"); self.fill_swatch.grid(row=0, column=1)
-        tk.Button(fill_props_frame, text="..", command=lambda: self.choose_color(self.fill_color_var, self.fill_swatch, "fill_color")).grid(row=0, column=2, padx=5)
-        fill_alpha_scale = tk.Scale(fill_props_frame, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.fill_alpha_var, showvalue=0, command=lambda val: self._update_selected_jobs("fill_alpha"))
+        ttk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
+
+        # --- Collapsible Panes for Color Properties ---
+        fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
+        fill_pane.pack(fill=tk.X, pady=2, padx=2)
+        outline_pane = CollapsiblePane(main_style_group, "Outline Properties")
+        outline_pane.pack(fill=tk.X, pady=2, padx=2)
+        shadow_pane = CollapsiblePane(main_style_group, "Shadow Properties")
+        shadow_pane.pack(fill=tk.X, pady=2, padx=2)
+
+        # Fill Properties
+        fill_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(fill_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.fill_swatch = tk.Label(fill_pane.container, text="    ", bg=self.fill_color_var.get(), relief="sunken"); self.fill_swatch.grid(row=0, column=1)
+        ttk.Button(fill_pane.container, text="..", command=lambda: self.choose_color(self.fill_color_var, self.fill_swatch, "fill_color"), width=3).grid(row=0, column=2, padx=5)
+        fill_alpha_scale = ttk.Scale(fill_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.fill_alpha_var, command=lambda val: self._update_selected_jobs("fill_alpha"))
         fill_alpha_scale.grid(row=0, column=3, sticky="ew")
         ToolTip(fill_alpha_scale, "Fill Alpha (Transparency)")
-        outline_props_frame = tk.LabelFrame(subtitle_group, text="Outline Properties", padx=5, pady=5)
-        outline_props_frame.pack(fill=tk.X, pady=5)
-        outline_props_frame.columnconfigure(3, weight=1)
-        tk.Label(outline_props_frame, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
-        self.outline_swatch = tk.Label(outline_props_frame, text="    ", bg=self.outline_color_var.get(), relief="sunken"); self.outline_swatch.grid(row=0, column=1)
-        tk.Button(outline_props_frame, text="..", command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch, "outline_color")).grid(row=0, column=2, padx=5)
-        outline_alpha_scale = tk.Scale(outline_props_frame, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.outline_alpha_var, showvalue=0, command=lambda val: self._update_selected_jobs("outline_alpha"))
+
+        # Outline Properties
+        outline_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.outline_swatch = tk.Label(outline_pane.container, text="    ", bg=self.outline_color_var.get(), relief="sunken"); self.outline_swatch.grid(row=0, column=1)
+        ttk.Button(outline_pane.container, text="..", command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch, "outline_color"), width=3).grid(row=0, column=2, padx=5)
+        outline_alpha_scale = ttk.Scale(outline_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.outline_alpha_var, command=lambda val: self._update_selected_jobs("outline_alpha"))
         outline_alpha_scale.grid(row=0, column=3, sticky="ew")
         ToolTip(outline_alpha_scale, "Outline Alpha (Transparency)")
-        tk.Label(outline_props_frame, text="Width:").grid(row=1, column=0, sticky="w", pady=(5,0))
-        outline_width_entry = tk.Entry(outline_props_frame, textvariable=self.outline_width_var, width=5)
-        outline_width_entry.grid(row=1, column=1, columnspan=2, sticky="w", pady=(5,0))
-        shadow_props_frame = tk.LabelFrame(subtitle_group, text="Shadow Properties", padx=5, pady=5)
-        shadow_props_frame.pack(fill=tk.X, pady=5)
-        shadow_props_frame.columnconfigure(3, weight=1)
-        tk.Label(shadow_props_frame, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
-        self.shadow_swatch = tk.Label(shadow_props_frame, text="    ", bg=self.shadow_color_var.get(), relief="sunken"); self.shadow_swatch.grid(row=0, column=1)
-        tk.Button(shadow_props_frame, text="..", command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch, "shadow_color")).grid(row=0, column=2, padx=5)
-        shadow_alpha_scale = tk.Scale(shadow_props_frame, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.shadow_alpha_var, showvalue=0, command=lambda val: self._update_selected_jobs("shadow_alpha"))
+        ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", pady=(5,0))
+        outline_width_entry = ttk.Entry(outline_pane.container, textvariable=self.outline_width_var, width=5)
+        outline_width_entry.grid(row=1, column=1, columnspan=2, sticky="w", pady=(5,0), padx=(0, 5))
+
+        # Shadow Properties
+        shadow_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.shadow_swatch = tk.Label(shadow_pane.container, text="    ", bg=self.shadow_color_var.get(), relief="sunken"); self.shadow_swatch.grid(row=0, column=1)
+        ttk.Button(shadow_pane.container, text="..", command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch, "shadow_color"), width=3).grid(row=0, column=2, padx=5)
+        shadow_alpha_scale = ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.shadow_alpha_var, command=lambda val: self._update_selected_jobs("shadow_alpha"))
         shadow_alpha_scale.grid(row=0, column=3, sticky="ew")
         ToolTip(shadow_alpha_scale, "Shadow Alpha (Transparency)")
-        offset_frame = tk.Frame(shadow_props_frame); offset_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(5,0))
-        tk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
-        shadow_offset_x_entry = tk.Entry(offset_frame, textvariable=self.shadow_offset_x_var, width=5)
+        offset_frame = ttk.Frame(shadow_pane.container); offset_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(5,0))
+        ttk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
+        shadow_offset_x_entry = ttk.Entry(offset_frame, textvariable=self.shadow_offset_x_var, width=5)
         shadow_offset_x_entry.pack(side=tk.LEFT, padx=(5,10))
-        tk.Label(offset_frame, text="Y:").pack(side=tk.LEFT)
-        shadow_offset_y_entry = tk.Entry(offset_frame, textvariable=self.shadow_offset_y_var, width=5)
+        ttk.Label(offset_frame, text="Y:").pack(side=tk.LEFT)
+        shadow_offset_y_entry = ttk.Entry(offset_frame, textvariable=self.shadow_offset_y_var, width=5)
         shadow_offset_y_entry.pack(side=tk.LEFT, padx=5)
-        tk.Label(offset_frame, text="Edge Blur:").pack(side=tk.LEFT, padx=(10,5))
-        shadow_blur_entry = tk.Entry(offset_frame, textvariable=self.shadow_blur_var, width=5)
+        ttk.Label(offset_frame, text="Blur:").pack(side=tk.LEFT, padx=(10,5))
+        shadow_blur_entry = ttk.Entry(offset_frame, textvariable=self.shadow_blur_var, width=5)
         shadow_blur_entry.pack(side=tk.LEFT, padx=5)
-        ToolTip(shadow_blur_entry, "Applies a blur to the edges of the text, outline, and shadow.")
-        action_frame = tk.Frame(subtitle_group)
-        action_frame.pack(fill=tk.X, pady=(10,0))
-        tk.Checkbutton(action_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=lambda: self._update_selected_jobs("burn_subtitles")).pack(side=tk.LEFT)
-        audio_group = tk.LabelFrame(parent, text="Audio Processing", padx=10, pady=10)
-        audio_group.pack(fill=tk.X, pady=(5, 0))
-        tk.Checkbutton(audio_group, text="Normalize Audio", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
-        self.audio_mode_frame = tk.Frame(audio_group)
-        self.audio_mode_frame.pack(fill=tk.X, padx=(20,0), pady=(4,0))
-        tk.Label(self.audio_mode_frame, text="Output Mode:").pack(side=tk.LEFT)
-        tk.Radiobutton(self.audio_mode_frame, text="Stereo + 5.1", variable=self.audio_mode_var, value="stereo+5.1", command=self._toggle_binaural_options).pack(side=tk.LEFT)
-        tk.Radiobutton(self.audio_mode_frame, text="Passthrough", variable=self.audio_mode_var, value="passthrough", command=self._toggle_binaural_options).pack(side=tk.LEFT)
-        self.binaural_checkbox = tk.Checkbutton(
-            audio_group, text="Enable Binaural Stereo (Headphones Only)",
-            variable=self.binaural_enabled_var,
-            command=lambda: self._update_selected_jobs("binaural_enabled")
-        )
-        self.binaural_checkbox.pack(anchor="w", padx=(20, 0))
-        sofa_frame = tk.Frame(audio_group)
-        sofa_frame.pack(fill=tk.X, padx=(20, 0))
-        tk.Label(sofa_frame, text="SOFA File:").pack(side=tk.LEFT)
-        self.sofa_entry = tk.Entry(sofa_frame, textvariable=self.sofa_file_var, width=30)
-        self.sofa_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.sofa_browse_btn = tk.Button(sofa_frame, text="Browse", command=self.browse_sofa_file)
-        self.sofa_browse_btn.pack(side=tk.LEFT)
-        self.audio_norm_frame = tk.Frame(audio_group)
-        self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0))
-        lufs_frame = tk.Frame(self.audio_norm_frame); lufs_frame.pack(fill=tk.X, pady=1)
-        tk.Label(lufs_frame, text="Loudness Target (LUFS):").pack(side=tk.LEFT)
-        self.loudness_target_entry = tk.Entry(lufs_frame, textvariable=self.loudness_target_var, width=6)
-        self.loudness_target_entry.pack(side=tk.LEFT, padx=5)
-        lra_frame = tk.Frame(self.audio_norm_frame); lra_frame.pack(fill=tk.X, pady=1)
-        tk.Label(lra_frame, text="Loudness Range (LRA):").pack(side=tk.LEFT)
-        self.loudness_range_entry = tk.Entry(lra_frame, textvariable=self.loudness_range_var, width=6)
-        self.loudness_range_entry.pack(side=tk.LEFT, padx=5)
-        peak_frame = tk.Frame(self.audio_norm_frame); peak_frame.pack(fill=tk.X, pady=1)
-        tk.Label(peak_frame, text="True Peak (dBTP):").pack(side=tk.LEFT)
-        self.true_peak_entry = tk.Entry(peak_frame, textvariable=self.true_peak_var, width=6)
-        self.true_peak_entry.pack(side=tk.LEFT, padx=5)
 
     def setup_button_row(self, parent):
-        self.start_button = tk.Button(parent, text="Start Processing", command=self.start_processing, bg="#4CAF50", fg="white", font=font.Font(weight="bold")); self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
-        self.generate_log_checkbox = tk.Checkbutton(parent, text="Generate Log File", variable=self.generate_log_var, command=lambda: self._update_selected_jobs("generate_log")); self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+        # FIX: Use style.map() for robust button coloring
+        style = ttk.Style(self.root)
+        style.configure("Start.TButton", font=("Arial", 10, "bold"), padding=5)
+        style.map("Start.TButton",
+            foreground=[('!disabled', 'green')],
+            background=[('!disabled', '#4CAF50'), ('active', '#58c05c')]
+        )
+        
+        self.start_button = ttk.Button(parent, text="Start Processing", command=self.start_processing, style="Start.TButton")
+        self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
+        self.generate_log_checkbox = ttk.Checkbutton(parent, text="Generate Log File", variable=self.generate_log_var, command=lambda: self._update_selected_jobs("generate_log"))
+        self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
     def populate_fonts(self):
         try:
@@ -840,22 +966,16 @@ class VideoProcessorApp:
     def _toggle_binaural_options(self):
         mode = self.audio_mode_var.get()
         is_stereo_mode = (mode == "stereo+5.1")
-        binaural_state = "normal" if is_stereo_mode else "disabled"
-        self.binaural_checkbox.config(state=binaural_state)
         
-        # If switching TO stereo+5.1, enable binaural by default
-        if is_stereo_mode:
-            self.binaural_enabled_var.set(True)
-        else:
+        self.binaural_checkbox.config(state="normal" if is_stereo_mode else "disabled")
+
+        if not is_stereo_mode:
             self.binaural_enabled_var.set(False)
-        
-        # Update SOFA entry state
-        sofa_enabled = is_stereo_mode and self.binaural_enabled_var.get()
-        entry_state = "normal" if sofa_enabled else "disabled"
-        self.sofa_entry.config(state=entry_state)
-        self.sofa_browse_btn.config(state=entry_state)
-        
-        # CRITICAL: Apply updated audio mode AND binaural state to selected jobs
+
+        sofa_controls_enabled = is_stereo_mode and self.binaural_enabled_var.get()
+        self.sofa_entry.config(state="normal" if sofa_controls_enabled else "disabled")
+        self.sofa_browse_btn.config(state="normal" if sofa_controls_enabled else "disabled")
+
         self._update_selected_jobs("audio_mode", "binaural_enabled", "sofa_file")
 
     def update_status(self, message):
@@ -950,7 +1070,7 @@ class VideoProcessorApp:
             self.on_input_file_select(None)
         self._update_bitrate_display()
 
-    def on_input_file_select(self, event):
+    def on_input_file_select(self, event=None):
         sel = self.job_listbox.curselection()
         if len(sel) == 1:
             selected_job = self.processing_jobs[sel[0]]
@@ -965,7 +1085,7 @@ class VideoProcessorApp:
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); self.audio_mode_var.set(options.get("audio_mode", DEFAULT_AUDIO_MODE))
         self.binaural_enabled_var.set(options.get("binaural_enabled", True))
-        self.sofa_file_var.set(options.get("sofa_file", r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"))
+        self.sofa_file_var.set(options.get("sofa_file", ""))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
@@ -996,113 +1116,45 @@ class VideoProcessorApp:
 
     def build_audio_segment(self, file_path, options):
         audio_mode = options.get("audio_mode", "stereo+5.1")
-        
-        # === PASSTHROUGH MODE (No changes needed here) ===
         if audio_mode == "passthrough":
             audio_streams = get_audio_stream_info(file_path)
-            if not audio_streams:
-                return ["-an"]
-            # Map the first audio stream and copy its codec
-            return ["-map", f"0:a:0", "-c:a", "copy"]
-        
-        # === STEREO + 5.1 MODE (Revised Logic) ===
+            return ["-an"] if not audio_streams else ["-map", f"0:a:0", "-c:a", "copy"]
         audio_streams = get_audio_stream_info(file_path)
-        if not audio_streams:
-            return ["-an"] # Return if no audio streams exist
-
-        # --- Path A: Source has a 5.1 (or greater) channel stream ---
-        # Find a suitable surround stream to use as the source
+        if not audio_streams: return ["-an"]
         surround_stream = next((s for s in audio_streams if int(s.get("channels", 0)) >= 6), None)
-
         if surround_stream:
             print("[INFO] 5.1+ channel audio stream detected. Processing for Stereo and 5.1 output.")
             surround_idx = int(surround_stream["index"])
-            
-            fc_parts = []
-
-            # Start with the surround stream and ensure it's mapped to a standard 5.1 layout
-            fc_parts.append(f"[0:{surround_idx}]channelmap=channel_layout=5.1(side)[a_5ch_raw]")
-
-            # Create the stereo downmix (either binaural or standard)
+            fc_parts = [f"[0:{surround_idx}]channelmap=channel_layout=5.1(side)[a_5ch_raw]"]
             binaural_enabled = options.get("binaural_enabled", False)
             if binaural_enabled:
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Binaural audio enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
-                sofalizer_params = (
-                    f"sofalizer=sofa='{safe_sofa}':"
-                    "normalize=enabled:"
-                    "speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218"
-                )
-                fc_parts.append(f"[a_5ch_raw]{sofalizer_params}[a_stereo]")
+                fc_parts.append(f"[a_5ch_raw]sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218[a_stereo]")
             else:
-                # Standard YouTube-compliant downmix
-                pan_expr = "pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3"
-                fc_parts.append(f"[a_5ch_raw]{pan_expr}[a_stereo]")
-
-            # Keep a clean copy of the 5.1 track
+                fc_parts.append(f"[a_5ch_raw]pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3[a_stereo]")
             fc_parts.append("[a_5ch_raw]anull[a_5ch]")
-
-            # Apply loudnorm to both streams if enabled
             map_stereo, map_5ch = "a_stereo", "a_5ch"
             if options.get("normalize_audio", False):
-                lt = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET)
-                lr = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
-                tp = options.get("true_peak", DEFAULT_TRUE_PEAK)
-                fc_parts.extend([
-                    f"[{map_stereo}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_stereo}_ln]",
-                    f"[{map_5ch}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_5ch}_ln]"
-                ])
+                lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
+                fc_parts.extend([f"[{map_stereo}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_stereo}_ln]", f"[{map_5ch}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_5ch}_ln]"])
                 map_stereo, map_5ch = f"{map_stereo}_ln", f"{map_5ch}_ln"
-
-            # Resample both final streams to the target sample rate
-            fc_parts.extend([
-                f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]",
-                f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"
-            ])
-            map_stereo, map_5ch = f"{map_stereo}_r", f"{map_5ch}_r"
-
-            # Return the full command for two audio tracks
-            return [
-                "-filter_complex", ";".join(fc_parts),
-                "-map", f"[{map_stereo}]", "-map", f"[{map_5ch}]",
-                "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k",
-                "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k",
-                "-disposition:a:0", "default", "-disposition:a:1", "0",
-                "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"
-            ]
-        
+            fc_parts.extend([f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]", f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"])
+            return ["-filter_complex", ";".join(fc_parts), "-map", f"[{map_stereo}_r]", "-map", f"[{map_5ch}_r]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k", "-disposition:a:0", "default", "-disposition:a:1", "0", "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"]
         else:
-            # --- Path B: Source is Stereo or Mono. Process a single Stereo output. ---
             print("[INFO] Stereo or mono audio stream detected. Processing for a single Stereo output.")
-            # Use the first audio stream as the source
             source_idx = int(audio_streams[0]["index"])
-            
             fc_parts = []
             source_tag = f"[0:{source_idx}]"
-            
-            # Apply loudnorm if enabled, otherwise just pass it through
             if options.get("normalize_audio", False):
-                lt = options.get("loudness_target", DEFAULT_LOUDNESS_TARGET)
-                lr = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
-                tp = options.get("true_peak", DEFAULT_TRUE_PEAK)
+                lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
                 fc_parts.append(f"{source_tag}loudnorm=i={lt}:lra={lr}:tp={tp}[a_proc]")
             else:
                 fc_parts.append(f"{source_tag}anull[a_proc]")
-
-            # Resample the final processed stream to the target sample rate
             fc_parts.append(f"[a_proc]aresample={AUDIO_SAMPLE_RATE}[a_final]")
-            
-            # Return the command for a single, processed stereo audio track
-            return [
-                "-filter_complex", ";".join(fc_parts),
-                "-map", "[a_final]",
-                "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k",
-                "-disposition:a:0", "default",
-                "-metadata:s:a:0", "title=Stereo"
-            ]
-
+            return ["-filter_complex", ";".join(fc_parts), "-map", "[a_final]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-disposition:a:0", "default", "-metadata:s:a:0", "title=Stereo"]
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = copy.deepcopy(job['options'])
@@ -1113,26 +1165,18 @@ class VideoProcessorApp:
         else:
             h_aspect = options.get('horizontal_aspect').replace(':', 'x')
             if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
-
         unique_base_name = os.path.splitext(job['display_name'])[0]
         safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", unique_base_name)
-        
-        # Add hash for unique filenames
         job_hash = get_job_hash(options)
         safe_base_name = f"{safe_base_name}_{job_hash}"
-
         tag_match = re.search(r'(\[.*\])', job['display_name'])
         tag = tag_match.group(1) if tag_match else "Subtitles"
         safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, folder_name, safe_subtitle_folder_name)
         os.makedirs(output_dir, exist_ok=True)
-
         output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
-
-        ass_burn_path = None
-        temp_extracted_srt_path = None
+        ass_burn_path, temp_extracted_srt_path = None, None
         try:
             if options.get("burn_subtitles") and job.get('subtitle_path'):
                 sub_identifier = job.get('subtitle_path')
@@ -1140,12 +1184,9 @@ class VideoProcessorApp:
                 if sub_identifier.startswith("embedded:"):
                     stream_index = int(sub_identifier.split(':')[1])
                     temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index)
-                    if temp_extracted_srt_path:
-                        subtitle_source_file = temp_extracted_srt_path
-                    else:
-                        print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'. Proceeding without subtitles.")
-                elif os.path.exists(sub_identifier):
-                    subtitle_source_file = sub_identifier
+                    if temp_extracted_srt_path: subtitle_source_file = temp_extracted_srt_path
+                    else: print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'.")
+                elif os.path.exists(sub_identifier): subtitle_source_file = sub_identifier
                 if subtitle_source_file:
                     if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
                         res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
@@ -1154,31 +1195,20 @@ class VideoProcessorApp:
                         num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect').split(':')); bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
                         total_real_h = top_h + bot_h
                         if total_real_h > 0:
-                            seam_ratio = top_h / total_real_h
-                            virtual_canvas_h, virtual_canvas_w = 1080, 1920
-                            seam_y_on_canvas = int(seam_ratio * virtual_canvas_h)
-                            options["calculated_pos"] = (int(virtual_canvas_w / 2), seam_y_on_canvas)
+                            seam_y_on_canvas = int((top_h / total_real_h) * 1080)
+                            options["calculated_pos"] = (960, seam_y_on_canvas)
                     ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
-                    if not ass_burn_path:
-                        raise VideoProcessingError(f"Failed to create styled ASS file from {subtitle_source_file}")
-
+                    if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
             cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
-            if self.run_ffmpeg_command(cmd) == 0:
-                print(f"File finalized => {output_file}")
-                self.verify_output_file(output_file, options)
-            else:
-                raise VideoProcessingError(f"Error encoding {job['video_path']}")
+            if self.run_ffmpeg_command(cmd) != 0: raise VideoProcessingError(f"Error encoding {job['video_path']}")
+            print(f"File finalized => {output_file}")
+            self.verify_output_file(output_file, options)
         finally:
-            if ass_burn_path and os.path.exists(ass_burn_path):
-                try: os.remove(ass_burn_path); debug_print(f"Cleaned up temp styled ASS file: {ass_burn_path}")
-                except Exception as e: print(f"[WARN] Failed to clean up temp file {ass_burn_path}: {e}")
-            if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path):
-                try: os.remove(temp_extracted_srt_path); debug_print(f"Cleaned up temp extracted SRT file: {temp_extracted_srt_path}")
-                except Exception as e: print(f"[WARN] Failed to clean up temp file {temp_extracted_srt_path}: {e}")
+            if ass_burn_path and os.path.exists(ass_burn_path): os.remove(ass_burn_path)
+            if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
 
     def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None):
-        if options is None:
-            options = job['options']
+        options = options or job['options']
         file_path = job['video_path']
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
@@ -1205,21 +1235,20 @@ class VideoProcessorApp:
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
                 cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black" if mode == 'pad' else f"crop={target_w}:{target_h}"
                 return vf, cpu, target_h
-            top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), options.get('upscale_algo'))
-            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
-            video_fc_parts = ["[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]"]
+            top_vf, top_cpu, _ = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), options.get('upscale_algo'))
+            bot_vf, bot_cpu, _ = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-            video_fc_parts.append(f"[v_top_out]hwdownload,format={cpu_pix_fmt},{top_cpu}[cpu_top]")
-            video_fc_parts.append(f"[v_bot_out]hwdownload,format={cpu_pix_fmt},{bot_cpu}[cpu_bot]")
-            video_fc_parts.append("[cpu_top][cpu_bot]vstack=inputs=2[stacked]")
             cpu_chain = []
-            lut_file = options.get("lut_file", DEFAULT_LUT_PATH)
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file): cpu_chain.append(f"lut3d=file='{lut_file.replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if ass_burn_path: cpu_chain.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
-            cpu_chain.append("hwupload_cuda")
-            video_fc_parts.append(f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]")
+            video_fc_parts = [
+                "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
+                f"[v_top_out]hwdownload,format={cpu_pix_fmt},{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},{bot_cpu}[cpu_bot]",
+                "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
+                f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
+            ]
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
         else:
@@ -1229,54 +1258,56 @@ class VideoProcessorApp:
                 width_map = {"HD": 1080, "4k": 2160, "8k": 4320} if orientation == "vertical" else {"HD": 1920, "4k": 3840, "8k": 7680}
                 target_w = width_map.get(res_key, 1920); num, den = map(int, aspect_str.split(':')); target_h = int(target_w * den / num)
                 target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
-                scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo', DEFAULT_UPSCALE_ALGO)}"
+                scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo')}"
                 if options.get("aspect_mode") == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
                 elif options.get("aspect_mode") == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
-            lut_file = options.get("lut_file", DEFAULT_LUT_PATH);
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(lut_file): cpu_filters.append(f"lut3d=file='{lut_file.replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if ass_burn_path: cpu_filters.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
-            if vf_filters or cpu_filters:
-                if cpu_filters:
-                    cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-                    processing_chain = [f"hwdownload,format={cpu_pix_fmt}"] + cpu_filters
-                    if not is_hdr_output: processing_chain.append("format=nv12")
-                    processing_chain.append("hwupload_cuda")
-                    vf_filters.append(','.join(processing_chain))
+            if cpu_filters:
+                processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}"] + cpu_filters
+                if not is_hdr_output: processing_chain.append("format=nv12")
+                vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
+            if vf_filters:
                 filter_complex_parts.append(f"[0:v]{','.join(vf_filters)}[v_out]")
                 video_out_tag = "[v_out]"
         if filter_complex_parts or audio_fc_str:
-            full_fc = ";".join(filter_complex_parts + ([audio_fc_str] if audio_fc_str else []))
+            full_fc = ";".join(filter(None, filter_complex_parts + ([audio_fc_str] if audio_fc_str else [])))
             cmd.extend(["-filter_complex", full_fc])
         cmd.extend(["-map", video_out_tag])
         cmd.extend(audio_cmd_parts)
-        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution', DEFAULT_RESOLUTION), info["framerate"], is_hdr_output)
-        gop_len = 0 if info["framerate"] == 0 else math.ceil(info["framerate"] / 2)
-        if is_hdr_output: cmd.extend(["-c:v", "hevc_nvenc", "-preset", "p1", "-profile:v", "main10", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
-        else: cmd.extend(["-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
+        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output)
+        gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
+        encoder_opts = ["-c:v", "hevc_nvenc", "-preset", "p1", "-profile:v", "main10", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"] if is_hdr_output else ["-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+        cmd.extend(encoder_opts)
         cmd.extend(["-f", "mp4", output_file])
         return cmd
 
     def validate_processing_settings(self):
         issues = []
-        if self.output_format_var.get() == 'sdr' and not os.path.exists(self.lut_file_var.get()): issues.append(f"LUT file not found: {self.lut_file_var.get()}")
+        if self.output_format_var.get() == 'sdr' and not os.path.exists(self.lut_file_var.get()):
+            issues.append(f"LUT file not found for HDR->SDR conversion: {self.lut_file_var.get()}")
         try:
-            test_file = os.path.join(os.getcwd(), f"temp_permission_test_{int(time.time())}.tmp")
-            with open(test_file, "w") as f: f.write("test")
-            os.remove(test_file)
-        except Exception as e:
-            issues.append(f"Cannot write to working directory (for temp subtitle files): {e}")
-        try:
-            if not -70 <= float(self.loudness_target_var.get()) <= 0: issues.append("Loudness target should be between -70 and 0 LUFS")
-        except ValueError: issues.append("Invalid loudness target value")
-        if issues: messagebox.showerror("Configuration Issues", "Please fix the following issues:\n" + "\n".join(f"• {issue}" for issue in issues)); return False
+            if not -70 <= float(self.loudness_target_var.get()) <= 0:
+                issues.append("Loudness target must be between -70 and 0 LUFS.")
+        except ValueError:
+            issues.append("Invalid loudness target. Must be a number.")
+        
+        if self.audio_mode_var.get() == "stereo+5.1" and self.binaural_enabled_var.get():
+            sofa_path = self.sofa_file_var.get()
+            if not sofa_path:
+                issues.append("Binaural audio is enabled, but no SOFA file has been selected.")
+            elif not os.path.exists(sofa_path):
+                issues.append(f"The selected SOFA file does not exist: {sofa_path}")
+
+        if issues:
+            messagebox.showerror("Configuration Issues", "Please fix the following issues:\n" + "\n".join(f"• {issue}" for issue in issues))
+            return False
         return True
 
     def start_processing(self):
-        self.root.focus_set()
-        self.root.update_idletasks()
-        if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files."); return
+        if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files to the queue."); return
         if not self.validate_processing_settings(): return
         self.output_mode = self.output_mode_var.get()
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
@@ -1284,23 +1315,9 @@ class VideoProcessorApp:
         total_jobs = len(self.processing_jobs)
         for i, job in enumerate(self.processing_jobs):
             self.update_status(f"Processing {i + 1}/{total_jobs}: {job['display_name']}")
-            opts = job['options']
-            info = get_video_info(job['video_path'])
-            bitrate_mode_str = f"Override ({opts.get('manual_bitrate')} kbps)" if opts.get('override_bitrate') else f"Automatic ({get_bitrate(opts.get('resolution'), info['framerate'], opts.get('output_format') == 'hdr')} kbps)"
-            audio_mode_str = f"True ({opts.get('loudness_target')} LUFS)" if opts.get('normalize_audio') else "False"
-            sub_mode_str = f"Burn Enabled (Font: {opts.get('subtitle_font')}, Size: {opts.get('subtitle_font_size')})" if opts.get('burn_subtitles') else "Burn Disabled"
-            print("\n" + "-"*80)
-            print(f"Starting job {i + 1}/{total_jobs}: {job['display_name']}")
-            print(f"    - Orientation:     {opts.get('orientation')}")
-            print(f"    - Resolution:      {opts.get('resolution')}")
-            print(f"    - Output Format:   {opts.get('output_format').upper()}")
-            print(f"    - Aspect Mode:     {opts.get('aspect_mode')}")
-            print(f"    - Bitrate Mode:    {bitrate_mode_str}")
-            print(f"    - Audio Normalize: {audio_mode_str}")
-            print(f"    - Subtitles:       {sub_mode_str}")
-            print("-" * 80)
+            print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-"*80)
             try:
-                orientation = opts.get("orientation", "horizontal")
+                orientation = job['options'].get("orientation", "horizontal")
                 if orientation == "horizontal + vertical":
                     self.build_ffmpeg_command_and_run(job, "horizontal")
                     self.build_ffmpeg_command_and_run(job, "vertical")
@@ -1315,28 +1332,19 @@ class VideoProcessorApp:
     def run_ffmpeg_command(self, cmd):
         print("Running FFmpeg command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
-        try:
-            return safe_ffmpeg_execution(cmd, "video encoding")
-        except VideoProcessingError as e:
-            print(f"\n[ERROR] FFmpeg execution failed. See details below:\n{e}")
-            return 1
+        return safe_ffmpeg_execution(cmd, "video encoding")
 
     def verify_output_file(self, file_path, options=None):
-        print(f"--- Verifying output file: {os.path.basename(file_path)} ---")
+        print(f"--- Verifying output: {os.path.basename(file_path)} ---")
         try:
-            cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,display_aspect_ratio", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
-            print(f"[VERIFIED] Output Specs: {'x'.join(result.stdout.strip().splitlines()[:2])}")
+            cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", file_path]
+            video_info = json.loads(safe_ffprobe(cmd, "output video verification").stdout)["streams"][0]
+            print(f"[VIDEO VER] {video_info.get('width')}x{video_info.get('height')} using {video_info.get('codec_name')}")
+            cmd_audio = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels,channel_layout,codec_name", "-of", "json", file_path]
+            audio_info = json.loads(safe_ffprobe(cmd_audio, "output audio verification").stdout).get("streams", [])
+            for s in audio_info:
+                print(f"[AUDIO VER] Stream #{s.get('index')}: {s.get('codec_name')}, {s.get('channels')} channels ('{s.get('channel_layout')}')")
         except Exception as e: print(f"[ERROR] Verification failed: {e}")
-        try:
-            cmd_audio = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels,channel_layout,sample_rate,codec_name,bit_rate", "-of", "json", file_path]
-            audio_info = json.loads(subprocess.run(cmd_audio, capture_output=True, text=True, check=True, env=env).stdout).get("streams", [])
-            for i, s in enumerate(audio_info):
-                print(f"[AUDIO VER] Stream #{i}: channels={s.get('channels')}, layout='{s.get('channel_layout', 'None')}', samplerate={s.get('sample_rate')}")
-            if options and options.get("audio_mode") == "stereo+5.1":
-                if any(s.get('channels') == 6 and s.get('channel_layout') != '5.1(side)' for s in audio_info):
-                    print("[WARN] 5.1 stream layout is not '5.1(side)', which YouTube requires.")
-        except Exception as e: print(f"[WARN] Could not run audio verification: {e}")
 
     def add_files(self):
         files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")])
@@ -1354,19 +1362,28 @@ class VideoProcessorApp:
 
     def select_all_files(self): self.job_listbox.select_set(0, tk.END); self.on_input_file_select(None)
 
-    def clear_file_selection(self): self.job_listbox.select_clear(0, tk.END)
+    def clear_file_selection(self): self.job_listbox.select_clear(0, tk.END); self.on_input_file_select(None)
+
+    def select_all_no_sub(self):
+        self.job_listbox.selection_clear(0, tk.END)
+        for i, job in enumerate(self.processing_jobs):
+            if job.get('subtitle_path') is None: self.job_listbox.selection_set(i)
+        self.on_input_file_select(None)
+
+    def select_all_subbed(self):
+        self.job_listbox.selection_clear(0, tk.END)
+        for i, job in enumerate(self.processing_jobs):
+            if job.get('subtitle_path') is not None: self.job_listbox.selection_set(i)
+        self.on_input_file_select(None)
+
+    def invert_selection(self):
+        selected_indices = self.job_listbox.curselection()
+        for i in range(self.job_listbox.size()):
+            if i in selected_indices: self.job_listbox.selection_clear(i)
+            else: self.job_listbox.selection_set(i)
+        self.on_input_file_select(None)
 
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
-
-    def remove_no_sub_jobs(self):
-        indices_to_remove = [i for i, job in enumerate(self.processing_jobs) if job.get('subtitle_path') is None]
-        for index in sorted(indices_to_remove, reverse=True): del self.processing_jobs[index]; self.job_listbox.delete(index)
-        print(f"Removed {len(indices_to_remove)} jobs without subtitles.")
-
-    def remove_sub_jobs(self):
-        indices_to_remove = [i for i, job in enumerate(self.processing_jobs) if job.get('subtitle_path') is not None]
-        for index in sorted(indices_to_remove, reverse=True): del self.processing_jobs[index]; self.job_listbox.delete(index)
-        print(f"Removed {len(indices_to_remove)} jobs with subtitles.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YouTube Batch Video Processing Tool", formatter_class=argparse.RawTextHelpFormatter)
@@ -1385,11 +1402,9 @@ if __name__ == "__main__":
     initial_files = []
     if args.input_files:
         for pattern in args.input_files: initial_files.extend(glob.glob(pattern))
-    else:
-        for root_dir, _, files in os.walk(os.getcwd()):
-            if not any(x in root_dir for x in ["_SDR", "_HDR", "_Vertical", "_Original", "_Hybrid_Stacked"]):
-                for filename in files:
-                    if os.path.splitext(filename)[1].lower() in ['.mp4', '.mkv', '.mov']:
-                        initial_files.append(os.path.join(root_dir, filename))
+    else: # Auto-discover files in cwd if none are provided
+        for filename in os.listdir(os.getcwd()):
+            if os.path.splitext(filename)[1].lower() in ['.mp4', '.mkv', '.mov', '.avi', '.webm']:
+                initial_files.append(os.path.join(os.getcwd(), filename))
     app = VideoProcessorApp(root, sorted(list(set(initial_files))), args.output_mode)
     root.mainloop()
