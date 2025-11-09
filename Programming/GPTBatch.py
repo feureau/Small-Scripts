@@ -1,6 +1,6 @@
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v19_mod_lmstudio
+Multimodal AI Batch Processor (GPTBatcher) v19_mod_lmstudio (with Output Extension)
 ================================================================================
 Purpose:
 --------
@@ -40,6 +40,7 @@ Key Features:
 - NEW: Option to overwrite the original input file with the AI-generated output.
 - ✅ UPDATED: Output filename extension matches input extension for single text files,
               with safe unique naming to prevent overwrites.
+- ✅ NEW: User can specify custom output extension (e.g., md, srt). If empty, uses default logic.
 Dependencies:
 -------------
 pip install google-generativeai requests
@@ -91,14 +92,17 @@ OLLAMA_GENERATE_ENDPOINT = f"{OLLAMA_API_URL}/api/generate"
 LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
 LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
+
 USER_PROMPT_TEMPLATE = """Analyze the provided content (text or image).
 If text is provided below: Summarize the key points, identify main topics, and suggest relevant keywords.
 If one or more images are provided: Describe the image(s) in detail. If multiple, note any relationships or differences. Suggest relevant keywords or tags.
 Provide the output as plain text.
 """
+
 SUPPORTED_TEXT_EXTENSIONS = ['.txt', '.srt', '.md', '.py', '.js', '.html', '.css']
 SUPPORTED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif']
 ALL_SUPPORTED_EXTENSIONS = SUPPORTED_TEXT_EXTENSIONS + SUPPORTED_IMAGE_EXTENSIONS
+
 DEFAULT_RAW_OUTPUT_SUFFIX = ""
 RAW_OUTPUT_FILE_EXTENSION = ".txt"
 LOG_FILE_EXTENSION = ".log"
@@ -353,7 +357,6 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
     base_name = generate_group_base_name(filepaths_group)
     log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name, 'status': 'Failure'}
     api_response = None
-
     # Determine output paths
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
@@ -361,22 +364,25 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         os.makedirs(log_folder_for_overwrite, exist_ok=True)
         _, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], log_folder_for_overwrite, log_folder_for_overwrite)
     else:
-        # Choose output extension
-        if len(filepaths_group) == 1:
-            filepath = filepaths_group[0]
-            _, orig_ext = os.path.splitext(filepath)
-            orig_ext = orig_ext.lower()
-            if orig_ext in SUPPORTED_TEXT_EXTENSIONS:
-                output_ext = orig_ext
-            else:
-                output_ext = RAW_OUTPUT_FILE_EXTENSION
+        # Determine output extension
+        user_output_ext = kwargs.get('output_extension', '').strip()
+        if user_output_ext:
+            output_ext = '.' + user_output_ext.lstrip('.')
         else:
-            output_ext = RAW_OUTPUT_FILE_EXTENSION  # groups always use .txt
+            if len(filepaths_group) == 1:
+                filepath = filepaths_group[0]
+                _, orig_ext = os.path.splitext(filepath)
+                orig_ext = orig_ext.lower()
+                if orig_ext in SUPPORTED_TEXT_EXTENSIONS:
+                    output_ext = orig_ext
+                else:
+                    output_ext = RAW_OUTPUT_FILE_EXTENSION
+            else:
+                output_ext = RAW_OUTPUT_FILE_EXTENSION  # groups always use .txt
 
         raw_path, log_path = determine_unique_output_paths(
             base_name, kwargs['output_suffix'], kwargs['output_folder'], kwargs['log_folder'], output_ext
         )
-
     try:
         images_data, text_content_parts, prompt = [], [], user_prompt
         print(f"--- Reading {len(filepaths_group)} file(s) for this group ---")
@@ -442,6 +448,7 @@ class AppGUI(tk.Tk):
         self.model_var = tk.StringVar()
         self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
         self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
+        self.output_ext_var = tk.StringVar(value=getattr(self.args, 'output_ext', ''))  # <-- NEW
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', False))
         self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
         self.group_files_var = tk.BooleanVar(value=False)
@@ -468,41 +475,51 @@ class AppGUI(tk.Tk):
     def create_widgets(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+
         api_frame = ttk.Frame(self, padding=(10, 10, 10, 5))
         api_frame.grid(row=0, column=0, sticky="ew")
         self.api_status_label = ttk.Label(api_frame, text=f"API Key Status: {'Set' if self.api_key else 'Not Set'}")
         self.api_status_label.pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(api_frame, text="Enter/Update Google API Key", command=self.prompt_for_api_key).pack(side=tk.LEFT)
+
         paned_window = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned_window.grid(row=1, column=0, sticky="nsew", padx=10)
+
         left_pane = ttk.Frame(paned_window, padding=5)
         left_pane.columnconfigure(0, weight=1)
         left_pane.rowconfigure(1, weight=1)
         paned_window.add(left_pane, weight=1)
+
         files_frame = ttk.LabelFrame(left_pane, text="Input Files", padding=10)
         files_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 5))
         files_frame.columnconfigure(0, weight=1)
         files_frame.rowconfigure(0, weight=1)
+
         self.file_listbox = tk.Listbox(files_frame, listvariable=self.files_var, selectmode=tk.EXTENDED)
         self.file_listbox.grid(row=0, column=0, sticky="nsew")
         files_scrollbar = ttk.Scrollbar(files_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
         files_scrollbar.grid(row=0, column=1, sticky="ns")
         self.file_listbox.config(yscrollcommand=files_scrollbar.set)
+
         btn_frame = ttk.Frame(files_frame)
         btn_frame.grid(row=0, column=2, sticky="ns", padx=(5,0))
         ttk.Button(btn_frame, text="Add Files...", command=self.add_files).pack(fill=tk.X)
         ttk.Button(btn_frame, text="Remove Sel.", command=self.remove_files).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="Clear All", command=self.clear_files).pack(fill=tk.X)
+
         prompt_frame = ttk.LabelFrame(left_pane, text="User Prompt", padding=10)
         prompt_frame.grid(row=1, column=0, sticky="nsew")
         prompt_frame.columnconfigure(0, weight=1)
         prompt_frame.rowconfigure(0, weight=1)
+
         self.prompt_text = scrolledtext.ScrolledText(prompt_frame, wrap=tk.WORD, height=8)
         self.prompt_text.grid(row=0, column=0, sticky="nsew")
         self.prompt_text.insert(tk.INSERT, USER_PROMPT_TEMPLATE)
+
         right_pane = ttk.Frame(paned_window, padding=5)
         paned_window.add(right_pane, weight=1)
         right_pane.columnconfigure(0, weight=1)
+
         options_frame = ttk.LabelFrame(right_pane, text="AI Options", padding=10)
         options_frame.pack(fill=tk.X, pady=(0, 5))
         options_frame.columnconfigure(1, weight=1)
@@ -512,6 +529,7 @@ class AppGUI(tk.Tk):
         self.model_combo = ttk.Combobox(options_frame, textvariable=self.model_var, state="disabled")
         self.model_combo.grid(row=1, column=1, sticky=tk.EW, pady=(5,0))
         ttk.Checkbutton(options_frame, text="Append filename to prompt before content", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
+
         grouping_frame = ttk.LabelFrame(right_pane, text="Batch Grouping", padding=10)
         grouping_frame.pack(fill=tk.X, pady=5)
         self.group_check = ttk.Checkbutton(grouping_frame, text="Process multiple files in one API call", variable=self.group_files_var, command=self.toggle_grouping_options)
@@ -521,6 +539,7 @@ class AppGUI(tk.Tk):
         self.group_size_spinbox.grid(row=1, column=1, sticky=tk.W)
         self.group_status_label = ttk.Label(grouping_frame, text="")
         self.group_status_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
+
         safety_frame = ttk.LabelFrame(right_pane, text="Google Safety Settings", padding=10)
         safety_frame.pack(fill=tk.X, pady=5)
         safety_frame.columnconfigure(1, weight=1)
@@ -534,20 +553,31 @@ class AppGUI(tk.Tk):
             combo = ttk.Combobox(safety_frame, textvariable=var, values=list(self.safety_map.keys()), state="disabled", width=25)
             combo.grid(row=i+1, column=1, sticky=tk.EW, pady=1)
             self.safety_widgets.extend([label, combo])
+
         settings_frame = ttk.LabelFrame(right_pane, text="Output Settings", padding=10)
         settings_frame.pack(fill=tk.X, pady=5)
         settings_frame.columnconfigure(1, weight=1)
+
         ttk.Label(settings_frame, text="Output Dir:").grid(row=0, column=0, sticky=tk.W)
         self.output_dir_entry = ttk.Entry(settings_frame, textvariable=self.output_dir_var)
         self.output_dir_entry.grid(row=0, column=1, sticky=tk.EW)
         self.browse_button = ttk.Button(settings_frame, text="Browse...", command=self.browse_output_dir)
         self.browse_button.grid(row=0, column=2, padx=(5,0))
+
         ttk.Label(settings_frame, text="Output Suffix:").grid(row=1, column=0, sticky=tk.W, pady=(5,0))
         self.suffix_entry = ttk.Entry(settings_frame, textvariable=self.suffix_var)
         self.suffix_entry.grid(row=1, column=1, sticky=tk.W, pady=(5,0))
-        ttk.Checkbutton(settings_frame, text="Stream Output (Google Only)", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky=tk.W)
+
+        # --- NEW: Output Extension Field ---
+        ttk.Label(settings_frame, text="Output Extension:").grid(row=2, column=0, sticky=tk.W, pady=(5,0))
+        self.output_ext_entry = ttk.Entry(settings_frame, textvariable=self.output_ext_var)
+        self.output_ext_entry.grid(row=2, column=1, sticky=tk.W, pady=(5,0))
+
+        ttk.Checkbutton(settings_frame, text="Stream Output (Google Only)", variable=self.stream_var).grid(row=3, column=0, columnspan=2, sticky=tk.W)
+
         self.overwrite_check = ttk.Checkbutton(settings_frame, text="Overwrite original input file", variable=self.overwrite_var, command=self.toggle_overwrite_options)
-        self.overwrite_check.grid(row=3, column=0, columnspan=2, sticky=tk.W)
+        self.overwrite_check.grid(row=4, column=0, columnspan=2, sticky=tk.W)
+
         ttk.Button(self, text="Process Files", command=self.process).grid(row=2, column=0, pady=(5, 10))
 
     def toggle_overwrite_options(self):
@@ -558,12 +588,14 @@ class AppGUI(tk.Tk):
             self.output_dir_entry.config(state="disabled")
             self.browse_button.config(state="disabled")
             self.suffix_entry.config(state="disabled")
+            self.output_ext_entry.config(state="disabled")  # <-- NEW
         else:
             self.group_check.config(state="normal")
             self.group_size_spinbox.config(state="normal" if self.group_files_var.get() else "disabled")
             self.output_dir_entry.config(state="normal")
             self.browse_button.config(state="normal")
             self.suffix_entry.config(state="normal")
+            self.output_ext_entry.config(state="normal")  # <-- NEW
             self.toggle_grouping_options()
 
     def toggle_grouping_options(self):
@@ -696,6 +728,7 @@ class AppGUI(tk.Tk):
             'model': self.model_var.get(),
             'output_dir': self.output_dir_var.get(),
             'suffix': self.suffix_var.get(),
+            'output_extension': self.output_ext_var.get().lstrip('.'),  # <-- NEW
             'stream_output': self.stream_var.get(),
             'api_key': self.api_key,
             'group_size': group_size,
@@ -719,11 +752,13 @@ def main():
     parser.add_argument("files", nargs="*", help="Path(s) to input file(s). Supports wildcards. If omitted, scans current directory.")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME, help="Subfolder for output.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX, help="Suffix for output filenames.")
+    parser.add_argument("--output-ext", default="", help="Override output file extension (e.g., md, srt, txt).")  # <-- NEW CLI
     parser.add_argument("--stream", action='store_true', help="Enable streaming output (Google Only).")
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama', 'lmstudio'], help="AI engine.")
     parser.add_argument("-m", "--model", help="Suggest a model to select by default.")
     parser.add_argument("--add-filename-to-prompt", action='store_true', help="Append filename (no extension) to the prompt before the file content.")
     args = parser.parse_args()
+
     filepaths = []
     if args.files:
         print("Processing files specified on the command line...")
@@ -740,17 +775,21 @@ def main():
         else:
             print("No supported files found in the current directory.")
     filepaths = sorted(list(set(f for f in filepaths if os.path.isfile(f) and os.path.splitext(f)[1].lower() in ALL_SUPPORTED_EXTENSIONS)), key=natural_sort_key)
+
     initial_api_key = get_api_key()
     app = AppGUI(initial_api_key, filepaths, args)
     app.mainloop()
+
     gui_settings = app.settings
     if not gui_settings:
         print("Operation cancelled or GUI closed.")
         return
+
     all_files = sorted(list(set(gui_settings['files'])), key=natural_sort_key)
     if not all_files:
         print("Error: No valid input files specified.")
         return
+
     group_size = 1 if gui_settings.get('overwrite_original') else gui_settings.get('group_size', 1)
     if gui_settings.get('overwrite_original'):
         print("INFO: Overwrite mode enabled. Processing files individually.")
@@ -758,8 +797,10 @@ def main():
     total_groups = len(file_groups)
     central_out_folder = os.path.join(os.getcwd(), gui_settings['output_dir']) if gui_settings['output_dir'] and not gui_settings.get('overwrite_original') else None
     processed_files, quota_hits, failed_files = 0, 0, {}
+
     exhausted_models = set()
     print(f"\nStarting batch processing for {len(all_files)} file(s) in {total_groups} group(s)...")
+
     i = 0
     while i < total_groups:
         group_of_filepaths = file_groups[i]
@@ -771,6 +812,7 @@ def main():
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(out_folder, exist_ok=True)
         os.makedirs(log_folder, exist_ok=True)
+
         try:
             _, error_msg = process_file_group(
                 group_of_filepaths,
@@ -779,6 +821,7 @@ def main():
                 gui_settings['custom_prompt'],
                 gui_settings['model'],
                 output_suffix=gui_settings['suffix'],
+                output_extension=gui_settings.get('output_extension', ''),  # <-- NEW
                 stream_output=gui_settings['stream_output'],
                 output_folder=out_folder,
                 log_folder=log_folder,
@@ -842,6 +885,7 @@ def main():
                 failed_files[fp] = reason
             [copy_failed_file(fp) for fp in group_of_filepaths]
             break
+
     failed_count = len(failed_files)
     attempted_count = processed_files + failed_count
     print("\n=========================================")
