@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 ================================================================================================
@@ -149,6 +150,16 @@ update this documentation in the same commit. Updates should include:
     WHY the specific design decisions were made.
 
 ---
+**v1.6 (2025-11-07): Fix Glob Pattern in Special Character Paths**
+- **Change:** Modified the glob processing logic to use `glob.escape()` on the directory
+  portion of the path.
+- **Reasoning:**
+  - **Primary Goal:** To allow the script to function correctly when the current working
+    directory's path contains special glob characters, such as square brackets (`[` or `]`).
+  - **Implementation:** The previous logic would fail because `glob.glob("C:/.../[Folder]/.../*.png")`
+    misinterprets `[Folder]` as a character set pattern. The fix separates the directory
+    path from the filename pattern, escapes only the directory, and then rejoins them.
+    This ensures that folder names are treated literally, preventing glob errors.
 
 **v1.5 (2025-09-17): Final Border Logic - Enforce 1920x1080 Output**
 - **Change:** The border logic was completely rewritten to meet three simultaneous goals:
@@ -500,7 +511,23 @@ def main():
                 if not glob_path.is_absolute():
                     glob_path = Path.cwd() / glob_path
                 
-                found_files = glob.glob(str(glob_path))
+                # --- START FIX ---
+                # This block handles paths with special characters (like '[' or ']')
+                # that would otherwise be misinterpreted by the glob module.
+                # 1. Separate the directory from the filename pattern (e.g., '*.png')
+                directory = glob_path.parent
+                pattern = glob_path.name
+                
+                # 2. Escape the directory path ONLY, so special characters are treated literally.
+                escaped_directory = glob.escape(str(directory))
+                
+                # 3. Join the escaped directory back with the unescaped pattern.
+                search_path = os.path.join(escaped_directory, pattern)
+                
+                # 4. Use this new, safe path for the glob search.
+                found_files = glob.glob(search_path)
+                # --- END FIX ---
+                
                 if not found_files:
                     print(f"Warning: Glob pattern '{file_or_pattern_str}' did not match any files.", file=sys.stderr)
                 
