@@ -11,7 +11,8 @@ with audio that meets YouTube's official and practical upload requirements.
 The tool automates:
     • Video transcoding with FFmpeg
     • Audio normalization (EBU R128 via loudnorm)
-    • Multi-track audio handling (Stereo + 5.1)
+    • Multi-track audio handling with mix-and-match outputs (Mono, Stereo, 5.1)
+    • Binaural (Sofalizer) downmixing for headphones
     • Bitrate, channel layout, and codec compliance for YouTube
     • Batch queue management through a Tkinter GUI
     • Advanced, multi-layer subtitle styling and burning
@@ -19,26 +20,24 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
-v6.9 - GUI Style Fix for Themed Widgets (2025-11-09)
-    • FIXED: The "Start Processing" ttk.Button appeared with white text on a
-      white background on some system themes, making it invisible.
-    • CHANGED: The button styling in `setup_button_row` now uses `style.map()`
-      to explicitly define the foreground and background colors for different
-      widget states (`normal`, `active`, `pressed`). This is the robust method
-      for overriding system themes and ensures the button is always visible.
+v7.1 - User Default Configuration (2025-11-11)
+    • CHANGED: Default audio selection is now "Stereo (Sofalizer)" and "5.1
+      Surround" to match user preference for high-quality headphone and
+      surround outputs.
+    • CHANGED: Re-instated the default SOFA file path to streamline the user's
+      primary workflow. The field is no longer blank on startup.
 
-v6.8 - GUI Bug Fixes and Portability Improvements (2025-11-08)
-    • FIXED: A critical crash (_tkinter.TclError) caused by using an invalid
-      'width' option in the .pack() geometry manager for audio tab labels.
-      Replaced the layout with the more appropriate .grid() manager.
-    • FIXED: A logic bug in `_toggle_binaural_options` that would incorrectly
-      force the "Enable Binaural" checkbox on, overriding the user's selection.
-    • CHANGED: Removed the hardcoded 'E:\...' path for the SOFA file to make the
-      script portable. The field now defaults to empty.
-    • ADDED: Validation logic in `validate_processing_settings` to ensure that
-      if binaural audio is enabled, a valid and existing SOFA file path is provided.
-    • REMOVED: Dead code methods (`remove_no_sub_jobs`, `remove_sub_jobs`) that
-      were left over from a previous GUI design.
+v7.0 - Flexible Audio Track Building (2025-11-11)
+    • REFACTORED: The audio processing backend (`build_audio_segment`) has been
+      completely rewritten to support a flexible track-building system.
+    • CHANGED: The GUI's audio tab now uses five checkboxes (Mono, Stereo,
+      Stereo Sofalizer, 5.1 Surround, Passthrough) instead of radio buttons.
+    • ADDED: Logic to make the "Passthrough" option mutually exclusive with all
+      other audio processing options to ensure valid commands.
+    • ADDED: Intelligent source analysis. The script now checks the source
+      audio channels and will only generate tracks that are possible.
+    • FIXED: Audio normalization is now applied independently to each generated
+      track, ensuring loudness targets are met for all outputs.
 """
 import os
 import subprocess
@@ -67,6 +66,7 @@ FFPROBE_CMD = os.environ.get("FFPROBE_PATH", "ffprobe")
 
 # Audio settings
 AUDIO_SAMPLE_RATE = 48000
+MONO_BITRATE_K = 128
 STEREO_BITRATE_K = 384
 SURROUND_BITRATE_K = 512
 PASSTHROUGH_NORMALIZE_BITRATE_K = 192
@@ -90,8 +90,12 @@ DEFAULT_LOUDNESS_TARGET = "-9"
 DEFAULT_LOUDNESS_RANGE = "7"
 DEFAULT_TRUE_PEAK = "-1.0"
 
-# Audio mode
-DEFAULT_AUDIO_MODE = "stereo+5.1"
+# Audio track selection defaults (User preference update)
+DEFAULT_AUDIO_MONO = False
+DEFAULT_AUDIO_STEREO_DOWNMIX = False
+DEFAULT_AUDIO_STEREO_SOFALIZER = True
+DEFAULT_AUDIO_SURROUND_51 = True
+DEFAULT_AUDIO_PASSTHROUGH = False
 
 # Subtitle defaults
 DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
@@ -414,9 +418,7 @@ def get_job_hash(job_options):
         job_options.get('aspect_mode', ''),
         job_options.get('fruc', False),
         job_options.get('fruc_fps', ''),
-        job_options.get('audio_mode', ''),
         str(job_options.get('normalize_audio', False)),
-        job_options.get('binaural_enabled', False),
         job_options.get('sofa_file', ''),
         job_options.get('subtitle_alignment', ''),
         job_options.get('hybrid_top_aspect', ''),
@@ -428,6 +430,12 @@ def get_job_hash(job_options):
         job_options.get('shadow_offset_y', ''),
         job_options.get('shadow_blur', ''),
         job_options.get('wrap_limit', ''),
+        # Add new audio options
+        job_options.get('audio_mono', False),
+        job_options.get('audio_stereo_downmix', False),
+        job_options.get('audio_stereo_sofalizer', False),
+        job_options.get('audio_surround_51', False),
+        job_options.get('audio_passthrough', False),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
@@ -520,8 +528,6 @@ class VideoProcessorApp:
         self.loudness_range_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_range'))
         self.true_peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
         self.true_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('true_peak'))
-        self.audio_mode_var = tk.StringVar(value=DEFAULT_AUDIO_MODE)
-        self.binaural_enabled_var = tk.BooleanVar(value=True)
         self.sofa_file_var = tk.StringVar(value=r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa")
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
@@ -556,6 +562,13 @@ class VideoProcessorApp:
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+
+        # New audio track booleans
+        self.audio_mono_var = tk.BooleanVar(value=DEFAULT_AUDIO_MONO)
+        self.audio_stereo_downmix_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_DOWNMIX)
+        self.audio_stereo_sofalizer_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_SOFALIZER)
+        self.audio_surround_51_var = tk.BooleanVar(value=DEFAULT_AUDIO_SURROUND_51)
+        self.audio_passthrough_var = tk.BooleanVar(value=DEFAULT_AUDIO_PASSTHROUGH)
 
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
@@ -606,6 +619,7 @@ class VideoProcessorApp:
         self._toggle_orientation_options()
         self._toggle_upscale_options()
         self._toggle_audio_norm_options()
+        self._update_audio_options_ui() # New unified audio UI updater
         self._update_bitrate_display()
 
     def setup_input_pane(self, parent):
@@ -725,14 +739,15 @@ class VideoProcessorApp:
         self.fruc_fps_entry = ttk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
 
     def setup_audio_tab(self, parent):
-        audio_group = ttk.LabelFrame(parent, text="Audio Processing", padding=10)
-        audio_group.pack(fill=tk.X, pady=(5, 0))
-        ttk.Checkbutton(audio_group, text="Normalize Audio (EBU R128)", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
-        
-        self.audio_norm_frame = ttk.Frame(audio_group)
+        # Normalization Group
+        norm_group = ttk.LabelFrame(parent, text="Normalization", padding=10)
+        norm_group.pack(fill=tk.X, pady=(0, 5))
+        ttk.Checkbutton(norm_group, text="Normalize Audio (EBU R128)", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
+
+        self.audio_norm_frame = ttk.Frame(norm_group)
         self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
         self.audio_norm_frame.columnconfigure(1, weight=1)
-        
+
         ttk.Label(self.audio_norm_frame, text="Loudness Target (LUFS):").grid(row=0, column=0, sticky="w", pady=2)
         self.loudness_target_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_target_var, width=8)
         self.loudness_target_entry.grid(row=0, column=1, sticky="w", padx=5)
@@ -745,24 +760,34 @@ class VideoProcessorApp:
         self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
         self.true_peak_entry.grid(row=2, column=1, sticky="w", padx=5)
 
-        self.audio_mode_frame = ttk.Frame(audio_group)
-        self.audio_mode_frame.pack(fill=tk.X, pady=(10,0))
-        ttk.Label(self.audio_mode_frame, text="Output Mode:").pack(side=tk.LEFT)
-        ttk.Radiobutton(self.audio_mode_frame, text="Stereo + 5.1", variable=self.audio_mode_var, value="stereo+5.1", command=self._toggle_binaural_options).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(self.audio_mode_frame, text="Passthrough", variable=self.audio_mode_var, value="passthrough", command=self._toggle_binaural_options).pack(side=tk.LEFT)
-        self.binaural_checkbox = ttk.Checkbutton(
-            audio_group, text="Enable Binaural Stereo Downmix (for Headphones)",
-            variable=self.binaural_enabled_var,
-            command=self._toggle_binaural_options
-        )
-        self.binaural_checkbox.pack(anchor="w", padx=(20, 0), pady=5)
-        sofa_frame = ttk.Frame(audio_group)
+        # Output Tracks Group
+        tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
+        tracks_group.pack(fill=tk.X, pady=5)
+
+        self.audio_cb_mono = ttk.Checkbutton(tracks_group, text="Mono (Downmix)", variable=self.audio_mono_var, command=self._update_audio_options_ui)
+        self.audio_cb_mono.pack(anchor="w")
+
+        self.audio_cb_stereo = ttk.Checkbutton(tracks_group, text="Stereo (Standard Downmix)", variable=self.audio_stereo_downmix_var, command=self._update_audio_options_ui)
+        self.audio_cb_stereo.pack(anchor="w")
+
+        self.audio_cb_sofa = ttk.Checkbutton(tracks_group, text="Stereo (Sofalizer for Headphones)", variable=self.audio_stereo_sofalizer_var, command=self._update_audio_options_ui)
+        self.audio_cb_sofa.pack(anchor="w")
+
+        sofa_frame = ttk.Frame(tracks_group)
         sofa_frame.pack(fill=tk.X, padx=(20, 0))
         ttk.Label(sofa_frame, text="SOFA File:").pack(side=tk.LEFT)
         self.sofa_entry = ttk.Entry(sofa_frame, textvariable=self.sofa_file_var)
         self.sofa_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.sofa_browse_btn = ttk.Button(sofa_frame, text="...", command=self.browse_sofa_file, width=4)
         self.sofa_browse_btn.pack(side=tk.LEFT)
+
+        self.audio_cb_surround = ttk.Checkbutton(tracks_group, text="5.1 Surround", variable=self.audio_surround_51_var, command=self._update_audio_options_ui)
+        self.audio_cb_surround.pack(anchor="w", pady=(5,0))
+
+        ttk.Separator(tracks_group, orient='horizontal').pack(fill='x', pady=10)
+
+        self.audio_cb_passthrough = ttk.Checkbutton(tracks_group, text="Passthrough (Copy Original Audio)", variable=self.audio_passthrough_var, command=self._update_audio_options_ui)
+        self.audio_cb_passthrough.pack(anchor="w")
 
     def setup_subtitle_tab(self, parent):
         action_frame = ttk.Frame(parent)
@@ -963,20 +988,39 @@ class VideoProcessorApp:
             widget.config(state=state)
         self._update_selected_jobs("normalize_audio")
 
-    def _toggle_binaural_options(self):
-        mode = self.audio_mode_var.get()
-        is_stereo_mode = (mode == "stereo+5.1")
+    def _update_audio_options_ui(self):
+        """Manages the state of all audio UI elements based on selections."""
+        is_passthrough = self.audio_passthrough_var.get()
+        is_sofalizer = self.audio_stereo_sofalizer_var.get()
+
+        # Mutual exclusivity for passthrough
+        if is_passthrough:
+            self.audio_mono_var.set(False)
+            self.audio_stereo_downmix_var.set(False)
+            self.audio_stereo_sofalizer_var.set(False)
+            self.audio_surround_51_var.set(False)
+            proc_state = "disabled"
+        else:
+            proc_state = "normal"
         
-        self.binaural_checkbox.config(state="normal" if is_stereo_mode else "disabled")
+        for cb in [self.audio_cb_mono, self.audio_cb_stereo, self.audio_cb_sofa, self.audio_cb_surround]:
+            cb.config(state=proc_state)
+            
+        any_proc_selected = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
+                                 self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
 
-        if not is_stereo_mode:
-            self.binaural_enabled_var.set(False)
+        self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
 
-        sofa_controls_enabled = is_stereo_mode and self.binaural_enabled_var.get()
-        self.sofa_entry.config(state="normal" if sofa_controls_enabled else "disabled")
-        self.sofa_browse_btn.config(state="normal" if sofa_controls_enabled else "disabled")
+        # Contextual SOFA file input
+        sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
+        self.sofa_entry.config(state=sofa_state)
+        self.sofa_browse_btn.config(state=sofa_state)
 
-        self._update_selected_jobs("audio_mode", "binaural_enabled", "sofa_file")
+        # Update job options for any changes
+        self._update_selected_jobs(
+            "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer",
+            "audio_surround_51", "audio_passthrough", "sofa_file"
+        )
 
     def update_status(self, message):
         self.status_var.set(message)
@@ -1003,8 +1047,10 @@ class VideoProcessorApp:
             "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(), "normalize_audio": self.normalize_audio_var.get(),
             "loudness_target": self.loudness_target_var.get(), "loudness_range": self.loudness_range_var.get(),
-            "true_peak": self.true_peak_var.get(), "audio_mode": self.audio_mode_var.get(),
-            "binaural_enabled": self.binaural_enabled_var.get(),
+            "true_peak": self.true_peak_var.get(), 
+            "audio_mono": self.audio_mono_var.get(), "audio_stereo_downmix": self.audio_stereo_downmix_var.get(),
+            "audio_stereo_sofalizer": self.audio_stereo_sofalizer_var.get(), "audio_surround_51": self.audio_surround_51_var.get(),
+            "audio_passthrough": self.audio_passthrough_var.get(),
             "sofa_file": self.sofa_file_var.get(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(), "hybrid_top_mode": self.hybrid_top_mode_var.get(),
@@ -1083,9 +1129,8 @@ class VideoProcessorApp:
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
-        self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); self.audio_mode_var.set(options.get("audio_mode", DEFAULT_AUDIO_MODE))
-        self.binaural_enabled_var.set(options.get("binaural_enabled", True))
-        self.sofa_file_var.set(options.get("sofa_file", ""))
+        self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
+        self.sofa_file_var.set(options.get("sofa_file", r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
@@ -1097,8 +1142,14 @@ class VideoProcessorApp:
         self.shadow_blur_var.set(options.get("shadow_blur", DEFAULT_SHADOW_BLUR)); self.lut_file_var.set(options.get("lut_file", DEFAULT_LUT_PATH))
         self.reformat_subtitles_var.set(options.get("reformat_subtitles", DEFAULT_REFORMAT_SUBTITLES))
         self.wrap_limit_var.set(options.get("wrap_limit", DEFAULT_WRAP_LIMIT))
+        self.audio_mono_var.set(options.get("audio_mono", DEFAULT_AUDIO_MONO))
+        self.audio_stereo_downmix_var.set(options.get("audio_stereo_downmix", DEFAULT_AUDIO_STEREO_DOWNMIX))
+        self.audio_stereo_sofalizer_var.set(options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))
+        self.audio_surround_51_var.set(options.get("audio_surround_51", DEFAULT_AUDIO_SURROUND_51))
+        self.audio_passthrough_var.set(options.get("audio_passthrough", DEFAULT_AUDIO_PASSTHROUGH))
+
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
-        self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._toggle_binaural_options()
+        self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
 
     def duplicate_selected_jobs(self):
         selected_indices = self.job_listbox.curselection()
@@ -1115,46 +1166,110 @@ class VideoProcessorApp:
             offset += 1
 
     def build_audio_segment(self, file_path, options):
-        audio_mode = options.get("audio_mode", "stereo+5.1")
-        if audio_mode == "passthrough":
-            audio_streams = get_audio_stream_info(file_path)
-            return ["-an"] if not audio_streams else ["-map", f"0:a:0", "-c:a", "copy"]
+        # 1. Handle Passthrough mode first as it's exclusive
+        if options.get("audio_passthrough"):
+            return ["-map", "0:a?", "-c:a", "copy"]
+
+        # 2. Get info on available audio streams
         audio_streams = get_audio_stream_info(file_path)
-        if not audio_streams: return ["-an"]
-        surround_stream = next((s for s in audio_streams if int(s.get("channels", 0)) >= 6), None)
-        if surround_stream:
-            print("[INFO] 5.1+ channel audio stream detected. Processing for Stereo and 5.1 output.")
-            surround_idx = int(surround_stream["index"])
-            fc_parts = [f"[0:{surround_idx}]channelmap=channel_layout=5.1(side)[a_5ch_raw]"]
-            binaural_enabled = options.get("binaural_enabled", False)
-            if binaural_enabled:
+        if not audio_streams:
+            return ["-an"]  # No audio streams found, so disable audio
+
+        # Prioritize surround, then stereo, then first available
+        source_stream = next((s for s in audio_streams if int(s.get("channels", 0)) >= 6),
+                             next((s for s in audio_streams if int(s.get("channels", 0)) == 2),
+                                  audio_streams[0]))
+        source_idx = source_stream['index']
+        source_channels = int(source_stream.get("channels", 0))
+        is_surround_source = source_channels >= 6
+
+        # 3. Determine which tracks to build
+        tracks_to_build = []
+        if options.get("audio_mono"):
+            tracks_to_build.append("mono")
+        if options.get("audio_stereo_downmix"):
+            tracks_to_build.append("stereo_downmix")
+        if options.get("audio_stereo_sofalizer"):
+            if is_surround_source:
+                tracks_to_build.append("stereo_sofalizer")
+            else:
+                print(f"[WARN] Sofalizer requires a 5.1+ source. Skipping Sofalizer track for {os.path.basename(file_path)}.")
+        if options.get("audio_surround_51"):
+            if is_surround_source:
+                tracks_to_build.append("surround_51")
+            else:
+                print(f"[WARN] 5.1 Surround output requires a 5.1+ source. Skipping 5.1 track for {os.path.basename(file_path)}.")
+
+        if not tracks_to_build:
+            print("[WARN] No valid audio tracks selected or possible for the source. Disabling audio.")
+            return ["-an"]
+
+        # 4. Build the filter_complex graph
+        fc_parts = []
+        final_maps = []
+        base_input_tag = f"[0:{source_idx}]"
+        
+        # Create a split for each track to process them in parallel
+        split_outputs = "".join(f"[s{i}]" for i in range(len(tracks_to_build)))
+        fc_parts.append(f"{base_input_tag}asplit={len(tracks_to_build)}{split_outputs}")
+
+        is_first_track = True
+        output_audio_index = 0
+
+        for i, track_type in enumerate(tracks_to_build):
+            input_tag = f"[s{i}]"
+            proc_tag = f"[{track_type}_proc]"
+            final_tag = proc_tag
+
+            # A. Build processing chain for this track type
+            if track_type == "mono":
+                fc_parts.append(f"{input_tag}pan=mono|c0=FC+0.707*FL+0.707*FR+0.5*LFE+0.707*SL+0.707*SR{proc_tag}")
+            elif track_type == "stereo_downmix":
+                fc_parts.append(f"{input_tag}pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3{proc_tag}")
+            elif track_type == "stereo_sofalizer":
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
-                    raise VideoProcessingError(f"Binaural audio enabled, but SOFA file not found: {sofa_path}")
+                    raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found or invalid: {sofa_path}")
                 safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
-                fc_parts.append(f"[a_5ch_raw]sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218[a_stereo]")
-            else:
-                fc_parts.append(f"[a_5ch_raw]pan=stereo|c0=0.707*c0+0.707*c2+0.707*c4+0.5*c3|c1=0.707*c1+0.707*c2+0.707*c5+0.5*c3[a_stereo]")
-            fc_parts.append("[a_5ch_raw]anull[a_5ch]")
-            map_stereo, map_5ch = "a_stereo", "a_5ch"
+                fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
+            elif track_type == "surround_51":
+                fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
+
+            # B. Apply normalization if enabled
             if options.get("normalize_audio", False):
-                lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
-                fc_parts.extend([f"[{map_stereo}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_stereo}_ln]", f"[{map_5ch}]loudnorm=i={lt}:lra={lr}:tp={tp}[{map_5ch}_ln]"])
-                map_stereo, map_5ch = f"{map_stereo}_ln", f"{map_5ch}_ln"
-            fc_parts.extend([f"[{map_stereo}]aresample={AUDIO_SAMPLE_RATE}[{map_stereo}_r]", f"[{map_5ch}]aresample={AUDIO_SAMPLE_RATE}[{map_5ch}_r]"])
-            return ["-filter_complex", ";".join(fc_parts), "-map", f"[{map_stereo}_r]", "-map", f"[{map_5ch}_r]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-c:a:1", "aac", "-b:a:1", f"{SURROUND_BITRATE_K}k", "-disposition:a:0", "default", "-disposition:a:1", "0", "-metadata:s:a:0", "title=Stereo", "-metadata:s:a:1", "title=5.1 Surround"]
-        else:
-            print("[INFO] Stereo or mono audio stream detected. Processing for a single Stereo output.")
-            source_idx = int(audio_streams[0]["index"])
-            fc_parts = []
-            source_tag = f"[0:{source_idx}]"
-            if options.get("normalize_audio", False):
-                lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
-                fc_parts.append(f"{source_tag}loudnorm=i={lt}:lra={lr}:tp={tp}[a_proc]")
-            else:
-                fc_parts.append(f"{source_tag}anull[a_proc]")
-            fc_parts.append(f"[a_proc]aresample={AUDIO_SAMPLE_RATE}[a_final]")
-            return ["-filter_complex", ";".join(fc_parts), "-map", "[a_final]", "-c:a:0", "aac", "-b:a:0", f"{STEREO_BITRATE_K}k", "-disposition:a:0", "default", "-metadata:s:a:0", "title=Stereo"]
+                lt = options.get("loudness_target")
+                lr = options.get("loudness_range")
+                tp = options.get("true_peak")
+                ln_tag = f"[{track_type}_ln]"
+                fc_parts.append(f"{proc_tag}loudnorm=i={lt}:lra={lr}:tp={tp}{ln_tag}")
+                final_tag = ln_tag
+
+            # C. Resample and prepare for mapping
+            resample_tag = f"[{track_type}_final]"
+            fc_parts.append(f"{final_tag}aresample={AUDIO_SAMPLE_RATE}{resample_tag}")
+
+            # D. Add mapping and metadata for this track
+            final_maps.extend(["-map", resample_tag])
+            
+            # Codec and Bitrate
+            if track_type == "mono":
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
+                title = "Mono"
+            elif "stereo" in track_type:
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{STEREO_BITRATE_K}k"])
+                title = "Stereo (Binaural)" if track_type == "stereo_sofalizer" else "Stereo"
+            elif track_type == "surround_51":
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
+                title = "5.1 Surround"
+            
+            # Disposition and Title Metadata
+            disposition = "default" if is_first_track else "0"
+            final_maps.extend([f"-disposition:a:{output_audio_index}", disposition, f"-metadata:s:a:{output_audio_index}", f"title={title}"])
+            
+            is_first_track = False
+            output_audio_index += 1
+            
+        return ["-filter_complex", ";".join(fc_parts)] + final_maps
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = copy.deepcopy(job['options'])
@@ -1294,12 +1409,18 @@ class VideoProcessorApp:
         except ValueError:
             issues.append("Invalid loudness target. Must be a number.")
         
-        if self.audio_mode_var.get() == "stereo+5.1" and self.binaural_enabled_var.get():
+        if self.audio_stereo_sofalizer_var.get() and not self.audio_passthrough_var.get():
             sofa_path = self.sofa_file_var.get()
             if not sofa_path:
-                issues.append("Binaural audio is enabled, but no SOFA file has been selected.")
+                issues.append("Sofalizer audio is enabled, but no SOFA file has been selected.")
             elif not os.path.exists(sofa_path):
                 issues.append(f"The selected SOFA file does not exist: {sofa_path}")
+        
+        if not self.audio_passthrough_var.get():
+            any_proc_selected = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
+                                     self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
+            if not any_proc_selected:
+                issues.append("No audio processing tracks are selected. Choose at least one or select Passthrough.")
 
         if issues:
             messagebox.showerror("Configuration Issues", "Please fix the following issues:\n" + "\n".join(f"• {issue}" for issue in issues))
@@ -1340,10 +1461,11 @@ class VideoProcessorApp:
             cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", file_path]
             video_info = json.loads(safe_ffprobe(cmd, "output video verification").stdout)["streams"][0]
             print(f"[VIDEO VER] {video_info.get('width')}x{video_info.get('height')} using {video_info.get('codec_name')}")
-            cmd_audio = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels,channel_layout,codec_name", "-of", "json", file_path]
+            cmd_audio = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels,channel_layout,codec_name:stream_tags=title", "-of", "json", file_path]
             audio_info = json.loads(safe_ffprobe(cmd_audio, "output audio verification").stdout).get("streams", [])
             for s in audio_info:
-                print(f"[AUDIO VER] Stream #{s.get('index')}: {s.get('codec_name')}, {s.get('channels')} channels ('{s.get('channel_layout')}')")
+                title = s.get('tags', {}).get('title', 'N/A')
+                print(f"[AUDIO VER] Stream #{s.get('index')}: '{title}' ({s.get('codec_name')}, {s.get('channels')} channels, '{s.get('channel_layout')}')")
         except Exception as e: print(f"[ERROR] Verification failed: {e}")
 
     def add_files(self):
