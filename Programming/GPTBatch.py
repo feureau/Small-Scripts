@@ -142,7 +142,7 @@ def fetch_google_models(api_key):
         print("Fetching Google AI models...")
         genai.configure(api_key=api_key)
         models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        models.sort(key=lambda x: (not ('1.5' in x or 'pro' in x or 'flash' in x), x))
+        models.sort(key=lambda x: (0 if 'latest' in x else 1 if '2.5' in x else 2 if '2.0' in x else 3, 0 if 'pro' in x else 1 if 'flash' in x else 2, x))
         print(f"Found and sorted Google models: {models}")
         return models, None
     except PermissionDenied:
