@@ -20,6 +20,14 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v7.2 - Intelligent Subtitle Defaulting (2025-11-13)
+    • ADDED: Logic to automatically enable "Enable Subtitle Burning" when a
+      job with an available subtitle source is switched to a vertical, hybrid,
+      or "horizontal + vertical" orientation.
+    • CHANGED: The script now provides immediate visual feedback by checking
+      the GUI box and saves this state change to all selected jobs.
+    • FIXED: Prevents enabling burn subtitles for jobs without a subtitle source.
+
 v7.1 - User Default Configuration (2025-11-11)
     • CHANGED: Default audio selection is now "Stereo (Sofalizer)" and "5.1
       Surround" to match user preference for high-quality headphone and
@@ -93,9 +101,9 @@ DEFAULT_TRUE_PEAK = "-1.0"
 # Audio track selection defaults (User preference update)
 DEFAULT_AUDIO_MONO = False
 DEFAULT_AUDIO_STEREO_DOWNMIX = False
-DEFAULT_AUDIO_STEREO_SOFALIZER = True
-DEFAULT_AUDIO_SURROUND_51 = True
-DEFAULT_AUDIO_PASSTHROUGH = False
+DEFAULT_AUDIO_STEREO_SOFALIZER = False
+DEFAULT_AUDIO_SURROUND_51 = False
+DEFAULT_AUDIO_PASSTHROUGH = True
 
 # Subtitle defaults
 DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
@@ -104,7 +112,7 @@ DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
 DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_UNDERLINE = False
-DEFAULT_SUBTITLE_MARGIN_V = "35"
+DEFAULT_SUBTITLE_MARGIN_V = "335"
 DEFAULT_REFORMAT_SUBTITLES = True
 DEFAULT_WRAP_LIMIT = "42"
 
@@ -946,6 +954,8 @@ class VideoProcessorApp:
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
         current_alignment = self.subtitle_alignment_var.get()
+
+        # --- Manage UI visibility and seam alignment ---
         if orientation == "hybrid (stacked)":
             if current_alignment != "seam":
                 self.last_standard_alignment.set(current_alignment)
@@ -955,10 +965,12 @@ class VideoProcessorApp:
             if current_alignment == "seam":
                 self.subtitle_alignment_var.set(self.last_standard_alignment.get())
             self.seam_align_rb.config(state="disabled")
+        
         self.aspect_ratio_frame.pack_forget()
         self.horizontal_rb_frame.pack_forget()
         self.vertical_rb_frame.pack_forget()
         self.hybrid_frame.pack_forget()
+        
         if orientation == "horizontal":
             self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio")
             self.horizontal_rb_frame.pack(fill="x")
@@ -977,7 +989,25 @@ class VideoProcessorApp:
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        self._update_selected_jobs("orientation", "subtitle_alignment")
+
+        # --- IMPLEMENTED: Intelligent Subtitle Burning Workflow ---
+        is_vertical_target = orientation in ["vertical", "hybrid (stacked)", "horizontal + vertical"]
+
+        if is_vertical_target:
+            selected_indices = self.job_listbox.curselection()
+            should_enable_burn = False
+            if selected_indices:
+                for index in selected_indices:
+                    job = self.processing_jobs[index]
+                    if job.get('subtitle_path') is not None:
+                        should_enable_burn = True
+                        break 
+            
+            if should_enable_burn:
+                self.burn_subtitles_var.set(True)
+        
+        # Update the selected jobs with all relevant changes
+        self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
     def _toggle_upscale_options(self):
         self._update_selected_jobs("aspect_mode")
@@ -1032,10 +1062,11 @@ class VideoProcessorApp:
             return
         current_options = self.get_current_gui_options()
         options_to_apply = {key: current_options[key] for key in keys_to_update if key in current_options}
-        print(f"[GUI ACTION] Applied {options_to_apply} to {len(selected_indices)} selected job(s).")
-        for index in selected_indices:
-            job = self.processing_jobs[index]
-            job['options'].update(options_to_apply)
+        if options_to_apply:
+             debug_print(f"[GUI ACTION] Applied {options_to_apply} to {len(selected_indices)} selected job(s).")
+             for index in selected_indices:
+                job = self.processing_jobs[index]
+                job['options'].update(options_to_apply)
 
     def get_current_gui_options(self):
         return {
