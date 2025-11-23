@@ -1,8 +1,10 @@
 
 """
 ================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v23.0_Final
+Multimodal AI Batch Processor (GPTBatcher) v23.1_Final
 ================================================================================
+Updates in v23.1:
+- ✅ NEW: "Ext" (Extension) input box in Output Frame to define custom file extensions.
 Updates in v23.0:
 - ✅ NEW: "Add Selected to Queue" button allows processing specific files.
 - ✅ NEW: "Requeue Failed" button allows retrying only failed jobs.
@@ -263,7 +265,14 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         out_folder = kwargs.get('output_folder') or os.path.dirname(filepaths_group[0])
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(out_folder, exist_ok=True); os.makedirs(log_folder, exist_ok=True)
-        ext = '.' + kwargs.get('output_extension', '').lstrip('.') if kwargs.get('output_extension') else RAW_OUTPUT_FILE_EXTENSION
+        
+        # Handle output extension
+        requested_ext = kwargs.get('output_extension', '').strip()
+        if not requested_ext:
+            ext = RAW_OUTPUT_FILE_EXTENSION
+        else:
+            ext = '.' + requested_ext.lstrip('.')
+            
         raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], out_folder, log_folder, ext)
 
     try:
@@ -304,7 +313,7 @@ def get_api_key(force_gui=False):
 class AppGUI(tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v23.0")
+        self.title("Multimodal AI Batch Processor v23.1")
         self.geometry("1400x850")
         self.minsize(1000, 600)
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -429,10 +438,15 @@ class AppGUI(tk.Tk):
         ttk.Label(out_f, text="Folder:").grid(row=0, column=0, sticky=tk.W)
         self.out_ent = ttk.Entry(out_f, textvariable=self.output_dir_var); self.out_ent.grid(row=0, column=1, sticky="ew")
         ttk.Button(out_f, text="...", width=3, command=self.browse_out).grid(row=0, column=2)
+        
         ttk.Label(out_f, text="Suffix:").grid(row=1, column=0, sticky=tk.W)
         self.suf_ent = ttk.Entry(out_f, textvariable=self.suffix_var); self.suf_ent.grid(row=1, column=1, sticky="ew")
+        
+        ttk.Label(out_f, text="Ext:").grid(row=2, column=0, sticky=tk.W)
+        self.ext_ent = ttk.Entry(out_f, textvariable=self.output_ext_var); self.ext_ent.grid(row=2, column=1, sticky="ew")
+
         self.over_check = ttk.Checkbutton(out_f, text="Overwrite Original", variable=self.overwrite_var, command=self.toggle_overwrite)
-        self.over_check.grid(row=3, column=0, columnspan=2, sticky=tk.W)
+        self.over_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5,0))
 
         # --- Col 3: Queue ---
         col3 = ttk.Frame(outer_pane, padding=5); outer_pane.add(col3, weight=2)
@@ -484,7 +498,7 @@ class AppGUI(tk.Tk):
     def toggle_overwrite(self):
         st = "disabled" if self.overwrite_var.get() else "normal"
         self.group_check.config(state=st); self.group_spin.config(state=st if self.group_files_var.get() else "disabled")
-        self.out_ent.config(state=st); self.suf_ent.config(state=st)
+        self.out_ent.config(state=st); self.suf_ent.config(state=st); self.ext_ent.config(state=st)
 
     def toggle_grouping(self):
         st = "normal" if self.group_files_var.get() else "disabled"
