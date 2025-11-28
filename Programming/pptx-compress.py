@@ -9,10 +9,10 @@ from PIL import Image
 # ============================================================
 #  USER-ADJUSTABLE DEFAULTS — EDIT THESE AS YOU LIKE
 # ============================================================
-DEFAULT_QUALITY    = 60      # JPEG quality (1–100)
-DEFAULT_MAX_WIDTH  = 1920    # e.g., 1920 — or None to disable
-DEFAULT_MAX_HEIGHT = 1080    # e.g., 1080 — or None to disable
-DEFAULT_MAX_MPX    = 2.0     # e.g., 2.0 for ~2 megapixels — or None
+DEFAULT_QUALITY    = 80      # JPEG quality (1–100)
+DEFAULT_MAX_WIDTH  = None    # e.g., 1920 — or None to disable
+DEFAULT_MAX_HEIGHT = None    # e.g., 1080 — or None to disable
+DEFAULT_MAX_MPX    = None     # e.g., 2.0 for ~2 megapixels — or None
 DEFAULT_OVERWRITE  = False   # Replace original file? True/False
 SKIP_SMALL_PIXELS  = 50_000  # Skip compressing icons/logos
 
