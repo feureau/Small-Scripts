@@ -1,51 +1,44 @@
 
 r"""
 ===============================================================================
-YouTube-Compliant Video Encoding and Audio Processing Utility
+vid.py - Advanced Video Encoding and Audio Processing Utility
 -------------------------------------------------------------------------------
 Overview
 --------
 This script provides a GUI-based batch transcoding interface built on top of
 FFmpeg. It is primarily intended for video creators who need to encode videos
-with audio that meets YouTube's official and practical upload requirements.
+with audio that meets official and practical upload requirements.
+
 The tool automates:
-    • Video transcoding with FFmpeg
+    • Video transcoding with FFmpeg (NVIDIA Hardware Acceleration)
     • Audio normalization (EBU R128 via loudnorm)
-    • Multi-track audio handling with mix-and-match outputs (Mono, Stereo, 5.1)
+    • Multi-track audio handling with mix-and-match outputs
     • Binaural (Sofalizer) downmixing for headphones
-    • Bitrate, channel layout, and codec compliance for YouTube
-    • Batch queue management through a Tkinter GUI
     • Advanced, multi-layer subtitle styling and burning
     • Hybrid stacked video creation for vertical formats
+
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v7.3 - Smart Preset Logic (2025-11-28)
+    • CHANGED: Renamed tool to vid.py.
+    • LOGIC UPDATE: Default preset behavior has been hardcoded for workflow efficiency:
+      1. Jobs with NO subtitles default to "Horizontal" orientation at "4k".
+      2. Jobs WITH subtitles (External SRT or Embedded) default to "Hybrid (Stacked)"
+         at "4k" with "Mono (Downmix)" audio.
+    • This ensures main footage stays high-res horizontal, while subtitled
+      social clips are automatically formatted for vertical stacking with clear
+      mono audio.
+
 v7.2 - Intelligent Subtitle Defaulting (2025-11-13)
     • ADDED: Logic to automatically enable "Enable Subtitle Burning" when a
-      job with an available subtitle source is switched to a vertical, hybrid,
-      or "horizontal + vertical" orientation.
-    • CHANGED: The script now provides immediate visual feedback by checking
-      the GUI box and saves this state change to all selected jobs.
-    • FIXED: Prevents enabling burn subtitles for jobs without a subtitle source.
+      job with an available subtitle source is switched to a vertical/hybrid.
 
 v7.1 - User Default Configuration (2025-11-11)
-    • CHANGED: Default audio selection is now "Stereo (Sofalizer)" and "5.1
-      Surround" to match user preference for high-quality headphone and
-      surround outputs.
-    • CHANGED: Re-instated the default SOFA file path to streamline the user's
-      primary workflow. The field is no longer blank on startup.
+    • CHANGED: Default SOFA/Audio preferences updated.
 
 v7.0 - Flexible Audio Track Building (2025-11-11)
-    • REFACTORED: The audio processing backend (`build_audio_segment`) has been
-      completely rewritten to support a flexible track-building system.
-    • CHANGED: The GUI's audio tab now uses five checkboxes (Mono, Stereo,
-      Stereo Sofalizer, 5.1 Surround, Passthrough) instead of radio buttons.
-    • ADDED: Logic to make the "Passthrough" option mutually exclusive with all
-      other audio processing options to ensure valid commands.
-    • ADDED: Intelligent source analysis. The script now checks the source
-      audio channels and will only generate tracks that are possible.
-    • FIXED: Audio normalization is now applied independently to each generated
-      track, ensuring loudness targets are met for all outputs.
+    • REFACTORED: Complete rewrite of audio backend for multi-track support.
 """
 import os
 import subprocess
@@ -333,6 +326,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
 
+    return None
+
 def get_video_info(file_path):
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,r_frame_rate,height,width,color_transfer,color_primaries,codec_name,codec_tag_string", "-of", "json", file_path]
     try:
@@ -507,8 +502,8 @@ class CollapsiblePane(ttk.Frame):
 class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
-        self.root.title("Video Processing Tool")
-        self.root.geometry("1200x800") # Set a reasonable default size
+        self.root.title("Video Processing Tool (vid.py)")
+        self.root.geometry("1200x800")
         self.output_mode = output_mode
         self.processing_jobs = []
 
@@ -627,7 +622,7 @@ class VideoProcessorApp:
         self._toggle_orientation_options()
         self._toggle_upscale_options()
         self._toggle_audio_norm_options()
-        self._update_audio_options_ui() # New unified audio UI updater
+        self._update_audio_options_ui() 
         self._update_bitrate_display()
 
     def setup_input_pane(self, parent):
@@ -1103,44 +1098,77 @@ class VideoProcessorApp:
             video_path = os.path.abspath(video_path)
             dir_name, video_basename = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
             current_options = self.get_current_gui_options()
+            
+            # --- 1. Create the base job (No Subtitles) ---
             no_sub_job = {
                 "job_id": f"job_{time.time()}_{len(self.processing_jobs)}",
                 "video_path": video_path,
                 "subtitle_path": None,
                 "options": copy.deepcopy(current_options)
             }
+            
+            # [PRESET LOGIC] Force No-Sub jobs to Horizontal 4K
+            no_sub_job['options']['orientation'] = 'horizontal'
+            no_sub_job['options']['resolution'] = '4k'
+            
             no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
             self.processing_jobs.append(no_sub_job)
             self.job_listbox.insert(tk.END, no_sub_job["display_name"])
+
+            # Helper function to apply "Subbed" presets
+            def apply_subbed_presets(job_options):
+                job_options['orientation'] = 'hybrid (stacked)'
+                job_options['resolution'] = '4k'
+                job_options['burn_subtitles'] = True
+                # Force Audio to Mono Only
+                job_options['audio_passthrough'] = False
+                job_options['audio_mono'] = True
+                job_options['audio_stereo_downmix'] = False
+                job_options['audio_stereo_sofalizer'] = False
+                job_options['audio_surround_51'] = False
+
+            # --- 2. Check for External .srt files ---
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
                         srt_basename = os.path.splitext(item)[0]
+                        # Match exact name or name with suffix
                         if srt_basename == video_basename or (srt_basename.startswith(video_basename) and len(srt_basename) > len(video_basename) and srt_basename[len(video_basename)] in [' ', '.', '-', '_']):
                             full_path = os.path.join(dir_name, item)
                             tag = srt_basename[len(video_basename):].strip(' .-_') or "(exact match)"
+                            
                             sub_job = copy.deepcopy(no_sub_job)
                             sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                             sub_job['subtitle_path'] = full_path
-                            sub_job['options']['burn_subtitles'] = True
+                            
+                            # [PRESET LOGIC] Apply Hybrid/Mono presets
+                            apply_subbed_presets(sub_job['options'])
+                            
                             sub_job['display_name'] = f"{os.path.basename(video_path)} [Sub: {tag}]"
                             self.processing_jobs.append(sub_job)
                             self.job_listbox.insert(tk.END, sub_job['display_name'])
             except Exception as e:
                 print(f"[WARN] Could not scan for external subtitles in {dir_name}: {e}")
+
+            # --- 3. Check for Embedded Subtitles ---
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
                 lang = tags.get("language", "und")
                 title = tags.get("title", f"Track {sub_stream.get('index')}")
                 codec = sub_stream.get('codec_name', 'sub').upper()
+                
                 sub_job = copy.deepcopy(no_sub_job)
                 sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                 sub_job['subtitle_path'] = f"embedded:{relative_index}"
-                sub_job['options']['burn_subtitles'] = True
+                
+                # [PRESET LOGIC] Apply Hybrid/Mono presets
+                apply_subbed_presets(sub_job['options'])
+                
                 sub_job['display_name'] = f"{os.path.basename(video_path)} [Embedded: {lang.title()} - {title} ({codec})]"
                 self.processing_jobs.append(sub_job)
                 self.job_listbox.insert(tk.END, sub_job['display_name'])
+
         if self.processing_jobs:
             self.job_listbox.selection_clear(0, tk.END)
             self.job_listbox.selection_set(0)
@@ -1256,8 +1284,7 @@ class VideoProcessorApp:
             if track_type == "mono":
                 fc_parts.append(f"{input_tag}aformat=channel_layouts=mono{proc_tag}")
             elif track_type == "stereo_downmix":
-                ffc_parts.append(f"{input_tag}aformat=channel_layouts=stereo{proc_tag}")
-
+                fc_parts.append(f"{input_tag}aformat=channel_layouts=stereo{proc_tag}")
             elif track_type == "stereo_sofalizer":
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
@@ -1556,9 +1583,15 @@ if __name__ == "__main__":
     initial_files = []
     if args.input_files:
         for pattern in args.input_files: initial_files.extend(glob.glob(pattern))
-    else: # Auto-discover files in cwd if none are provided
-        for filename in os.listdir(os.getcwd()):
-            if os.path.splitext(filename)[1].lower() in ['.mp4', '.mkv', '.mov', '.avi', '.webm']:
-                initial_files.append(os.path.join(os.getcwd(), filename))
+    else: # Auto-discover files RECURSIVELY in cwd if none are provided
+        supported_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv'}
+        print(f"[INFO] Scanning {os.getcwd()} and subdirectories...")
+        for root_dir, _, filenames in os.walk(os.getcwd()):
+            for filename in filenames:
+                if os.path.splitext(filename)[1].lower() in supported_exts:
+                    initial_files.append(os.path.join(root_dir, filename))
+        print(f"[INFO] Found {len(initial_files)} files.")
+        
     app = VideoProcessorApp(root, sorted(list(set(initial_files))), args.output_mode)
+
     root.mainloop()
