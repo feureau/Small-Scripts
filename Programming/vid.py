@@ -20,30 +20,25 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v7.6 - Audio Logic & Loudness Update (2025-11-29)
+    • LOGIC UPDATE: "No Subtitles" jobs now default to "5.1 Surround" (Re-encode)
+      instead of Passthrough, with Normalization enabled.
+    • ENGINE UPDATE: 5.1 Output option now supports Stereo sources (Upmix via aformat)
+      instead of skipping them.
+    • CONFIG UPDATE: Default loudness targets updated to -6 LUFS / 4 LRA / -0.1 dBTP
+      (Maximum Loudness).
+
+v7.5 - Audio Preset Update (2025-11-29)
+    • LOGIC UPDATE: Subtitled jobs now default to "Stereo (Sofalizer)" with 
+      Audio Normalization enabled (previously Mono).
+
 v7.4 - Multi-Source Audio Routing (2025-11-29)
     • REFACTORED: Audio engine now supports independent source selection per track.
-    • LOGIC UPDATE: Mono Downmix now prioritizes Stereo input source (if available)
-      before falling back to 5.1.
-    • LOGIC UPDATE: Sofalizer/Surround outputs prioritize 5.1 input source.
-    • ADDED: Dynamic stream splitting (asplit) to allow multiple output tracks
-      to pull from the same input source without conflict.
+    • ADDED: Dynamic stream splitting (asplit).
 
 v7.3 - Smart Preset Logic (2025-11-28)
     • CHANGED: Renamed tool to vid.py.
-    • LOGIC UPDATE: Default preset behavior has been hardcoded for workflow efficiency:
-      1. Jobs with NO subtitles default to "Horizontal" orientation at "4k".
-      2. Jobs WITH subtitles (External SRT or Embedded) default to "Hybrid (Stacked)"
-         at "4k" with "Mono (Downmix)" audio.
-
-v7.2 - Intelligent Subtitle Defaulting (2025-11-13)
-    • ADDED: Logic to automatically enable "Enable Subtitle Burning" when a
-      job with an available subtitle source is switched to a vertical/hybrid.
-
-v7.1 - User Default Configuration (2025-11-11)
-    • CHANGED: Default SOFA/Audio preferences updated.
-
-v7.0 - Flexible Audio Track Building (2025-11-11)
-    • REFACTORED: Complete rewrite of audio backend for multi-track support.
+    • LOGIC UPDATE: Default preset behavior has been hardcoded for workflow efficiency.
 """
 import os
 import subprocess
@@ -91,11 +86,11 @@ DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = False
 
-# Audio normalization
-DEFAULT_NORMALIZE_AUDIO = False
-DEFAULT_LOUDNESS_TARGET = "-9"
-DEFAULT_LOUDNESS_RANGE = "7"
-DEFAULT_TRUE_PEAK = "-1.0"
+# Audio normalization (Maximum Loudness / "Loudness War" settings)
+DEFAULT_NORMALIZE_AUDIO = False # Defaults to False globally, enabled via Presets
+DEFAULT_LOUDNESS_TARGET = "-6"
+DEFAULT_LOUDNESS_RANGE = "4"
+DEFAULT_TRUE_PEAK = "-0.1"
 
 # Audio track selection defaults (User preference update)
 DEFAULT_AUDIO_MONO = False
@@ -1116,6 +1111,15 @@ class VideoProcessorApp:
             # [PRESET LOGIC] Force No-Sub jobs to Horizontal 4K
             no_sub_job['options']['orientation'] = 'horizontal'
             no_sub_job['options']['resolution'] = '4k'
+
+            # [NEW LOGIC v7.6] Default to 5.1 Surround + Normalization (Maximum Loudness)
+            no_sub_job['options']['normalize_audio'] = True
+            no_sub_job['options']['audio_passthrough'] = False
+            no_sub_job['options']['audio_surround_51'] = True
+            # Disable others to be safe
+            no_sub_job['options']['audio_mono'] = False
+            no_sub_job['options']['audio_stereo_downmix'] = False
+            no_sub_job['options']['audio_stereo_sofalizer'] = False
             
             no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
             self.processing_jobs.append(no_sub_job)
@@ -1126,11 +1130,13 @@ class VideoProcessorApp:
                 job_options['orientation'] = 'hybrid (stacked)'
                 job_options['resolution'] = '4k'
                 job_options['burn_subtitles'] = True
-                # Force Audio to Mono Only
+                
+                # [UPDATED LOGIC] Default to Normalized Sofalizer Audio
+                job_options['normalize_audio'] = True
                 job_options['audio_passthrough'] = False
-                job_options['audio_mono'] = True
+                job_options['audio_mono'] = False
                 job_options['audio_stereo_downmix'] = False
-                job_options['audio_stereo_sofalizer'] = False
+                job_options['audio_stereo_sofalizer'] = True 
                 job_options['audio_surround_51'] = False
 
             # --- 2. Check for External .srt files ---
@@ -1282,15 +1288,13 @@ class VideoProcessorApp:
                 print(f"[WARN] Sofalizer skipped: Best available source for {os.path.basename(file_path)} is not 5.1/Surround.")
 
         if options.get("audio_surround_51"):
-            # Validation: 5.1 Output needs 5.1 Source
-            if int(src_for_hq.get("channels", 0)) >= 6:
-                tracks_config.append({
-                    "type": "surround_51", 
-                    "source_index": src_for_hq['index'],
-                    "source_channels": int(src_for_hq.get("channels", 0))
-                })
-            else:
-                print(f"[WARN] 5.1 Output skipped: No 5.1 source stream found in {os.path.basename(file_path)}.")
+            # [LOGIC UPDATE v7.6] Use whatever best source is available. 
+            # Later we use aformat or channelmap depending on channel count.
+            tracks_config.append({
+                "type": "surround_51", 
+                "source_index": src_for_hq['index'],
+                "source_channels": int(src_for_hq.get("channels", 0))
+            })
 
         if not tracks_config:
             print("[WARN] No valid audio tracks selected or possible. Disabling audio.")
@@ -1340,7 +1344,13 @@ class VideoProcessorApp:
                 # Standard SOFA mapping for 5.1
                 fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
-                fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
+                # [LOGIC UPDATE v7.6] Robust 5.1 creation
+                if track['source_channels'] >= 6:
+                     # Standard mapping for surround inputs
+                     fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
+                else:
+                     # Upmix stereo (or others) to 5.1 using aformat
+                     fc_parts.append(f"{input_tag}aformat=channel_layouts=5.1{proc_tag}")
 
             # B. Normalization (Loudnorm)
             if options.get("normalize_audio", False):
