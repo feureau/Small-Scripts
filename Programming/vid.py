@@ -20,15 +20,20 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v7.4 - Multi-Source Audio Routing (2025-11-29)
+    • REFACTORED: Audio engine now supports independent source selection per track.
+    • LOGIC UPDATE: Mono Downmix now prioritizes Stereo input source (if available)
+      before falling back to 5.1.
+    • LOGIC UPDATE: Sofalizer/Surround outputs prioritize 5.1 input source.
+    • ADDED: Dynamic stream splitting (asplit) to allow multiple output tracks
+      to pull from the same input source without conflict.
+
 v7.3 - Smart Preset Logic (2025-11-28)
     • CHANGED: Renamed tool to vid.py.
     • LOGIC UPDATE: Default preset behavior has been hardcoded for workflow efficiency:
       1. Jobs with NO subtitles default to "Horizontal" orientation at "4k".
       2. Jobs WITH subtitles (External SRT or Embedded) default to "Hybrid (Stacked)"
          at "4k" with "Mono (Downmix)" audio.
-    • This ensures main footage stays high-res horizontal, while subtitled
-      social clips are automatically formatted for vertical stacking with clear
-      mono audio.
 
 v7.2 - Intelligent Subtitle Defaulting (2025-11-13)
     • ADDED: Logic to automatically enable "Enable Subtitle Burning" when a
@@ -60,6 +65,7 @@ import time
 import glob
 import textwrap
 import hashlib
+from collections import Counter
 
 # -------------------------- Configuration / Constants --------------------------
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
@@ -1225,62 +1231,103 @@ class VideoProcessorApp:
             offset += 1
 
     def build_audio_segment(self, file_path, options):
-        # 1. Handle Passthrough mode first as it's exclusive
+        # 1. Handle Passthrough mode
         if options.get("audio_passthrough"):
             return ["-map", "0:a?", "-c:a", "copy"]
 
         # 2. Get info on available audio streams
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams:
-            return ["-an"]  # No audio streams found, so disable audio
-
-        # Prioritize surround, then stereo, then first available
-        source_stream = next((s for s in audio_streams if int(s.get("channels", 0)) >= 6),
-                             next((s for s in audio_streams if int(s.get("channels", 0)) == 2),
-                                  audio_streams[0]))
-        source_idx = source_stream['index']
-        source_channels = int(source_stream.get("channels", 0))
-        is_surround_source = source_channels >= 6
-
-        # 3. Determine which tracks to build
-        tracks_to_build = []
-        if options.get("audio_mono"):
-            tracks_to_build.append("mono")
-        if options.get("audio_stereo_downmix"):
-            tracks_to_build.append("stereo_downmix")
-        if options.get("audio_stereo_sofalizer"):
-            if is_surround_source:
-                tracks_to_build.append("stereo_sofalizer")
-            else:
-                print(f"[WARN] Sofalizer requires a 5.1+ source. Skipping Sofalizer track for {os.path.basename(file_path)}.")
-        if options.get("audio_surround_51"):
-            if is_surround_source:
-                tracks_to_build.append("surround_51")
-            else:
-                print(f"[WARN] 5.1 Surround output requires a 5.1+ source. Skipping 5.1 track for {os.path.basename(file_path)}.")
-
-        if not tracks_to_build:
-            print("[WARN] No valid audio tracks selected or possible for the source. Disabling audio.")
             return ["-an"]
 
-        # 4. Build the filter_complex graph
-        fc_parts = []
-        final_maps = []
-        base_input_tag = f"[0:{source_idx}]"
+        # Helper to find specific streams
+        # Note: We cast to int because ffprobe JSON values might be strings
+        stereo_streams = [s for s in audio_streams if int(s.get("channels", 0)) == 2]
+        surround_streams = [s for s in audio_streams if int(s.get("channels", 0)) >= 6]
         
-        # Create a split for each track to process them in parallel
-        split_outputs = "".join(f"[s{i}]" for i in range(len(tracks_to_build)))
-        fc_parts.append(f"{base_input_tag}asplit={len(tracks_to_build)}{split_outputs}")
+        # Define 'Best' candidates based on priorities
+        # For Mono: Prefer Stereo -> Surround -> First Available
+        src_for_mono = stereo_streams[0] if stereo_streams else (surround_streams[0] if surround_streams else audio_streams[0])
+        
+        # For Others (High Quality): Prefer Surround -> Stereo -> First Available
+        src_for_hq = surround_streams[0] if surround_streams else (stereo_streams[0] if stereo_streams else audio_streams[0])
 
-        is_first_track = True
+        # 3. Determine which tracks to build and assign their specific source
+        # Structure: list of dicts { 'type': str, 'source_index': int, 'source_channels': int }
+        tracks_config = []
+
+        if options.get("audio_mono"):
+            tracks_config.append({
+                "type": "mono", 
+                "source_index": src_for_mono['index'],
+                "source_channels": int(src_for_mono.get("channels", 0))
+            })
+
+        if options.get("audio_stereo_downmix"):
+            tracks_config.append({
+                "type": "stereo_downmix", 
+                "source_index": src_for_hq['index'],
+                "source_channels": int(src_for_hq.get("channels", 0))
+            })
+
+        if options.get("audio_stereo_sofalizer"):
+            # Validation: Sofalizer usually needs 5.1 to be worth it
+            if int(src_for_hq.get("channels", 0)) >= 6:
+                tracks_config.append({
+                    "type": "stereo_sofalizer", 
+                    "source_index": src_for_hq['index'],
+                    "source_channels": int(src_for_hq.get("channels", 0))
+                })
+            else:
+                print(f"[WARN] Sofalizer skipped: Best available source for {os.path.basename(file_path)} is not 5.1/Surround.")
+
+        if options.get("audio_surround_51"):
+            # Validation: 5.1 Output needs 5.1 Source
+            if int(src_for_hq.get("channels", 0)) >= 6:
+                tracks_config.append({
+                    "type": "surround_51", 
+                    "source_index": src_for_hq['index'],
+                    "source_channels": int(src_for_hq.get("channels", 0))
+                })
+            else:
+                print(f"[WARN] 5.1 Output skipped: No 5.1 source stream found in {os.path.basename(file_path)}.")
+
+        if not tracks_config:
+            print("[WARN] No valid audio tracks selected or possible. Disabling audio.")
+            return ["-an"]
+
+        # 4. Build Input Routing (Dynamic splitting)
+        # We need to see how many times each source index is used to apply 'asplit' if needed.
+        source_counts = Counter(t['source_index'] for t in tracks_config)
+        
+        fc_parts = []
+        # specific_pads maps source_index -> list of available pad names e.g. {1: ["[s1_0]", "[s1_1]"]}
+        specific_pads = {} 
+
+        for src_idx, count in source_counts.items():
+            if count > 1:
+                # We need to split this source
+                out_pads = [f"[src{src_idx}_{i}]" for i in range(count)]
+                fc_parts.append(f"[0:{src_idx}]asplit={count}{''.join(out_pads)}")
+                specific_pads[src_idx] = out_pads
+            else:
+                # Used once, use direct input
+                specific_pads[src_idx] = [f"[0:{src_idx}]"]
+
+        final_maps = []
         output_audio_index = 0
 
-        for i, track_type in enumerate(tracks_to_build):
-            input_tag = f"[s{i}]"
+        # 5. Build Filters per Track
+        for track in tracks_config:
+            track_type = track['type']
+            src_idx = track['source_index']
+            
+            # Pop one pad from the list of available pads for this source
+            input_tag = specific_pads[src_idx].pop(0)
             proc_tag = f"[{track_type}_proc]"
             final_tag = proc_tag
 
-            # A. Build processing chain for this track type
+            # A. Processing Chain
             if track_type == "mono":
                 fc_parts.append(f"{input_tag}aformat=channel_layouts=mono{proc_tag}")
             elif track_type == "stereo_downmix":
@@ -1288,13 +1335,14 @@ class VideoProcessorApp:
             elif track_type == "stereo_sofalizer":
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
-                    raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found or invalid: {sofa_path}")
+                    raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
+                # Standard SOFA mapping for 5.1
                 fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
                 fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
 
-            # B. Apply normalization if enabled
+            # B. Normalization (Loudnorm)
             if options.get("normalize_audio", False):
                 lt = options.get("loudness_target")
                 lr = options.get("loudness_range")
@@ -1303,14 +1351,14 @@ class VideoProcessorApp:
                 fc_parts.append(f"{proc_tag}loudnorm=i={lt}:lra={lr}:tp={tp}{ln_tag}")
                 final_tag = ln_tag
 
-            # C. Resample and prepare for mapping
+            # C. Resample
             resample_tag = f"[{track_type}_final]"
             fc_parts.append(f"{final_tag}aresample={AUDIO_SAMPLE_RATE}{resample_tag}")
 
-            # D. Add mapping and metadata for this track
+            # D. FFmpeg Mapping Flags
             final_maps.extend(["-map", resample_tag])
             
-            # Codec and Bitrate
+            # Codec/Bitrate Settings
             if track_type == "mono":
                 final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
                 title = "Mono"
@@ -1321,11 +1369,10 @@ class VideoProcessorApp:
                 final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
                 title = "5.1 Surround"
             
-            # Disposition and Title Metadata
-            disposition = "default" if is_first_track else "0"
+            # Metadata
+            disposition = "default" if output_audio_index == 0 else "0"
             final_maps.extend([f"-disposition:a:{output_audio_index}", disposition, f"-metadata:s:a:{output_audio_index}", f"title={title}"])
             
-            is_first_track = False
             output_audio_index += 1
             
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
