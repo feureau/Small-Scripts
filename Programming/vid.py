@@ -20,25 +20,15 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v7.7 - Workflow & Output Refactor (2025-12-03)
+    • CONFIG UPDATE: Added top-level dictionaries for Workflow Presets.
+    • LOGIC UPDATE: Subtitled jobs now default to Mono (configurable at top).
+    • FEATURE ADDED: Simplified Output folder logic. Defaults to "Output" folder.
+    • UI UPDATE: Added "Use Subfolders" checkbox to toggle complex directory structures.
+
 v7.6 - Audio Logic & Loudness Update (2025-11-29)
-    • LOGIC UPDATE: "No Subtitles" jobs now default to "5.1 Surround" (Re-encode)
-      instead of Passthrough, with Normalization enabled.
-    • ENGINE UPDATE: 5.1 Output option now supports Stereo sources (Upmix via aformat)
-      instead of skipping them.
-    • CONFIG UPDATE: Default loudness targets updated to -6 LUFS / 4 LRA / -0.1 dBTP
-      (Maximum Loudness).
-
-v7.5 - Audio Preset Update (2025-11-29)
-    • LOGIC UPDATE: Subtitled jobs now default to "Stereo (Sofalizer)" with 
-      Audio Normalization enabled (previously Mono).
-
-v7.4 - Multi-Source Audio Routing (2025-11-29)
-    • REFACTORED: Audio engine now supports independent source selection per track.
-    • ADDED: Dynamic stream splitting (asplit).
-
-v7.3 - Smart Preset Logic (2025-11-28)
-    • CHANGED: Renamed tool to vid.py.
-    • LOGIC UPDATE: Default preset behavior has been hardcoded for workflow efficiency.
+    • LOGIC UPDATE: "No Subtitles" jobs now default to "5.1 Surround".
+    • CONFIG UPDATE: Default loudness targets updated to -6 LUFS.
 """
 import os
 import subprocess
@@ -85,6 +75,34 @@ DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = False
+
+# -------------------------- Output Configuration --------------------------
+# If True: Output path is [Base]/[Resolution]_[Format]/[Subtitle_Tag]/File.mp4
+# If False: Output path is [Base]/[DEFAULT_SINGLE_OUTPUT_DIR_NAME]/File.mp4
+DEFAULT_OUTPUT_TO_SUBFOLDERS = False
+DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"
+
+# -------------------------- Workflow Presets --------------------------
+# Audio Options: "mono", "stereo", "sofalizer", "surround_51", "passthrough"
+# Orientation Options: "horizontal", "vertical", "hybrid (stacked)", "original"
+
+# 1. Default settings for videos containing NO subtitles
+PRESET_NO_SUBTITLES = {
+    "orientation": "horizontal",
+    "resolution": "4k",
+    "normalize_audio": True,
+    "audio_type": "surround_51", 
+    "burn_subtitles": False
+}
+
+# 2. Default settings for videos WITH subtitles (Embedded or .srt)
+PRESET_WITH_SUBTITLES = {
+    "orientation": "hybrid (stacked)",
+    "resolution": "4k",
+    "normalize_audio": True,
+    "audio_type": "mono",         # Default changed to Mono
+    "burn_subtitles": True
+}
 
 # Audio normalization (Maximum Loudness / "Loudness War" settings)
 DEFAULT_NORMALIZE_AUDIO = False # Defaults to False globally, enabled via Presets
@@ -513,6 +531,7 @@ class VideoProcessorApp:
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
         self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
+        self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS) # New Subfolder Toggle
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
         self.horizontal_aspect_var = tk.StringVar(value=DEFAULT_HORIZONTAL_ASPECT)
@@ -728,6 +747,11 @@ class VideoProcessorApp:
         ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
         ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
         ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
+        
+        # --- NEW CHECKBOX FOR SUBFOLDERS ---
+        ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
+                        command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
+        
         lut_frame = ttk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
         self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
@@ -1092,7 +1116,34 @@ class VideoProcessorApp:
             "shadow_offset_x": self.shadow_offset_x_var.get(), "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
+            # New folder config
+            "output_to_subfolders": self.output_subfolders_var.get(),
         }
+
+    def _apply_workflow_preset(self, options, preset_config):
+        """Applies dictionary-based presets to the job options."""
+        # 1. Apply direct mappings
+        if "orientation" in preset_config: options["orientation"] = preset_config["orientation"]
+        if "resolution" in preset_config: options["resolution"] = preset_config["resolution"]
+        if "normalize_audio" in preset_config: options["normalize_audio"] = preset_config["normalize_audio"]
+        if "burn_subtitles" in preset_config: options["burn_subtitles"] = preset_config["burn_subtitles"]
+
+        # 2. Apply Audio Logic (Reset all first, then enable one)
+        if "audio_type" in preset_config:
+            # Reset all
+            options["audio_passthrough"] = False
+            options["audio_mono"] = False
+            options["audio_stereo_downmix"] = False
+            options["audio_stereo_sofalizer"] = False
+            options["audio_surround_51"] = False
+
+            # Enable specific
+            atype = preset_config["audio_type"]
+            if atype == "passthrough": options["audio_passthrough"] = True
+            elif atype == "mono": options["audio_mono"] = True
+            elif atype == "stereo": options["audio_stereo_downmix"] = True
+            elif atype == "sofalizer": options["audio_stereo_sofalizer"] = True
+            elif atype == "surround_51": options["audio_surround_51"] = True
 
     def add_video_files_and_discover_jobs(self, file_paths):
         for video_path in file_paths:
@@ -1108,43 +1159,18 @@ class VideoProcessorApp:
                 "options": copy.deepcopy(current_options)
             }
             
-            # [PRESET LOGIC] Force No-Sub jobs to Horizontal 4K
-            no_sub_job['options']['orientation'] = 'horizontal'
-            no_sub_job['options']['resolution'] = '4k'
-
-            # [NEW LOGIC v7.6] Default to 5.1 Surround + Normalization (Maximum Loudness)
-            no_sub_job['options']['normalize_audio'] = True
-            no_sub_job['options']['audio_passthrough'] = False
-            no_sub_job['options']['audio_surround_51'] = True
-            # Disable others to be safe
-            no_sub_job['options']['audio_mono'] = False
-            no_sub_job['options']['audio_stereo_downmix'] = False
-            no_sub_job['options']['audio_stereo_sofalizer'] = False
+            # [PRESET LOGIC] Apply defaults from top of script constants
+            self._apply_workflow_preset(no_sub_job['options'], PRESET_NO_SUBTITLES)
             
             no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
             self.processing_jobs.append(no_sub_job)
             self.job_listbox.insert(tk.END, no_sub_job["display_name"])
-
-            # Helper function to apply "Subbed" presets
-            def apply_subbed_presets(job_options):
-                job_options['orientation'] = 'hybrid (stacked)'
-                job_options['resolution'] = '4k'
-                job_options['burn_subtitles'] = True
-                
-                # [UPDATED LOGIC] Default to Normalized Sofalizer Audio
-                job_options['normalize_audio'] = True
-                job_options['audio_passthrough'] = False
-                job_options['audio_mono'] = True
-                job_options['audio_stereo_downmix'] = False
-                job_options['audio_stereo_sofalizer'] = False 
-                job_options['audio_surround_51'] = False
 
             # --- 2. Check for External .srt files ---
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
                         srt_basename = os.path.splitext(item)[0]
-                        # Match exact name or name with suffix
                         if srt_basename == video_basename or (srt_basename.startswith(video_basename) and len(srt_basename) > len(video_basename) and srt_basename[len(video_basename)] in [' ', '.', '-', '_']):
                             full_path = os.path.join(dir_name, item)
                             tag = srt_basename[len(video_basename):].strip(' .-_') or "(exact match)"
@@ -1153,8 +1179,8 @@ class VideoProcessorApp:
                             sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                             sub_job['subtitle_path'] = full_path
                             
-                            # [PRESET LOGIC] Apply Hybrid/Mono presets
-                            apply_subbed_presets(sub_job['options'])
+                            # [PRESET LOGIC] Apply defaults from top of script constants
+                            self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
                             
                             sub_job['display_name'] = f"{os.path.basename(video_path)} [Sub: {tag}]"
                             self.processing_jobs.append(sub_job)
@@ -1174,8 +1200,8 @@ class VideoProcessorApp:
                 sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                 sub_job['subtitle_path'] = f"embedded:{relative_index}"
                 
-                # [PRESET LOGIC] Apply Hybrid/Mono presets
-                apply_subbed_presets(sub_job['options'])
+                # [PRESET LOGIC] Apply defaults from top of script constants
+                self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
                 
                 sub_job['display_name'] = f"{os.path.basename(video_path)} [Embedded: {lang.title()} - {title} ({codec})]"
                 self.processing_jobs.append(sub_job)
@@ -1196,6 +1222,7 @@ class VideoProcessorApp:
     def update_gui_from_job_options(self, job):
         options = job['options']
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
+        self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
         self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
@@ -1389,24 +1416,37 @@ class VideoProcessorApp:
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = copy.deepcopy(job['options'])
-        folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
-        if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
-        elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
-        elif orientation == "original": folder_name += "_Original"
+        
+        # --- NEW FOLDER LOGIC START ---
+        if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
+            # Complex subfolder structure
+            folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
+            if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
+            elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
+            elif orientation == "original": folder_name += "_Original"
+            else:
+                h_aspect = options.get('horizontal_aspect').replace(':', 'x')
+                if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
+            
+            tag_match = re.search(r'(\[.*\])', job['display_name'])
+            tag = tag_match.group(1) if tag_match else "Subtitles"
+            safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
+            final_sub_path = os.path.join(folder_name, safe_subtitle_folder_name)
         else:
-            h_aspect = options.get('horizontal_aspect').replace(':', 'x')
-            if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
+            # Simple single output folder
+            final_sub_path = DEFAULT_SINGLE_OUTPUT_DIR_NAME
+        
+        base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
+        output_dir = os.path.join(base_dir, final_sub_path)
+        os.makedirs(output_dir, exist_ok=True)
+        # --- NEW FOLDER LOGIC END ---
+
         unique_base_name = os.path.splitext(job['display_name'])[0]
         safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", unique_base_name)
         job_hash = get_job_hash(options)
         safe_base_name = f"{safe_base_name}_{job_hash}"
-        tag_match = re.search(r'(\[.*\])', job['display_name'])
-        tag = tag_match.group(1) if tag_match else "Subtitles"
-        safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-        base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
-        output_dir = os.path.join(base_dir, folder_name, safe_subtitle_folder_name)
-        os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
+        
         ass_burn_path, temp_extracted_srt_path = None, None
         try:
             if options.get("burn_subtitles") and job.get('subtitle_path'):
