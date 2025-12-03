@@ -1134,9 +1134,9 @@ class VideoProcessorApp:
                 # [UPDATED LOGIC] Default to Normalized Sofalizer Audio
                 job_options['normalize_audio'] = True
                 job_options['audio_passthrough'] = False
-                job_options['audio_mono'] = False
+                job_options['audio_mono'] = True
                 job_options['audio_stereo_downmix'] = False
-                job_options['audio_stereo_sofalizer'] = True 
+                job_options['audio_stereo_sofalizer'] = False 
                 job_options['audio_surround_51'] = False
 
             # --- 2. Check for External .srt files ---
