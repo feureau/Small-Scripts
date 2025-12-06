@@ -4,8 +4,8 @@
 Ultimate YouTube Batch Uploader & Manager
 =================================================
 
-Version: 1.2 (Playlist Loading Update)
-Date: 2025-11-07
+Version: 1.3 (Auto-Schedule Update)
+Date: 2025-12-06
 Author: [Your Name Here]
 
 ---
@@ -23,6 +23,7 @@ The application operates in two primary modes:
 - **GUI-Based Operation:** Easy-to-use interface for all functions.
 - **Dual Modes:** Seamlessly switch between managing existing videos and uploading new ones.
 - **Load from Specific Playlist:** Load videos from a specific playlist ID, allowing you to manage private/unlisted videos easily.
+- **Auto-Set Schedule:** Smart button to automatically set the start time based on the latest scheduled video in the list + interval.
 - **Google OAuth2 Authentication:** Securely authenticates with your YouTube account using the official Google Auth library. Tokens are stored locally and automatically revoked on exit for security.
 - **Batch Metadata Updates:** Modify titles, descriptions, tags, categories, privacy status, and more for multiple videos at once.
 - **Automated Scheduling:** Automatically calculate and assign staggered publishing times for a batch of videos based on a start time and interval.
@@ -80,6 +81,7 @@ The application operates in two primary modes:
 4.  **Configure Settings:**
     - **Scheduling & Visibility (Update & Upload):**
         - Set a start date and time for the first video.
+        - **NEW: Auto-Set Button:** Click "Auto-Set" to automatically find the last scheduled video in the list, add the interval, and set the start time.
         - Define the interval (in hours and minutes) between subsequent videos.
         - To apply the schedule, ensure the "Update Schedule" checkbox is checked. This automatically sets videos to "Private" until their scheduled time.
         - In Update Mode, you can also set a static visibility (Private, Unlisted, Public) if not scheduling.
@@ -392,7 +394,7 @@ class MainApp:
         self.load_for_upload_button = ttk.Button(load_frame, text='OR: Load Files for Upload', command=self.gui_load_files_for_upload, state=tk.NORMAL)
         self.load_for_upload_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Label(load_frame, text='Max to Load:').pack(side=tk.LEFT, padx=(10, 2))
-        self.max_videos_var = tk.StringVar(value='50')
+        self.max_videos_var = tk.StringVar(value='100')
         ttk.Spinbox(load_frame, from_=0, to=10000, width=5, textvariable=self.max_videos_var).pack(side=tk.LEFT, padx=(0, 5))
 
         # --- Treeview Frame ---
@@ -413,9 +415,23 @@ class MainApp:
         meta = ttk.LabelFrame(bottom_frame, text='Metadata', padding=10); meta.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # --- Scheduling Widgets ---
-        ttk.Label(sched, text='First Publish:').grid(row=0, column=0, sticky='w'); self.start_ent = ttk.Entry(sched, width=20); self.start_ent.insert(0, calculate_default_start_time()); self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
-        ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w'); self.interval_hour_var = tk.StringVar(value='2'); ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_hour_var).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(sched, text='Interval Mins:').grid(row=2, column=0, sticky='w'); self.interval_minute_var = tk.StringVar(value='24'); ttk.Spinbox(sched, from_=0, to=59, width=5, textvariable=self.interval_minute_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
+        ttk.Label(sched, text='First Publish:').grid(row=0, column=0, sticky='w')
+        self.start_ent = ttk.Entry(sched, width=20)
+        self.start_ent.insert(0, calculate_default_start_time())
+        self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
+        
+        # --- NEW BUTTON: Auto-Set ---
+        ttk.Button(sched, text="Auto-Set", width=8, command=self.auto_set_start_time).grid(row=0, column=2, sticky='w', padx=2)
+        # ----------------------------
+
+        ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w')
+        self.interval_hour_var = tk.StringVar(value='2')
+        ttk.Spinbox(sched, from_=0, to=1000, width=5, textvariable=self.interval_hour_var).grid(row=1, column=1, sticky='w', padx=5, pady=2)
+        
+        ttk.Label(sched, text='Interval Mins:').grid(row=2, column=0, sticky='w')
+        self.interval_minute_var = tk.StringVar(value='24')
+        ttk.Spinbox(sched, from_=0, to=59, width=5, textvariable=self.interval_minute_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
+        
         ttk.Separator(sched, orient='horizontal').grid(row=3, column=0, columnspan=2, sticky='ew', pady=10)
         self.update_schedule_var = tk.BooleanVar(value=True); ttk.Checkbutton(sched, text="Update Schedule", variable=self.update_schedule_var, command=self._update_ui_states).grid(row=4, column=0, columnspan=2, sticky='w')
         self.update_visibility_var = tk.BooleanVar(value=False); self.vis_cb = ttk.Checkbutton(sched, text="Update Visibility Status", variable=self.update_visibility_var, command=self._update_ui_states); self.vis_cb.grid(row=5, column=0, columnspan=2, sticky='w')
@@ -459,6 +475,56 @@ class MainApp:
         # --- Process Button and Status Bar ---
         self.process_button = ttk.Button(frm, text='PROCESS', command=self.start_processing_thread, state=tk.DISABLED); self.process_button.pack(fill=tk.X, ipady=8, pady=(5, 0)); self.status_bar = ttk.Label(frm, text="Welcome! Authenticate to load existing videos, or load local files now.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
     
+    def auto_set_start_time(self):
+        """
+        Sets the 'First Publish' time based on the latest scheduled video + interval.
+        If no videos are scheduled, uses Current Time + Interval.
+        """
+        # 1. Get the interval from the GUI spinners
+        try:
+            hours = int(self.interval_hour_var.get())
+            mins = int(self.interval_minute_var.get())
+        except ValueError:
+            hours, mins = 2, 24 # Defaults if empty
+            
+        interval_delta = timedelta(hours=hours, minutes=mins)
+        latest_scheduled_dt = None
+
+        # 2. Iterate through loaded videos to find the latest schedule (Update Mode only usually has schedules)
+        if self.app_mode == "update":
+            for vd in self.videos_to_process:
+                if isinstance(vd, VideoData):
+                    raw_time = vd.video_status.get('publishAt')
+                    if raw_time:
+                        try:
+                            # Parse ISO format (e.g., 2025-11-07T10:00:00Z)
+                            # We replace Z with +00:00 to ensure it's treated as UTC-aware
+                            dt = datetime.fromisoformat(raw_time.replace('Z', '+00:00'))
+                            
+                            if latest_scheduled_dt is None or dt > latest_scheduled_dt:
+                                latest_scheduled_dt = dt
+                        except ValueError:
+                            pass
+        
+        # 3. Calculate the new start time
+        if latest_scheduled_dt:
+            # We found a scheduled video (It is in UTC).
+            # Convert UTC to Local Time because the GUI Entry expects Local Time (system time).
+            latest_local = latest_scheduled_dt.astimezone()
+            new_start_time = latest_local + interval_delta
+            logger.info(f"Auto-Set: Found latest scheduled video at {latest_local.strftime('%Y-%m-%d %H:%M')}. Setting start to {new_start_time.strftime('%Y-%m-%d %H:%M')}")
+            self.update_status(f"Found schedule. Setting start to {new_start_time.strftime('%Y-%m-%d %H:%M')}")
+        else:
+            # No scheduled videos found (or in Upload mode). Use Now + Interval.
+            new_start_time = datetime.now() + interval_delta
+            logger.info(f"Auto-Set: No scheduled videos found. Setting start to Now + Interval: {new_start_time.strftime('%Y-%m-%d %H:%M')}")
+            self.update_status(f"No previous schedule found. Setting start to Now + Interval.")
+
+        # 4. Update the GUI Entry
+        formatted_time = new_start_time.strftime('%Y-%m-%d %H:%M')
+        self.start_ent.delete(0, tk.END)
+        self.start_ent.insert(0, formatted_time)
+
     def _update_gui_for_mode(self):
         self.tree.delete(*self.tree.get_children())
         if self.app_mode == "update":
