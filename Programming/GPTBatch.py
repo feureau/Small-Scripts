@@ -48,6 +48,8 @@ PRESET_DATA_B64 = "ewogICAgIkRlZmF1bHQgQW5hbHlzaXMiOiB7CiAgICAgICAgInByb21wdCI6I
 # --- PRESETS_END ---
 ################################################################################
 
+
+
 ################################################################################
 # --- Configuration ---
 ################################################################################
@@ -333,8 +335,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         return None
     except Exception as e:
         log_data.update({'status': 'Failure', 'error': str(e)})
-        save_output_files(f"Error: {e}", log_data, raw_path, log_path)
         if isinstance(e, QuotaExhaustedError): raise
+        save_output_files(f"Error: {e}", log_data, raw_path, log_path)
         return str(e)
 
 def get_api_key(force_gui=False):
@@ -349,6 +351,106 @@ def get_api_key(force_gui=False):
 ################################################################################
 # --- GUI Class ---
 ################################################################################
+
+class ModelSelectionDialog(tk.Toplevel):
+    def __init__(self, parent, current_engine, current_model, fetch_callback, exhausted_set):
+        super().__init__(parent)
+        self.title("Quota Exhausted")
+        self.result = None
+        self.fetch_callback = fetch_callback
+        self.exhausted_set = exhausted_set
+        self.quota_marker = " ⛔ (Quota Hit)"
+        
+        # Center the window
+        w, h = 450, 200
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (w // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (h // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text=f"Quota exhausted for: {current_model}", foreground="red").pack(pady=(0, 5))
+        ttk.Label(frame, text="Select a new Provider and Model:", font=('Helvetica', 9, 'bold')).pack(pady=(0, 10))
+
+        # Grid for dropdowns
+        grid_frame = ttk.Frame(frame)
+        grid_frame.pack(fill=tk.X)
+
+        ttk.Label(grid_frame, text="Provider:").grid(row=0, column=0, sticky="w", padx=5)
+        self.provider_var = tk.StringVar(value=current_engine)
+        self.provider_combo = ttk.Combobox(grid_frame, textvariable=self.provider_var, 
+                                           values=['google', 'ollama', 'lmstudio'], state="readonly", width=15)
+        self.provider_combo.grid(row=0, column=1, sticky="ew", padx=5)
+        self.provider_combo.bind("<<ComboboxSelected>>", self.on_provider_change)
+
+        ttk.Label(grid_frame, text="Model:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.model_combo_var = tk.StringVar()
+        self.model_combo = ttk.Combobox(grid_frame, textvariable=self.model_combo_var, state="readonly", width=35)
+        self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+
+        # Initial Load
+        self.on_provider_change(None, initial_model=current_model)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(pady=15, fill=tk.X)
+        ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Apply to Remaining Jobs", command=self.on_ok).pack(side=tk.RIGHT, padx=5)
+
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        self.transient(parent)
+        self.wait_visibility()
+        self.grab_set()
+        self.wait_window(self)
+
+    def on_provider_change(self, event, initial_model=None):
+        engine = self.provider_var.get()
+        self.model_combo.set("Loading...")
+        self.model_combo['values'] = []
+        self.update_idletasks()
+        
+        # Use callback to fetch models from main app (which uses cache)
+        models = self.fetch_callback(engine)
+        
+        display_values = []
+        for m in models:
+            if m in self.exhausted_set:
+                display_values.append(f"{m}{self.quota_marker}")
+            else:
+                display_values.append(m)
+        
+        self.model_combo['values'] = display_values
+        
+        if display_values:
+            # Try to select the initial model (marked or unmarked)
+            target = initial_model
+            marked_target = f"{initial_model}{self.quota_marker}"
+            
+            if initial_model and initial_model in models:
+                # If it's in the exhausted set, select the marked version
+                if initial_model in self.exhausted_set:
+                    self.model_combo.set(marked_target)
+                else:
+                    self.model_combo.set(initial_model)
+            else:
+                self.model_combo.current(0)
+        else:
+            self.model_combo.set("No models found")
+
+    def on_ok(self):
+        # Clean the model name (remove the marker)
+        raw_model = self.model_combo_var.get()
+        clean_model = raw_model.split(self.quota_marker)[0]
+        
+        # Return tuple: (Provider, Model)
+        self.result = (self.provider_var.get(), clean_model)
+        self.destroy()
+
+    def on_cancel(self):
+        self.result = None
+        self.destroy()
+
 class AppGUI(tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
@@ -366,6 +468,9 @@ class AppGUI(tk.Tk):
         self.result_queue = queue.Queue()
         self.job_registry = {}
         self.current_presets = {}
+        self.model_cache = {} 
+        self.exhausted_models = set() # Track models that hit 429 errors
+        self.global_runtime_overrides = None # Stores {engine: ..., model_name: ...}
         
         self.processing_paused = threading.Event()
         self.processing_cancelled = threading.Event()
@@ -614,17 +719,36 @@ class AppGUI(tk.Tk):
         k = get_api_key(True)
         if k: self.api_key = k; self.api_status_label.config(text="API Key: Set"); self.update_models()
 
+    def get_models_for_provider(self, provider):
+        """Helper to get models for the dialog (using cache)."""
+        if provider in self.model_cache:
+            return self.model_cache[provider]
+        
+        m, err = [], None
+        if provider == "google": m, err = fetch_google_models(self.api_key)
+        elif provider == "ollama": m, err = fetch_ollama_models()
+        elif provider == "lmstudio": m, err = fetch_lmstudio_models()
+        
+        if m: self.model_cache[provider] = m
+        return m or []
+
     def update_models(self, *args):
-        e = self.engine_var.get(); self.model_combo.set('Loading...'); self.model_combo.config(state="disabled"); self.update_idletasks()
-        if e == "google": m, err = fetch_google_models(self.api_key)
-        elif e == "ollama": m, err = fetch_ollama_models()
-        elif e == "lmstudio": m, err = fetch_lmstudio_models()
-        else: m, err = [], "Unknown"
-        if err: self.model_combo.set(err)
-        elif m:
-            self.model_combo['values'] = m; self.model_combo.config(state="readonly")
-            self.model_combo.set(DEFAULT_GOOGLE_MODEL if e=="google" and DEFAULT_GOOGLE_MODEL in m else m[0])
-        else: self.model_combo.set("No models found")
+        e = self.engine_var.get()
+        self.model_combo.set('Loading...')
+        self.model_combo.config(state="disabled")
+        self.update_idletasks()
+        
+        m = self.get_models_for_provider(e)
+
+        if m:
+            self.model_combo['values'] = m
+            self.model_combo.config(state="readonly")
+            # Keep current selection if valid, otherwise default
+            curr = self.model_var.get()
+            if curr and curr in m: self.model_combo.set(curr)
+            else: self.model_combo.set(DEFAULT_GOOGLE_MODEL if e=="google" and DEFAULT_GOOGLE_MODEL in m else m[0])
+        else: 
+            self.model_combo.set("No models found")
 
     def add_files(self):
         f = filedialog.askopenfilenames(parent=self, filetypes=[("Supported", " ".join(f"*{e}" for e in SUPPORTED_IMAGE_EXTENSIONS + ['.*']))])
@@ -732,11 +856,29 @@ class AppGUI(tk.Tk):
                 jid, status = res['job_id'], res['status']
                 if self.tree.exists(jid):
                     self.tree.set(jid, 'status', status)
-                    tag = 'success' if status=='Completed' else 'fail' if status=='Failed' else 'retry' if 'Retrying' in status else ''
-                    if tag: self.tree.tag_configure('success', background='#ccffcc'); self.tree.tag_configure('fail', background='#ffcccc'); self.tree.tag_configure('retry', background='#fff5cc')
+                    tag = 'success' if status=='Completed' else 'fail' if status=='Failed' else 'retry' if 'Retrying' in status else 'wait' if 'Waiting' in status else ''
+                    if tag: 
+                        self.tree.tag_configure('success', background='#ccffcc')
+                        self.tree.tag_configure('fail', background='#ffcccc')
+                        self.tree.tag_configure('retry', background='#fff5cc')
+                        self.tree.tag_configure('wait', background='#ffe0b2')
                     if tag: self.tree.item(jid, tags=(tag,))
         except queue.Empty: pass
         finally: self.after(100, self._check_result_queue)
+
+    def update_tree_models(self, new_model_name):
+        # Update current running job and all pending jobs
+        for child in self.tree.get_children():
+            # child is the item ID (which matches job_id in this app)
+            status = self.tree.set(child, 'status')
+            if status in ('Pending', 'Running', 'Waiting for User...', 'Retrying'):
+                self.tree.set(child, 'model', new_model_name)
+
+    def _ask_user_for_new_model(self, current_engine, current_model, event_container):
+        """Called by the main thread to ask user for a new model via a dropdown dialog."""
+        dialog = ModelSelectionDialog(self, current_engine, current_model, self.get_models_for_provider, self.exhausted_models)
+        event_container['result'] = dialog.result
+        event_container['event'].set()
 
     def _worker(self):
         console_log("Worker thread started.", "INFO")
@@ -751,7 +893,17 @@ class AppGUI(tk.Tk):
             self.result_queue.put({'job_id': jid, 'status': 'Running'})
             params = job.copy(); params.pop('job_id')
             
-            for attempt in range(1, MAX_RETRIES + 1):
+            # --- APPLY GLOBAL OVERRIDES (for all subsequent jobs) ---
+            if self.global_runtime_overrides:
+                params['engine'] = self.global_runtime_overrides['engine']
+                params['model_name'] = self.global_runtime_overrides['model_name']
+                # If switching to google, ensure API key is present (in case started with local)
+                if params['engine'] == 'google' and not params.get('api_key'):
+                    params['api_key'] = self.api_key
+
+            attempt = 0
+            while attempt < MAX_RETRIES:
+                attempt += 1
                 if self.processing_cancelled.is_set(): break
                 try:
                     err = process_file_group(**params)
@@ -760,15 +912,55 @@ class AppGUI(tk.Tk):
                         break
                     else: raise Exception(err)
                 except Exception as e:
+                    is_quota = isinstance(e, QuotaExhaustedError) or "Quota exhausted" in str(e) or "429" in str(e)
+                    
+                    if is_quota:
+                        console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
+                        self.result_queue.put({'job_id': jid, 'status': 'Waiting for User...'})
+                        
+                        # Add current model to exhausted set
+                        self.exhausted_models.add(params['model_name'])
+                        
+                        event_container = {'event': threading.Event(), 'result': None}
+                        # Ask main thread to show the custom dialog
+                        self.after(0, lambda: self._ask_user_for_new_model(params['engine'], params['model_name'], event_container))
+                        
+                        # Wait here until main thread sets the event (dialog closed)
+                        event_container['event'].wait() 
+                        
+                        # Result is tuple (engine, model)
+                        user_result = event_container['result']
+                        if user_result:
+                            new_engine, new_model = user_result
+                            console_log(f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)", "ACTION")
+                            
+                            # UPDATE GLOBAL OVERRIDES
+                            self.global_runtime_overrides = {'engine': new_engine, 'model_name': new_model}
+                            
+                            # UPDATE CURRENT PARAMS
+                            params['engine'] = new_engine
+                            params['model_name'] = new_model
+                            if new_engine == 'google':
+                                params['api_key'] = self.api_key
+                            
+                            # Trigger UI update
+                            self.after(0, lambda: self.update_tree_models(new_model))
+                            
+                            attempt -= 1 # Don't count this as a failed retry
+                            continue # Retry immediately
+                        else:
+                            console_log("User cancelled model switch. Retrying normally...", "WARN")
+
                     console_log(f"Job {jid} Error: {e}", "ERROR")
                     if attempt < MAX_RETRIES:
-                        wait_time = 60 if isinstance(e, QuotaExhaustedError) else 5
+                        wait_time = 60 if is_quota else 5
                         self.result_queue.put({'job_id': jid, 'status': f"Retrying ({attempt})"})
                         time.sleep(wait_time)
                     else:
-                        traceback.print_exc() # Print full traceback to console on final failure
+                        traceback.print_exc()
                         [copy_failed_file(fp) for fp in job['filepaths_group']]
                         self.result_queue.put({'job_id': jid, 'status': 'Failed'})
+                        break
         console_log("Worker thread finished.", "INFO")
         self.after(0, self._reset_gui)
 
