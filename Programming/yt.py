@@ -853,7 +853,14 @@ def update_videos_on_youtube(service, processing_data):
                 except HttpError as pl_e:
                     if 'playlistItemDuplicate' in str(pl_e.content): logger.warning(f"    -> NOTE: Video already in playlist.")
                     else: logger.error(f"    -> FAILED to add to playlist: {pl_e.reason}")
-        except HttpError as e: logger.error(f"FAILED to update '{vd.original_title}': {e.reason}"); os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True); shutil.copy(vd.description_file_path, FAILED_UPDATES_FOLDER)
+        except HttpError as e: 
+            logger.error(f"FAILED to update '{vd.original_title}': {e.reason}")
+            # Only try to back up the file if a local file actually exists
+            if vd.description_file_path:
+                os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True)
+                shutil.copy(vd.description_file_path, FAILED_UPDATES_FOLDER)
+            else:
+                logger.warning(f"Could not backup description file for '{vd.original_title}' (No local file matched).")
         except Exception as e: logger.error(f"An unexpected error occurred for '{vd.original_title}': {e}", exc_info=True)
     logger.info("--- Update processing complete. ---")
 
