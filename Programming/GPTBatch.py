@@ -53,12 +53,15 @@ PRESET_DATA_B64 = "ewogICAgIkRlZmF1bHQgQW5hbHlzaXMiOiB7CiAgICAgICAgInByb21wdCI6I
 ################################################################################
 # --- Configuration ---
 ################################################################################
+import ollama # <--- Added for Web Search capability
+
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
 DEFAULT_GOOGLE_MODEL = "models/gemini-flash-latest"
 
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_API_URL}/api/tags"
-OLLAMA_GENERATE_ENDPOINT = f"{OLLAMA_API_URL}/api/generate"
+# Note: The generate endpoint is no longer used for Ollama in this script, 
+# we use the ollama library which uses /api/chat
 
 LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
@@ -216,7 +219,7 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     elif engine == "lmstudio": return call_lmstudio_api(prompt_text, model_name, **kwargs)
     else: return f"Error: Unknown engine '{engine}'"
 
-def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=None, stream_output=False, safety_settings=None):
+def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=None, stream_output=False, safety_settings=None, **kwargs):
     global last_request_time
     if not api_key: return "Error: Google API Key not configured."
     try:
@@ -240,13 +243,35 @@ def call_google_gemini_api(prompt_text, api_key, model_name, images_data_list=No
     except ResourceExhausted: raise QuotaExhaustedError(f"Quota exhausted for model {model_name}")
     except Exception as e: raise e
 
-def call_ollama_api(prompt_text, model_name, images_data_list=None, **kwargs):
-    payload = {"model": model_name, "prompt": prompt_text, "stream": False}
-    if images_data_list:
-        payload["images"] = [base64.b64encode(img_data['bytes']).decode('utf-8') for img_data in images_data_list]
-    response = requests.post(OLLAMA_GENERATE_ENDPOINT, json=payload, timeout=600)
-    response.raise_for_status()
-    return sanitize_api_response(response.json().get("response", ""))
+def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, **kwargs):
+    """
+    Updated to use the official Ollama library.
+    Supports tool calling for Web Search if enabled.
+    """
+    try:
+        message = {
+            'role': 'user', 
+            'content': prompt_text
+        }
+
+        # The ollama library accepts bytes for images
+        if images_data_list:
+            message['images'] = [img['bytes'] for img in images_data_list]
+
+        # Conditionally add the web_search tool
+        tools_list = [ollama.web_search] if enable_web_search else []
+
+        # Use the chat endpoint which supports tools
+        response = ollama.chat(
+            model=model_name,
+            messages=[message],
+            tools=tools_list, 
+        )
+
+        return response['message']['content']
+
+    except Exception as e:
+        return f"Error calling Ollama API: {str(e)}"
 
 def call_lmstudio_api(prompt_text, model_name, images_data_list=None, **kwargs):
     headers = {"Content-Type": "application/json"}
@@ -325,7 +350,17 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         prompt += "".join(text_parts)
         log_data['prompt_sent'] = prompt
         
-        response = call_generative_ai_api(engine, prompt, api_key, model_name, images_data_list=images_data, stream_output=kwargs['stream_output'], safety_settings=kwargs.get('safety_settings'))
+        # Pass enable_web_search from kwargs
+        response = call_generative_ai_api(
+            engine, 
+            prompt, 
+            api_key, 
+            model_name, 
+            images_data_list=images_data, 
+            stream_output=kwargs['stream_output'], 
+            safety_settings=kwargs.get('safety_settings'),
+            enable_web_search=kwargs.get('enable_web_search', False)
+        )
         
         if response and response.startswith("Error:"): raise Exception(response)
         
@@ -562,8 +597,13 @@ class AppGUI(tk.Tk):
         ttk.Label(tab_ai, text="Provider:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(tab_ai, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
         ttk.Label(tab_ai, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
-        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled"); self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=50); self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
         ttk.Checkbutton(tab_ai, text="Append Filename to Prompt", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        
+        # --- OLLAMA SEARCH TOGGLE ---
+        self.ollama_search_var = tk.BooleanVar(value=False)
+        self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
+        self.ollama_search_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(5,0))
 
         tab_out = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_out, text="Output & Batch")
         ttk.Label(tab_out, text="Folder:").grid(row=0, column=0, sticky="w")
@@ -636,6 +676,8 @@ class AppGUI(tk.Tk):
             set_var(self.stream_var, 'stream_output', False)
             set_var(self.group_size_var, 'group_size', 3)
             set_var(self.group_files_var, 'group_files', False)
+            # Reset Web Search on preset load (defaulting to False for safety)
+            self.ollama_search_var.set(False)
             
             self.toggle_overwrite()
             self.toggle_grouping()
@@ -734,6 +776,15 @@ class AppGUI(tk.Tk):
 
     def update_models(self, *args):
         e = self.engine_var.get()
+        
+        # --- LOGIC TO SHOW/HIDE OLLAMA SEARCH ---
+        if e == 'ollama':
+            self.ollama_search_check.grid()
+        else:
+            self.ollama_search_check.grid_remove()
+            self.ollama_search_var.set(False)
+        # ----------------------------------------
+
         self.model_combo.set('Loading...')
         self.model_combo.config(state="disabled")
         self.update_idletasks()
@@ -802,7 +853,8 @@ class AppGUI(tk.Tk):
                 'output_folder': self.output_dir_var.get(), 'output_suffix': self.suffix_var.get(),
                 'output_extension': self.output_ext_var.get(), 'stream_output': self.stream_var.get(),
                 'safety_settings': safe, 'add_filename_to_prompt': self.add_filename_var.get(),
-                'overwrite_original': self.overwrite_var.get()
+                'overwrite_original': self.overwrite_var.get(),
+                'enable_web_search': self.ollama_search_var.get() # <--- Capture Search Toggle
             }
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
