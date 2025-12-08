@@ -105,10 +105,28 @@ PRESET_WITH_SUBTITLES = {
 }
 
 # Audio normalization (Maximum Loudness / "Loudness War" settings)
+"""
+================================================================================
+YouTube Loudness Recommendations by Content Type
+================================================================================
+Content Type       | LUFS Target | LRA Range | True Peak | Notes
+-------------------|-------------|-----------|-----------|-------------------------
+Music Videos       | -14         | 8-11      | -1.0      | Preserve dynamics
+Podcasts/Voice     | -16         | 4-7       | -1.0      | Dialogue clarity
+Action Content     | -14         | 6-9       | -1.0      | Balance impact & clarity
+YouTube Shorts     | -13         | 5-8       | -1.0      | Slightly louder for mobile
+
+Notes:
+- LUFS: Loudness Units Full Scale (EBU R128 standard)
+- LRA: Loudness Range - Higher values preserve dynamics, lower values compress
+- True Peak: Maximum allowed peak level to prevent clipping
+- YouTube normalizes ALL content to -14 LUFS (-13 for Shorts/Reels)
+- Mastering at these targets avoids platform re-processing
+"""
 DEFAULT_NORMALIZE_AUDIO = False # Defaults to False globally, enabled via Presets
-DEFAULT_LOUDNESS_TARGET = "-6"
-DEFAULT_LOUDNESS_RANGE = "4"
-DEFAULT_TRUE_PEAK = "-0.1"
+DEFAULT_LOUDNESS_TARGET = "-13" # LUFS YouTube at -14, shorts at -13
+DEFAULT_LOUDNESS_RANGE = "5"    # LRA youtube at 4-7, shorts at 5-8
+DEFAULT_TRUE_PEAK = "-1.0"      # always at -1.0
 
 # Audio track selection defaults (User preference update)
 DEFAULT_AUDIO_MONO = False
