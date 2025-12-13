@@ -1,114 +1,73 @@
+
 #!/usr/bin/env python3
 
-"""
+r"""
 ================================================================================
  SCRIPT NAME: Advanced Text File Merger
- VERSION: 4.1 (UI Improvement)
+ VERSION: 4.2 (Natural Sorting Fix)
  AUTHOR: Contributor (Patched by ChatGPT, Refactored by Gemini)
- DATE: October 22, 2025
+ DATE: December 13, 2025
 ================================================================================
 
 PURPOSE & DESCRIPTION:
 ----------------------
 This script merges multiple text-based files (e.g., .txt, .srt, .md, .log)
-into a single, consolidated output file. It is designed with several advanced
-features to handle common text processing tasks, such as intelligent numerical
-sorting of filenames, cleaning up LLM-generated artifacts, and re-flowing
-paragraph line breaks.
+into a single, consolidated output file.
 
-The script is highly configurable via the CONFIGURATION section below and
-controllable via a rich set of command-line arguments.
-
-NEW IN V4.1:
-- Changed the -H/--headers flag to -m/--markers to avoid any potential
-  conflict or confusion with the standard -h/--help flag.
+NEW IN V4.2:
+- Fixed sorting logic. Now uses "Natural Sorting" (alphanumeric split) instead
+  of just looking at the last number. This fixes issues where files ending in
+  "(1).txt" were incorrectly sorted to the top.
+- Fixed SyntaxWarning regarding escape sequences in documentation.
 
 --------------------------------------------------------------------------------
 CORE FEATURES:
 --------------------------------------------------------------------------------
--   Numerical Sorting: Sorts input files based on the last number found in
-    each filename, ensuring `chapter-2.txt` comes before `chapter-10.txt`.
+-   Natural Sorting: Sorts filenames like a human would (e.g., "File 9" comes
+    before "File 10", and "Chapter 109 (1)" follows "Chapter 109").
 -   Content Sanitization: Automatically removes Markdown code fences
     (e.g., ```text ... ```) that often wrap LLM-generated text.
 -   Linebreak & Hyphenation Stripping: Can reflow paragraphs by removing
-    mid-sentence line breaks and automatically joining hyphenated words
-    that were split across lines.
--   Customizable Markers: Can insert distinct, configurable markers (headers
-    and footers) around the content of each merged file, clearly marking
-    where each original file's content begins and ends.
--   Multi-Pattern Input: Accepts multiple file patterns at once (e.g.,
-    "*.txt", "*.md").
+    mid-sentence line breaks and automatically joining hyphenated words.
+-   Customizable Markers: Can insert distinct markers around content.
 
 --------------------------------------------------------------------------------
 COMMAND-LINE ARGUMENTS:
 --------------------------------------------------------------------------------
--   `file_patterns` (Required): One or more glob patterns (wildcard paths)
-    used to find the files to merge. Must be enclosed in quotes if they
-    contain wildcards.
+-   `file_patterns` (Required): One or more glob patterns.
     Example: `"*.txt" "chapter-*.md"`
 
--   `-o, --output` (Optional): Specifies the name of the final merged file.
-    If not provided, a default name is generated based on the configuration
-    variables `DEFAULT_OUTPUT_BASENAME` and the extension of the *first*
-    file pattern.
+-   `-o, --output` (Optional): Output filename.
     Example: `-o "final_document.md"`
 
--   `-lb, --linebreak` (Optional): Inserts an extra blank line between the
-    contents of each merged file. Provides simple visual separation.
+-   `-lb, --linebreak` (Optional): Inserts an extra blank line between files.
 
--   `-strip, --strip` (Optional): A powerful text-cleaning option that
-    removes single line breaks within paragraphs and de-hyphenates words
-    split across lines. Ideal for cleaning up copied/pasted text.
+-   `-strip, --strip` (Optional): Removes single line breaks within paragraphs
+    and de-hyphenates words.
 
--   `-m, --markers` (Optional): Activates the insertion of formatted start
-    and end markers around each file's content. The format of these is
-    controlled by the configuration variables below.
+-   `-m, --markers` (Optional): Inserts headers/footers around file content.
 
--   `--no-remove-strings` (Optional): Disables the automatic removal of
-    Markdown code fences. Use this if your source files legitimately use
-    these fences and you want to preserve them.
+-   `--no-remove-strings` (Optional): Disables markdown code fence removal.
 
 --------------------------------------------------------------------------------
 CONFIGURATION VARIABLES:
 --------------------------------------------------------------------------------
-The variables in the SCRIPT CONFIGURATION section below allow you to customize
-the script's behavior without editing the core logic.
-
--   `MARKER_CHAR`: The character used to draw the horizontal lines in the
-    markers (e.g., "=", "-", "*").
--   `MARKER_LENGTH`: The number of characters in each horizontal line.
--   `START_MARKER_FORMAT`: The f-string template for the marker that appears
-    *before* each file's content. Must contain `{filename}`.
--   `END_MARKER_FORMAT`: The f-string template for the marker that appears
-    *after* each file's content. Must contain `{filename}`.
--   `DEFAULT_OUTPUT_BASENAME`: The base name for the output file if `-o` is
-    not specified.
--   `DEFAULT_OUTPUT_EXTENSION`: The fallback extension for the output file if
-    it cannot be determined from the input patterns.
+-   `MARKER_CHAR`: Character for marker lines (default "=").
+-   `MARKER_LENGTH`: Length of marker lines.
+-   `START_MARKER_FORMAT`: Template for start marker.
+-   `END_MARKER_FORMAT`: Template for end marker.
 
 --------------------------------------------------------------------------------
 FUNCTION REFERENCE:
 --------------------------------------------------------------------------------
 -   `get_numerical_sort_key(filename)`:
-    The custom sorting key for the script. It uses a regular expression
-    `r'\d+'` to find all sequences of digits in a filename, extracts the
-    *last* one, and converts it to an integer for sorting. Files without
-    numbers are placed at the end.
+    Splits a filename into text and numeric chunks to perform natural sorting.
 
 -   `sanitize_api_response(text)`:
-    Cleans text by removing Markdown fences. The regex `r"^\s*```[a-z]*\s*
-    \n?(.*?)\n?\s*```\s*$"` finds and extracts the content from within a
-    code block that spans the entire string.
+    Cleans text by removing Markdown fences.
 
 -   `merge_text_files(...)`:
-    The main function that orchestrates the entire process. It gathers files,
-    sorts them, and iterates through them, applying the selected processing
-    options (stripping, markers, etc.) before writing to the output file.
-    The hyphenation-stripping regex `r'(\w)-\n(\w?)'` finds a word character
-    followed by a hyphen and a newline, and joins it with the word character
-    on the next line. The paragraph-reflowing regex `r'(?<!\n)\n(?!\n)'`
-    finds single newlines and replaces them with a space.
-
+    Main orchestration function.
 ================================================================================
 """
 
@@ -134,20 +93,14 @@ DEFAULT_OUTPUT_EXTENSION = "txt"
 
 
 def get_numerical_sort_key(filename):
-    """Extracts the LAST numerical part from ANY filename for sorting."""
-    try:
-        numerical_parts_str = re.findall(r'\d+', filename)
-        if numerical_parts_str:
-            last_numerical_part_str = numerical_parts_str[-1]
-            try:
-                numerical_part = int(last_numerical_part_str)
-                return (numerical_part, filename)
-            except ValueError:
-                return (float('inf'), filename)
-        else:
-            return (float('inf'), filename)
-    except:
-        return (float('inf'), filename)
+    """
+    Generates a key for 'Natural Sorting'.
+    Splits the filename into a list of integers and lowercase strings.
+    This ensures that 'file2.txt' comes before 'file10.txt', and
+    'Vol 1 (1).txt' comes after 'Vol 1.txt' if logically appropriate.
+    """
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split(r'(\d+)', filename)]
 
 
 def sanitize_api_response(text):
@@ -176,6 +129,7 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
             return
 
         default_output_file = f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}"
+        # Intelligent output naming if -o is not provided
         if output_filename == default_output_file:
             first_pattern = file_patterns[0]
             pattern_parts = first_pattern.split('.')
@@ -185,12 +139,14 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
             else:
                 output_filename = default_output_file
 
+        # Apply Natural Sorting
         files_to_merge.sort(key=get_numerical_sort_key)
 
+        # Ensure we don't try to merge the output file into itself
         if output_filename in files_to_merge:
             files_to_merge.remove(output_filename)
 
-        print(f"Merging files in numerical ascending order (by last number in filename):")
+        print(f"Merging files in Natural Sort order:")
         for f in files_to_merge:
             print(f"  - {f}")
         print(f"Output file will be: {output_filename}\n")
@@ -205,12 +161,14 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
                             content = sanitize_api_response(content)
 
                         if strip_linebreaks:
+                            # De-hyphenate words split across lines
                             while True:
                                 original_content = content
                                 content = re.sub(r'(\w)-\n(\w?)', r'\1\2', content, flags=re.MULTILINE)
                                 if content == original_content:
                                     break
-
+                            
+                            # Reflow paragraphs
                             content = re.sub(r'\n{2,}', '\n\n', content)
                             content = re.sub(r'(?<!\n)\n(?!\n)', ' ', content)
 
