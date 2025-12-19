@@ -301,7 +301,7 @@ class MainApp:
         self.load_for_upload_button = ttk.Button(load_frame, text='OR: Load Files for Upload', command=self.gui_load_files_for_upload, state=tk.NORMAL)
         self.load_for_upload_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Label(load_frame, text='Max to Load:').pack(side=tk.LEFT, padx=(10, 2))
-        self.max_videos_var = tk.StringVar(value='100')
+        self.max_videos_var = tk.StringVar(value='500')
         ttk.Spinbox(load_frame, from_=0, to=10000, width=5, textvariable=self.max_videos_var).pack(side=tk.LEFT, padx=(0, 5))
 
         list_lf = ttk.LabelFrame(frm, text="Video List", padding=5); list_lf.pack(fill=tk.BOTH, expand=True, pady=5)
@@ -562,7 +562,11 @@ class MainApp:
                     def get_ts(s):
                         if not s: return None
                         m = TIMESTAMP_PATTERN.search(s)
-                        if m: return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}-{m.group(5)}"
+                        if m:
+                            # Capture: Year-Month-Day Hour-Minute-Seconds
+                            # We add the group(6) here to handle the -10, -48, etc.
+                            secs = m.group(6) if m.group(6) else "00"
+                            return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}-{m.group(5)}-{secs}"
                         return None
                     
                     ts_title = get_ts(vd_obj.current_title)
