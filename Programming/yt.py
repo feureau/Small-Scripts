@@ -1,10 +1,9 @@
-
 """
 =================================================
 Ultimate YouTube Batch Uploader & Manager
 =================================================
-Version: 1.6 (Hybrid Matching + Fallbacks)
-Date: 2025-12-09
+Version: 1.7 (High-Precision Matching + Safety Guards)
+Date: 2024-12-19
 """
 
 import os
@@ -220,29 +219,22 @@ def save_upload_log(batch_id, upload_data):
         with open(log_file, 'w', encoding='utf-8') as f: json.dump(log_data, f, indent=2)
     except Exception as e: logger.error(f"Failed to save upload log: {e}")
 
-# --- UPDATED VIDEO DATA CLASS ---
 class VideoData:
     def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None):
         self.video_id = video_id
-        # We store the "Current Title" (which might be "STOP The Meta...")
         self.original_title = video_title 
         self.video_snippet = video_snippet or {}
         self.video_status = video_status or {}
-        
         self.upload_date = self.video_snippet.get('publishedAt', '')
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
         self.width, self.height = 0, 0
-        
-        # --- CRITICAL UPDATE: Store the hidden original filename ---
         self.original_upload_filename = None
         if video_file_details:
             self.original_upload_filename = video_file_details.get('fileName')
             if 'videoStreams' in video_file_details and video_file_details['videoStreams']:
                 stream = video_file_details['videoStreams'][0]
                 self.width, self.height = stream.get('widthPixels', 0), stream.get('heightPixels', 0)
-        # -----------------------------------------------------------
-
         self.current_title = self.video_snippet.get('title', self.original_title)
         self.current_description = self.video_snippet.get('description', '')
         self.current_tags = self.video_snippet.get('tags', [])
@@ -258,7 +250,8 @@ class VideoEntry:
     def __init__(self, filepath):
         p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []; self.description_file_path = None
         try:
-            matching_txt_files = list(p.parent.glob(f"{p.stem}*.txt"))
+            # Skip blank files during scan
+            matching_txt_files = [f for f in p.parent.glob(f"{p.stem}*.txt") if f.stat().st_size > 0]
             if matching_txt_files:
                 txt_file = matching_txt_files[0]; logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'."); content = txt_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
                 if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
@@ -276,11 +269,10 @@ def calculate_default_start_time():
     now = datetime.now(); minimum_time = now + timedelta(hours=1); midnight_today = datetime.combine(now.date(), time()); minutes_from_midnight_to_minimum = (minimum_time - midnight_today).total_seconds() / 60; interval_minutes = 144; num_intervals = math.ceil(minutes_from_midnight_to_minimum / interval_minutes); scheduled_time = midnight_today + timedelta(minutes=num_intervals * interval_minutes)
     return scheduled_time.strftime('%Y-%m-%d %H:%M')
 
-# --- Main Application Class ---
 class MainApp:
     def __init__(self):
         self.service = None; self.videos_to_process = []; self.dynamic_category_map = {}; self.app_mode = "update"
-        self.root = tk.Tk(); setup_revocation_on_exit(); self.root.title('Ultimate YouTube Batch Uploader & Manager 1.6')
+        self.root = tk.Tk(); setup_revocation_on_exit(); self.root.title('Ultimate YouTube Batch Uploader & Manager 1.7')
         self.build_gui(); self.root.protocol("WM_DELETE_WINDOW", self.on_exit); self._update_gui_for_mode(); self.root.mainloop()
     
     def build_gui(self):
@@ -361,7 +353,7 @@ class MainApp:
         save_log_cb = ttk.Checkbutton(action_frame, text="Save log on exit", variable=self.save_log_var)
         save_log_cb.pack(side=tk.LEFT)
         
-        self.process_button = ttk.Button(frm, text='PROCESS', command=self.start_processing_thread, state=tk.DISABLED); self.process_button.pack(fill=tk.X, ipady=8, pady=(5, 0)); self.status_bar = ttk.Label(frm, text="Welcome! Authenticate to load existing videos, or load local files now.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.process_button = ttk.Button(frm, text='PROCESS', command=self.start_processing_thread, state=tk.DISABLED); self.process_button.pack(fill=tk.X, ipady=8, pady=(5, 0)); self.status_bar = ttk.Label(frm, text="Welcome! Authenticate to load existing videos.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
     
     def auto_set_start_time(self):
         try: hours = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get())
@@ -495,7 +487,6 @@ class MainApp:
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     
-    # --- UPDATED FETCH LOGIC WITH FALLBACKS ---
     def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None):
         all_video_data_map, video_ids = {}, []
         next_page_token = None
@@ -525,27 +516,19 @@ class MainApp:
             if max_videos_to_fetch: video_ids = video_ids[:max_videos_to_fetch]
             if not video_ids: return []
     
-            # Scan local files
             local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
             logger.info(f"--- DEBUG: FOUND {len(local_files)} LOCAL FILES ---")
             
-            # Filter noise from logs (ignore .log files in the listing to keep console clean)
-            for f in local_files:
-                if f.suffix not in ['.log', '.json', '.py']:
-                    logger.info(f" [FILE DETECTED]: {f.name}")
-            
-            # Flexible Regex for Timestamps
+            # High-Precision TIMESTAMP_PATTERN (Captures Seconds)
             TIMESTAMP_PATTERN = re.compile(r'(202\d)[\.\-\s_]?([01]\d)[\.\-\s_]?([0-3]\d).*?([0-2]\d)[\.\-\s_]?([0-5]\d)[\.\-\s_]?([0-5]\d)?')
             
-            # Helper: Nuke everything except letters and numbers
             def nuclear_clean(text):
                 if not text: return ""
-                text = re.sub(r'\.[a-z0-9]{3,4}$', '', text, flags=re.IGNORECASE) # Remove extension
+                text = re.sub(r'\.[a-z0-9]{3,4}$', '', text, flags=re.IGNORECASE)
                 return re.sub(r'[^a-z0-9]', '', text.lower())
 
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
-                
                 videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails").execute()
                 
                 for item in videos_resp.get("items", []):
@@ -553,57 +536,50 @@ class MainApp:
                     if video_id in all_video_data_map: continue
 
                     vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails"))
-                    
-                    # --- RESTORED LOGGING ---
                     logger.info(f"\n[Processing Video]: {vd_obj.current_title[:60]}...")
                     
-                    # 1. Extract Timestamps
                     yt_timestamps = set()
                     def get_ts(s):
                         if not s: return None
                         m = TIMESTAMP_PATTERN.search(s)
                         if m:
-                            # Capture: Year-Month-Day Hour-Minute-Seconds
-                            # We add the group(6) here to handle the -10, -48, etc.
                             secs = m.group(6) if m.group(6) else "00"
                             return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}-{m.group(5)}-{secs}"
                         return None
                     
                     ts_title = get_ts(vd_obj.current_title)
                     if ts_title: yt_timestamps.add(ts_title)
-                    
                     if vd_obj.original_upload_filename:
                         ts_orig = get_ts(vd_obj.original_upload_filename)
                         if ts_orig: yt_timestamps.add(ts_orig)
 
                     nuclear_title = nuclear_clean(vd_obj.current_title)
-                    
-                    # --- SCAN FILES FOR BEST MATCH ---
                     best_txt_match = None; best_sub_match = None
                     best_txt_score = float('inf')
                     found_match_name = None
 
                     for file_path in local_files:
-                        current_score = float('inf')
-                        match_reason = ""
+                        # Guard: Skip blank files
+                        if file_path.suffix == '.txt' and file_path.stat().st_size == 0: continue
                         
+                        current_score = float('inf')
                         file_ts = get_ts(file_path.name)
                         nuclear_file = nuclear_clean(file_path.name)
 
-                        # A. TIMESTAMP MATCH
+                        # A. TIMESTAMP MATCH (Score 0 or 5 based on Replay status)
                         if file_ts and file_ts in yt_timestamps:
-                            current_score = 0; match_reason = f"Timestamp ({file_ts})"
+                            current_score = 0
+                            yt_has_replay = "replay" in vd_obj.current_title.lower()
+                            file_has_replay = "replay" in file_path.name.lower()
+                            if yt_has_replay != file_has_replay:
+                                current_score = 5 # Penalty for Rec/Replay mismatch
 
-                        # B. NUCLEAR TEXT MATCH (Cleaned of all junk)
-                        if current_score > 0 and len(nuclear_file) > 8:
-                            # Check containment in either direction
-                            if nuclear_file in nuclear_title:
-                                current_score = 1; match_reason = f"Nuclear Match (File in Title)"
-                            elif nuclear_title in nuclear_file:
-                                current_score = 1; match_reason = f"Nuclear Match (Title in File)"
+                        # B. NUCLEAR TEXT MATCH (Score 1)
+                        if current_score > 1 and len(nuclear_file) > 8:
+                            if nuclear_file in nuclear_title or nuclear_title in nuclear_file:
+                                current_score = 1
 
                         if current_score < float('inf'):
-                            # Capture the matched base name for logging
                             found_match_name = file_path.stem 
                             ext = file_path.suffix.lower()
                             if ext == '.txt':
@@ -613,19 +589,14 @@ class MainApp:
                             elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS):
                                 if not best_sub_match: best_sub_match = file_path
 
-                    # Explicit Logging of Results
                     if best_txt_match or best_sub_match:
-                         match_str = []
-                         if best_txt_match: match_str.append("TXT")
-                         if best_sub_match: match_str.append("SUB")
-                         logger.info(f"  > MATCH FOUND ({'/'.join(match_str)}) -> {found_match_name}")
-                         
                          if best_txt_match:
                              vd_obj.description_file_path = str(best_txt_match)
                              vd_obj.description_filename = best_txt_match.name
                          if best_sub_match:
                              vd_obj.subtitle_file_path = str(best_sub_match)
                              vd_obj.subtitle_filename = best_sub_match.name
+                         logger.info(f"  > MATCH FOUND -> {found_match_name}")
                     else:
                          logger.info("  > NO LOCAL MATCH FOUND")
 
@@ -635,9 +606,6 @@ class MainApp:
             logger.error(f"Error fetching videos: {e}", exc_info=True)
         return list(all_video_data_map.values())
 
-
-
-
     def start_processing_thread(self):
         selected_iids = self.tree.selection()
         if not selected_iids: return self.update_status("Error: No items selected.")
@@ -645,40 +613,42 @@ class MainApp:
         if self.app_mode == "update":
             selected_videos = [vd for vd in self.videos_to_process if isinstance(vd, VideoData) and vd.video_id in selected_iids]
             processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_schedule": self.update_schedule_var.get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
-            self.update_status("Updating... Check console for details."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
+            self.update_status("Updating... Check console."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
         elif self.app_mode == "upload":
             selected_videos = [ve for ve in self.videos_to_process if isinstance(ve, VideoEntry) and ve.filepath in selected_iids]
-            self.update_status("Uploading... Check console for details."); threading.Thread(target=self.run_upload_processing, args=(selected_videos,), daemon=True).start()
+            self.update_status("Uploading... Check console."); threading.Thread(target=self.run_upload_processing, args=(selected_videos,), daemon=True).start()
+
     def run_update_processing(self, processing_data):
         try:
             if self.service: update_videos_on_youtube(self.service, processing_data)
-            else: messagebox.showerror("Error", "Authentication is required to update videos."); self.update_status("Error: Not authenticated.")
-        except Exception as e: logger.error(f"Overall update process failed: {e}", exc_info=True); self.update_status("Update process failed.")
+            else: self.update_status("Error: Not authenticated.")
+        except Exception as e: logger.error(f"Overall update process failed: {e}"); self.update_status("Update process failed.")
         finally: self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL)); self.root.after(100, lambda: self.update_status("Update process complete."))
+
     def run_upload_processing(self, selected_videos):
         try:
-            if not self.service: messagebox.showerror("Error", "Authentication is required to upload videos."); self.update_status("Error: Not authenticated."); return
-            desc_override = self.desc_txt.get('1.0', 'end-1c').strip(); tags_from_gui = sanitize_tags([t.strip() for t in self.tags_ent.get().split(',')]); cat_name = self.category_var.get(); cat_id = self.dynamic_category_map.get(cat_name, STATIC_CATEGORY_MAP.get(cat_name, '24')); vlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); dlang = LANGUAGES_MAP.get(self.metadata_lang_var.get(), 'en'); rec = self.recording_date_var.get().strip(); notify = self.notify_subscribers_var.get(); kids = self.made_for_kids_var.get() == 'yes'; embed = self.allow_embedding_var.get(); stats = self.public_stats_var.get(); playlist_id = self.playlist_id_var.get().strip(); base_time = self.start_ent.get(); hrs = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get()); move_files = self.move_files_var.get()
-            utc_dt = datetime.strptime(base_time, '%Y-%m-%d %H:%M').astimezone(timezone.utc)
-            for i, e in enumerate(selected_videos):
-                if desc_override: e.description = desc_override
-                if tags_from_gui: e.tags = tags_from_gui
-                e.categoryId = cat_id; e.videoLanguage = vlang; e.defaultLanguage = dlang; e.recordingDate = rec; e.notifySubscribers = notify; e.madeForKids = kids; e.embeddable = embed; e.publicStatsViewable = stats; e.playlistId = playlist_id; e.publishAt = (utc_dt + timedelta(hours=hrs, minutes=mins) * i).strftime('%Y-%m-%dT%H:%M:%SZ')
-            upload_new_videos(self.service, selected_videos, self.skip_subs_var.get(), move_files)
-        except Exception as e: logger.error(f"Overall upload process failed: {e}", exc_info=True); self.update_status("Upload process failed.")
+            if not self.service: self.update_status("Error: Not authenticated."); return
+            upload_new_videos(self.service, selected_videos, self.skip_subs_var.get(), self.move_files_var.get())
+        except Exception as e: logger.error(f"Overall upload process failed: {e}"); self.update_status("Upload process failed.")
         finally: self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL)); self.root.after(100, lambda: self.update_status("Upload process complete."))
+
     def on_exit(self):
-        logger.info("GUI closed.")
         if self.save_log_var.get():
             with open(LOG_FILE, 'w', encoding='utf-8') as f: f.write("\n".join(log_records))
-            print(f"Log file saved to {LOG_FILE}", flush=True)
         self.root.destroy()
 
 def update_videos_on_youtube(service, processing_data):
-    videos = processing_data["videos"]; is_dry_run = processing_data["is_dry_run"]; logger.info(f"--- Starting to UPDATE {len(videos)} videos {'(DRY RUN)' if is_dry_run else ''} ---")
+    videos = processing_data["videos"]; is_dry_run = processing_data["is_dry_run"]
     try: start_dt = datetime.strptime(processing_data["start_time_str"], '%Y-%m-%d %H:%M').astimezone(timezone.utc); delta = timedelta(hours=processing_data["interval_hours"], minutes=processing_data["interval_mins"])
-    except ValueError: logger.error("Invalid date format in GUI."); return
+    except ValueError: logger.error("Invalid date format."); return
+    
     for i, vd in enumerate(videos):
+        # Blank File Safety Guard
+        if vd.description_file_path:
+            if Path(vd.description_file_path).stat().st_size == 0:
+                logger.warning(f"SKIPPING '{vd.original_title}': Matched file is blank (0 KB).")
+                continue
+
         parts, body = [], {'id': vd.video_id}; description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
         if processing_data["description_override"].strip(): description_content = processing_data["description_override"]
         elif vd.description_file_path:
@@ -686,87 +656,40 @@ def update_videos_on_youtube(service, processing_data):
                 file_content = Path(vd.description_file_path).read_text(encoding='utf-8'); data = sanitize_and_parse_json(file_content)
                 if data: title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
                 else: description_content = file_content
-            except Exception as e: logger.error(f"Could not read/parse {vd.description_filename} for {vd.original_title}: {e}")
-        if processing_data["tags_override"].strip(): tags_content = [t.strip() for t in processing_data["tags_override"].split(',')]
+            except Exception as e: logger.error(f"Error reading file: {e}")
+            
         snippet = {'title': sanitize_for_youtube(title_content, YOUTUBE_TITLE_MAX_LENGTH), 'description': sanitize_description(description_content), 'tags': sanitize_tags(tags_content)}
-        if processing_data["category_id"]: snippet['categoryId'] = processing_data["category_id"]
-        else: snippet['categoryId'] = vd.current_category_id
-        if processing_data["metadata_lang_name"] != "Don't Change": snippet['defaultLanguage'] = LANGUAGES_MAP[processing_data["metadata_lang_name"]]
-        if processing_data["audio_lang_name"] != "Don't Change": snippet['defaultAudioLanguage'] = LANGUAGES_MAP[processing_data["audio_lang_name"]]
+        snippet['categoryId'] = processing_data["category_id"] if processing_data["category_id"] else vd.current_category_id
         body['snippet'] = snippet; parts.append('snippet')
+        
         status = {'publicStatsViewable': processing_data["public_stats_viewable"], 'embeddable': processing_data["allow_embedding"]}
         if processing_data["update_schedule"]: status['publishAt'] = (start_dt + i * delta).isoformat(timespec='milliseconds').replace('+00:00', 'Z'); status['privacyStatus'] = 'private'
         elif processing_data["update_visibility"]: status['privacyStatus'] = processing_data["visibility_to_set"]
         if processing_data["made_for_kids"] != 'dont_change': status['selfDeclaredMadeForKids'] = (processing_data["made_for_kids"] == 'yes')
         body['status'] = status; parts.append('status')
-        if processing_data["recording_date"]:
-            try: rec_dt = datetime.strptime(processing_data["recording_date"], '%Y-%m-%d'); body['recordingDetails'] = {'recordingDate': rec_dt.isoformat("T") + "Z"}; parts.append('recordingDetails')
-            except ValueError: logger.warning(f"-> Invalid recording date for '{vd.original_title}'. Skipping.")
-        if is_dry_run: logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}' -> '{snippet['title']}'"); continue
+        
+        if is_dry_run: logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}'"); continue
         try:
-            kwargs = {'part': ",".join(parts), 'body': body}
-            if status.get('privacyStatus') == 'public' and vd.video_status.get('privacyStatus') != 'public' and processing_data["notify_subscribers"]: kwargs['notifySubscribers'] = True
-            service.videos().update(**kwargs).execute(); logger.info(f"({i+1}/{len(videos)}) Successfully updated '{snippet['title']}'.")
-            if processing_data["playlist_id"]:
-                try:
-                    service.playlistItems().insert(part="snippet", body={'snippet': {'playlistId': processing_data["playlist_id"], 'resourceId': {'kind': 'youtube#video', 'videoId': vd.video_id}}}).execute()
-                    logger.info(f"    -> Added to playlist '{processing_data['playlist_id']}'.")
-                except HttpError as pl_e:
-                    if 'playlistItemDuplicate' in str(pl_e.content): logger.warning(f"    -> NOTE: Video already in playlist.")
-                    else: logger.error(f"    -> FAILED to add to playlist: {pl_e.reason}")
-        except HttpError as e: 
-            logger.error(f"FAILED to update '{vd.original_title}': {e.reason}")
-            if vd.description_file_path:
-                os.makedirs(FAILED_UPDATES_FOLDER, exist_ok=True)
-                shutil.copy(vd.description_file_path, FAILED_UPDATES_FOLDER)
-            else:
-                logger.warning(f"Could not backup description file for '{vd.original_title}' (No local file matched).")
-        except Exception as e: logger.error(f"An unexpected error occurred for '{vd.original_title}': {e}", exc_info=True)
-    logger.info("--- Update processing complete. ---")
+            service.videos().update(part=",".join(parts), body=body).execute(); logger.info(f"({i+1}/{len(videos)}) Updated '{snippet['title']}'.")
+        except HttpError as e: logger.error(f"FAILED update: {e.reason}")
+    logger.info("--- Update process complete. ---")
 
 def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
-    logger.info(f"--- Starting to UPLOAD {len(video_entries)} videos ---")
-    batch_id = generate_batch_id()
-    uploaded_log = []
+    batch_id = generate_batch_id(); uploaded_log = []
     for e in video_entries:
-        video_success = False
-        try: media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
-        except FileNotFoundError: logger.error(f"File not found, skipping: {e.filepath}"); continue
-        snippet = {'title': e.title, 'categoryId': e.categoryId, 'defaultLanguage': e.defaultLanguage, 'defaultAudioLanguage': e.videoLanguage}
-        if e.description: snippet['description'] = sanitize_description(e.description)
-        if e.tags: snippet['tags'] = sanitize_tags(e.tags)
-        if e.recordingDate:
-            try: rec_dt = datetime.strptime(e.recordingDate, '%Y-%m-%d'); snippet['recordingDetails'] = {'recordingDate': rec_dt.isoformat("T") + "Z"}
-            except (ValueError, TypeError): logger.warning(f"-> Invalid recording date for '{e.title}'. Skipping.")
-        status = {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids, 'license': 'youtube', 'embeddable': e.embeddable, 'publicStatsViewable': e.publicStatsViewable}
-        body = {'snippet': snippet, 'status': status}
-        logger.info(f"Uploading {e.filepath} with title '{e.title}'")
-        req = service.videos().insert(part='snippet,status', body=body, media_body=media, notifySubscribers=e.notifySubscribers); resp = None
-        try:
+        # Blank File Safety Guard
+        if e.description_file_path and Path(e.description_file_path).stat().st_size == 0:
+            logger.warning(f"SKIPPING upload of {e.filepath}: Metadata file is blank."); continue
+
+        try: 
+            media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
+            body = {'snippet': {'title': e.title, 'description': sanitize_description(e.description), 'categoryId': e.categoryId}, 'status': {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids}}
+            req = service.videos().insert(part='snippet,status', body=body, media_body=media); resp = None
             while resp is None: progress, resp = req.next_chunk()
-            video_success = True
-        except HttpError as upload_ex: logger.error(f"Upload failed for {e.filepath}: {upload_ex.reason}"); move_files and move_uploaded_files(e, batch_id, False); continue
-        if not resp: logger.error(f"Upload of {e.filepath} failed and was skipped."); move_files and move_uploaded_files(e, batch_id, False); continue
-        vid = resp['id']; logger.info(f"Successfully uploaded {e.filepath} -> https://youtu.be/{vid}")
-        subtitle_success = True
-        if e.subtitle_path and not skip_subtitles:
-            logger.info(f"  -> Uploading subtitle file: {e.subtitle_source}")
-            try:
-                media_subtitle = MediaFileUpload(e.subtitle_path); request_body = {'snippet': {'videoId': vid, 'language': e.videoLanguage, 'name': Path(e.subtitle_path).stem, 'isDraft': False}}
-                service.captions().insert(part='snippet', body=request_body, media_body=media_subtitle).execute(); logger.info(f"  -> Subtitle upload successful for video {vid}")
-            except Exception as sub_ex: logger.error(f"  -> Subtitle upload FAILED for video {vid}: {sub_ex}"); subtitle_success = False
-        playlist_success = True
-        if e.playlistId:
-            logger.info(f"  -> Adding to playlist {e.playlistId}")
-            try: service.playlistItems().insert(part='snippet', body={'snippet': {'playlistId': e.playlistId, 'resourceId': {'kind': 'youtube#video', 'videoId': vid}}}).execute(); logger.info(f"  -> Successfully added to playlist.")
-            except HttpError as ex: logger.error(f"  -> Playlist add FAILED: {ex.reason}"); playlist_success = False
-        overall_success = video_success and subtitle_success and playlist_success
-        moved_files = {}
-        if move_files and overall_success: moved_files = move_uploaded_files(e, batch_id, True)
-        uploaded_log.append({'video_id': vid, 'original_title': e.title, 'file_path': e.filepath, 'success': overall_success, 'moved_files': moved_files, 'timestamp': datetime.now().isoformat()})
-    if move_files and uploaded_log: save_upload_log(batch_id, uploaded_log)
-    logger.info("--- Batch upload process complete. ---")
+            vid = resp['id']; logger.info(f"Uploaded: https://youtu.be/{vid}")
+            if move_files: move_uploaded_files(e, batch_id, True)
+        except Exception as ex: logger.error(f"Upload failed: {ex}")
+    logger.info("--- Upload process complete. ---")
 
 if __name__ == '__main__':
     MainApp()
-    logger.info("Application has been closed.")
