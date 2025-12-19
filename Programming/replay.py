@@ -10,10 +10,11 @@ def organize_and_count_files():
         # --- CONFIGURATION ---
         base_replay_name = "Replay"
         base_horz_name = "Horz"
+        
+        # Define what counts as a video file (must be lowercase)
+        video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".ts", ".3gp"}
 
         # --- STEP 0: RESET FOLDERS ---
-        # If folders like "Replay-10" exist from a previous run, 
-        # rename them back to "Replay" so we can move new files into them easily.
         all_items = os.listdir(current_directory)
         
         for item in all_items:
@@ -35,42 +36,56 @@ def organize_and_count_files():
 
         # --- STEP 1: MOVE FILES ---
         files = os.listdir(current_directory)
-        
-        # Get the script's own name to prevent moving itself
         script_filename = os.path.basename(__file__) 
 
         for file_name in files:
             source_path = os.path.join(current_directory, file_name)
 
             if os.path.isfile(source_path) and file_name != script_filename:
-                # Skip the "total X.txt" files if they exist, we will clean them later
-                if file_name.startswith("total ") and file_name.endswith(".txt"):
+                
+                # Check extension
+                _, ext = os.path.splitext(file_name)
+                is_video = ext.lower() in video_extensions
+
+                # Skip "total" files
+                if file_name.startswith("total "):
                     continue
 
-                if "Replay" in file_name:
-                    destination_path = os.path.join(replay_folder_path, file_name)
-                    # Handle overwrite protection
-                    if not os.path.exists(destination_path):
-                        shutil.move(source_path, destination_path)
-                
-                elif "Rec" in file_name:
-                    destination_path = os.path.join(horz_folder_path, file_name)
-                    if not os.path.exists(destination_path):
-                        shutil.move(source_path, destination_path)
+                # ONLY move if it contains the keyword AND is a video file
+                if is_video:
+                    if "Replay" in file_name:
+                        destination_path = os.path.join(replay_folder_path, file_name)
+                        if not os.path.exists(destination_path):
+                            shutil.move(source_path, destination_path)
+                    
+                    elif "Rec" in file_name:
+                        destination_path = os.path.join(horz_folder_path, file_name)
+                        if not os.path.exists(destination_path):
+                            shutil.move(source_path, destination_path)
 
         # --- STEP 2: COUNT AND RENAME FOLDERS ---
         
-        # Count files in Replay
-        replay_files = [f for f in os.listdir(replay_folder_path) if os.path.isfile(os.path.join(replay_folder_path, f))]
-        replay_count = len(replay_files)
-        
-        # Count files in Horz
-        horz_files = [f for f in os.listdir(horz_folder_path) if os.path.isfile(os.path.join(horz_folder_path, f))]
-        horz_count = len(horz_files)
+        # Helper function to count only videos in a specific folder
+        def count_videos_in_folder(folder_path):
+            if not os.path.exists(folder_path):
+                return 0
+            
+            items = os.listdir(folder_path)
+            video_count = 0
+            for f in items:
+                full_p = os.path.join(folder_path, f)
+                if os.path.isfile(full_p):
+                    _, ext = os.path.splitext(f)
+                    if ext.lower() in video_extensions:
+                        video_count += 1
+            return video_count
+
+        replay_count = count_videos_in_folder(replay_folder_path)
+        horz_count = count_videos_in_folder(horz_folder_path)
 
         # Rename Replay Folder -> "Replay-X"
         new_replay_name = f"{base_replay_name}-{replay_count}"
-        if os.path.exists(replay_folder_path): # Check exists to prevent crash if folder was deleted
+        if os.path.exists(replay_folder_path): 
             os.rename(replay_folder_path, os.path.join(current_directory, new_replay_name))
 
         # Rename Horz Folder -> "Horz-X"
@@ -78,19 +93,21 @@ def organize_and_count_files():
         if os.path.exists(horz_folder_path):
             os.rename(horz_folder_path, os.path.join(current_directory, new_horz_name))
 
-        # --- STEP 3: CREATE TOTAL TXT FILE ---
+        # --- STEP 3: CREATE TOTAL FILE (NO EXTENSION) ---
         
-        # Remove OLD "total X.txt" files to avoid clutter
-        old_totals = glob.glob(os.path.join(current_directory, "total *.txt"))
+        # Remove OLD "total" files
+        old_totals = glob.glob(os.path.join(current_directory, "total *"))
         for old_file in old_totals:
-            try:
-                os.remove(old_file)
-            except OSError:
-                pass
+            if os.path.isfile(old_file):
+                try:
+                    os.remove(old_file)
+                except OSError:
+                    pass
 
-        # Create NEW total file
+        # Create NEW total file WITHOUT extension
         grand_total = replay_count + horz_count
-        total_file_name = f"total {grand_total}.txt"
+        total_file_name = f"total {grand_total}"
+        
         with open(os.path.join(current_directory, total_file_name), "w") as f:
             f.write(f"Replay: {replay_count}\nHorz: {horz_count}\nTotal: {grand_total}")
 
