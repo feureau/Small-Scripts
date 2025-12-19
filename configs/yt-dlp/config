@@ -1,0 +1,43 @@
+# Format: best combined MP4 (video+audio)
+-f "best[ext=mp4]"
+
+# Merge separate streams if any (usually not needed with combined formats)
+--merge-output-format mp4
+
+# Thumbnails
+--embed-thumbnail
+--write-thumbnail
+
+# Metadata
+--add-metadata
+
+# Subtitles
+--write-subs
+--write-auto-subs
+--sub-lang auto
+--embed-subs
+
+# Download progress
+--progress
+
+# Audio conversion
+--audio-format aac
+
+# Retry and resume
+--retries 10
+--fragment-retries 10
+--continue
+
+# Request pacing to avoid temporary 403s
+# --sleep-requests 2
+
+# Optional: avoid errors for DASH/unavailable streams
+--compat-options no-youtube-unavailable-videos
+
+# Optional: emulate browser for extra safety
+--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+
+# File naming
+# Naming: Channel - Date - Title - ID
+--output "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s"
+
