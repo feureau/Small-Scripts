@@ -20,6 +20,7 @@ import torchaudio.transforms as T
 import av  # PyAV - Much more robust than torchaudio for checking streams
 from faster_whisper import WhisperModel
 import gc
+import yt_dlp
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -48,8 +49,54 @@ vad_utils = None
 def is_media_file(filepath: str) -> bool:
     return os.path.splitext(filepath)[1].lower() in SUPPORTED_EXTENSIONS
 
+def is_text_file(filepath: str) -> bool:
+    """Checks if a file is text (not binary) by inspecting the beginning."""
+    try:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(1024)
+        return b'\x00' not in chunk
+    except Exception:
+        return False
+
+def download_audio(url: str, output_dir: str = None) -> str:
+    print(f"⬇️  Downloading audio from: {url}")
+    target_dir = output_dir if output_dir else os.getcwd()
+    
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': os.path.join(target_dir, '%(title)s.%(ext)s'),
+        'noplaylist': True,
+        'quiet': False,     # Enable output for debugging
+        'no_warnings': False,
+        # Fix for 403 Forbidden: Impersonate Android client
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            }
+        },
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            final_filename = os.path.splitext(filename)[0] + ".mp3"
+            print(f"   ✅ Downloaded: {final_filename}")
+            return final_filename
+    except Exception as e:
+        print(f"   ❌ Download failed: {e}")
+        return None
+
 def collect_input_files(paths_or_patterns):
     files = set()
+    urls = set()
+    
     if not paths_or_patterns:
         print("🔍 Scanning current directory for media files...")
         for ext in SUPPORTED_EXTENSIONS:
@@ -58,19 +105,42 @@ def collect_input_files(paths_or_patterns):
                     files.add(os.path.abspath(path))
     else:
         for pattern in paths_or_patterns:
+            # 1. Direct URL (valid for any yt-dlp supported site)
+            if pattern.startswith("http://") or pattern.startswith("https://"):
+                urls.add(pattern)
+                continue
+                
+            # 2. Files via Glob or Direct Path
             expanded = glob.glob(pattern, recursive=True)
-            for path in expanded:
-                if os.path.isfile(path) and is_media_file(path):
-                    files.add(os.path.abspath(path))
-            if not expanded and os.path.isfile(pattern) and is_media_file(pattern):
-                files.add(os.path.abspath(pattern))
+            candidate_paths = expanded if expanded else ([pattern] if os.path.exists(pattern) else [])
+            
+            for path in candidate_paths:
+                path = os.path.abspath(path)
+                if os.path.isfile(path):
+                    if is_media_file(path):
+                        files.add(path)
+                    elif is_text_file(path):
+                        # Batch Mode: Read URLs from text file
+                        print(f"📄 Reading batch list: {os.path.basename(path)}")
+                        try:
+                            with open(path, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and (line.startswith("http://") or line.startswith("https://")):
+                                        urls.add(line)
+                        except Exception as e:
+                            print(f"   ⚠️  Could not read list file {path}: {e}")
 
     files = sorted(list(files))
-    if not files:
-        print("⚠️ No supported media files found.")
+    urls = sorted(list(urls))
+    
+    all_items = urls + files
+    
+    if not all_items:
+        print("⚠️ No supported media files or URLs found.")
     else:
-        print(f"✅ Found {len(files)} file(s) to process.")
-    return files
+        print(f"✅ Found {len(all_items)} item(s) to process ({len(urls)} URLs, {len(files)} files).")
+    return all_items
 
 def format_srt_time(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
@@ -349,6 +419,7 @@ def main():
     parser.add_argument("-l", "--lang", type=str)
     parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"])
     parser.add_argument("--use_vad", action="store_true", help="Enable Silero VAD alignment")
+    parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
 
     args = parser.parse_args()
     files_to_process = collect_input_files(args.files)
@@ -364,7 +435,20 @@ def main():
     for i, fpath in enumerate(files_to_process, 1):
         print(f"\n[{i}/{len(files_to_process)}]", end=" ")
         try:
-            ok, msg = run_transcription(fpath, args)
+            is_url = fpath.startswith("http://") or fpath.startswith("https://")
+            current_file = fpath
+            temp_file_created = False
+            
+            if is_url:
+                downloaded = download_audio(fpath, args.output_dir)
+                if not downloaded:
+                    fail_count += 1
+                    continue
+                current_file = downloaded
+                temp_file_created = True
+
+            ok, msg = run_transcription(current_file, args)
+            
             if ok:
                 print(f"✅ Saved: {os.path.basename(msg)}")
                 success_count += 1
@@ -373,6 +457,14 @@ def main():
             else:
                 print(f"❌ Failed: {msg}")
                 fail_count += 1
+            
+            if temp_file_created and not args.keep:
+                try:
+                    os.remove(current_file)
+                    print(f"   🗑️  Deleted temporary audio: {os.path.basename(current_file)}")
+                except OSError as e:
+                    print(f"   ⚠️  Failed to delete temp file: {e}")
+                    
         except KeyboardInterrupt:
             print("\n🛑 Stopped by user.")
             break
