@@ -20,15 +20,13 @@ The tool automates:
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
-v7.7 - Workflow & Output Refactor (2025-12-03)
-    • CONFIG UPDATE: Added top-level dictionaries for Workflow Presets.
-    • LOGIC UPDATE: Subtitled jobs now default to Mono (configurable at top).
-    • FEATURE ADDED: Simplified Output folder logic. Defaults to "Output" folder.
-    • UI UPDATE: Added "Use Subfolders" checkbox to toggle complex directory structures.
-
-v7.6 - Audio Logic & Loudness Update (2025-11-29)
-    • LOGIC UPDATE: "No Subtitles" jobs now default to "5.1 Surround".
-    • CONFIG UPDATE: Default loudness targets updated to -6 LUFS.
+v7.8 - Stability & Threading Update (2025-12-20)
+    • FEATURE: Added Threading. GUI no longer freezes during processing.
+    • FEATURE: Added Progress Bar with real-time percentage.
+    • FEATURE: Graceful Exit (Ctrl+C) kills FFmpeg processes and cleans temp files.
+    • BUGFIX: Hybrid jobs now apply "Seam" alignment to ALL files, not just the first.
+    • LOGIC: Improved SRT regex to handle '.' timestamps.
+    • CONFIG: Removed hardcoded paths for portability.
 """
 import os
 import subprocess
@@ -51,6 +49,7 @@ import glob
 import textwrap
 import hashlib
 from collections import Counter
+import signal
 
 # -------------------------- Configuration / Constants --------------------------
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
@@ -64,7 +63,10 @@ SURROUND_BITRATE_K = 512
 PASSTHROUGH_NORMALIZE_BITRATE_K = 192
 
 # Video & General
-DEFAULT_LUT_PATH = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT\NBCU\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
+# NOTE: Set these to empty strings or valid paths on your machine.
+DEFAULT_LUT_PATH = "" 
+DEFAULT_SOFA_PATH = "" 
+
 DEFAULT_RESOLUTION = "4k"
 DEFAULT_UPSCALE_ALGO = "lanczos"
 DEFAULT_OUTPUT_FORMAT = "sdr"
@@ -77,15 +79,10 @@ DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = False
 
 # -------------------------- Output Configuration --------------------------
-# If True: Output path is [Base]/[Resolution]_[Format]/[Subtitle_Tag]/File.mp4
-# If False: Output path is [Base]/[DEFAULT_SINGLE_OUTPUT_DIR_NAME]/File.mp4
 DEFAULT_OUTPUT_TO_SUBFOLDERS = False
 DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"
 
 # -------------------------- Workflow Presets --------------------------
-# Audio Options: "mono", "stereo", "sofalizer", "surround_51", "passthrough"
-# Orientation Options: "horizontal", "vertical", "hybrid (stacked)", "original"
-
 # 1. Default settings for videos containing NO subtitles
 PRESET_NO_SUBTITLES = {
     "orientation": "horizontal",
@@ -100,35 +97,18 @@ PRESET_WITH_SUBTITLES = {
     "orientation": "hybrid (stacked)",
     "resolution": "4k",
     "normalize_audio": True,
-    "audio_type": "mono",         # Default changed to Mono
-    "burn_subtitles": True
+    "audio_type": "mono",
+    "burn_subtitles": True,
+    "subtitle_alignment": "seam" # FIX: Explicitly set Seam alignment for all hybrid jobs
 }
 
-# Audio normalization (Maximum Loudness / "Loudness War" settings)
-"""
-================================================================================
-YouTube Loudness Recommendations by Content Type
-================================================================================
-Content Type       | LUFS Target | LRA Range | True Peak | Notes
--------------------|-------------|-----------|-----------|-------------------------
-Music Videos       | -14         | 8-11      | -1.0      | Preserve dynamics
-Podcasts/Voice     | -16         | 4-7       | -1.0      | Dialogue clarity
-Action Content     | -14         | 6-9       | -1.0      | Balance impact & clarity
-YouTube Shorts     | -13         | 5-8       | -1.0      | Slightly louder for mobile
+# Audio normalization
+DEFAULT_NORMALIZE_AUDIO = False 
+DEFAULT_LOUDNESS_TARGET = "-13" 
+DEFAULT_LOUDNESS_RANGE = "5"    
+DEFAULT_TRUE_PEAK = "-1.0"      
 
-Notes:
-- LUFS: Loudness Units Full Scale (EBU R128 standard)
-- LRA: Loudness Range - Higher values preserve dynamics, lower values compress
-- True Peak: Maximum allowed peak level to prevent clipping
-- YouTube normalizes ALL content to -14 LUFS (-13 for Shorts/Reels)
-- Mastering at these targets avoids platform re-processing
-"""
-DEFAULT_NORMALIZE_AUDIO = False # Defaults to False globally, enabled via Presets
-DEFAULT_LOUDNESS_TARGET = "-13" # LUFS YouTube at -14, shorts at -13
-DEFAULT_LOUDNESS_RANGE = "5"    # LRA youtube at 4-7, shorts at 5-8
-DEFAULT_TRUE_PEAK = "-1.0"      # always at -1.0
-
-# Audio track selection defaults (User preference update)
+# Audio track selection defaults
 DEFAULT_AUDIO_MONO = False
 DEFAULT_AUDIO_STEREO_DOWNMIX = False
 DEFAULT_AUDIO_STEREO_SOFALIZER = False
@@ -162,7 +142,11 @@ DEFAULT_SHADOW_OFFSET_X = "2"
 DEFAULT_SHADOW_OFFSET_Y = "4"
 DEFAULT_SHADOW_BLUR = "5"
 
-DEBUG_MODE = False  # or True
+DEBUG_MODE = False
+
+# --- Global State for Graceful Exit ---
+CURRENT_FFMPEG_PROCESS = None
+CURRENT_TEMP_FILE = None
 
 def debug_print(*args, **kwargs):
     if DEBUG_MODE:
@@ -174,7 +158,34 @@ env["PYTHONIOENCODING"] = "utf-8"
 class VideoProcessingError(Exception):
     pass
 
-# --- Utility Functions (Unchanged) ---
+# --- Graceful Exit Handler ---
+def handle_sigint(signum, frame):
+    """Handles Ctrl+C to clean up subprocesses and temp files."""
+    print("\n\n" + "!"*60)
+    print("[WARN] Ctrl+C detected! Stopping immediately...")
+    print("!"*60)
+    
+    global CURRENT_FFMPEG_PROCESS, CURRENT_TEMP_FILE
+
+    if CURRENT_FFMPEG_PROCESS:
+        try:
+            print(f"[INFO] Terminating FFmpeg process (PID: {CURRENT_FFMPEG_PROCESS.pid})...")
+            CURRENT_FFMPEG_PROCESS.kill()
+            CURRENT_FFMPEG_PROCESS.wait()
+        except Exception as e:
+            print(f"[ERROR] Failed to kill process: {e}")
+
+    if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE):
+        try:
+            os.remove(CURRENT_TEMP_FILE)
+            print(f"[INFO] Cleaned up temp file: {CURRENT_TEMP_FILE}")
+        except Exception as e:
+            print(f"[WARN] Could not delete temp file: {e}")
+
+    print("[INFO] Exiting.")
+    sys.exit(0)
+
+# --- Utility Functions ---
 def check_cuda_availability():
     try:
         cmd = [FFMPEG_CMD, "-hwaccels"]
@@ -228,10 +239,22 @@ def safe_ffprobe(cmd, operation="operation"):
     except Exception as e:
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
-def safe_ffmpeg_execution(cmd, operation="encoding"):
+def get_file_duration(file_path):
+    """Returns the duration of the file in seconds."""
+    cmd = [FFPROBE_CMD, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+    try:
+        result = safe_ffprobe(cmd, "duration check")
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None):
+    global CURRENT_FFMPEG_PROCESS
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
+        CURRENT_FFMPEG_PROCESS = process
+        
         output_lines = []
         while True:
             line = process.stdout.readline()
@@ -239,17 +262,30 @@ def safe_ffmpeg_execution(cmd, operation="encoding"):
                 break
             if line:
                 output_lines.append(line)
+                
+                # Progress Parsing
+                if duration and progress_callback and "time=" in line:
+                    match = re.search(r'time=(\d{2}):(\d{2}):(\d{2}\.\d{2})', line)
+                    if match:
+                        h, m, s = map(float, match.groups())
+                        current_seconds = h * 3600 + m * 60 + s
+                        percent = min(100, (current_seconds / duration) * 100)
+                        progress_callback(percent)
+
+                # Console output
                 if "\r" in line:
-                    progress = line.split("\r")[-1].strip()
-                    sys.stdout.write("\r" + progress)
+                    sys.stdout.write("\r" + line.strip())
                 else:
                     sys.stdout.write(line)
                 sys.stdout.flush()
+        
         process.stdout.close()
         return_code = process.wait()
+        CURRENT_FFMPEG_PROCESS = None
+        
         if return_code != 0:
             error_output = "".join(output_lines)
-            raise VideoProcessingError(f"FFmpeg {operation} failed with return code {return_code}\nFull output:\n{error_output}")
+            raise VideoProcessingError(f"FFmpeg {operation} failed with return code {return_code}")
         return return_code
     except FileNotFoundError:
         raise VideoProcessingError("FFmpeg not found. Please ensure FFmpeg is installed and in PATH")
@@ -267,6 +303,7 @@ def alpha_to_libass_alpha(alpha_val):
     return f"&H{alpha_val:02X}"
 
 def create_temporary_ass_file(srt_path, options):
+    global CURRENT_TEMP_FILE
     try:
         with open(srt_path, 'r', encoding='utf-8', errors='replace') as f:
             srt_content = f.read()
@@ -323,7 +360,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     dialogue_lines = []
-    srt_blocks = re.findall(r'(\d+)\s*\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s*\n(.*?)(?=\n\n|\Z)', srt_content, re.DOTALL)
+    # Updated Regex to handle both comma and period in timestamps
+    srt_blocks = re.findall(r'(\d+)\s*\n(\d{2}:\d{2}:\d{2}[.,]\d{3}) --> (\d{2}:\d{2}:\d{2}[.,]\d{3})\s*\n(.*?)(?=\n\n|\Z)', srt_content, re.DOTALL)
     for block in srt_blocks:
         _, start_time, end_time, text = block
         clean_text = re.sub(r'<[^>]+>', '', text)
@@ -348,7 +386,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if options.get("subtitle_alignment") == "seam" and "calculated_pos" in options:
             x, y = options["calculated_pos"]
             pos_override = fr"{{\an5\pos({x},{y})}}"
-            debug_print(f"Applying position override: {pos_override}")
         dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
 
     full_ass_content = header + "\n".join(dialogue_lines)
@@ -357,13 +394,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(full_ass_content)
+        CURRENT_TEMP_FILE = filepath
         debug_print(f"Created temporary subtitle file: {filepath}")
         return filepath
     except Exception as e:
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
-
-    return None
 
 def get_video_info(file_path):
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,r_frame_rate,height,width,color_transfer,color_primaries,codec_name,codec_tag_string", "-of", "json", file_path]
@@ -417,18 +453,14 @@ def extract_embedded_subtitle(video_path, subtitle_index):
         print(f"[INFO] Extracting embedded subtitle stream {subtitle_index}...")
         subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=env)
         if os.path.exists(temp_subtitle_path) and os.path.getsize(temp_subtitle_path) > 0:
-            debug_print(f"Successfully extracted subtitle to {temp_subtitle_path}")
             return temp_subtitle_path
         else:
-            print(f"[WARN] Extracted subtitle file is empty or missing.")
             if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
             return None
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to extract subtitle stream {subtitle_index}.")
+    except subprocess.CalledProcessError:
         if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
         return None
-    except Exception as e:
-        print(f"[ERROR] Unexpected error during subtitle extraction: {e}")
+    except Exception:
         if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
         return None
 
@@ -470,7 +502,6 @@ def get_job_hash(job_options):
         job_options.get('shadow_offset_y', ''),
         job_options.get('shadow_blur', ''),
         job_options.get('wrap_limit', ''),
-        # Add new audio options
         job_options.get('audio_mono', False),
         job_options.get('audio_stereo_downmix', False),
         job_options.get('audio_stereo_sofalizer', False),
@@ -502,7 +533,6 @@ class ToolTip:
             self.tip_window = None
 
 class CollapsiblePane(ttk.Frame):
-    """A collapsible pane widget for tkinter."""
     def __init__(self, parent, text="", initial_state='collapsed'):
         super().__init__(parent, padding=5)
         self.columnconfigure(0, weight=1)
@@ -540,7 +570,7 @@ class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
         self.root.title("Video Processing Tool (vid.py)")
-        self.root.geometry("1200x800")
+        self.root.geometry("1200x850")
         self.output_mode = output_mode
         self.processing_jobs = []
 
@@ -549,7 +579,7 @@ class VideoProcessorApp:
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
         self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
-        self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS) # New Subfolder Toggle
+        self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
         self.horizontal_aspect_var = tk.StringVar(value=DEFAULT_HORIZONTAL_ASPECT)
@@ -569,7 +599,7 @@ class VideoProcessorApp:
         self.loudness_range_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_range'))
         self.true_peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
         self.true_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('true_peak'))
-        self.sofa_file_var = tk.StringVar(value=r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa")
+        self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
@@ -604,7 +634,6 @@ class VideoProcessorApp:
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
 
-        # New audio track booleans
         self.audio_mono_var = tk.BooleanVar(value=DEFAULT_AUDIO_MONO)
         self.audio_stereo_downmix_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_DOWNMIX)
         self.audio_stereo_sofalizer_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_SOFALIZER)
@@ -620,7 +649,6 @@ class VideoProcessorApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        # --- Main Layout ---
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_pane.grid(row=0, column=0, sticky="nsew")
 
@@ -630,17 +658,20 @@ class VideoProcessorApp:
         settings_notebook = ttk.Notebook(main_pane)
         main_pane.add(settings_notebook, weight=2)
 
-        # --- Bottom Bar ---
+        # Bottom Bar with Progress
         bottom_frame = ttk.Frame(self.root)
         bottom_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
         button_frame = ttk.Frame(bottom_frame)
         button_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
+        
+        # Progress Bar
+        self.progress_bar = ttk.Progressbar(bottom_frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
+        self.progress_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=2)
 
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
 
-        # --- Populate Panes and Tabs ---
         self.setup_input_pane(input_frame)
 
         video_tab = ttk.Frame(settings_notebook, padding=10)
@@ -656,7 +687,6 @@ class VideoProcessorApp:
         self.setup_subtitle_tab(subtitle_tab)
         self.setup_button_row(button_frame)
 
-        # --- Initial State Updates ---
         self._toggle_orientation_options()
         self._toggle_upscale_options()
         self._toggle_audio_norm_options()
@@ -686,7 +716,6 @@ class VideoProcessorApp:
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
         self.job_listbox.bind("<<ListboxSelect>>", self.on_input_file_select)
 
-        # --- Action Buttons ---
         selection_buttons_frame = ttk.Frame(file_group)
         selection_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
         ttk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
@@ -752,7 +781,6 @@ class VideoProcessorApp:
         self.rb_hd = ttk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=lambda: self._update_selected_jobs("resolution")); self.rb_hd.pack(side=tk.LEFT)
         self.rb_4k = ttk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=lambda: self._update_selected_jobs("resolution")); self.rb_4k.pack(side=tk.LEFT, padx=5)
         self.rb_8k = ttk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
-        ToolTip(self.rb_hd, "HD: 1920x1080 (H) or 1080px wide (V/Hybrid)."); ToolTip(self.rb_4k, "4K: 3840x2160 (H) or 2160px wide (V/Hybrid)."); ToolTip(self.rb_8k, "8K: 7680x4320 (H) or 4320px wide (V/Hybrid).")
         upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(upscale_frame, text="Lanczos", variable=self.upscale_algo_var, value="lanczos", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
@@ -765,8 +793,6 @@ class VideoProcessorApp:
         ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
         ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
         ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
-        
-        # --- NEW CHECKBOX FOR SUBFOLDERS ---
         ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
                         command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
         
@@ -774,7 +800,6 @@ class VideoProcessorApp:
         ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
         self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
-        ToolTip(self.lut_entry, "Path to LUT file for HDR to SDR conversion")
         bitrate_frame = ttk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
         self.manual_bitrate_entry = ttk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
@@ -785,7 +810,6 @@ class VideoProcessorApp:
         self.fruc_fps_entry = ttk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
 
     def setup_audio_tab(self, parent):
-        # Normalization Group
         norm_group = ttk.LabelFrame(parent, text="Normalization", padding=10)
         norm_group.pack(fill=tk.X, pady=(0, 5))
         ttk.Checkbutton(norm_group, text="Normalize Audio (EBU R128)", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
@@ -806,7 +830,6 @@ class VideoProcessorApp:
         self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
         self.true_peak_entry.grid(row=2, column=1, sticky="w", padx=5)
 
-        # Output Tracks Group
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
 
@@ -877,7 +900,6 @@ class VideoProcessorApp:
         wrap_limit_entry.pack(side=tk.LEFT)
         ttk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
 
-        # --- Collapsible Panes for Color Properties ---
         fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
         fill_pane.pack(fill=tk.X, pady=2, padx=2)
         outline_pane = CollapsiblePane(main_style_group, "Outline Properties")
@@ -885,35 +907,29 @@ class VideoProcessorApp:
         shadow_pane = CollapsiblePane(main_style_group, "Shadow Properties")
         shadow_pane.pack(fill=tk.X, pady=2, padx=2)
 
-        # Fill Properties
         fill_pane.container.columnconfigure(3, weight=1)
         ttk.Label(fill_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
         self.fill_swatch = tk.Label(fill_pane.container, text="    ", bg=self.fill_color_var.get(), relief="sunken"); self.fill_swatch.grid(row=0, column=1)
         ttk.Button(fill_pane.container, text="..", command=lambda: self.choose_color(self.fill_color_var, self.fill_swatch, "fill_color"), width=3).grid(row=0, column=2, padx=5)
         fill_alpha_scale = ttk.Scale(fill_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.fill_alpha_var, command=lambda val: self._update_selected_jobs("fill_alpha"))
         fill_alpha_scale.grid(row=0, column=3, sticky="ew")
-        ToolTip(fill_alpha_scale, "Fill Alpha (Transparency)")
 
-        # Outline Properties
         outline_pane.container.columnconfigure(3, weight=1)
         ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
         self.outline_swatch = tk.Label(outline_pane.container, text="    ", bg=self.outline_color_var.get(), relief="sunken"); self.outline_swatch.grid(row=0, column=1)
         ttk.Button(outline_pane.container, text="..", command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch, "outline_color"), width=3).grid(row=0, column=2, padx=5)
         outline_alpha_scale = ttk.Scale(outline_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.outline_alpha_var, command=lambda val: self._update_selected_jobs("outline_alpha"))
         outline_alpha_scale.grid(row=0, column=3, sticky="ew")
-        ToolTip(outline_alpha_scale, "Outline Alpha (Transparency)")
         ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", pady=(5,0))
         outline_width_entry = ttk.Entry(outline_pane.container, textvariable=self.outline_width_var, width=5)
         outline_width_entry.grid(row=1, column=1, columnspan=2, sticky="w", pady=(5,0), padx=(0, 5))
 
-        # Shadow Properties
         shadow_pane.container.columnconfigure(3, weight=1)
         ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
         self.shadow_swatch = tk.Label(shadow_pane.container, text="    ", bg=self.shadow_color_var.get(), relief="sunken"); self.shadow_swatch.grid(row=0, column=1)
         ttk.Button(shadow_pane.container, text="..", command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch, "shadow_color"), width=3).grid(row=0, column=2, padx=5)
         shadow_alpha_scale = ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.shadow_alpha_var, command=lambda val: self._update_selected_jobs("shadow_alpha"))
         shadow_alpha_scale.grid(row=0, column=3, sticky="ew")
-        ToolTip(shadow_alpha_scale, "Shadow Alpha (Transparency)")
         offset_frame = ttk.Frame(shadow_pane.container); offset_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(5,0))
         ttk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
         shadow_offset_x_entry = ttk.Entry(offset_frame, textvariable=self.shadow_offset_x_var, width=5)
@@ -926,7 +942,6 @@ class VideoProcessorApp:
         shadow_blur_entry.pack(side=tk.LEFT, padx=5)
 
     def setup_button_row(self, parent):
-        # FIX: Use style.map() for robust button coloring
         style = ttk.Style(self.root)
         style.configure("Start.TButton", font=("Arial", 10, "bold"), padding=5)
         style.map("Start.TButton",
@@ -948,7 +963,6 @@ class VideoProcessorApp:
             elif fonts:
                 self.font_combo.set(fonts[0])
         except Exception as e:
-            print(f"[WARN] Could not load system fonts: {e}")
             self.font_combo['values'] = [DEFAULT_SUBTITLE_FONT]
             self.font_combo.set(DEFAULT_SUBTITLE_FONT)
 
@@ -993,7 +1007,6 @@ class VideoProcessorApp:
         orientation = self.orientation_var.get()
         current_alignment = self.subtitle_alignment_var.get()
 
-        # --- Manage UI visibility and seam alignment ---
         if orientation == "hybrid (stacked)":
             if current_alignment != "seam":
                 self.last_standard_alignment.set(current_alignment)
@@ -1028,7 +1041,6 @@ class VideoProcessorApp:
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
 
-        # --- IMPLEMENTED: Intelligent Subtitle Burning Workflow ---
         is_vertical_target = orientation in ["vertical", "hybrid (stacked)", "horizontal + vertical"]
 
         if is_vertical_target:
@@ -1044,7 +1056,6 @@ class VideoProcessorApp:
             if should_enable_burn:
                 self.burn_subtitles_var.set(True)
         
-        # Update the selected jobs with all relevant changes
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
     def _toggle_upscale_options(self):
@@ -1057,11 +1068,9 @@ class VideoProcessorApp:
         self._update_selected_jobs("normalize_audio")
 
     def _update_audio_options_ui(self):
-        """Manages the state of all audio UI elements based on selections."""
         is_passthrough = self.audio_passthrough_var.get()
         is_sofalizer = self.audio_stereo_sofalizer_var.get()
 
-        # Mutual exclusivity for passthrough
         if is_passthrough:
             self.audio_mono_var.set(False)
             self.audio_stereo_downmix_var.set(False)
@@ -1079,12 +1088,10 @@ class VideoProcessorApp:
 
         self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
 
-        # Contextual SOFA file input
         sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
         self.sofa_entry.config(state=sofa_state)
         self.sofa_browse_btn.config(state=sofa_state)
 
-        # Update job options for any changes
         self._update_selected_jobs(
             "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer",
             "audio_surround_51", "audio_passthrough", "sofa_file"
@@ -1092,7 +1099,13 @@ class VideoProcessorApp:
 
     def update_status(self, message):
         self.status_var.set(message)
-        self.root.update_idletasks()
+        # self.root.update_idletasks() # Not safe in thread, rely on mainloop
+
+    def update_progress(self, percent):
+        """Updates the progress bar in the GUI."""
+        # This is called from the thread, but assigning to a ttk.Progressbar variable 
+        # or configuring it is generally handled well by tk, but using after() is safer.
+        self.root.after(0, lambda: self.progress_bar.config(value=percent))
 
     def _update_selected_jobs(self, *keys_to_update):
         selected_indices = self.job_listbox.curselection()
@@ -1101,7 +1114,6 @@ class VideoProcessorApp:
         current_options = self.get_current_gui_options()
         options_to_apply = {key: current_options[key] for key in keys_to_update if key in current_options}
         if options_to_apply:
-             debug_print(f"[GUI ACTION] Applied {options_to_apply} to {len(selected_indices)} selected job(s).")
              for index in selected_indices:
                 job = self.processing_jobs[index]
                 job['options'].update(options_to_apply)
@@ -1134,28 +1146,25 @@ class VideoProcessorApp:
             "shadow_offset_x": self.shadow_offset_x_var.get(), "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
-            # New folder config
             "output_to_subfolders": self.output_subfolders_var.get(),
         }
 
     def _apply_workflow_preset(self, options, preset_config):
         """Applies dictionary-based presets to the job options."""
-        # 1. Apply direct mappings
         if "orientation" in preset_config: options["orientation"] = preset_config["orientation"]
         if "resolution" in preset_config: options["resolution"] = preset_config["resolution"]
         if "normalize_audio" in preset_config: options["normalize_audio"] = preset_config["normalize_audio"]
         if "burn_subtitles" in preset_config: options["burn_subtitles"] = preset_config["burn_subtitles"]
+        # FIX: Ensure alignment from preset is applied
+        if "subtitle_alignment" in preset_config: options["subtitle_alignment"] = preset_config["subtitle_alignment"]
 
-        # 2. Apply Audio Logic (Reset all first, then enable one)
         if "audio_type" in preset_config:
-            # Reset all
             options["audio_passthrough"] = False
             options["audio_mono"] = False
             options["audio_stereo_downmix"] = False
             options["audio_stereo_sofalizer"] = False
             options["audio_surround_51"] = False
 
-            # Enable specific
             atype = preset_config["audio_type"]
             if atype == "passthrough": options["audio_passthrough"] = True
             elif atype == "mono": options["audio_mono"] = True
@@ -1169,22 +1178,19 @@ class VideoProcessorApp:
             dir_name, video_basename = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
             current_options = self.get_current_gui_options()
             
-            # --- 1. Create the base job (No Subtitles) ---
+            # 1. Base Job (No Subtitles)
             no_sub_job = {
                 "job_id": f"job_{time.time()}_{len(self.processing_jobs)}",
                 "video_path": video_path,
                 "subtitle_path": None,
                 "options": copy.deepcopy(current_options)
             }
-            
-            # [PRESET LOGIC] Apply defaults from top of script constants
             self._apply_workflow_preset(no_sub_job['options'], PRESET_NO_SUBTITLES)
-            
             no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
             self.processing_jobs.append(no_sub_job)
             self.job_listbox.insert(tk.END, no_sub_job["display_name"])
 
-            # --- 2. Check for External .srt files ---
+            # 2. External .srt
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
@@ -1196,17 +1202,14 @@ class VideoProcessorApp:
                             sub_job = copy.deepcopy(no_sub_job)
                             sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                             sub_job['subtitle_path'] = full_path
-                            
-                            # [PRESET LOGIC] Apply defaults from top of script constants
                             self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
-                            
                             sub_job['display_name'] = f"{os.path.basename(video_path)} [Sub: {tag}]"
                             self.processing_jobs.append(sub_job)
                             self.job_listbox.insert(tk.END, sub_job['display_name'])
             except Exception as e:
                 print(f"[WARN] Could not scan for external subtitles in {dir_name}: {e}")
 
-            # --- 3. Check for Embedded Subtitles ---
+            # 3. Embedded Subtitles
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
@@ -1217,10 +1220,7 @@ class VideoProcessorApp:
                 sub_job = copy.deepcopy(no_sub_job)
                 sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
                 sub_job['subtitle_path'] = f"embedded:{relative_index}"
-                
-                # [PRESET LOGIC] Apply defaults from top of script constants
                 self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
-                
                 sub_job['display_name'] = f"{os.path.basename(video_path)} [Embedded: {lang.title()} - {title} ({codec})]"
                 self.processing_jobs.append(sub_job)
                 self.job_listbox.insert(tk.END, sub_job['display_name'])
@@ -1246,7 +1246,7 @@ class VideoProcessorApp:
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
-        self.sofa_file_var.set(options.get("sofa_file", r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"))
+        self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
@@ -1282,101 +1282,57 @@ class VideoProcessorApp:
             offset += 1
 
     def build_audio_segment(self, file_path, options):
-        # 1. Handle Passthrough mode
         if options.get("audio_passthrough"):
             return ["-map", "0:a?", "-c:a", "copy"]
 
-        # 2. Get info on available audio streams
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams:
             return ["-an"]
 
-        # Helper to find specific streams
-        # Note: We cast to int because ffprobe JSON values might be strings
         stereo_streams = [s for s in audio_streams if int(s.get("channels", 0)) == 2]
         surround_streams = [s for s in audio_streams if int(s.get("channels", 0)) >= 6]
         
-        # Define 'Best' candidates based on priorities
-        # For Mono: Prefer Stereo -> Surround -> First Available
         src_for_mono = stereo_streams[0] if stereo_streams else (surround_streams[0] if surround_streams else audio_streams[0])
-        
-        # For Others (High Quality): Prefer Surround -> Stereo -> First Available
         src_for_hq = surround_streams[0] if surround_streams else (stereo_streams[0] if stereo_streams else audio_streams[0])
 
-        # 3. Determine which tracks to build and assign their specific source
-        # Structure: list of dicts { 'type': str, 'source_index': int, 'source_channels': int }
         tracks_config = []
-
         if options.get("audio_mono"):
-            tracks_config.append({
-                "type": "mono", 
-                "source_index": src_for_mono['index'],
-                "source_channels": int(src_for_mono.get("channels", 0))
-            })
-
+            tracks_config.append({"type": "mono", "source_index": src_for_mono['index'], "source_channels": int(src_for_mono.get("channels", 0))})
         if options.get("audio_stereo_downmix"):
-            tracks_config.append({
-                "type": "stereo_downmix", 
-                "source_index": src_for_hq['index'],
-                "source_channels": int(src_for_hq.get("channels", 0))
-            })
-
+            tracks_config.append({"type": "stereo_downmix", "source_index": src_for_hq['index'], "source_channels": int(src_for_hq.get("channels", 0))})
         if options.get("audio_stereo_sofalizer"):
-            # Validation: Sofalizer usually needs 5.1 to be worth it
             if int(src_for_hq.get("channels", 0)) >= 6:
-                tracks_config.append({
-                    "type": "stereo_sofalizer", 
-                    "source_index": src_for_hq['index'],
-                    "source_channels": int(src_for_hq.get("channels", 0))
-                })
+                tracks_config.append({"type": "stereo_sofalizer", "source_index": src_for_hq['index'], "source_channels": int(src_for_hq.get("channels", 0))})
             else:
-                print(f"[WARN] Sofalizer skipped: Best available source for {os.path.basename(file_path)} is not 5.1/Surround.")
-
+                print(f"[WARN] Sofalizer skipped: Best source for {os.path.basename(file_path)} is not 5.1/Surround.")
         if options.get("audio_surround_51"):
-            # [LOGIC UPDATE v7.6] Use whatever best source is available. 
-            # Later we use aformat or channelmap depending on channel count.
-            tracks_config.append({
-                "type": "surround_51", 
-                "source_index": src_for_hq['index'],
-                "source_channels": int(src_for_hq.get("channels", 0))
-            })
+            tracks_config.append({"type": "surround_51", "source_index": src_for_hq['index'], "source_channels": int(src_for_hq.get("channels", 0))})
 
         if not tracks_config:
-            print("[WARN] No valid audio tracks selected or possible. Disabling audio.")
+            print("[WARN] No valid audio tracks selected. Disabling audio.")
             return ["-an"]
 
-        # 4. Build Input Routing (Dynamic splitting)
-        # We need to see how many times each source index is used to apply 'asplit' if needed.
         source_counts = Counter(t['source_index'] for t in tracks_config)
-        
-        fc_parts = []
-        # specific_pads maps source_index -> list of available pad names e.g. {1: ["[s1_0]", "[s1_1]"]}
-        specific_pads = {} 
+        fc_parts, specific_pads = [], {}
 
         for src_idx, count in source_counts.items():
             if count > 1:
-                # We need to split this source
                 out_pads = [f"[src{src_idx}_{i}]" for i in range(count)]
                 fc_parts.append(f"[0:{src_idx}]asplit={count}{''.join(out_pads)}")
                 specific_pads[src_idx] = out_pads
             else:
-                # Used once, use direct input
                 specific_pads[src_idx] = [f"[0:{src_idx}]"]
 
         final_maps = []
         output_audio_index = 0
 
-        # 5. Build Filters per Track
         for track in tracks_config:
             track_type = track['type']
             src_idx = track['source_index']
-            
-            # Pop one pad from the list of available pads for this source
             input_tag = specific_pads[src_idx].pop(0)
             proc_tag = f"[{track_type}_proc]"
             final_tag = proc_tag
 
-            # A. Processing Chain
             if track_type == "mono":
                 fc_parts.append(f"{input_tag}aformat=channel_layouts=mono{proc_tag}")
             elif track_type == "stereo_downmix":
@@ -1386,34 +1342,23 @@ class VideoProcessorApp:
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
-                # Standard SOFA mapping for 5.1
                 fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
-                # [LOGIC UPDATE v7.6] Robust 5.1 creation
                 if track['source_channels'] >= 6:
-                     # Standard mapping for surround inputs
                      fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
                 else:
-                     # Upmix stereo (or others) to 5.1 using aformat
                      fc_parts.append(f"{input_tag}aformat=channel_layouts=5.1{proc_tag}")
 
-            # B. Normalization (Loudnorm)
             if options.get("normalize_audio", False):
-                lt = options.get("loudness_target")
-                lr = options.get("loudness_range")
-                tp = options.get("true_peak")
+                lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
                 fc_parts.append(f"{proc_tag}loudnorm=i={lt}:lra={lr}:tp={tp}{ln_tag}")
                 final_tag = ln_tag
 
-            # C. Resample
             resample_tag = f"[{track_type}_final]"
             fc_parts.append(f"{final_tag}aresample={AUDIO_SAMPLE_RATE}{resample_tag}")
-
-            # D. FFmpeg Mapping Flags
             final_maps.extend(["-map", resample_tag])
             
-            # Codec/Bitrate Settings
             if track_type == "mono":
                 final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
                 title = "Mono"
@@ -1424,10 +1369,8 @@ class VideoProcessorApp:
                 final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
                 title = "5.1 Surround"
             
-            # Metadata
             disposition = "default" if output_audio_index == 0 else "0"
             final_maps.extend([f"-disposition:a:{output_audio_index}", disposition, f"-metadata:s:a:{output_audio_index}", f"title={title}"])
-            
             output_audio_index += 1
             
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
@@ -1435,9 +1378,7 @@ class VideoProcessorApp:
     def build_ffmpeg_command_and_run(self, job, orientation):
         options = copy.deepcopy(job['options'])
         
-        # --- NEW FOLDER LOGIC START ---
         if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
-            # Complex subfolder structure
             folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
             if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
             elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
@@ -1451,13 +1392,11 @@ class VideoProcessorApp:
             safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
             final_sub_path = os.path.join(folder_name, safe_subtitle_folder_name)
         else:
-            # Simple single output folder
             final_sub_path = DEFAULT_SINGLE_OUTPUT_DIR_NAME
         
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, final_sub_path)
         os.makedirs(output_dir, exist_ok=True)
-        # --- NEW FOLDER LOGIC END ---
 
         unique_base_name = os.path.splitext(job['display_name'])[0]
         safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", unique_base_name)
@@ -1488,8 +1427,13 @@ class VideoProcessorApp:
                             options["calculated_pos"] = (960, seam_y_on_canvas)
                     ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
                     if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
+            
             cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
-            if self.run_ffmpeg_command(cmd) != 0: raise VideoProcessingError(f"Error encoding {job['video_path']}")
+            duration = get_file_duration(job['video_path'])
+            
+            if self.run_ffmpeg_command(cmd, duration) != 0: 
+                raise VideoProcessingError(f"Error encoding {job['video_path']}")
+            
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
         finally:
@@ -1528,7 +1472,7 @@ class VideoProcessorApp:
             bot_vf, bot_cpu, _ = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if ass_burn_path: cpu_chain.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
@@ -1551,7 +1495,7 @@ class VideoProcessorApp:
                 if options.get("aspect_mode") == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
                 elif options.get("aspect_mode") == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if ass_burn_path: cpu_filters.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             if cpu_filters:
@@ -1575,8 +1519,11 @@ class VideoProcessorApp:
 
     def validate_processing_settings(self):
         issues = []
-        if self.output_format_var.get() == 'sdr' and not os.path.exists(self.lut_file_var.get()):
-            issues.append(f"LUT file not found for HDR->SDR conversion: {self.lut_file_var.get()}")
+        if self.output_format_var.get() == 'sdr':
+             lut_path = self.lut_file_var.get()
+             if lut_path and not os.path.exists(lut_path):
+                 issues.append(f"LUT file path is set but file not found: {lut_path}")
+        
         try:
             if not -70 <= float(self.loudness_target_var.get()) <= 0:
                 issues.append("Loudness target must be between -70 and 0 LUFS.")
@@ -1605,11 +1552,22 @@ class VideoProcessorApp:
         if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files to the queue."); return
         if not self.validate_processing_settings(): return
         self.output_mode = self.output_mode_var.get()
+        
+        # Disable button to prevent re-entry
+        self.start_button.config(state="disabled")
+        
+        # Start Thread
+        threading.Thread(target=self._process_files_thread, daemon=True).start()
+
+    def _process_files_thread(self):
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
         successful, failed = 0, 0
         total_jobs = len(self.processing_jobs)
+        
         for i, job in enumerate(self.processing_jobs):
-            self.update_status(f"Processing {i + 1}/{total_jobs}: {job['display_name']}")
+            self.root.after(0, lambda m=f"Processing {i + 1}/{total_jobs}: {job['display_name']}": self.update_status(m))
+            self.root.after(0, lambda: self.progress_bar.config(value=0))
+            
             print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-"*80)
             try:
                 orientation = job['options'].get("orientation", "horizontal")
@@ -1621,13 +1579,18 @@ class VideoProcessorApp:
                 successful += 1; print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
             except (VideoProcessingError, Exception) as e:
                 failed += 1; print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
+        
         final_message = f"Processing Complete: {successful} successful, {failed} failed"
-        print("\n" + "="*80 + "\n" + final_message); self.update_status(final_message)
+        print("\n" + "="*80 + "\n" + final_message)
+        
+        self.root.after(0, lambda: self.update_status(final_message))
+        self.root.after(0, lambda: self.progress_bar.config(value=0))
+        self.root.after(0, lambda: self.start_button.config(state="normal"))
 
-    def run_ffmpeg_command(self, cmd):
+    def run_ffmpeg_command(self, cmd, duration=None):
         print("Running FFmpeg command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
-        return safe_ffmpeg_execution(cmd, "video encoding")
+        return safe_ffmpeg_execution(cmd, "video encoding", duration, self.update_progress)
 
     def verify_output_file(self, file_path, options=None):
         print(f"--- Verifying output: {os.path.basename(file_path)} ---")
@@ -1682,23 +1645,29 @@ class VideoProcessorApp:
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
 
 if __name__ == "__main__":
+    # Register the Ctrl+C handler
+    signal.signal(signal.SIGINT, handle_sigint)
+
     parser = argparse.ArgumentParser(description="YouTube Batch Video Processing Tool", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-o', '--output-mode', dest='output_mode', choices=['local', 'pooled'], default='local', help="Set initial output directory mode.")
     parser.add_argument('input_files', nargs='*', help="Optional: Paths to video files or glob patterns.")
     parser.add_argument('-d', '--debug', action='store_true', help="Enable debug mode.")
     args = parser.parse_args()
     DEBUG_MODE = args.debug
+    
     if not check_cuda_availability():
         messagebox.showerror("CUDA Not Available", "CUDA hardware acceleration is not available or not detected in FFmpeg. The application requires CUDA to run.\nPlease ensure your NVIDIA drivers are installed and you have a compatible FFmpeg build.")
         sys.exit(1)
+    
     capabilities = check_ffmpeg_capabilities()
     if not capabilities['nvenc']:
         messagebox.showwarning("NVENC Not Available", "NVENC encoders not found in FFmpeg. Video encoding may fail.\nContinuing anyway...")
+    
     root = TkinterDnD.Tk()
     initial_files = []
     if args.input_files:
         for pattern in args.input_files: initial_files.extend(glob.glob(pattern))
-    else: # Auto-discover files RECURSIVELY in cwd if none are provided
+    else: 
         supported_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv'}
         print(f"[INFO] Scanning {os.getcwd()} and subdirectories...")
         for root_dir, _, filenames in os.walk(os.getcwd()):
