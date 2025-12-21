@@ -1,5 +1,6 @@
 import os
 import shutil
+import filecmp
 
 def flatten_directory_tree(root_dir):
     """
@@ -13,6 +14,11 @@ def flatten_directory_tree(root_dir):
 
             # Ensure we don't overwrite files with the same name
             if os.path.exists(dest_path):
+                if filecmp.cmp(src_path, dest_path, shallow=False):
+                    print(f"Duplicate found: {filename}")
+                    os.remove(src_path)
+                    continue
+
                 base, ext = os.path.splitext(filename)
                 counter = 1
                 while os.path.exists(dest_path):
