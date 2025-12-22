@@ -69,7 +69,7 @@ def download_audio(url: str, output_dir: str = None) -> str:
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        'outtmpl': os.path.join(target_dir, '%(title)s.%(ext)s'),
+        'outtmpl': os.path.join(target_dir, '%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s'),
         'noplaylist': True,
         'quiet': False,     # Enable output for debugging
         'no_warnings': False,
