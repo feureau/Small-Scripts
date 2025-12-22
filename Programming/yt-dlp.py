@@ -80,6 +80,7 @@ fail during processing are logged to a specified error file for easy retries.
 | `--srt` | `-s` | Download subtitles (SRT format). |
 | `--thumbnail` | `-t` | Download video thumbnail image. |
 | `--metadata` | `-m` | Download video metadata to a `.json` file (this is now the default behavior). |
+| `--description` | `-d` | Download video description to a `.description` file. |
 | `--language`| `-l` | Language code for audio/subs (e.g., 'id', 'es'). |
 
 ### gallery-dl Options (for image content in Download Mode)
@@ -824,7 +825,7 @@ import re
 # ================== USER CONFIGURABLE VARIABLES ==================
 YTDLP_PATH = "yt-dlp"
 GALLERYDL_PATH = "gallery-dl"
-OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(title)s - %(language)s.%(ext)s")
+OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s")
 PARALLEL_DOWNLOADS = 6
 # ================================================================
 
@@ -1023,22 +1024,44 @@ def build_ytdlp_command(video_id, args):
     # This is the custom format and options block based on your config.
     # It will be applied for default downloads (--default_download) or explicit video downloads (--video).
     if getattr(args, 'default_download', False) or args.video:
-        # Your custom format selection string - REMOVED [ext=m4a] for better compatibility
-        custom_format_string = "bestvideo[vcodec^=av01]+bestaudio/bestvideo+bestaudio"
+        # User requested configuration
+        custom_format_string = "best[ext=mp4]"
         
         command_list.extend([
-            '--audio-multistreams',
             '-f', custom_format_string,
-            '--progress',
-            '--audio-format', 'aac',
-            '--embed-thumbnail',
-            '--add-metadata',
             '--merge-output-format', 'mp4',
+            
+            # Thumbnails
+            '--embed-thumbnail',
             '--write-thumbnail',
-            '--write-auto-sub',
-            '--sub-lang', 'en',
-            '--convert-subs', 'srt'
+            
+            # Metadata
+            '--add-metadata',
+            
+            # Subtitles
+            '--write-subs',
+            '--write-auto-subs',
+            '--sub-lang', 'auto',
+            '--embed-subs',
+            
+            # Audio
+            '--audio-format', 'aac',
+            
+            # Progress
+            '--progress',
+            
+            # Retry and Resume
+            '--retries', '10',
+            '--fragment-retries', '10',
+            '--continue',
+            
+            # Compatibility & User Agent
+            '--compat-options', 'no-youtube-unavailable-videos',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
         ])
+
+        if args.description:
+            command_list.append('--write-description')
     
     # The original logic for other specific flags remains, in case you use them separately.
     else:
@@ -1053,6 +1076,8 @@ def build_ytdlp_command(video_id, args):
             command_list.extend(["--write-thumbnail", "--skip-download"])
         if args.metadata: 
             command_list.extend(["--write-info-json", "--skip-download"])
+        if args.description:
+            command_list.extend(["--write-description", "--skip-download"])
 
     command_list.append(video_url)
     return command_list
@@ -1153,6 +1178,7 @@ def main():
     ytdlp_group.add_argument("-a", "--audio-only", dest="audio_only", action="store_true", help="Download audio-only (MP3).")
     ytdlp_group.add_argument("-s", "--srt", action="store_true", help="Download subtitles (SRT).")
     ytdlp_group.add_argument("-t", "--thumbnail", action="store_true", help="Download video thumbnail.")
+    ytdlp_group.add_argument("-d", "--description", action="store_true", help="Download video description (.description).")
     ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json) (default).")
     ytdlp_group.add_argument("-l", "--language", type=str, help="Language code for audio/subs (e.g., 'id', 'es').")
     
@@ -1188,7 +1214,7 @@ def main():
         print("❌ No valid URLs were found from the provided inputs. Exiting.", file=sys.stderr)
         sys.exit(1)
     
-    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.metadata, args.g_write_metadata])
+    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.g_write_metadata])
     args.default_download = not is_any_specific_flag
     
     print(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...\n")
