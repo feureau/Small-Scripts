@@ -75,12 +75,13 @@ fail during processing are logged to a specified error file for easy retries.
 ### yt-dlp Options (for video content in Download Mode)
 | Flag | Short | Description |
 | :--- | :--- | :--- |
-| `--video` | `-v` | Download video (best quality, MP4). |
+| `--video` | `-v` | Download video (best quality MP4 + metadata, desc, comments). |
 | `--audio-only`| `-a` | Download audio-only (best quality, MP3). |
 | `--srt` | `-s` | Download subtitles (SRT format). |
 | `--thumbnail` | `-t` | Download video thumbnail image. |
-| `--metadata` | `-m` | Download video metadata to a `.json` file (this is now the default behavior). |
-| `--description` | `-d` | Download video description to a `.description` file. |
+| `--metadata` | `-m` | Download video metadata to a `.json` file (default). |
+| `--description` | `-d` | Download video description to a `.description` file (default). |
+| `--comments`    | `-C` | Download video comments into the metadata file (default). |
 | `--language`| `-l` | Language code for audio/subs (e.g., 'id', 'es'). |
 
 ### gallery-dl Options (for image content in Download Mode)
@@ -1035,8 +1036,11 @@ def build_ytdlp_command(video_id, args):
             '--embed-thumbnail',
             '--write-thumbnail',
             
-            # Metadata
+            # Metadata & Description (Default)
             '--add-metadata',
+            '--write-description',
+            '--write-info-json',
+            '--write-comments',
             
             # Subtitles
             '--write-subs',
@@ -1059,9 +1063,6 @@ def build_ytdlp_command(video_id, args):
             '--compat-options', 'no-youtube-unavailable-videos',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
         ])
-
-        if args.description:
-            command_list.append('--write-description')
     
     # The original logic for other specific flags remains, in case you use them separately.
     else:
@@ -1078,6 +1079,8 @@ def build_ytdlp_command(video_id, args):
             command_list.extend(["--write-info-json", "--skip-download"])
         if args.description:
             command_list.extend(["--write-description", "--skip-download"])
+        if args.comments:
+            command_list.extend(["--write-comments", "--write-info-json", "--skip-download"])
 
     command_list.append(video_url)
     return command_list
@@ -1178,8 +1181,9 @@ def main():
     ytdlp_group.add_argument("-a", "--audio-only", dest="audio_only", action="store_true", help="Download audio-only (MP3).")
     ytdlp_group.add_argument("-s", "--srt", action="store_true", help="Download subtitles (SRT).")
     ytdlp_group.add_argument("-t", "--thumbnail", action="store_true", help="Download video thumbnail.")
-    ytdlp_group.add_argument("-d", "--description", action="store_true", help="Download video description (.description).")
+    ytdlp_group.add_argument("-d", "--description", action="store_true", help="Download video description (.description) (default).")
     ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json) (default).")
+    ytdlp_group.add_argument("-C", "--comments", action="store_true", help="Download video comments into the metadata file (default).")
     ytdlp_group.add_argument("-l", "--language", type=str, help="Language code for audio/subs (e.g., 'id', 'es').")
     
     gallerydl_group = parser.add_argument_group('gallery-dl Options (for image content in Download Mode)')
@@ -1214,7 +1218,7 @@ def main():
         print("❌ No valid URLs were found from the provided inputs. Exiting.", file=sys.stderr)
         sys.exit(1)
     
-    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.g_write_metadata])
+    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.comments, args.g_write_metadata])
     args.default_download = not is_any_specific_flag
     
     print(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...\n")
