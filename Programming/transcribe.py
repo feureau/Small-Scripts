@@ -20,7 +20,9 @@ import torchaudio.transforms as T
 import av  # PyAV - Much more robust than torchaudio for checking streams
 from faster_whisper import WhisperModel
 import gc
+import shutil
 import yt_dlp
+import subprocess
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -33,7 +35,7 @@ MODEL_ALIASES = {
     "small": "small"
 }
 
-DEFAULT_MODEL_KEY = "turbo"
+DEFAULT_MODEL_KEY = "large-v3"
 DEFAULT_TASK = "transcribe"
 DEFAULT_MIN_SILENCE_DURATION_WT = 100 # ms
 DEFAULT_MAX_WORD_DURATION = 750       # ms
@@ -164,6 +166,92 @@ def has_valid_audio_track(file_path: str) -> bool:
         # but let's return False to be safe and skip it.
         print(f"   ⚠️  Probe Error: {e}")
         return False
+
+def preprocess_audio(input_path: str, output_dir: str = None) -> str:
+    """
+    Normalizes audio using FFmpeg's dynaudnorm filter to boost quiet parts (game audio) 
+    relative to loud parts (commentary). Returns path to temporary WAV file.
+    """
+    try:
+        print("   🔊 Enhancing audio levels (Dynamic Normalization)...")
+        wd = output_dir if output_dir else os.path.dirname(input_path)
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        temp_wav = os.path.join(wd, f"{base_name}_enhanced.wav")
+        
+        # Audio Filter Chain:
+        # 1. dynaudnorm: Dynamic Audio Normalizer (boosts quiet sections)
+        #    f=200: Frame len 200ms
+        #    g=5:  Small Gaussian window (5) for fast gain adaptation
+        #    m=40: Max gain 40 (allow 40x boost for very quiet parts)
+        # 2. aresample: Resample to 16k
+        # 3. ac 1: Mix to mono (average)
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", input_path,
+            "-map", "0:a:0", # Map First Audio Track
+            "-af", "dynaudnorm=f=200:g=5:m=40:p=0.95",
+            "-ar", "16000",
+            "-ac", "1",
+            temp_wav
+        ]
+        
+        subprocess.run(cmd, check=True)
+        return temp_wav
+    except subprocess.CalledProcessError as e:
+        print(f"   ⚠️  Audio Enhancement Failed: {e}")
+        return None
+    except FileNotFoundError:
+        print("   ⚠️  FFmpeg not found. Skipping enhancement.")
+        return None
+
+def isolate_audio_with_demucs(input_path: str, output_dir: str = None) -> str:
+    """
+    Uses Demucs to separate vocals from background noise/music.
+    Returns path to the isolated 'vocals.wav'.
+    """
+    try:
+        print("   🎸 Isolating vocals with Demucs...")
+        wd = output_dir if output_dir else os.path.dirname(input_path)
+        
+        # Output structure: {wd}/htdemucs/{filename_no_ext}/vocals.wav
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        expected_output = os.path.join(wd, "htdemucs", base_name, "vocals.wav")
+        
+        # Demucs command (Ultimate Quality Settings):
+        # --two-stems=vocals: Only separate vocals vs others
+        # -n htdemucs_ft: Use Fine-Tuned Hybrid Transformer model
+        # --shifts 10: Multi-pass prediction for better quality
+        # --overlap 0.5: Healthier segment transitions
+        # --float32: Preserve bit-depth fidelity
+        cmd = [
+            "demucs", "--two-stems=vocals", "-n", "htdemucs_ft",
+            "--shifts", "10", "--overlap", "0.5", "--float32",
+            "-o", wd, input_path
+        ]
+        
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        if os.path.exists(expected_output):
+            # Move out of htdemucs/ folder to be in same dir as input
+            final_isolated_wav = os.path.join(wd, f"{base_name}_isolated.wav")
+            if os.path.exists(final_isolated_wav): os.remove(final_isolated_wav)
+            os.rename(expected_output, final_isolated_wav)
+            
+            # Clean up the htdemucs folder immediately since we moved the file
+            try: shutil.rmtree(os.path.join(wd, "htdemucs"))
+            except: pass
+            
+            return final_isolated_wav
+        else:
+            print(f"   ⚠️  Demucs finished but output not found at: {expected_output}")
+            return None
+            
+    except subprocess.CalledProcessError as e:
+        print(f"   ⚠️  Demucs Failed: {e}")
+        return None
+    except FileNotFoundError:
+        print("   ⚠️  Demucs not found (pip install demucs). Skipping isolation.")
+        return None
 
 # --- VAD (Silero) Functions ---
 def load_vad_model():
@@ -346,12 +434,37 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         print(f"   🔇 WARNING: No audio track detected! Skipping.")
         return False, "Skipped (No Audio)"
 
+        return False, "Skipped (No Audio)"
+
+    # 1.5 Optional Preprocessing Chain
+    # Order matters: Enhance/Normalize -> Isolate Vocals
+    # Enhancing first helps Demucs detect quiet voices.
+    
+    transcription_source = file_path
+    temp_files_to_cleanup = []
+
+    # Step A: Enhancement (Normalization)
+    if args.enhance:
+        enhanced = preprocess_audio(transcription_source, args.output_dir)
+        if enhanced and os.path.exists(enhanced):
+            transcription_source = enhanced
+            temp_files_to_cleanup.append(enhanced)
+
+    # Step B: Isolation
+    if args.isolate:
+        isolated = isolate_audio_with_demucs(transcription_source, args.output_dir)
+        if isolated and os.path.exists(isolated):
+            transcription_source = isolated
+            temp_files_to_cleanup.append(isolated)
+            # Demucs creates a folder structure we might want to clean up later, 
+            # but for now we just track the file.
+
     # 2. Transcribe with Fallbacks
     cleaned_data = None
     
     def try_transcribe(use_vad_filter):
         s, _ = transcription_model.transcribe(
-            file_path, language=args.lang, task=args.task, vad_filter=use_vad_filter, 
+            transcription_source, language=args.lang, task=args.task, vad_filter=use_vad_filter, 
             vad_parameters={"min_silence_duration_ms": DEFAULT_MIN_SILENCE_DURATION_WT}, word_timestamps=True
         )
         res = {"segments": []}
@@ -363,9 +476,11 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         return res
 
     try:
-        # Attempt 1: Requested Model + Internal VAD
+        # Attempt 1: Requested Model + Internal VAD settings
+        # If enhanced, DISABLE VAD to prevent suppression of normalized game dialog
         ensure_model_loaded(args.model)
-        cleaned_data = try_transcribe(True)
+        default_vad = False if args.enhance else True
+        cleaned_data = try_transcribe(default_vad)
     except Exception as e:
         err = str(e).lower()
         if "tuple index" in err or "indexerror" in err:
@@ -395,7 +510,9 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     # 4. True VAD Alignment (Silero)
     if args.use_vad:
         print("   🔍 Aligning with Silero VAD...")
-        true_regions = detect_true_speech_regions(file_path)
+        # Use the enhanced file for VAD if available, as it might help detection too
+        vad_source = transcription_source 
+        true_regions = detect_true_speech_regions(vad_source)
         if true_regions:
             c = 0
             for seg in cleaned_data["segments"]:
@@ -408,6 +525,28 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     success = convert_data_to_srt(cleaned_data, final_srt_path)
     del cleaned_data
     gc.collect()
+
+    # Cleanup temp files
+    if not args.keep:
+        for tmp in temp_files_to_cleanup:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                    print(f"   🧹 Removed temp file: {os.path.basename(tmp)}")
+                except: pass
+        # Cleanup Demucs folder (deprecated by move-rename but kept for safety)
+        if args.isolate:
+            # {output_dir}/htdemucs/{base_name}
+            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            wd = args.output_dir if args.output_dir else os.path.dirname(file_path)
+            demucs_folder = os.path.join(wd, "htdemucs")
+            if os.path.exists(demucs_folder):
+                 try: shutil.rmtree(demucs_folder)
+                 except: pass
+    elif temp_files_to_cleanup:
+        print(f"   💾 Keeping temp files (due to -k):")
+        for tmp in temp_files_to_cleanup:
+            print(f"      - {tmp}")
     
     return success, final_srt_path if success else "Write failed"
 
@@ -418,7 +557,12 @@ def main():
     parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL_KEY, help=f"Model: {', '.join(MODEL_ALIASES.keys())}")
     parser.add_argument("-l", "--lang", type=str)
     parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"])
+
     parser.add_argument("--use_vad", action="store_true", help="Enable Silero VAD alignment")
+    parser.add_argument("-e", "--enhance", action="store_true", default=True, help="Normalize audio levels (Default: ON)")
+    parser.add_argument("-ne", "--no-enhance", action="store_false", dest="enhance", help="Disable audio normalization")
+    parser.add_argument("-i", "--isolate", action="store_true", default=True, help="Use Demucs to isolate vocals (Default: ON)")
+    parser.add_argument("-ni", "--no-isolate", action="store_false", dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
 
     args = parser.parse_args()
