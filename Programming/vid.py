@@ -1,68 +1,92 @@
-
 r"""
 ===============================================================================
 vid.py - Advanced Video Encoding and Audio Processing Utility
 ===============================================================================
 
+DOCUMENTATION & MAINTENANCE POLICY
+----------------------------------
+This documentation block is a living document integrated directly into the 
+script source. It MUST be updated with every feature addition, bug fix, or 
+UI change to ensure that the source code remains the single source of truth 
+for the tool's capabilities and logic.
+
 Overview
 --------
-`vid.py` is a powerful, GUI-based batch video processing and transcoding utility
-built on top of FFmpeg. It is designed for video creators who require high-quality,
-hardware-accelerated encoding with advanced audio processing and professional
-subtitle styling.
+`vid.py` is a professional-grade, GUI-driven batch video processing utility 
+built on FFmpeg. It focuses on high-quality production pipelines for content 
+creators, featuring hardware-accelerated NVIDIA NVENC encoding, advanced 
+audio mastering, and professional subtitle styling.
 
-Key Features
-------------
-*   **Video Processing**:
-    *   Hardware-accelerated encoding using NVIDIA NVENC (H.264/HEVC/AV1).
-    *   Support for SDR and HDR (BT.2020) color spaces with automated bitrate selection.
-    *   Smart upscaling/downscaling (Lanczos, Bicubic, Bilinear) with aspect ratio handling (Crop, Pad, Stretch).
-    *   FRUC (Frame Rate Up-Conversion) support for smooth motion.
-    *   "Hybrid (Stacked)" mode for creating vertical content from horizontal sources (e.g., facecam over gameplay).
+System Requirements & Dependencies
+----------------------------------
+*   **Hardware**: NVIDIA GPU (for CUDA/NVENC acceleration).
+*   **Tools**: FFmpeg (with `cuda`, `nvenc`, `libass`, `loudnorm`, `dynaudnorm` support).
+*   **Library**: `tkinterdnd2` (for drag-and-drop support).
+*   **Env Variables**: `FFMPEG_PATH` and `FFPROBE_PATH` (optional).
 
-*   **Audio Enhancement & Normalization**:
-    *   **Loudness War Tools**: Integrated compressor (`acompressor`) and limiter (`alimiter`) for aggressive signal boosting and dynamic range reduction.
-    *   **Chained Normalization**: Apply Dynamic Normalization (`dynaudnorm`) followed by EBU R128 (`loudnorm`)
-        in a single-pass filter chain for perfectly leveled and compliant audio.
-    *   **Fully Customizable**: Exposes granular control over Frame Length, Filter Window, Peak, and Gain, including "Brickwall" normalization presets.
-    *   **Loudness Measurement**: Automated post-processing pass to measure Integrated Loudness, LRA, and True Peak, saving results to an enhanced JSON report with YouTube target comparisons.
-    *   **Multi-Track Handling**: Mix-and-match output tracks (Mono, Stereo, 5.1 Surround, or Passthrough).
-    *   **Binaural Mixing**: Advanced HRTF-based "Sofalizer" downmixing for immersive headphone audio.
+Core Feature Sets
+-----------------
 
-*   **Subtitle Styling & Burning**:
-    *   Hard-burn subtitles from external `.srt` or discovery of embedded streams.
-    *   Advanced styling via `libass`: Custom fonts, sizes, colors, outlines, and drop shadows.
-    *   Smart alignment (Top/Mid/Bottom) and "Seam" positioning for Hybrid layouts.
-    *   Automated text wrapping and reformatting.
+1. **Video Processing (Hardware Accelerated)**:
+    *   **Encoders**: H.264, HEVC (H.265), and AV1 via NVIDIA NVENC.
+    *   **Color Spaces**: Full SDR and HDR (BT.2020) support with automated tagging.
+    *   **Scaling**: Smart upscaling (Lanczos, Bicubic, Bilinear) with aspect 
+        ratio handling (Crop/Fill, Pad/Fit, Stretch).
+    *   **Sharpening (New)**: Integrated CAS (Contrast Adaptive Sharpen) and 
+        matrix-based `unsharp` filters. Enabled by default for all jobs.
+    *   **Motion**: FRUC (Frame Rate Up-Conversion) via `minterpolate` for 
+        smooth 60+ FPS output.
+    *   **Hybrid (Stacked) Mode**: Specialized layout for creating vertical 
+        content from horizontal sources (e.g., facecam over gameplay).
 
-*   **Workflow & Interface**:
-    *   Modern Tkinter interface with Drag-and-Drop (`tkinterdnd2`) support.
-    *   Threaded processing to keep the GUI responsive during long jobs.
-    *   Queue management with per-job option persistence and hashing (job caching logic).
-    *   Graceful exit handling (kills FFmpeg and cleans up temp files on Ctrl+C).
+2. **Audio Mastering & "Loudness War" Tools**:
+    *   **Compression**: Multi-parameter `acompressor` for signal density.
+    *   **Limiting**: Hard-knee `alimiter` to prevent clipping at 0dB.
+    *   **Normalization**: Chained Dynamic Normalization (`dynaudnorm`) + 
+        EBU R128 (`loudnorm`) for perfectly leveled signals.
+    *   **Measurement**: Post-processing analysis that exports JSON reports 
+        with YouTube target comparisons (-14 LUFS).
+    *   **Binaural Mixing**: HRTF-based "Sofalizer" for immersive headphone 
+        audio from surround sources.
+
+3. **Subtitle Styling & Burning**:
+    *   **Sources**: Automatic discovery of external `.srt` or embedded streams.
+    *   **Styling**: Powered by `libass`. Customizable fonts, sizes, colors, 
+        alpha, outlines, and drop shadows via the GUI.
+    *   **Smart Alignment**: Positions subtitles relative to video content or 
+        at the "Seam" in Hybrid layouts.
+
+Workflow Logic
+--------------
+*   **Job Hashing**: Uses MD5 hashes of processing options to avoid redundant 
+    encodes and manage unique file naming.
+*   **Threaded Processing**: Offloads FFmpeg execution to background threads 
+    to keep the GUI responsive.
+*   **Graceful Exit**: Signal handling for Ctrl+C to kill FFmpeg processes 
+    and purge temporary files immediately.
 
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.6 - Sharpening & Docs Update (2025-12-26)
+    • FEATURE: Integrated video sharpening with `cas` and `unsharp` filters.
+    • FEATURE: Enabled sharpening by default (Algorithm: `cas`, Strength: `0.5`).
+    • UI: Added Sharpening controls to the Color & Quality section.
+    • DOCS: Expanded comprehensive documentation header and maintenance policy.
+
 v8.5 - Loudness War & Measurement Update (2025-12-26)
-    • FEATURE: "Loudness War" section with multi-parameter compressor and limiter.
-    • FEATURE: Enhanced Loudness Measurement system with automated JSON export and YouTube target comparison.
+    • FEATURE: "Loudness War" section with compressor and limiter.
+    • FEATURE: Enhanced Loudness Measurement system with JSON export.
     • FEATURE: "Brickwall" normalization settings for maximum signal density.
-    • UI: Reordered Audio tab to prioritize loudness controls.
 
 v8.0 - Audio Normalization Update (2025-12-26)
     • FEATURE: Added chained audio normalization (Dynamic + EBU R128).
-    • FEATURE: Exposed full dynaudnorm parameters (f, g, p, m) in the GUI.
     • FEATURE: Enabled Dynamic Normalization by default.
-    • DOCS: Comprehensive GitHub-style header documentation.
 
 v7.8 - Stability & Threading Update (2025-12-20)
-    • FEATURE: Added Threading. GUI no longer freezes during processing.
-    • FEATURE: Added Progress Bar with real-time percentage.
-    • FEATURE: Graceful Exit (Ctrl+C) kills FFmpeg processes and cleans temp files.
-    • BUGFIX: Hybrid jobs now apply "Seam" alignment to ALL files, not just the first.
-    • LOGIC: Improved SRT regex to handle '.' timestamps.
-    • CONFIG: Removed hardcoded paths for portability.
+    • FEATURE: Added Threading and Progress Bar.
+    • FEATURE: Graceful Exit (Ctrl+C) handling.
+    • BUGFIX: Hybrid jobs "Seam" alignment logic parity.
 """
 import os
 import subprocess
@@ -113,6 +137,9 @@ DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = False
+DEFAULT_USE_SHARPENING = True
+DEFAULT_SHARPENING_ALGO = "cas"
+DEFAULT_SHARPENING_STRENGTH = "0.5"
 
 # -------------------------- Output Configuration --------------------------
 DEFAULT_OUTPUT_TO_SUBFOLDERS = False
@@ -577,6 +604,9 @@ def get_job_hash(job_options):
         job_options.get('audio_stereo_sofalizer', False),
         job_options.get('audio_surround_51', False),
         job_options.get('audio_passthrough', False),
+        str(job_options.get('use_sharpening', False)),
+        job_options.get('sharpening_algo', ''),
+        job_options.get('sharpening_strength', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
@@ -730,6 +760,11 @@ class VideoProcessorApp:
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+
+        self.use_sharpening_var = tk.BooleanVar(value=DEFAULT_USE_SHARPENING)
+        self.sharpening_algo_var = tk.StringVar(value=DEFAULT_SHARPENING_ALGO)
+        self.sharpening_strength_var = tk.StringVar(value=DEFAULT_SHARPENING_STRENGTH)
+        self.sharpening_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('sharpening_strength'))
 
         self.audio_mono_var = tk.BooleanVar(value=DEFAULT_AUDIO_MONO)
         self.audio_stereo_downmix_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_DOWNMIX)
@@ -905,6 +940,18 @@ class VideoProcessorApp:
         ttk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self._update_selected_jobs("fruc")]).pack(side=tk.LEFT)
         ttk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
         self.fruc_fps_entry = ttk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
+
+        # Sharpening Group
+        sharpen_group = ttk.LabelFrame(quality_group, text="Sharpening", padding=10); sharpen_group.pack(fill=tk.X, pady=(5,0))
+        ttk.Checkbutton(sharpen_group, text="Enable Sharpening", variable=self.use_sharpening_var, command=lambda: self._update_selected_jobs("use_sharpening")).pack(side=tk.LEFT)
+        ttk.Label(sharpen_group, text="Algo:").pack(side=tk.LEFT, padx=(10, 5))
+        self.sharpen_algo_combo = ttk.Combobox(sharpen_group, textvariable=self.sharpening_algo_var, values=["cas", "unsharp"], width=8, state="readonly")
+        self.sharpen_algo_combo.pack(side=tk.LEFT)
+        self.sharpen_algo_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("sharpening_algo"))
+        ttk.Label(sharpen_group, text="Strength:").pack(side=tk.LEFT, padx=(10, 5))
+        self.sharpen_strength_entry = ttk.Entry(sharpen_group, textvariable=self.sharpening_strength_var, width=5)
+        self.sharpen_strength_entry.pack(side=tk.LEFT)
+        ToolTip(sharpen_group, "CAS: 0.5 is ideal. Unsharp: 0.5-1.0 is good.")
 
     def setup_audio_tab(self, parent):
         # --- Loudness War (Compressor & Limiter) ---
@@ -1329,6 +1376,9 @@ class VideoProcessorApp:
             "shadow_blur": self.shadow_blur_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
             "output_to_subfolders": self.output_subfolders_var.get(),
+            "use_sharpening": self.use_sharpening_var.get(),
+            "sharpening_algo": self.sharpening_algo_var.get(),
+            "sharpening_strength": self.sharpening_strength_var.get(),
         }
 
     def _apply_workflow_preset(self, options, preset_config):
@@ -1459,6 +1509,9 @@ class VideoProcessorApp:
         self.audio_stereo_sofalizer_var.set(options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))
         self.audio_surround_51_var.set(options.get("audio_surround_51", DEFAULT_AUDIO_SURROUND_51))
         self.audio_passthrough_var.set(options.get("audio_passthrough", DEFAULT_AUDIO_PASSTHROUGH))
+        self.use_sharpening_var.set(options.get("use_sharpening", DEFAULT_USE_SHARPENING))
+        self.sharpening_algo_var.set(options.get("sharpening_algo", DEFAULT_SHARPENING_ALGO))
+        self.sharpening_strength_var.set(options.get("sharpening_strength", DEFAULT_SHARPENING_STRENGTH))
 
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
@@ -1691,6 +1744,11 @@ class VideoProcessorApp:
             cpu_chain = []
             if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
+            if options.get("use_sharpening"):
+                algo = options.get("sharpening_algo")
+                strength = options.get("sharpening_strength", "0.5")
+                if algo == "cas": cpu_chain.append(f"cas=strength={strength}")
+                else: cpu_chain.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path: cpu_chain.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
             video_fc_parts = [
@@ -1714,6 +1772,11 @@ class VideoProcessorApp:
                 else: vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
+            if options.get("use_sharpening"):
+                algo = options.get("sharpening_algo")
+                strength = options.get("sharpening_strength", "0.5")
+                if algo == "cas": cpu_filters.append(f"cas=strength={strength}")
+                else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path: cpu_filters.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
             if cpu_filters:
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}"] + cpu_filters
@@ -1729,7 +1792,22 @@ class VideoProcessorApp:
         cmd.extend(audio_cmd_parts)
         bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output)
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
-        encoder_opts = ["-c:v", "hevc_nvenc", "-preset", "p1", "-profile:v", "main10", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"] if is_hdr_output else ["-c:v", "h264_nvenc", "-preset", "p1", "-profile:v", "high", "-b:v", f"{bitrate_kbps}k", "-g", str(gop_len), "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+        if is_hdr_output:
+            encoder_opts = [
+                "-c:v", "hevc_nvenc", "-preset", "p1", "-tune", "hq", "-profile:v", "main10",
+                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
+                "-g", str(gop_len), "-bf", "4", "-b_ref_mode", "middle",
+                "-multipass", "fullres", "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32",
+                "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"
+            ]
+        else:
+            encoder_opts = [
+                "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "hq", "-profile:v", "high",
+                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
+                "-g", str(gop_len), "-bf", "4", "-b_ref_mode", "middle",
+                "-multipass", "fullres", "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32",
+                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"
+            ]
         cmd.extend(encoder_opts)
         cmd.extend(["-f", "mp4", output_file])
         return cmd
