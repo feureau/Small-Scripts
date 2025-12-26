@@ -8,16 +8,18 @@ Features:
 1. Robust Audio Validation: Uses PyAV for 100% stream detection accuracy across MOV, MKV, MP4, etc.
 2. Modern Model Support: Optimized for Faster-Whisper (Turbo, Distil, Large-v3).
 3. Auto-Fallback & Recovery: Switches to fallback models (Large-v2) on internal VAD crashes.
-4. Vocal Isolation (Demucs): Forced GPU isolation using htdemucs_ft to separate speech from background.
-5. Audio Enhancement: Dynamic normalization via FFmpeg (dynaudnorm) to balance quiet/loud audio.
-6. Multi-Stage VAD: 
+4. Compression Limiter: Integrated Compressor (acompressor) and Limiter (alimiter) for consistent loudness.
+5. Vocal Isolation (Demucs): Forced GPU isolation using htdemucs_ft to separate speech from background.
+6. Audio Enhancement: Dynamic normalization via FFmpeg (dynaudnorm) to balance quiet/loud audio.
+7. Multi-Stage VAD: 
    - Internal Whisper VAD filter for hallucination reduction.
    - External Silero VAD for precise word-level subtitle alignment (--use_vad).
    - Adjustable sensitivity via --vad_threshold.
-7. Dynamic Feedback: Real-time progress bars for Whisper (tqdm), FFmpeg, and Demucs isolation.
-8. Intelligent SRT Generation: Netflix-style grouping, smart line breaks, and punctuation-aware casing.
-9. Batch Processing: Supports direct files, glob patterns, YouTube/URL downloads, and URL lists in TXT.
-10. Headless/Remote Ready: Top-level DEFAULT constants for easy default behavior customization.
+8. Dynamic Feedback: Real-time progress bars for Whisper (tqdm), FFmpeg, and Demucs isolation.
+9. Intelligent SRT Generation: Netflix-style grouping, smart line breaks, and punctuation-aware casing.
+10. Batch Processing: Supports direct files, glob patterns, YouTube/URL downloads, and URL lists in TXT.
+11. Headless/Remote Ready: Top-level DEFAULT constants for easy default behavior customization.
+12. Ordered Pipeline: Flags like -cl, -e, and -i respect command-line order (Default: -cl -e -i).
 
 Dependencies:
 - ffmpeg, faster-whisper, demucs, yt-dlp, tqdm, av, torch, torchaudio, silero-vad
@@ -58,6 +60,7 @@ DEFAULT_MAX_WORD_DURATION = 750       # ms
 
 DEFAULT_ENHANCE = True  # Normalize / Pre-process audio levels
 DEFAULT_ISOLATE = True # Use Demucs to isolate vocals
+DEFAULT_CL = True # Use compression limiter to prevent clipping
 DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
 DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
 
@@ -103,6 +106,29 @@ DEFAULT_DEMUCS_MODEL = "htdemucs_ft"      # Demucs model to use (Options: htdemu
 DEFAULT_DEMUCS_SHIFTS = 5               # Number of random shifts (Higher = better quality, slower. Range: 1-20+. Default: 5)
 DEFAULT_DEMUCS_OVERLAP = 0.25             # Overlap between segments (Range: 0.0-1.0. Default: 0.25)
 DEFAULT_DEMUCS_FLOAT32 = True            # Use float32 for output (Default: True)
+
+# --- Advanced Compression Limiter Tuning ---
+DEFAULT_CL_C_ENABLE = True          # Enable compressor stage
+DEFAULT_CL_L_ENABLE = True          # Enable limiter stage
+
+# Compressor Stage (acompressor)
+DEFAULT_CL_THRESHOLD = 0.125        # Threshold (Range: 0.000976563-1.0. Default: 0.125)
+DEFAULT_CL_RATIO = 2.0              # Ratio (Range: 1.0-20.0. Default: 2.0)
+DEFAULT_CL_C_ATTACK = 20.0          # Compressor Attack ms (Range: 0.01-2000.0. Default: 20.0)
+DEFAULT_CL_C_RELEASE = 250.0        # Compressor Release ms (Range: 0.01-9000.0. Default: 250.0)
+DEFAULT_CL_MAKEUP = 1.0             # Make-up gain (Range: 1.0-64.0. Default: 1.0)
+DEFAULT_CL_KNEE = 2.828             # Knee (Range: 1.0-8.0. Default: 2.828)
+
+# Limiter Stage (alimiter)
+DEFAULT_CL_L_LEVEL_IN = 1.0         # Limiter Input gain (Range: 0.015625-64.0. Default: 1.0)
+DEFAULT_CL_L_LEVEL_OUT = 1.0        # Limiter Output gain (Range: 0.015625-64.0. Default: 1.0)
+DEFAULT_CL_L_LIMIT = 0.99           # Ceiling (Range: 0.0625-1.0. Default: 0.99)
+DEFAULT_CL_L_ATTACK = 5.0           # Limiter Attack ms (Range: 0.1-80.0. Default: 5.0)
+DEFAULT_CL_L_RELEASE = 50.0         # Limiter Release ms (Range: 1.0-8000.0. Default: 50.0)
+DEFAULT_CL_ASC = False              # Enable Auto Slow Control (True/False)
+DEFAULT_CL_ASC_LEVEL = 0.5          # ASC Level (Range: 0.0-1.0. Default: 0.5)
+DEFAULT_CL_AUTO_LEVEL = True        # Auto level (True/False)
+DEFAULT_CL_LATENCY = False          # Compensate delay (True/False)
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma", ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".webm"}
 
@@ -281,6 +307,73 @@ def preprocess_audio(input_path: str, output_dir: str = None,
         return None
     except FileNotFoundError:
         print("   ⚠️  FFmpeg not found. Skipping enhancement.")
+        return None
+
+def apply_compression_limiter(input_path: str, output_dir: str = None, 
+                             threshold=DEFAULT_CL_THRESHOLD,
+                             ratio=DEFAULT_CL_RATIO,
+                             c_attack=DEFAULT_CL_C_ATTACK,
+                             c_release=DEFAULT_CL_C_RELEASE,
+                             makeup=DEFAULT_CL_MAKEUP,
+                             knee=DEFAULT_CL_KNEE,
+                             l_level_in=DEFAULT_CL_L_LEVEL_IN,
+                             l_level_out=DEFAULT_CL_L_LEVEL_OUT,
+                             l_limit=DEFAULT_CL_L_LIMIT,
+                             l_attack=DEFAULT_CL_L_ATTACK,
+                             l_release=DEFAULT_CL_L_RELEASE,
+                             asc=DEFAULT_CL_ASC,
+                             asc_level=DEFAULT_CL_ASC_LEVEL,
+                             level=DEFAULT_CL_AUTO_LEVEL,
+                             latency=DEFAULT_CL_LATENCY,
+                             enable_compressor=DEFAULT_CL_C_ENABLE,
+                             enable_limiter=DEFAULT_CL_L_ENABLE) -> str:
+    """
+    Applies a compression limiter using a chain of acompressor and/or alimiter.
+    Returns path to temporary WAV file.
+    """
+    try:
+        mode_desc = []
+        if enable_compressor: mode_desc.append("Compressor")
+        if enable_limiter: mode_desc.append("Limiter")
+        
+        if not mode_desc:
+            return input_path # No-op if both disabled
+            
+        print(f"   🔊 Applying compression limiter ({' + '.join(mode_desc)})...")
+        
+        wd = output_dir if output_dir else os.path.dirname(input_path)
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        temp_wav = os.path.join(wd, f"{base_name}_cl.wav")
+        
+        # Build filter chain
+        filters = []
+        if enable_compressor:
+            filters.append(f"acompressor=threshold={threshold}:ratio={ratio}:attack={c_attack}:release={c_release}:makeup={makeup}:knee={knee}")
+        if enable_limiter:
+            filters.append(
+                f"alimiter=level_in={l_level_in}:level_out={l_level_out}:limit={l_limit}:"
+                f"attack={l_attack}:release={l_release}:asc={1 if asc else 0}:"
+                f"asc_level={asc_level}:level={1 if level else 0}:latency={1 if latency else 0}"
+            )
+        
+        filter_str = ",".join(filters)
+        
+        cmd = [
+            "ffmpeg", "-y", "-v", "info", "-stats",
+            "-i", input_path,
+            "-af", filter_str,
+            "-ar", "16000",
+            "-ac", "1", # Ensure mono for consistent processing
+            temp_wav
+        ]
+        
+        subprocess.run(cmd, check=True)
+        return temp_wav
+    except subprocess.CalledProcessError as e:
+        print(f"   ⚠️  Compression Limiter Failed: {e}")
+        return None
+    except FileNotFoundError:
+        print("   ⚠️  FFmpeg not found. Skipping limiter.")
         return None
 
 def isolate_audio_with_demucs(input_path: str, output_dir: str = None, 
@@ -533,7 +626,33 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     # Step: Dynamic Preprocessing Pipeline
     # Follow the order specified in args.pipeline (or the default order)
     for step in getattr(args, 'pipeline', []):
-        if step == 'enhance' and args.enhance:
+        if step == 'cl' and args.cl:
+            cl_processed = apply_compression_limiter(
+                transcription_source,
+                args.output_dir,
+                threshold=getattr(args, 'cl_threshold', DEFAULT_CL_THRESHOLD),
+                ratio=getattr(args, 'cl_ratio', DEFAULT_CL_RATIO),
+                c_attack=getattr(args, 'cl_c_attack', DEFAULT_CL_C_ATTACK),
+                c_release=getattr(args, 'cl_c_release', DEFAULT_CL_C_RELEASE),
+                makeup=getattr(args, 'cl_makeup', DEFAULT_CL_MAKEUP),
+                knee=getattr(args, 'cl_knee', DEFAULT_CL_KNEE),
+                l_level_in=getattr(args, 'cl_l_level_in', DEFAULT_CL_LEVEL_IN),
+                l_level_out=getattr(args, 'cl_l_level_out', DEFAULT_CL_LEVEL_OUT),
+                l_limit=getattr(args, 'cl_l_limit', DEFAULT_CL_LIMIT),
+                l_attack=getattr(args, 'cl_l_attack', DEFAULT_CL_L_ATTACK),
+                l_release=getattr(args, 'cl_l_release', DEFAULT_CL_L_RELEASE),
+                asc=getattr(args, 'cl_asc', DEFAULT_CL_ASC),
+                asc_level=getattr(args, 'cl_asc_level', DEFAULT_CL_ASC_LEVEL),
+                level=getattr(args, 'cl_auto_level', DEFAULT_CL_AUTO_LEVEL),
+                latency=getattr(args, 'cl_latency', DEFAULT_CL_LATENCY),
+                enable_compressor=getattr(args, 'cl_compressor', DEFAULT_CL_C_ENABLE),
+                enable_limiter=getattr(args, 'cl_limiter', DEFAULT_CL_L_ENABLE)
+            )
+            if cl_processed and os.path.exists(cl_processed):
+                transcription_source = cl_processed
+                temp_files_to_cleanup.append(cl_processed)
+
+        elif step == 'enhance' and args.enhance:
             enhanced = preprocess_audio(
                 transcription_source, 
                 args.output_dir,
@@ -709,6 +828,38 @@ def main():
     parser.add_argument("--enhance_gaussian", type=int, default=DEFAULT_ENHANCE_GAUSSIAN, help=f"Gaussian window size (Default: {DEFAULT_ENHANCE_GAUSSIAN})")
     parser.add_argument("--enhance_max_gain", type=float, default=DEFAULT_ENHANCE_MAX_GAIN, help=f"Max gain factor (Default: {DEFAULT_ENHANCE_MAX_GAIN})")
     parser.add_argument("--enhance_peak", type=float, default=DEFAULT_ENHANCE_PEAK, help=f"Target peak volume (Default: {DEFAULT_ENHANCE_PEAK})")
+    
+    # Ordered Pipeline Flags
+    parser.add_argument("-cl", "--compression-limiter", action=PipelineAction, nargs=0, const=True, default=DEFAULT_CL, dest="cl", help=f"Use compression limiter (Default: {'ON' if DEFAULT_CL else 'OFF'})")
+    parser.add_argument("-ncl", "--no-compression-limiter", action=PipelineAction, nargs=0, const=False, dest="cl", help="Disable compression limiter")
+
+    # Advanced Compression Limiter Tuning
+    # Compressor Tuning
+    parser.add_argument("--cl_threshold", type=float, default=DEFAULT_CL_THRESHOLD, help=f"Compressor threshold (Default: {DEFAULT_CL_THRESHOLD})")
+    parser.add_argument("--cl_ratio", type=float, default=DEFAULT_CL_RATIO, help=f"Compressor ratio (Default: {DEFAULT_CL_RATIO})")
+    parser.add_argument("--cl_c_attack", type=float, default=DEFAULT_CL_C_ATTACK, help=f"Compressor attack ms (Default: {DEFAULT_CL_C_ATTACK})")
+    parser.add_argument("--cl_c_release", type=float, default=DEFAULT_CL_C_RELEASE, help=f"Compressor release ms (Default: {DEFAULT_CL_C_RELEASE})")
+    parser.add_argument("--cl_makeup", type=float, default=DEFAULT_CL_MAKEUP, help=f"Compressor makeup gain (Default: {DEFAULT_CL_MAKEUP})")
+    parser.add_argument("--cl_knee", type=float, default=DEFAULT_CL_KNEE, help=f"Compressor knee (Default: {DEFAULT_CL_KNEE})")
+    
+    # Limiter Tuning
+    parser.add_argument("--cl_l_level_in", type=float, default=DEFAULT_CL_L_LEVEL_IN, help=f"Limiter input gain (Default: {DEFAULT_CL_L_LEVEL_IN})", dest="cl_l_level_in")
+    parser.add_argument("--cl_l_level_out", type=float, default=DEFAULT_CL_L_LEVEL_OUT, help=f"Limiter output gain (Default: {DEFAULT_CL_L_LEVEL_OUT})", dest="cl_l_level_out")
+    parser.add_argument("--cl_l_limit", type=float, default=DEFAULT_CL_L_LIMIT, help=f"Limiter ceiling (Default: {DEFAULT_CL_L_LIMIT})", dest="cl_l_limit")
+    parser.add_argument("--cl_l_attack", type=float, default=DEFAULT_CL_L_ATTACK, help=f"Limiter attack ms (Default: {DEFAULT_CL_L_ATTACK})", dest="cl_l_attack")
+    parser.add_argument("--cl_l_release", type=float, default=DEFAULT_CL_L_RELEASE, help=f"Limiter release ms (Default: {DEFAULT_CL_L_RELEASE})", dest="cl_l_release")
+    
+    parser.add_argument("--cl_asc", action="store_true", default=DEFAULT_CL_ASC, help="Enable Auto Slow Control")
+    parser.add_argument("--cl_asc_level", type=float, default=DEFAULT_CL_ASC_LEVEL, help=f"ASC Level (Default: {DEFAULT_CL_ASC_LEVEL})")
+    parser.add_argument("--cl_auto_level", action="store_true", default=DEFAULT_CL_AUTO_LEVEL, help="Enable Auto Level")
+    parser.add_argument("--no_cl_auto_level", action="store_false", dest="cl_auto_level", help="Disable Auto Level")
+    parser.add_argument("--cl_latency", action="store_true", default=DEFAULT_CL_LATENCY, help="Compensate delay")
+    
+    parser.add_argument("--cl_compressor", action="store_true", default=DEFAULT_CL_C_ENABLE, help="Enable compressor component")
+    parser.add_argument("--no_cl_compressor", action="store_false", dest="cl_compressor", help="Disable compressor component")
+    parser.add_argument("--cl_limiter", action="store_true", default=DEFAULT_CL_L_ENABLE, help="Enable limiter component")
+    parser.add_argument("--no_cl_limiter", action="store_false", dest="cl_limiter", help="Disable limiter component")
+
     parser.add_argument("-i", "--isolate", action=PipelineAction, nargs=0, const=True, default=DEFAULT_ISOLATE, help=f"Use Demucs to isolate vocals (Default: {'ON' if DEFAULT_ISOLATE else 'OFF'})")
     parser.add_argument("-ni", "--no-isolate", action=PipelineAction, nargs=0, const=False, dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
@@ -736,6 +887,7 @@ def main():
     # Finalize pipeline for default behaviors if no flags were passed
     if not hasattr(args, 'pipeline'):
         args.pipeline = []
+        if args.cl: args.pipeline.append('cl')
         if args.enhance: args.pipeline.append('enhance')
         if args.isolate: args.pipeline.append('isolate')
 
