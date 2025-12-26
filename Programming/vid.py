@@ -30,7 +30,7 @@ Core Feature Sets
 1. **Video Processing (Hardware Accelerated)**:
     *   **Encoders**: H.264, HEVC (H.265), and AV1 via NVIDIA NVENC.
     *   **Color Spaces**: Full SDR and HDR (BT.2020) support with automated tagging.
-    *   **Scaling**: Smart upscaling (Lanczos, Bicubic, Bilinear) with aspect 
+    *   **Scaling**: Smart upscaling (Nearest, Bilinear, Bicubic, Lanczos) with aspect 
         ratio handling (Crop/Fill, Pad/Fit, Stretch).
     *   **Sharpening (New)**: Integrated CAS (Contrast Adaptive Sharpen) and 
         matrix-based `unsharp` filters. Enabled by default for all jobs.
@@ -68,6 +68,12 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.7 - Upscaling Algorithm Expansion (2025-12-26)
+    • UI: Replaced upscale algorithm radio buttons with dropdown (Combobox).
+    • FEATURE: Added "Nearest" algorithm option for fastest upscaling.
+    • FEATURE: Exposed all 4 scale_cuda algorithms: nearest, bilinear, bicubic, lanczos.
+    • UX: Added tooltip explaining quality/speed tradeoffs for each algorithm.
+
 v8.6 - Sharpening & Docs Update (2025-12-26)
     • FEATURE: Integrated video sharpening with `cas` and `unsharp` filters.
     • FEATURE: Enabled sharpening by default (Algorithm: `cas`, Strength: `0.5`).
@@ -128,7 +134,7 @@ DEFAULT_LUT_PATH = ""
 DEFAULT_SOFA_PATH = "" 
 
 DEFAULT_RESOLUTION = "4k"
-DEFAULT_UPSCALE_ALGO = "lanczos"
+DEFAULT_UPSCALE_ALGO = "bicubic"
 DEFAULT_OUTPUT_FORMAT = "sdr"
 DEFAULT_ORIENTATION = "horizontal"
 DEFAULT_ASPECT_MODE = "crop"
@@ -915,9 +921,10 @@ class VideoProcessorApp:
         self.rb_8k = ttk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
         upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(upscale_frame, text="Lanczos", variable=self.upscale_algo_var, value="lanczos", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
-        ttk.Radiobutton(upscale_frame, text="Bicubic", variable=self.upscale_algo_var, value="bicubic", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(upscale_frame, text="Bilinear", variable=self.upscale_algo_var, value="bilinear", command=lambda: self._update_selected_jobs("upscale_algo")).pack(side=tk.LEFT)
+        self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos"], width=10, state="readonly")
+        self.upscale_algo_combo.pack(side=tk.LEFT)
+        self.upscale_algo_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("upscale_algo"))
+        ToolTip(self.upscale_algo_combo, "Nearest=Fastest/Lowest Quality, Bilinear=Fast/Good, Bicubic=Default/Better (scale_cuda default), Lanczos=Slowest/Best")
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
