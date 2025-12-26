@@ -2,24 +2,52 @@
 r"""
 ===============================================================================
 vid.py - Advanced Video Encoding and Audio Processing Utility
--------------------------------------------------------------------------------
+===============================================================================
+
 Overview
 --------
-This script provides a GUI-based batch transcoding interface built on top of
-FFmpeg. It is primarily intended for video creators who need to encode videos
-with audio that meets official and practical upload requirements.
+`vid.py` is a powerful, GUI-based batch video processing and transcoding utility
+built on top of FFmpeg. It is designed for video creators who require high-quality,
+hardware-accelerated encoding with advanced audio processing and professional
+subtitle styling.
 
-The tool automates:
-    • Video transcoding with FFmpeg (NVIDIA Hardware Acceleration)
-    • Audio normalization (EBU R128 via loudnorm)
-    • Multi-track audio handling with mix-and-match outputs
-    • Binaural (Sofalizer) downmixing for headphones
-    • Advanced, multi-layer subtitle styling and burning
-    • Hybrid stacked video creation for vertical formats
+Key Features
+------------
+*   **Video Processing**:
+    *   Hardware-accelerated encoding using NVIDIA NVENC (H.264/HEVC/AV1).
+    *   Support for SDR and HDR (BT.2020) color spaces with automated bitrate selection.
+    *   Smart upscaling/downscaling (Lanczos, Bicubic, Bilinear) with aspect ratio handling (Crop, Pad, Stretch).
+    *   FRUC (Frame Rate Up-Conversion) support for smooth motion.
+    *   "Hybrid (Stacked)" mode for creating vertical content from horizontal sources (e.g., facecam over gameplay).
+
+*   **Audio Enhancement & Normalization**:
+    *   **Chained Normalization**: Apply Dynamic Normalization (`dynaudnorm`) followed by EBU R128 (`loudnorm`)
+        in a single-pass filter chain for perfectly leveled and compliant audio.
+    *   **Fully Customizable**: Exposes granular control over Frame Length, Filter Window, Peak, and Gain.
+    *   **Multi-Track Handling**: Mix-and-match output tracks (Mono, Stereo, 5.1 Surround, or Passthrough).
+    *   **Binaural Mixing**: Advanced HRTF-based "Sofalizer" downmixing for immersive headphone audio.
+
+*   **Subtitle Styling & Burning**:
+    *   Hard-burn subtitles from external `.srt` or discovery of embedded streams.
+    *   Advanced styling via `libass`: Custom fonts, sizes, colors, outlines, and drop shadows.
+    *   Smart alignment (Top/Mid/Bottom) and "Seam" positioning for Hybrid layouts.
+    *   Automated text wrapping and reformatting.
+
+*   **Workflow & Interface**:
+    *   Modern Tkinter interface with Drag-and-Drop (`tkinterdnd2`) support.
+    *   Threaded processing to keep the GUI responsive during long jobs.
+    *   Queue management with per-job option persistence and hashing (job caching logic).
+    *   Graceful exit handling (kills FFmpeg and cleans up temp files on Ctrl+C).
 
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.0 - Audio Normalization Update (2025-12-26)
+    • FEATURE: Added chained audio normalization (Dynamic + EBU R128).
+    • FEATURE: Exposed full dynaudnorm parameters (f, g, p, m) in the GUI.
+    • FEATURE: Enabled Dynamic Normalization by default.
+    • DOCS: Comprehensive GitHub-style header documentation.
+
 v7.8 - Stability & Threading Update (2025-12-20)
     • FEATURE: Added Threading. GUI no longer freezes during processing.
     • FEATURE: Added Progress Bar with real-time percentage.
@@ -104,9 +132,14 @@ PRESET_WITH_SUBTITLES = {
 
 # Audio normalization
 DEFAULT_NORMALIZE_AUDIO = False 
+DEFAULT_USE_DYNAUDNORM = True
 DEFAULT_LOUDNESS_TARGET = "-13" 
 DEFAULT_LOUDNESS_RANGE = "5"    
 DEFAULT_TRUE_PEAK = "-1.0"      
+DEFAULT_DYNAUDNORM_FRAME_LEN = "500"
+DEFAULT_DYNAUDNORM_GAUSS_WIN = "31"
+DEFAULT_DYNAUDNORM_PEAK = "0.95"
+DEFAULT_DYNAUDNORM_MAX_GAIN = "10.0"
 
 # Audio track selection defaults
 DEFAULT_AUDIO_MONO = False
@@ -206,7 +239,7 @@ def check_ffmpeg_capabilities():
         capabilities['nvenc'] = any(x in result.stdout.lower() for x in ['h264_nvenc', 'hevc_nvenc'])
         cmd = [FFMPEG_CMD, "-filters"]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        capabilities['filters'] = all(x in result.stdout.lower() for x in ['loudnorm', 'scale_cuda', 'lut3d'])
+        capabilities['filters'] = all(x in result.stdout.lower() for x in ['loudnorm', 'dynaudnorm', 'scale_cuda', 'lut3d'])
         return capabilities
     except Exception as e:
         print(f"[ERROR] Failed to check FFmpeg capabilities: {e}")
@@ -490,6 +523,11 @@ def get_job_hash(job_options):
         job_options.get('aspect_mode', ''),
         job_options.get('fruc', False),
         job_options.get('fruc_fps', ''),
+        str(job_options.get('use_dynaudnorm', False)),
+        job_options.get('dyn_frame_len', ''),
+        job_options.get('dyn_gauss_win', ''),
+        job_options.get('dyn_peak', ''),
+        job_options.get('dyn_max_gain', ''),
         str(job_options.get('normalize_audio', False)),
         job_options.get('sofa_file', ''),
         job_options.get('subtitle_alignment', ''),
@@ -592,6 +630,7 @@ class VideoProcessorApp:
         self.override_bitrate_var = tk.BooleanVar(value=False)
         self.manual_bitrate_var = tk.StringVar()
         self.manual_bitrate_var.trace_add('write', lambda *args: self._update_selected_jobs('manual_bitrate'))
+        self.use_dynaudnorm_var = tk.BooleanVar(value=DEFAULT_USE_DYNAUDNORM)
         self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
         self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
         self.loudness_target_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_target'))
@@ -599,6 +638,14 @@ class VideoProcessorApp:
         self.loudness_range_var.trace_add('write', lambda *args: self._update_selected_jobs('loudness_range'))
         self.true_peak_var = tk.StringVar(value=DEFAULT_TRUE_PEAK)
         self.true_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('true_peak'))
+        self.dyn_frame_len_var = tk.StringVar(value=DEFAULT_DYNAUDNORM_FRAME_LEN)
+        self.dyn_frame_len_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_frame_len'))
+        self.dyn_gauss_win_var = tk.StringVar(value=DEFAULT_DYNAUDNORM_GAUSS_WIN)
+        self.dyn_gauss_win_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_gauss_win'))
+        self.dyn_peak_var = tk.StringVar(value=DEFAULT_DYNAUDNORM_PEAK)
+        self.dyn_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_peak'))
+        self.dyn_max_gain_var = tk.StringVar(value=DEFAULT_DYNAUDNORM_MAX_GAIN)
+        self.dyn_max_gain_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_max_gain'))
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
@@ -812,7 +859,28 @@ class VideoProcessorApp:
     def setup_audio_tab(self, parent):
         norm_group = ttk.LabelFrame(parent, text="Normalization", padding=10)
         norm_group.pack(fill=tk.X, pady=(0, 5))
-        ttk.Checkbutton(norm_group, text="Normalize Audio (EBU R128)", variable=self.normalize_audio_var, command=self._toggle_audio_norm_options).pack(anchor="w")
+        
+        ttk.Checkbutton(norm_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
+                        command=self._toggle_audio_norm_options).pack(anchor="w")
+        
+        self.dyn_norm_frame = ttk.Frame(norm_group)
+        self.dyn_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.dyn_norm_frame.columnconfigure(1, weight=1)
+        ttk.Label(self.dyn_norm_frame, text="Frame Len (ms):").grid(row=0, column=0, sticky="w", pady=2)
+        self.dyn_frame_len_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_frame_len_var, width=8)
+        self.dyn_frame_len_entry.grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Label(self.dyn_norm_frame, text="Filter Window:").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
+        self.dyn_gauss_win_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_gauss_win_var, width=8)
+        self.dyn_gauss_win_entry.grid(row=0, column=3, sticky="w", padx=5)
+        ttk.Label(self.dyn_norm_frame, text="Target Peak:").grid(row=1, column=0, sticky="w", pady=2)
+        self.dyn_peak_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_peak_var, width=8)
+        self.dyn_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
+        ttk.Label(self.dyn_norm_frame, text="Max Gain:").grid(row=1, column=2, sticky="w", pady=2, padx=(10, 0))
+        self.dyn_max_gain_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_max_gain_var, width=8)
+        self.dyn_max_gain_entry.grid(row=1, column=3, sticky="w", padx=5)
+
+        ttk.Checkbutton(norm_group, text="EBU R128 Normalization (loudnorm)", variable=self.normalize_audio_var, 
+                        command=self._toggle_audio_norm_options).pack(anchor="w", pady=(5, 0))
 
         self.audio_norm_frame = ttk.Frame(norm_group)
         self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
@@ -822,13 +890,13 @@ class VideoProcessorApp:
         self.loudness_target_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_target_var, width=8)
         self.loudness_target_entry.grid(row=0, column=1, sticky="w", padx=5)
 
-        ttk.Label(self.audio_norm_frame, text="Loudness Range (LRA):").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(self.audio_norm_frame, text="Loudness Range (LRA):").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
         self.loudness_range_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_range_var, width=8)
-        self.loudness_range_entry.grid(row=1, column=1, sticky="w", padx=5)
+        self.loudness_range_entry.grid(row=0, column=3, sticky="w", padx=5)
 
-        ttk.Label(self.audio_norm_frame, text="True Peak (dBTP):").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(self.audio_norm_frame, text="True Peak (dBTP):").grid(row=1, column=0, sticky="w", pady=2)
         self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
-        self.true_peak_entry.grid(row=2, column=1, sticky="w", padx=5)
+        self.true_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
 
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
@@ -1062,10 +1130,15 @@ class VideoProcessorApp:
         self._update_selected_jobs("aspect_mode")
 
     def _toggle_audio_norm_options(self):
-        state = "normal" if self.normalize_audio_var.get() else "disabled"
+        state_ln = "normal" if self.normalize_audio_var.get() else "disabled"
         for widget in [self.loudness_target_entry, self.loudness_range_entry, self.true_peak_entry]:
-            widget.config(state=state)
-        self._update_selected_jobs("normalize_audio")
+            widget.config(state=state_ln)
+        
+        state_dyn = "normal" if self.use_dynaudnorm_var.get() else "disabled"
+        for widget in [self.dyn_frame_len_entry, self.dyn_gauss_win_entry, self.dyn_peak_entry, self.dyn_max_gain_entry]:
+            widget.config(state=state_dyn)
+            
+        self._update_selected_jobs("normalize_audio", "use_dynaudnorm")
 
     def _update_audio_options_ui(self):
         is_passthrough = self.audio_passthrough_var.get()
@@ -1126,7 +1199,11 @@ class VideoProcessorApp:
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
-            "manual_bitrate": self.manual_bitrate_var.get(), "normalize_audio": self.normalize_audio_var.get(),
+            "manual_bitrate": self.manual_bitrate_var.get(), 
+            "use_dynaudnorm": self.use_dynaudnorm_var.get(),
+            "dyn_frame_len": self.dyn_frame_len_var.get(), "dyn_gauss_win": self.dyn_gauss_win_var.get(),
+            "dyn_peak": self.dyn_peak_var.get(), "dyn_max_gain": self.dyn_max_gain_var.get(),
+            "normalize_audio": self.normalize_audio_var.get(),
             "loudness_target": self.loudness_target_var.get(), "loudness_range": self.loudness_range_var.get(),
             "true_peak": self.true_peak_var.get(), 
             "audio_mono": self.audio_mono_var.get(), "audio_stereo_downmix": self.audio_stereo_downmix_var.get(),
@@ -1244,7 +1321,13 @@ class VideoProcessorApp:
         self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
-        self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
+        self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); 
+        self.use_dynaudnorm_var.set(options.get("use_dynaudnorm", DEFAULT_USE_DYNAUDNORM))
+        self.dyn_frame_len_var.set(options.get("dyn_frame_len", DEFAULT_DYNAUDNORM_FRAME_LEN))
+        self.dyn_gauss_win_var.set(options.get("dyn_gauss_win", DEFAULT_DYNAUDNORM_GAUSS_WIN))
+        self.dyn_peak_var.set(options.get("dyn_peak", DEFAULT_DYNAUDNORM_PEAK))
+        self.dyn_max_gain_var.set(options.get("dyn_max_gain", DEFAULT_DYNAUDNORM_MAX_GAIN))
+        self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
         self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
@@ -1349,11 +1432,19 @@ class VideoProcessorApp:
                 else:
                      fc_parts.append(f"{input_tag}aformat=channel_layouts=5.1{proc_tag}")
 
+            if options.get("use_dynaudnorm", False):
+                f, g, p, m = options.get("dyn_frame_len"), options.get("dyn_gauss_win"), options.get("dyn_peak"), options.get("dyn_max_gain")
+                dyn_tag = f"[{track_type}_dyn]"
+                fc_parts.append(f"{proc_tag}dynaudnorm=f={f}:g={g}:p={p}:m={m}{dyn_tag}")
+                proc_tag = dyn_tag
+
             if options.get("normalize_audio", False):
                 lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
                 fc_parts.append(f"{proc_tag}loudnorm=i={lt}:lra={lr}:tp={tp}{ln_tag}")
-                final_tag = ln_tag
+                proc_tag = ln_tag
+
+            final_tag = proc_tag
 
             resample_tag = f"[{track_type}_final]"
             fc_parts.append(f"{final_tag}aresample={AUDIO_SAMPLE_RATE}{resample_tag}")
