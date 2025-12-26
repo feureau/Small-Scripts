@@ -21,9 +21,11 @@ Key Features
     *   "Hybrid (Stacked)" mode for creating vertical content from horizontal sources (e.g., facecam over gameplay).
 
 *   **Audio Enhancement & Normalization**:
+    *   **Loudness War Tools**: Integrated compressor (`acompressor`) and limiter (`alimiter`) for aggressive signal boosting and dynamic range reduction.
     *   **Chained Normalization**: Apply Dynamic Normalization (`dynaudnorm`) followed by EBU R128 (`loudnorm`)
         in a single-pass filter chain for perfectly leveled and compliant audio.
-    *   **Fully Customizable**: Exposes granular control over Frame Length, Filter Window, Peak, and Gain.
+    *   **Fully Customizable**: Exposes granular control over Frame Length, Filter Window, Peak, and Gain, including "Brickwall" normalization presets.
+    *   **Loudness Measurement**: Automated post-processing pass to measure Integrated Loudness, LRA, and True Peak, saving results to an enhanced JSON report with YouTube target comparisons.
     *   **Multi-Track Handling**: Mix-and-match output tracks (Mono, Stereo, 5.1 Surround, or Passthrough).
     *   **Binaural Mixing**: Advanced HRTF-based "Sofalizer" downmixing for immersive headphone audio.
 
@@ -42,6 +44,12 @@ Key Features
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.5 - Loudness War & Measurement Update (2025-12-26)
+    • FEATURE: "Loudness War" section with multi-parameter compressor and limiter.
+    • FEATURE: Enhanced Loudness Measurement system with automated JSON export and YouTube target comparison.
+    • FEATURE: "Brickwall" normalization settings for maximum signal density.
+    • UI: Reordered Audio tab to prioritize loudness controls.
+
 v8.0 - Audio Normalization Update (2025-12-26)
     • FEATURE: Added chained audio normalization (Dynamic + EBU R128).
     • FEATURE: Exposed full dynaudnorm parameters (f, g, p, m) in the GUI.
@@ -130,16 +138,32 @@ PRESET_WITH_SUBTITLES = {
     "subtitle_alignment": "seam" # FIX: Explicitly set Seam alignment for all hybrid jobs
 }
 
-# Audio normalization
+# Audio normalization settings
 DEFAULT_NORMALIZE_AUDIO = False 
 DEFAULT_USE_DYNAUDNORM = True
-DEFAULT_LOUDNESS_TARGET = "-13" 
-DEFAULT_LOUDNESS_RANGE = "5"    
-DEFAULT_TRUE_PEAK = "-1.0"      
-DEFAULT_DYNAUDNORM_FRAME_LEN = "500"
-DEFAULT_DYNAUDNORM_GAUSS_WIN = "31"
-DEFAULT_DYNAUDNORM_PEAK = "0.95"
-DEFAULT_DYNAUDNORM_MAX_GAIN = "10.0"
+
+# EBU R128 (loudnorm) parameters
+DEFAULT_LOUDNESS_TARGET = "-13"    # (i) Integrated loudness target. Default: -24, Range: -70 to -5
+DEFAULT_LOUDNESS_RANGE = "7"      # (lra) Loudness range (dynamic range). Default: 7, Range: 1 to 50
+DEFAULT_TRUE_PEAK = "-1.0"           # (tp) Maximum true peak level. Default: -2.0, Range: -9.0 to 0.0
+
+# Dynamic Normalization (dynaudnorm) parameters
+DEFAULT_DYNAUDNORM_FRAME_LEN = "100" # (f) Frame length in ms for gain calculation. Brickwall: 100, Default: 500
+DEFAULT_DYNAUDNORM_GAUSS_WIN = "3"   # (g) Gaussian filter window size (must be odd). Brickwall: 3, Default: 31
+DEFAULT_DYNAUDNORM_PEAK = "1.0"        # (p) Target peak value. Default: 0.95, Range: 0.0 to 1.0
+DEFAULT_DYNAUDNORM_MAX_GAIN = "100.0" # (m) Maximum allowed gain factor. Default: 10.0, Range: 1.0 to 100.0
+
+# Loudness War (Compression & Limiting)
+DEFAULT_USE_LOUDNESS_WAR = True
+DEFAULT_COMPRESSOR_THRESHOLD = "-60" # Level at which compression starts. Default: -24dB, Range: -60dB to 0dB
+DEFAULT_COMPRESSOR_RATIO = "3"       # Ratio of input to output level. Default: 10, Range: 1 to 20
+DEFAULT_COMPRESSOR_ATTACK = "0.7"   # Time until fully active. Total War: 0.01, Default: 1ms
+DEFAULT_COMPRESSOR_RELEASE = "50"   # Time until compression stops. Total War: 10, Default: 100ms
+DEFAULT_COMPRESSOR_MAKEUP = "12"     # Additional gain applied after compression. Total War: 40, Default: 12dB
+DEFAULT_LIMITER_LIMIT = "0"          # Hard limit ceiling. Fixed: alimiter max is 0dB (1.0 linear)
+
+# Measurement
+DEFAULT_MEASURE_LOUDNESS = False
 
 # Audio track selection defaults
 DEFAULT_AUDIO_MONO = False
@@ -528,6 +552,14 @@ def get_job_hash(job_options):
         job_options.get('dyn_gauss_win', ''),
         job_options.get('dyn_peak', ''),
         job_options.get('dyn_max_gain', ''),
+        str(job_options.get('use_loudness_war', False)),
+        job_options.get('comp_threshold', ''),
+        job_options.get('comp_ratio', ''),
+        job_options.get('comp_attack', ''),
+        job_options.get('comp_release', ''),
+        job_options.get('comp_makeup', ''),
+        job_options.get('limit_limit', ''),
+        str(job_options.get('measure_loudness', False)),
         str(job_options.get('normalize_audio', False)),
         job_options.get('sofa_file', ''),
         job_options.get('subtitle_alignment', ''),
@@ -646,6 +678,24 @@ class VideoProcessorApp:
         self.dyn_peak_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_peak'))
         self.dyn_max_gain_var = tk.StringVar(value=DEFAULT_DYNAUDNORM_MAX_GAIN)
         self.dyn_max_gain_var.trace_add('write', lambda *args: self._update_selected_jobs('dyn_max_gain'))
+
+        # Loudness War variables
+        self.use_loudness_war_var = tk.BooleanVar(value=DEFAULT_USE_LOUDNESS_WAR)
+        self.comp_threshold_var = tk.StringVar(value=DEFAULT_COMPRESSOR_THRESHOLD)
+        self.comp_threshold_var.trace_add('write', lambda *args: self._update_selected_jobs('comp_threshold'))
+        self.comp_ratio_var = tk.StringVar(value=DEFAULT_COMPRESSOR_RATIO)
+        self.comp_ratio_var.trace_add('write', lambda *args: self._update_selected_jobs('comp_ratio'))
+        self.comp_attack_var = tk.StringVar(value=DEFAULT_COMPRESSOR_ATTACK)
+        self.comp_attack_var.trace_add('write', lambda *args: self._update_selected_jobs('comp_attack'))
+        self.comp_release_var = tk.StringVar(value=DEFAULT_COMPRESSOR_RELEASE)
+        self.comp_release_var.trace_add('write', lambda *args: self._update_selected_jobs('comp_release'))
+        self.comp_makeup_var = tk.StringVar(value=DEFAULT_COMPRESSOR_MAKEUP)
+        self.comp_makeup_var.trace_add('write', lambda *args: self._update_selected_jobs('comp_makeup'))
+        self.limit_limit_var = tk.StringVar(value=DEFAULT_LIMITER_LIMIT)
+        self.limit_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('limit_limit'))
+
+        self.measure_loudness_var = tk.BooleanVar(value=DEFAULT_MEASURE_LOUDNESS)
+
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
@@ -857,8 +907,46 @@ class VideoProcessorApp:
         self.fruc_fps_entry = ttk.Entry(fruc_frame, textvariable=self.fruc_fps_var, width=5, state="disabled"); self.fruc_fps_entry.pack(side=tk.LEFT)
 
     def setup_audio_tab(self, parent):
+        # --- Loudness War (Compressor & Limiter) ---
+        lw_group = ttk.LabelFrame(parent, text="Loudness War (Combat Dynamic Range)", padding=10)
+        lw_group.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Checkbutton(lw_group, text="Enable Compression & Limiting (acompressor + alimiter)", 
+                        variable=self.use_loudness_war_var, 
+                        command=self._toggle_audio_norm_options).pack(anchor="w")
+
+        self.lw_frame = ttk.Frame(lw_group)
+        self.lw_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.lw_frame.columnconfigure(1, weight=1)
+        self.lw_frame.columnconfigure(3, weight=1)
+        self.lw_frame.columnconfigure(5, weight=1)
+
+        ttk.Label(self.lw_frame, text="Threshold (dB):").grid(row=0, column=0, sticky="w", pady=2)
+        self.comp_threshold_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_threshold_var, width=8)
+        self.comp_threshold_entry.grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(self.lw_frame, text="Ratio:").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
+        self.comp_ratio_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_ratio_var, width=8)
+        self.comp_ratio_entry.grid(row=0, column=3, sticky="w", padx=5)
+
+        ttk.Label(self.lw_frame, text="Makeup Gain (dB):").grid(row=0, column=4, sticky="w", pady=2, padx=(10, 0))
+        self.comp_makeup_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_makeup_var, width=8)
+        self.comp_makeup_entry.grid(row=0, column=5, sticky="w", padx=5)
+
+        ttk.Label(self.lw_frame, text="Attack (ms):").grid(row=1, column=0, sticky="w", pady=2)
+        self.comp_attack_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_attack_var, width=8)
+        self.comp_attack_entry.grid(row=1, column=1, sticky="w", padx=5)
+
+        ttk.Label(self.lw_frame, text="Release (ms):").grid(row=1, column=2, sticky="w", pady=2, padx=(10, 0))
+        self.comp_release_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_release_var, width=8)
+        self.comp_release_entry.grid(row=1, column=3, sticky="w", padx=5)
+
+        ttk.Label(self.lw_frame, text="Limit Peak (dB):").grid(row=1, column=4, sticky="w", pady=2, padx=(10, 0))
+        self.limit_limit_entry = ttk.Entry(self.lw_frame, textvariable=self.limit_limit_var, width=8)
+        self.limit_limit_entry.grid(row=1, column=5, sticky="w", padx=5)
+
         norm_group = ttk.LabelFrame(parent, text="Normalization", padding=10)
-        norm_group.pack(fill=tk.X, pady=(0, 5))
+        norm_group.pack(fill=tk.X, pady=5)
         
         ttk.Checkbutton(norm_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
                         command=self._toggle_audio_norm_options).pack(anchor="w")
@@ -897,6 +985,13 @@ class VideoProcessorApp:
         ttk.Label(self.audio_norm_frame, text="True Peak (dBTP):").grid(row=1, column=0, sticky="w", pady=2)
         self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
         self.true_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
+
+        # --- Measurement Option ---
+        measure_group = ttk.LabelFrame(parent, text="Loudness Measurement", padding=10)
+        measure_group.pack(fill=tk.X, pady=5)
+        ttk.Checkbutton(measure_group, text="Measure Output Loudness (Save JSON metadata)", 
+                        variable=self.measure_loudness_var, 
+                        command=lambda: self._update_selected_jobs("measure_loudness")).pack(anchor="w")
 
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
@@ -1138,7 +1233,12 @@ class VideoProcessorApp:
         for widget in [self.dyn_frame_len_entry, self.dyn_gauss_win_entry, self.dyn_peak_entry, self.dyn_max_gain_entry]:
             widget.config(state=state_dyn)
             
-        self._update_selected_jobs("normalize_audio", "use_dynaudnorm")
+        state_lw = "normal" if self.use_loudness_war_var.get() else "disabled"
+        for widget in [self.comp_threshold_entry, self.comp_ratio_entry, self.comp_makeup_entry, 
+                       self.comp_attack_entry, self.comp_release_entry, self.limit_limit_entry]:
+            widget.config(state=state_lw)
+
+        self._update_selected_jobs("normalize_audio", "use_dynaudnorm", "use_loudness_war")
 
     def _update_audio_options_ui(self):
         is_passthrough = self.audio_passthrough_var.get()
@@ -1203,6 +1303,11 @@ class VideoProcessorApp:
             "use_dynaudnorm": self.use_dynaudnorm_var.get(),
             "dyn_frame_len": self.dyn_frame_len_var.get(), "dyn_gauss_win": self.dyn_gauss_win_var.get(),
             "dyn_peak": self.dyn_peak_var.get(), "dyn_max_gain": self.dyn_max_gain_var.get(),
+            "use_loudness_war": self.use_loudness_war_var.get(),
+            "comp_threshold": self.comp_threshold_var.get(), "comp_ratio": self.comp_ratio_var.get(),
+            "comp_attack": self.comp_attack_var.get(), "comp_release": self.comp_release_var.get(),
+            "comp_makeup": self.comp_makeup_var.get(), "limit_limit": self.limit_limit_var.get(),
+            "measure_loudness": self.measure_loudness_var.get(),
             "normalize_audio": self.normalize_audio_var.get(),
             "loudness_target": self.loudness_target_var.get(), "loudness_range": self.loudness_range_var.get(),
             "true_peak": self.true_peak_var.get(), 
@@ -1327,6 +1432,14 @@ class VideoProcessorApp:
         self.dyn_gauss_win_var.set(options.get("dyn_gauss_win", DEFAULT_DYNAUDNORM_GAUSS_WIN))
         self.dyn_peak_var.set(options.get("dyn_peak", DEFAULT_DYNAUDNORM_PEAK))
         self.dyn_max_gain_var.set(options.get("dyn_max_gain", DEFAULT_DYNAUDNORM_MAX_GAIN))
+        self.use_loudness_war_var.set(options.get("use_loudness_war", DEFAULT_USE_LOUDNESS_WAR))
+        self.comp_threshold_var.set(options.get("comp_threshold", DEFAULT_COMPRESSOR_THRESHOLD))
+        self.comp_ratio_var.set(options.get("comp_ratio", DEFAULT_COMPRESSOR_RATIO))
+        self.comp_attack_var.set(options.get("comp_attack", DEFAULT_COMPRESSOR_ATTACK))
+        self.comp_release_var.set(options.get("comp_release", DEFAULT_COMPRESSOR_RELEASE))
+        self.comp_makeup_var.set(options.get("comp_makeup", DEFAULT_COMPRESSOR_MAKEUP))
+        self.limit_limit_var.set(options.get("limit_limit", DEFAULT_LIMITER_LIMIT))
+        self.measure_loudness_var.set(options.get("measure_loudness", DEFAULT_MEASURE_LOUDNESS))
         self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
         self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
@@ -1432,6 +1545,16 @@ class VideoProcessorApp:
                 else:
                      fc_parts.append(f"{input_tag}aformat=channel_layouts=5.1{proc_tag}")
 
+            # --- Loudness War (Compressor + Limiter) ---
+            if options.get("use_loudness_war", False):
+                t, r, a, re, m = options.get("comp_threshold"), options.get("comp_ratio"), options.get("comp_attack"), options.get("comp_release"), options.get("comp_makeup")
+                l = options.get("limit_limit")
+                lw_tag = f"[{track_type}_lw]"
+                # FFmpeg attack/release for acompressor are in ms (but often expressed as floats). 
+                # The user request specified attack=1 and release=100.
+                fc_parts.append(f"{proc_tag}acompressor=threshold={t}dB:ratio={r}:attack={a}:release={re}:makeup={m},alimiter=limit={l}dB{lw_tag}")
+                proc_tag = lw_tag
+
             if options.get("use_dynaudnorm", False):
                 f, g, p, m = options.get("dyn_frame_len"), options.get("dyn_gauss_win"), options.get("dyn_peak"), options.get("dyn_max_gain")
                 dyn_tag = f"[{track_type}_dyn]"
@@ -1527,6 +1650,9 @@ class VideoProcessorApp:
             
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
+
+            if options.get("measure_loudness"):
+                self.measure_loudness(output_file, options)
         finally:
             if ass_burn_path and os.path.exists(ass_burn_path): os.remove(ass_burn_path)
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
@@ -1695,6 +1821,51 @@ class VideoProcessorApp:
                 title = s.get('tags', {}).get('title', 'N/A')
                 print(f"[AUDIO VER] Stream #{s.get('index')}: '{title}' ({s.get('codec_name')}, {s.get('channels')} channels, '{s.get('channel_layout')}')")
         except Exception as e: print(f"[ERROR] Verification failed: {e}")
+
+    def measure_loudness(self, file_path, options=None):
+        """Measures the loudness of the output file and saves it to an enhanced JSON file."""
+        print(f"--- Measuring loudness: {os.path.basename(file_path)} ---")
+        try:
+            # -vn -sn -dn to ignore video/subs/data and speed up the pass
+            cmd = [FFMPEG_CMD, "-i", file_path, "-vn", "-sn", "-dn", "-af", "loudnorm=print_format=json", "-f", "null", "-"]
+            debug_print("Loudness command:", " ".join(cmd))
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            output = (result.stdout or "") + (result.stderr or "")
+            
+            json_match = re.search(r'\{[\s\S]*?\}', output)
+            if json_match:
+                raw_data = json.loads(json_match.group(0))
+                
+                # Extract the actual measurements (FFmpeg labels them as 'input' because they are input to the loudnorm filter)
+                measured_i = float(raw_data.get('input_i', 0))
+                measured_tp = float(raw_data.get('input_tp', 0))
+                measured_lra = float(raw_data.get('input_lra', 0))
+                
+                yt_target = -14.0
+                diff = measured_i - yt_target
+                
+                # Create a more human-readable dictionary
+                enhanced_data = {
+                    "__INFO__": "This JSON contains loudness data measured from the output file.",
+                    "actual_integrated_loudness_lufs": f"{measured_i:.2f}",
+                    "actual_true_peak_db": f"{measured_tp:.2f}",
+                    "actual_loudness_range_lra": f"{measured_lra:.2f}",
+                    "youtube_target_lufs": f"{yt_target:.1f}",
+                    "status_vs_youtube": f"{abs(diff):.2f}dB {'louder' if diff > 0 else 'quieter'} than YouTube standard",
+                    "raw_ffmpeg_output": raw_data
+                }
+                
+                json_path = f"{file_path}.loudness.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(enhanced_data, f, indent=4)
+                
+                print(f"[SUCCESS] Enhanced loudness report saved to: {os.path.basename(json_path)}")
+                print(f"          Integrated: {measured_i:.2f} LUFS | Status: {enhanced_data['status_vs_youtube']}")
+            else:
+                print("[WARN] Could not find JSON loudness data in FFmpeg output.")
+        except Exception as e:
+            print(f"[ERROR] Loudness measurement failed: {e}")
 
     def add_files(self):
         files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")])
