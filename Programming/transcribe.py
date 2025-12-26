@@ -56,7 +56,7 @@ DEFAULT_MIN_SILENCE_DURATION_WT = 100 # ms
 DEFAULT_VAD_THRESHOLD = 0.3
 DEFAULT_MAX_WORD_DURATION = 750       # ms
 
-DEFAULT_ENHANCE = False  # Normalize audio levels
+DEFAULT_ENHANCE = False  # Normalize / Pre-process audio levels
 DEFAULT_ISOLATE = False # Use Demucs to isolate vocals
 DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
 DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
@@ -89,6 +89,14 @@ DEFAULT_INITIAL_PROMPT = None           # Hint/Context for the model (e.g., "Ove
 DEFAULT_NO_SPEECH_THRESHOLD = 0.3       # Silence detection threshold (Range: 0.0-1.0. Default: 0.6)
 DEFAULT_LOGPROB_THRESHOLD = -1.0        # Log probability threshold for speech detection (Range: -20.0 to 0.0. Default: -1.0)
 DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4 # Repetition filter (Filters out "the the the" loops. Range: 1.0-5.0+. Default: 2.4)
+
+# --- Advanced Audio Enhancement Tuning ---
+DEFAULT_ENHANCE_NORMALIZE = False      # Enable dynaudnorm (True/False)
+DEFAULT_ENHANCE_MONO = True           # Downmix to mono (True/False)
+DEFAULT_ENHANCE_FRAME_LEN = 200        # Frame length in ms (Lower = more reactive, higher = smoother. Range: 10-2000. Default: 200)
+DEFAULT_ENHANCE_GAUSSIAN = 5           # Gaussian filter window size (Higher = smoother gain transitions. Range: 3-301, must be odd. Default: 5)
+DEFAULT_ENHANCE_MAX_GAIN = 40          # Maximum gain factor (How much to boost quiet parts. Range: 1.0-100.0. Default: 40)
+DEFAULT_ENHANCE_PEAK = 0.95            # Target peak volume (Normalization level. Range: 0.0-1.0. Default: 0.95)
 
 # --- Advanced Demucs Tuning ---
 DEFAULT_DEMUCS_MODEL = "htdemucs_ft"      # Demucs model to use (Options: htdemucs, htdemucs_ft, htdemucs_6s. Default: htdemucs_ft)
@@ -223,33 +231,48 @@ def has_valid_audio_track(file_path: str) -> bool:
         print(f"   ⚠️  Probe Error: {e}")
         return False
 
-def preprocess_audio(input_path: str, output_dir: str = None) -> str:
+def preprocess_audio(input_path: str, output_dir: str = None, 
+                     do_normalize=DEFAULT_ENHANCE_NORMALIZE,
+                     do_mono=DEFAULT_ENHANCE_MONO,
+                     frame_len=DEFAULT_ENHANCE_FRAME_LEN, 
+                     gaussian=DEFAULT_ENHANCE_GAUSSIAN, 
+                     max_gain=DEFAULT_ENHANCE_MAX_GAIN, 
+                     peak=DEFAULT_ENHANCE_PEAK) -> str:
     """
-    Normalizes audio using FFmpeg's dynaudnorm filter to boost quiet parts (game audio) 
-    relative to loud parts (commentary). Returns path to temporary WAV file.
+    Pre-processes audio using FFmpeg. Optional dynamic normalization and mono downmix.
+    Returns path to temporary WAV file.
     """
     try:
-        print("   🔊 Enhancing audio levels (Dynamic Normalization)...")
+        mode_desc = []
+        if do_normalize: mode_desc.append("Normalization")
+        if do_mono: mode_desc.append("Mono Downmix")
+        print(f"   🔊 Enhancing audio ({' + '.join(mode_desc) if mode_desc else 'Passthrough'})...")
+        
         wd = output_dir if output_dir else os.path.dirname(input_path)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
         temp_wav = os.path.join(wd, f"{base_name}_enhanced.wav")
         
-        # Audio Filter Chain:
-        # 1. dynaudnorm: Dynamic Audio Normalizer (boosts quiet sections)
-        #    f=200: Frame len 200ms
-        #    g=5:  Small Gaussian window (5) for fast gain adaptation
-        #    m=40: Max gain 40 (allow 40x boost for very quiet parts)
-        # 2. aresample: Resample to 16k
-        # 3. ac 1: Mix to mono (average)
+        # Build Filter Chain
+        filters = []
+        if do_normalize:
+            filters.append(f"dynaudnorm=f={frame_len}:g={gaussian}:m={max_gain}:p={peak}")
+        
+        # Combine filters
+        filter_str = ",".join(filters) if filters else "anull" # anull is a no-op audio filter
+        
+        # FFmpeg command
         cmd = [
             "ffmpeg", "-y", "-v", "info", "-stats",
             "-i", input_path,
             "-map", "0:a:0", # Map First Audio Track
-            "-af", "dynaudnorm=f=200:g=5:m=40:p=0.95",
+            "-af", filter_str,
             "-ar", "16000",
-            "-ac", "1",
-            temp_wav
         ]
+        
+        if do_mono:
+            cmd.extend(["-ac", "1"])
+            
+        cmd.append(temp_wav)
         
         subprocess.run(cmd, check=True)
         return temp_wav
@@ -511,7 +534,16 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     # Follow the order specified in args.pipeline (or the default order)
     for step in getattr(args, 'pipeline', []):
         if step == 'enhance' and args.enhance:
-            enhanced = preprocess_audio(transcription_source, args.output_dir)
+            enhanced = preprocess_audio(
+                transcription_source, 
+                args.output_dir,
+                do_normalize=getattr(args, 'enhance_normalize', DEFAULT_ENHANCE_NORMALIZE),
+                do_mono=getattr(args, 'enhance_mono', DEFAULT_ENHANCE_MONO),
+                frame_len=getattr(args, 'enhance_frame_len', DEFAULT_ENHANCE_FRAME_LEN),
+                gaussian=getattr(args, 'enhance_gaussian', DEFAULT_ENHANCE_GAUSSIAN),
+                max_gain=getattr(args, 'enhance_max_gain', DEFAULT_ENHANCE_MAX_GAIN),
+                peak=getattr(args, 'enhance_peak', DEFAULT_ENHANCE_PEAK)
+            )
             if enhanced and os.path.exists(enhanced):
                 transcription_source = enhanced
                 temp_files_to_cleanup.append(enhanced)
@@ -666,6 +698,17 @@ def main():
     # Ordered Pipeline Flags
     parser.add_argument("-e", "--enhance", action=PipelineAction, nargs=0, const=True, default=DEFAULT_ENHANCE, help=f"Normalize audio levels (Default: {'ON' if DEFAULT_ENHANCE else 'OFF'})")
     parser.add_argument("-ne", "--no-enhance", action=PipelineAction, nargs=0, const=False, dest="enhance", help="Disable audio normalization")
+    
+    # Advanced Audio Enhancement Tuning
+    parser.add_argument("-en", "--enhance_normalize", action="store_true", default=DEFAULT_ENHANCE_NORMALIZE, help="Enable dynamic normalization")
+    parser.add_argument("-nen", "--no_enhance_normalize", action="store_false", dest="enhance_normalize", help="Disable dynamic normalization")
+    parser.add_argument("-em", "--enhance_mono", action="store_true", default=DEFAULT_ENHANCE_MONO, help="Downmix to mono")
+    parser.add_argument("-nem", "--no_enhance_mono", action="store_false", dest="enhance_mono", help="Disable mono downmix")
+    
+    parser.add_argument("--enhance_frame_len", type=int, default=DEFAULT_ENHANCE_FRAME_LEN, help=f"Frame length in ms (Default: {DEFAULT_ENHANCE_FRAME_LEN})")
+    parser.add_argument("--enhance_gaussian", type=int, default=DEFAULT_ENHANCE_GAUSSIAN, help=f"Gaussian window size (Default: {DEFAULT_ENHANCE_GAUSSIAN})")
+    parser.add_argument("--enhance_max_gain", type=float, default=DEFAULT_ENHANCE_MAX_GAIN, help=f"Max gain factor (Default: {DEFAULT_ENHANCE_MAX_GAIN})")
+    parser.add_argument("--enhance_peak", type=float, default=DEFAULT_ENHANCE_PEAK, help=f"Target peak volume (Default: {DEFAULT_ENHANCE_PEAK})")
     parser.add_argument("-i", "--isolate", action=PipelineAction, nargs=0, const=True, default=DEFAULT_ISOLATE, help=f"Use Demucs to isolate vocals (Default: {'ON' if DEFAULT_ISOLATE else 'OFF'})")
     parser.add_argument("-ni", "--no-isolate", action=PipelineAction, nargs=0, const=False, dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
