@@ -121,35 +121,35 @@ import signal
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
 FFPROBE_CMD = os.environ.get("FFPROBE_PATH", "ffprobe")
 
-# Audio settings
-AUDIO_SAMPLE_RATE = 48000
-MONO_BITRATE_K = 128
-STEREO_BITRATE_K = 384
-SURROUND_BITRATE_K = 512
-PASSTHROUGH_NORMALIZE_BITRATE_K = 192
+# Audio settings (Bitrates for different track types)
+AUDIO_SAMPLE_RATE = 48000                           # Sample rate for all audio outputs (Hz). Fixed: 48000
+MONO_BITRATE_K = 128                                # Bitrate for mono tracks (kbps). Default: 128
+STEREO_BITRATE_K = 384                              # Bitrate for stereo tracks (kbps). Default: 384
+SURROUND_BITRATE_K = 512                            # Bitrate for 5.1 surround tracks (kbps). Default: 512
+PASSTHROUGH_NORMALIZE_BITRATE_K = 192               # Bitrate when passthrough with normalization (kbps). Default: 192
 
 # Video & General
 # NOTE: Set these to empty strings or valid paths on your machine.
-DEFAULT_LUT_PATH = "" 
-DEFAULT_SOFA_PATH = "" 
+DEFAULT_LUT_PATH = ""                               # Path to 3D LUT file for HDR to SDR conversion. Default: "" (none)
+DEFAULT_SOFA_PATH = ""                              # Path to SOFA file for binaural audio (Sofalizer). Default: "" (none)
 
-DEFAULT_RESOLUTION = "4k"
-DEFAULT_UPSCALE_ALGO = "bicubic"
-DEFAULT_OUTPUT_FORMAT = "sdr"
-DEFAULT_ORIENTATION = "horizontal"
-DEFAULT_ASPECT_MODE = "crop"
-DEFAULT_HORIZONTAL_ASPECT = "16:9"
-DEFAULT_VERTICAL_ASPECT = "4:5"
-DEFAULT_FRUC = False
-DEFAULT_FRUC_FPS = "60"
-DEFAULT_BURN_SUBTITLES = False
-DEFAULT_USE_SHARPENING = True
-DEFAULT_SHARPENING_ALGO = "cas"
-DEFAULT_SHARPENING_STRENGTH = "0.5"
+DEFAULT_RESOLUTION = "4k"                           # Output resolution. Default: 4k, Options: HD, 4k, 8k
+DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
+DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
+DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
+DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch
+DEFAULT_HORIZONTAL_ASPECT = "16:9"                  # Horizontal aspect ratio. Default: 16:9, Common: 16:9, 21:9, 4:3
+DEFAULT_VERTICAL_ASPECT = "4:5"                     # Vertical aspect ratio. Default: 4:5, Common: 4:5, 9:16
+DEFAULT_FRUC = False                                # Enable frame rate up-conversion. Default: False
+DEFAULT_FRUC_FPS = "60"                             # Target FPS for FRUC. Default: 60, Range: 30 to 120
+DEFAULT_BURN_SUBTITLES = False                      # Burn subtitles into video. Default: False
+DEFAULT_USE_SHARPENING = True                       # Enable video sharpening. Default: True
+DEFAULT_SHARPENING_ALGO = "unsharp"                 # Sharpening algorithm. Default: cas, Options: cas, unsharp
+DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Default: 0.5, Range: 0.0 to 1.0
 
 # -------------------------- Output Configuration --------------------------
-DEFAULT_OUTPUT_TO_SUBFOLDERS = False
-DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"
+DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per video. Default: False
+DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"           # Name of pooled output directory. Default: Output
 
 # -------------------------- Workflow Presets --------------------------
 # 1. Default settings for videos containing NO subtitles
@@ -172,8 +172,8 @@ PRESET_WITH_SUBTITLES = {
 }
 
 # Audio normalization settings
-DEFAULT_NORMALIZE_AUDIO = False 
-DEFAULT_USE_DYNAUDNORM = True
+DEFAULT_NORMALIZE_AUDIO = False                     # Enable EBU R128 normalization (loudnorm). Default: False
+DEFAULT_USE_DYNAUDNORM = True                       # Enable dynamic normalization (dynaudnorm). Default: True
 
 # EBU R128 (loudnorm) parameters
 DEFAULT_LOUDNESS_TARGET = "-13"    # (i) Integrated loudness target. Default: -24, Range: -70 to -5
@@ -196,41 +196,43 @@ DEFAULT_COMPRESSOR_MAKEUP = "12"     # Additional gain applied after compression
 DEFAULT_LIMITER_LIMIT = "0"          # Hard limit ceiling. Fixed: alimiter max is 0dB (1.0 linear)
 
 # Measurement
-DEFAULT_MEASURE_LOUDNESS = False
+DEFAULT_MEASURE_LOUDNESS = False                    # Measure output loudness and save JSON report. Default: False
 
 # Audio track selection defaults
-DEFAULT_AUDIO_MONO = False
-DEFAULT_AUDIO_STEREO_DOWNMIX = False
-DEFAULT_AUDIO_STEREO_SOFALIZER = False
-DEFAULT_AUDIO_SURROUND_51 = False
-DEFAULT_AUDIO_PASSTHROUGH = True
+DEFAULT_AUDIO_MONO = False                          # Output mono track (downmix). Default: False
+DEFAULT_AUDIO_STEREO_DOWNMIX = False                # Output stereo track (standard downmix). Default: False
+DEFAULT_AUDIO_STEREO_SOFALIZER = False              # Output stereo track (binaural via Sofalizer). Default: False
+DEFAULT_AUDIO_SURROUND_51 = False                   # Output 5.1 surround track. Default: False
+DEFAULT_AUDIO_PASSTHROUGH = True                    # Passthrough original audio (no processing). Default: True
 
 # Subtitle defaults
-DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
-DEFAULT_SUBTITLE_FONT_SIZE = "32"
-DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
-DEFAULT_SUBTITLE_BOLD = True
-DEFAULT_SUBTITLE_ITALIC = False
-DEFAULT_SUBTITLE_UNDERLINE = False
-DEFAULT_SUBTITLE_MARGIN_V = "335"
-DEFAULT_REFORMAT_SUBTITLES = True
-DEFAULT_WRAP_LIMIT = "42"
+DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"  # Font family name. Default: HelveticaNeueLT Std Blk
+DEFAULT_SUBTITLE_FONT_SIZE = "32"                   # Font size in points. Default: 32, Range: 8 to 200
+DEFAULT_SUBTITLE_ALIGNMENT = "bottom"               # Vertical alignment. Default: bottom, Options: top, middle, bottom, seam
+DEFAULT_SUBTITLE_BOLD = True                        # Bold text style. Default: True
+DEFAULT_SUBTITLE_ITALIC = False                     # Italic text style. Default: False
+DEFAULT_SUBTITLE_UNDERLINE = False                  # Underline text style. Default: False
+DEFAULT_SUBTITLE_MARGIN_V = "335"                   # Vertical margin from edge (pixels). Default: 335, Range: 0 to 1080
+DEFAULT_SUBTITLE_MARGIN_L = "50"                    # Left margin from edge (pixels). Default: 50, Range: 0 to 960
+DEFAULT_SUBTITLE_MARGIN_R = "100"                   # Right margin from edge (pixels). Default: 100, Range: 0 to 960
+DEFAULT_REFORMAT_SUBTITLES = True                   # Reformat to single wrapped line. Default: True
+DEFAULT_WRAP_LIMIT = "42"                           # Characters per line before wrapping. Default: 42, Range: 20 to 100
 
-# Fill
-DEFAULT_FILL_COLOR = "#FFAA00"
-DEFAULT_FILL_ALPHA = 0
+# Fill (Primary text color)
+DEFAULT_FILL_COLOR = "#FFAA00"                      # Fill color (hex). Default: #FFAA00 (orange)
+DEFAULT_FILL_ALPHA = 0                              # Fill transparency. Default: 0 (opaque), Range: 0 (opaque) to 255 (transparent)
 
-# Outline
-DEFAULT_OUTLINE_COLOR = "#000000"
-DEFAULT_OUTLINE_ALPHA = 0
-DEFAULT_OUTLINE_WIDTH = "9"
+# Outline (Border around text)
+DEFAULT_OUTLINE_COLOR = "#000000"                   # Outline color (hex). Default: #000000 (black)
+DEFAULT_OUTLINE_ALPHA = 0                           # Outline transparency. Default: 0 (opaque), Range: 0 (opaque) to 255 (transparent)
+DEFAULT_OUTLINE_WIDTH = "9"                         # Outline thickness (pixels). Default: 9, Range: 0 to 20
 
-# Shadow
-DEFAULT_SHADOW_COLOR = "#202020"
-DEFAULT_SHADOW_ALPHA = 120
-DEFAULT_SHADOW_OFFSET_X = "2"
-DEFAULT_SHADOW_OFFSET_Y = "4"
-DEFAULT_SHADOW_BLUR = "5"
+# Shadow (Drop shadow behind text)
+DEFAULT_SHADOW_COLOR = "#202020"                    # Shadow color (hex). Default: #202020 (dark gray)
+DEFAULT_SHADOW_ALPHA = 120                          # Shadow transparency. Default: 120 (semi-transparent), Range: 0 (opaque) to 255 (transparent)
+DEFAULT_SHADOW_OFFSET_X = "2"                       # Shadow horizontal offset (pixels). Default: 2, Range: -50 to 50
+DEFAULT_SHADOW_OFFSET_Y = "4"                       # Shadow vertical offset (pixels). Default: 4, Range: -50 to 50
+DEFAULT_SHADOW_BLUR = "5"                           # Shadow blur radius (pixels). Default: 5, Range: 0 to 20
 
 DEBUG_MODE = False
 
@@ -407,6 +409,8 @@ def create_temporary_ass_file(srt_path, options):
     italic_flag = "-1" if options.get('subtitle_italic', DEFAULT_SUBTITLE_ITALIC) else "0"
     underline_flag = "-1" if options.get('subtitle_underline', DEFAULT_SUBTITLE_UNDERLINE) else "0"
     margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
+    margin_l = options.get('subtitle_margin_l', DEFAULT_SUBTITLE_MARGIN_L)
+    margin_r = options.get('subtitle_margin_r', DEFAULT_SUBTITLE_MARGIN_R)
     align_map = {"top": 8, "middle": 5, "bottom": 2, "seam": 2}
     alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
     reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
@@ -433,7 +437,7 @@ def create_temporary_ass_file(srt_path, options):
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
         f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
-        f"{outline_width},{shadow_offset_y},{alignment},10,10,{margin_v},1"
+        f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
     )
 
     header = f"""[Script Info]
@@ -605,6 +609,8 @@ def get_job_hash(job_options):
         job_options.get('shadow_offset_y', ''),
         job_options.get('shadow_blur', ''),
         job_options.get('wrap_limit', ''),
+        job_options.get('subtitle_margin_l', ''),
+        job_options.get('subtitle_margin_r', ''),
         job_options.get('audio_mono', False),
         job_options.get('audio_stereo_downmix', False),
         job_options.get('audio_stereo_sofalizer', False),
@@ -748,6 +754,10 @@ class VideoProcessorApp:
         self.subtitle_underline_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_UNDERLINE)
         self.subtitle_margin_v_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_V)
         self.subtitle_margin_v_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_v'))
+        self.subtitle_margin_l_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_L)
+        self.subtitle_margin_l_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_l'))
+        self.subtitle_margin_r_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_R)
+        self.subtitle_margin_r_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_r'))
         self.fill_color_var = tk.StringVar(value=DEFAULT_FILL_COLOR)
         self.fill_alpha_var = tk.IntVar(value=DEFAULT_FILL_ALPHA)
         self.outline_color_var = tk.StringVar(value=DEFAULT_OUTLINE_COLOR)
@@ -1109,6 +1119,12 @@ class VideoProcessorApp:
         ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
         margin_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
+        ttk.Label(align_frame, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        margin_l_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_l_var, width=5)
+        margin_l_entry.pack(side=tk.LEFT)
+        ttk.Label(align_frame, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        margin_r_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_r_var, width=5)
+        margin_r_entry.pack(side=tk.LEFT)
         reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
         ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles")).pack(side=tk.LEFT)
@@ -1375,7 +1391,10 @@ class VideoProcessorApp:
             "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(), "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(), "subtitle_underline": self.subtitle_underline_var.get(),
-            "subtitle_margin_v": self.subtitle_margin_v_var.get(), "fill_color": self.fill_color_var.get(),
+            "subtitle_margin_v": self.subtitle_margin_v_var.get(), 
+            "subtitle_margin_l": self.subtitle_margin_l_var.get(),
+            "subtitle_margin_r": self.subtitle_margin_r_var.get(),
+            "fill_color": self.fill_color_var.get(),
             "fill_alpha": self.fill_alpha_var.get(), "outline_color": self.outline_color_var.get(),
             "outline_alpha": self.outline_alpha_var.get(), "outline_width": self.outline_width_var.get(),
             "shadow_color": self.shadow_color_var.get(), "shadow_alpha": self.shadow_alpha_var.get(),
@@ -1504,7 +1523,10 @@ class VideoProcessorApp:
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD)); self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC)); self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
-        self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V)); self.fill_color_var.set(options.get("fill_color", DEFAULT_FILL_COLOR)); self.fill_alpha_var.set(options.get("fill_alpha", DEFAULT_FILL_ALPHA))
+        self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
+        self.subtitle_margin_l_var.set(options.get("subtitle_margin_l", DEFAULT_SUBTITLE_MARGIN_L))
+        self.subtitle_margin_r_var.set(options.get("subtitle_margin_r", DEFAULT_SUBTITLE_MARGIN_R))
+        self.fill_color_var.set(options.get("fill_color", DEFAULT_FILL_COLOR)); self.fill_alpha_var.set(options.get("fill_alpha", DEFAULT_FILL_ALPHA))
         self.outline_color_var.set(options.get("outline_color", DEFAULT_OUTLINE_COLOR)); self.outline_alpha_var.set(options.get("outline_alpha", DEFAULT_OUTLINE_ALPHA))
         self.outline_width_var.set(options.get("outline_width", DEFAULT_OUTLINE_WIDTH)); self.shadow_color_var.set(options.get("shadow_color", DEFAULT_SHADOW_COLOR))
         self.shadow_alpha_var.set(options.get("shadow_alpha", DEFAULT_SHADOW_ALPHA)); self.shadow_offset_x_var.set(options.get("shadow_offset_x", DEFAULT_SHADOW_OFFSET_X)); self.shadow_offset_y_var.set(options.get("shadow_offset_y", DEFAULT_SHADOW_OFFSET_Y))
