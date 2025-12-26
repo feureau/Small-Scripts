@@ -62,6 +62,24 @@ DEFAULT_ISOLATE = False # Use Demucs to isolate vocals
 DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
 DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
 
+# --- Custom Pipeline Tracking for Argparse ---
+class PipelineAction(argparse.Action):
+    """Custom action to track the order of pipeline flags (-e, -i)."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        if not hasattr(namespace, 'pipeline'):
+            setattr(namespace, 'pipeline', [])
+        
+        # If the option is a positive flag (e.g., -e, -i)
+        if self.const is True:
+            setattr(namespace, self.dest, True)
+            if self.dest not in namespace.pipeline:
+                namespace.pipeline.append(self.dest)
+        # If it's a negative flag (e.g., -ne, -ni)
+        elif self.const is False:
+            setattr(namespace, self.dest, False)
+            if self.dest in namespace.pipeline:
+                namespace.pipeline.remove(self.dest)
+
 # --- Advanced Whisper Tuning ---
 DEFAULT_BEAM_SIZE = 20                   # Number of paths to explore (Higher = more accurate, slower. Range: 1-20+. Default: 5)
 DEFAULT_BEST_OF = 20                     # Number of candidates to sample (Range: 1-20+. Default: 5)
@@ -477,21 +495,20 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     transcription_source = file_path
     temp_files_to_cleanup = []
 
-    # Step A: Enhancement (Normalization)
-    if args.enhance:
-        enhanced = preprocess_audio(transcription_source, args.output_dir)
-        if enhanced and os.path.exists(enhanced):
-            transcription_source = enhanced
-            temp_files_to_cleanup.append(enhanced)
-
-    # Step B: Isolation
-    if args.isolate:
-        isolated = isolate_audio_with_demucs(transcription_source, args.output_dir)
-        if isolated and os.path.exists(isolated):
-            transcription_source = isolated
-            temp_files_to_cleanup.append(isolated)
-            # Demucs creates a folder structure we might want to clean up later, 
-            # but for now we just track the file.
+    # Step: Dynamic Preprocessing Pipeline
+    # Follow the order specified in args.pipeline (or the default order)
+    for step in getattr(args, 'pipeline', []):
+        if step == 'enhance' and args.enhance:
+            enhanced = preprocess_audio(transcription_source, args.output_dir)
+            if enhanced and os.path.exists(enhanced):
+                transcription_source = enhanced
+                temp_files_to_cleanup.append(enhanced)
+        
+        elif step == 'isolate' and args.isolate:
+            isolated = isolate_audio_with_demucs(transcription_source, args.output_dir)
+            if isolated and os.path.exists(isolated):
+                transcription_source = isolated
+                temp_files_to_cleanup.append(isolated)
 
     # 2. Transcribe with Fallbacks
     cleaned_data = None
@@ -626,10 +643,12 @@ def main():
     parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD, help="VAD threshold (0-1). Lower is more sensitive. Default: 0.5")
     parser.add_argument("--vad_filter", action="store_true", default=None, help="Enable Whisper internal VAD filter")
     parser.add_argument("--no_vad_filter", action="store_false", dest="vad_filter", help="Disable Whisper internal VAD filter")
-    parser.add_argument("-e", "--enhance", action="store_true", default=DEFAULT_ENHANCE, help=f"Normalize audio levels (Default: {'ON' if DEFAULT_ENHANCE else 'OFF'})")
-    parser.add_argument("-ne", "--no-enhance", action="store_false", dest="enhance", help="Disable audio normalization")
-    parser.add_argument("-i", "--isolate", action="store_true", default=DEFAULT_ISOLATE, help=f"Use Demucs to isolate vocals (Default: {'ON' if DEFAULT_ISOLATE else 'OFF'})")
-    parser.add_argument("-ni", "--no-isolate", action="store_false", dest="isolate", help="Disable vocal isolation")
+    
+    # Ordered Pipeline Flags
+    parser.add_argument("-e", "--enhance", action=PipelineAction, nargs=0, const=True, default=DEFAULT_ENHANCE, help=f"Normalize audio levels (Default: {'ON' if DEFAULT_ENHANCE else 'OFF'})")
+    parser.add_argument("-ne", "--no-enhance", action=PipelineAction, nargs=0, const=False, dest="enhance", help="Disable audio normalization")
+    parser.add_argument("-i", "--isolate", action=PipelineAction, nargs=0, const=True, default=DEFAULT_ISOLATE, help=f"Use Demucs to isolate vocals (Default: {'ON' if DEFAULT_ISOLATE else 'OFF'})")
+    parser.add_argument("-ni", "--no-isolate", action=PipelineAction, nargs=0, const=False, dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
     
     # Advanced Whisper CLI Overrides
@@ -644,6 +663,13 @@ def main():
     parser.add_argument("--compression_ratio_threshold", type=float, default=DEFAULT_COMPRESSION_RATIO_THRESHOLD)
 
     args = parser.parse_args()
+
+    # Finalize pipeline for default behaviors if no flags were passed
+    if not hasattr(args, 'pipeline'):
+        args.pipeline = []
+        if args.enhance: args.pipeline.append('enhance')
+        if args.isolate: args.pipeline.append('isolate')
+
     files_to_process = collect_input_files(args.files)
     if not files_to_process: sys.exit(0)
 
