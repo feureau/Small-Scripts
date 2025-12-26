@@ -2,11 +2,25 @@
 """
 transcribe_ultimate_v2.py
 -------------------------
-Production-Grade Transcription with:
-1. Robust Audio Validation (Switched to PyAV for 100% detection accuracy)
-2. Modern Model Support (Turbo, Distil)
-3. Auto-Fallback & Crash Recovery
-4. Netflix-Style Phrase Grouping
+Production-Grade Transcription & Audio Processing Pipeline
+
+Features:
+1. Robust Audio Validation: Uses PyAV for 100% stream detection accuracy across MOV, MKV, MP4, etc.
+2. Modern Model Support: Optimized for Faster-Whisper (Turbo, Distil, Large-v3).
+3. Auto-Fallback & Recovery: Switches to fallback models (Large-v2) on internal VAD crashes.
+4. Vocal Isolation (Demucs): Forced GPU isolation using htdemucs_ft to separate speech from background.
+5. Audio Enhancement: Dynamic normalization via FFmpeg (dynaudnorm) to balance quiet/loud audio.
+6. Multi-Stage VAD: 
+   - Internal Whisper VAD filter for hallucination reduction.
+   - External Silero VAD for precise word-level subtitle alignment (--use_vad).
+   - Adjustable sensitivity via --vad_threshold.
+7. Dynamic Feedback: Real-time progress bars for Whisper (tqdm), FFmpeg, and Demucs isolation.
+8. Intelligent SRT Generation: Netflix-style grouping, smart line breaks, and punctuation-aware casing.
+9. Batch Processing: Supports direct files, glob patterns, YouTube/URL downloads, and URL lists in TXT.
+10. Headless/Remote Ready: Top-level DEFAULT constants for easy default behavior customization.
+
+Dependencies:
+- ffmpeg, faster-whisper, demucs, yt-dlp, tqdm, av, torch, torchaudio, silero-vad
 """
 
 import sys
@@ -23,6 +37,7 @@ import gc
 import shutil
 import yt_dlp
 import subprocess
+from tqdm import tqdm
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -34,11 +49,29 @@ MODEL_ALIASES = {
     "medium": "medium",
     "small": "small"
 }
+DEMUCS_MODEL = "htdemucs_ft"
 
 DEFAULT_MODEL_KEY = "large-v3"
 DEFAULT_TASK = "transcribe"
 DEFAULT_MIN_SILENCE_DURATION_WT = 100 # ms
+DEFAULT_VAD_THRESHOLD = 0.3
 DEFAULT_MAX_WORD_DURATION = 750       # ms
+
+DEFAULT_ENHANCE = False  # Normalize audio levels
+DEFAULT_ISOLATE = False # Use Demucs to isolate vocals
+DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
+DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
+
+# --- Advanced Whisper Tuning ---
+DEFAULT_BEAM_SIZE = 20                   # Number of paths to explore (Higher = more accurate, slower. Range: 1-20+. Default: 5)
+DEFAULT_BEST_OF = 20                     # Number of candidates to sample (Range: 1-20+. Default: 5)
+DEFAULT_PATIENCE = 1.0                  # Beam search patience (Range: 0.0-2.0+. Default: 1.0)
+DEFAULT_TEMPERATURE = 0                 # Randomness (0 = deterministic, 1.0 = creative. Range: 0.0-1.0. Default: 0)
+DEFAULT_CONDITION_ON_PREVIOUS_TEXT = False # Use previous segment as context (Setting to True can cause loops. Default: False)
+DEFAULT_INITIAL_PROMPT = None           # Hint/Context for the model (e.g., "Overwatch technical terms". Default: None)
+DEFAULT_NO_SPEECH_THRESHOLD = 0.3       # Silence detection threshold (Range: 0.0-1.0. Default: 0.6)
+DEFAULT_LOGPROB_THRESHOLD = -1.0        # Log probability threshold for speech detection (Range: -20.0 to 0.0. Default: -1.0)
+DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4 # Repetition filter (Filters out "the the the" loops. Range: 1.0-5.0+. Default: 2.4)
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma", ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".webm"}
 
@@ -186,7 +219,7 @@ def preprocess_audio(input_path: str, output_dir: str = None) -> str:
         # 2. aresample: Resample to 16k
         # 3. ac 1: Mix to mono (average)
         cmd = [
-            "ffmpeg", "-y", "-v", "error",
+            "ffmpeg", "-y", "-v", "info", "-stats",
             "-i", input_path,
             "-map", "0:a:0", # Map First Audio Track
             "-af", "dynaudnorm=f=200:g=5:m=40:p=0.95",
@@ -213,9 +246,9 @@ def isolate_audio_with_demucs(input_path: str, output_dir: str = None) -> str:
         print("   🎸 Isolating vocals with Demucs...")
         wd = output_dir if output_dir else os.path.dirname(input_path)
         
-        # Output structure: {wd}/htdemucs/{filename_no_ext}/vocals.wav
+        # Output structure: {wd}/{model_name}/{filename_no_ext}/vocals.wav
         base_name = os.path.splitext(os.path.basename(input_path))[0]
-        expected_output = os.path.join(wd, "htdemucs", base_name, "vocals.wav")
+        expected_output = os.path.join(wd, DEMUCS_MODEL, base_name, "vocals.wav")
         
         # Demucs command (Ultimate Quality Settings):
         # --two-stems=vocals: Only separate vocals vs others
@@ -224,12 +257,13 @@ def isolate_audio_with_demucs(input_path: str, output_dir: str = None) -> str:
         # --overlap 0.5: Healthier segment transitions
         # --float32: Preserve bit-depth fidelity
         cmd = [
-            "demucs", "--two-stems=vocals", "-n", "htdemucs_ft",
+            "demucs", "--two-stems=vocals", "-n", DEMUCS_MODEL,
+            "-d", "cuda",
             "--shifts", "10", "--overlap", "0.5", "--float32",
             "-o", wd, input_path
         ]
         
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, check=True)
         
         if os.path.exists(expected_output):
             # Move out of htdemucs/ folder to be in same dir as input
@@ -238,7 +272,7 @@ def isolate_audio_with_demucs(input_path: str, output_dir: str = None) -> str:
             os.rename(expected_output, final_isolated_wav)
             
             # Clean up the htdemucs folder immediately since we moved the file
-            try: shutil.rmtree(os.path.join(wd, "htdemucs"))
+            try: shutil.rmtree(os.path.join(wd, DEMUCS_MODEL))
             except: pass
             
             return final_isolated_wav
@@ -463,24 +497,54 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     cleaned_data = None
     
     def try_transcribe(use_vad_filter):
-        s, _ = transcription_model.transcribe(
-            transcription_source, language=args.lang, task=args.task, vad_filter=use_vad_filter, 
-            vad_parameters={"min_silence_duration_ms": DEFAULT_MIN_SILENCE_DURATION_WT}, word_timestamps=True
+        segments, info = transcription_model.transcribe(
+            transcription_source, 
+            language=args.lang, 
+            task=args.task, 
+            
+            # VAD Settings
+            vad_filter=use_vad_filter, 
+            vad_parameters={
+                "threshold": args.vad_threshold,
+                "min_silence_duration_ms": DEFAULT_MIN_SILENCE_DURATION_WT
+            }, 
+            
+            # Advanced Decoding Settings
+            beam_size=args.beam_size,
+            best_of=args.best_of,
+            patience=args.patience,
+            temperature=args.temperature,
+            condition_on_previous_text=args.condition_on_previous_text,
+            initial_prompt=args.initial_prompt,
+            
+            # Hallucination Control
+            no_speech_threshold=args.no_speech_threshold,
+            log_prob_threshold=args.logprob_threshold,
+            compression_ratio_threshold=args.compression_ratio_threshold,
+            
+            word_timestamps=True
         )
         res = {"segments": []}
-        for seg in s:
-            res["segments"].append({
-                "start": seg.start, "end": seg.end, "text": seg.text, 
-                "words": [{"start": w.start, "end": w.end, "word": w.word} for w in seg.words] if seg.words else []
-            })
+        
+        with tqdm(total=round(info.duration, 2), unit='s', desc="   Whisper", dynamic_ncols=True, leave=False) as pbar:
+            for seg in segments:
+                res["segments"].append({
+                    "start": seg.start, "end": seg.end, "text": seg.text, 
+                    "words": [{"start": w.start, "end": w.end, "word": w.word} for w in seg.words] if seg.words else []
+                })
+                pbar.update(min(seg.end - pbar.n, info.duration - pbar.n))
+            pbar.update(info.duration - pbar.n)
+            
         return res
 
     try:
         # Attempt 1: Requested Model + Internal VAD settings
-        # If enhanced, DISABLE VAD to prevent suppression of normalized game dialog
+        # 1. Attempt 1: Requested Model + VAD settings
+        # Use explicit CLI arg if provided, otherwise use the top-level default
+        # Note: We still automatically disable it if enhancement is ON UNLESS explicitly set.
         ensure_model_loaded(args.model)
-        default_vad = False if args.enhance else True
-        cleaned_data = try_transcribe(default_vad)
+        vad_to_use = args.vad_filter if args.vad_filter is not None else (False if args.enhance else DEFAULT_VAD_FILTER)
+        cleaned_data = try_transcribe(vad_to_use)
     except Exception as e:
         err = str(e).lower()
         if "tuple index" in err or "indexerror" in err:
@@ -539,7 +603,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             # {output_dir}/htdemucs/{base_name}
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             wd = args.output_dir if args.output_dir else os.path.dirname(file_path)
-            demucs_folder = os.path.join(wd, "htdemucs")
+            demucs_folder = os.path.join(wd, DEMUCS_MODEL)
             if os.path.exists(demucs_folder):
                  try: shutil.rmtree(demucs_folder)
                  except: pass
@@ -558,12 +622,26 @@ def main():
     parser.add_argument("-l", "--lang", type=str)
     parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"])
 
-    parser.add_argument("--use_vad", action="store_true", help="Enable Silero VAD alignment")
-    parser.add_argument("-e", "--enhance", action="store_true", default=True, help="Normalize audio levels (Default: ON)")
+    parser.add_argument("--use_vad", action="store_true", default=DEFAULT_VAD_ALIGN, help=f"Enable Silero VAD alignment (Default: {'ON' if DEFAULT_VAD_ALIGN else 'OFF'})")
+    parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD, help="VAD threshold (0-1). Lower is more sensitive. Default: 0.5")
+    parser.add_argument("--vad_filter", action="store_true", default=None, help="Enable Whisper internal VAD filter")
+    parser.add_argument("--no_vad_filter", action="store_false", dest="vad_filter", help="Disable Whisper internal VAD filter")
+    parser.add_argument("-e", "--enhance", action="store_true", default=DEFAULT_ENHANCE, help=f"Normalize audio levels (Default: {'ON' if DEFAULT_ENHANCE else 'OFF'})")
     parser.add_argument("-ne", "--no-enhance", action="store_false", dest="enhance", help="Disable audio normalization")
-    parser.add_argument("-i", "--isolate", action="store_true", default=True, help="Use Demucs to isolate vocals (Default: ON)")
+    parser.add_argument("-i", "--isolate", action="store_true", default=DEFAULT_ISOLATE, help=f"Use Demucs to isolate vocals (Default: {'ON' if DEFAULT_ISOLATE else 'OFF'})")
     parser.add_argument("-ni", "--no-isolate", action="store_false", dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
+    
+    # Advanced Whisper CLI Overrides
+    parser.add_argument("--beam_size", type=int, default=DEFAULT_BEAM_SIZE)
+    parser.add_argument("--best_of", type=int, default=DEFAULT_BEST_OF)
+    parser.add_argument("--patience", type=float, default=DEFAULT_PATIENCE)
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    parser.add_argument("--condition_on_previous_text", action="store_true", default=DEFAULT_CONDITION_ON_PREVIOUS_TEXT)
+    parser.add_argument("--initial_prompt", type=str, default=DEFAULT_INITIAL_PROMPT)
+    parser.add_argument("--no_speech_threshold", type=float, default=DEFAULT_NO_SPEECH_THRESHOLD)
+    parser.add_argument("--logprob_threshold", type=float, default=DEFAULT_LOGPROB_THRESHOLD)
+    parser.add_argument("--compression_ratio_threshold", type=float, default=DEFAULT_COMPRESSION_RATIO_THRESHOLD)
 
     args = parser.parse_args()
     files_to_process = collect_input_files(args.files)
