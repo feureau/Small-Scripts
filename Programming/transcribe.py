@@ -49,7 +49,6 @@ MODEL_ALIASES = {
     "medium": "medium",
     "small": "small"
 }
-DEMUCS_MODEL = "htdemucs_ft"
 
 DEFAULT_MODEL_KEY = "large-v3"
 DEFAULT_TASK = "transcribe"
@@ -83,13 +82,19 @@ class PipelineAction(argparse.Action):
 # --- Advanced Whisper Tuning ---
 DEFAULT_BEAM_SIZE = 20                   # Number of paths to explore (Higher = more accurate, slower. Range: 1-20+. Default: 5)
 DEFAULT_BEST_OF = 20                     # Number of candidates to sample (Range: 1-20+. Default: 5)
-DEFAULT_PATIENCE = 1.0                  # Beam search patience (Range: 0.0-2.0+. Default: 1.0)
+DEFAULT_PATIENCE = 2.0                  # Beam search patience (Range: 0.0-2.0+. Default: 1.0)
 DEFAULT_TEMPERATURE = 0                 # Randomness (0 = deterministic, 1.0 = creative. Range: 0.0-1.0. Default: 0)
 DEFAULT_CONDITION_ON_PREVIOUS_TEXT = False # Use previous segment as context (Setting to True can cause loops. Default: False)
 DEFAULT_INITIAL_PROMPT = None           # Hint/Context for the model (e.g., "Overwatch technical terms". Default: None)
 DEFAULT_NO_SPEECH_THRESHOLD = 0.3       # Silence detection threshold (Range: 0.0-1.0. Default: 0.6)
 DEFAULT_LOGPROB_THRESHOLD = -1.0        # Log probability threshold for speech detection (Range: -20.0 to 0.0. Default: -1.0)
 DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4 # Repetition filter (Filters out "the the the" loops. Range: 1.0-5.0+. Default: 2.4)
+
+# --- Advanced Demucs Tuning ---
+DEFAULT_DEMUCS_MODEL = "htdemucs_ft"      # Demucs model to use (Options: htdemucs, htdemucs_ft, htdemucs_6s. Default: htdemucs_ft)
+DEFAULT_DEMUCS_SHIFTS = 5               # Number of random shifts (Higher = better quality, slower. Range: 1-20+. Default: 5)
+DEFAULT_DEMUCS_OVERLAP = 0.25             # Overlap between segments (Range: 0.0-1.0. Default: 0.25)
+DEFAULT_DEMUCS_FLOAT32 = True            # Use float32 for output (Default: True)
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma", ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".webm"}
 
@@ -255,42 +260,49 @@ def preprocess_audio(input_path: str, output_dir: str = None) -> str:
         print("   ⚠️  FFmpeg not found. Skipping enhancement.")
         return None
 
-def isolate_audio_with_demucs(input_path: str, output_dir: str = None) -> str:
+def isolate_audio_with_demucs(input_path: str, output_dir: str = None, 
+                              model=DEFAULT_DEMUCS_MODEL, 
+                              shifts=DEFAULT_DEMUCS_SHIFTS, 
+                              overlap=DEFAULT_DEMUCS_OVERLAP, 
+                              use_float32=DEFAULT_DEMUCS_FLOAT32) -> str:
     """
     Uses Demucs to separate vocals from background noise/music.
     Returns path to the isolated 'vocals.wav'.
     """
     try:
-        print("   🎸 Isolating vocals with Demucs...")
+        print(f"   🎸 Isolating vocals with Demucs ({model})...")
         wd = output_dir if output_dir else os.path.dirname(input_path)
         
         # Output structure: {wd}/{model_name}/{filename_no_ext}/vocals.wav
         base_name = os.path.splitext(os.path.basename(input_path))[0]
-        expected_output = os.path.join(wd, DEMUCS_MODEL, base_name, "vocals.wav")
+        expected_output = os.path.join(wd, model, base_name, "vocals.wav")
         
-        # Demucs command (Ultimate Quality Settings):
+        # Demucs command:
         # --two-stems=vocals: Only separate vocals vs others
-        # -n htdemucs_ft: Use Fine-Tuned Hybrid Transformer model
-        # --shifts 10: Multi-pass prediction for better quality
-        # --overlap 0.5: Healthier segment transitions
-        # --float32: Preserve bit-depth fidelity
+        # -n {model}: Demucs model to use
+        # --shifts: Multi-pass prediction for better quality
+        # --overlap: Segment transition overlap
+        # --float32: Bit-depth fidelity
         cmd = [
-            "demucs", "--two-stems=vocals", "-n", DEMUCS_MODEL,
-            "-d", "cuda",
-            "--shifts", "10", "--overlap", "0.5", "--float32",
-            "-o", wd, input_path
+            "demucs", "--two-stems=vocals", "-n", model,
+            "-d", "cuda" if torch.cuda.is_available() else "cpu",
+            "--shifts", str(shifts), "--overlap", str(overlap),
         ]
+        if use_float32:
+            cmd.append("--float32")
+            
+        cmd.extend(["-o", wd, input_path])
         
         subprocess.run(cmd, check=True)
         
         if os.path.exists(expected_output):
-            # Move out of htdemucs/ folder to be in same dir as input
+            # Move out of model folder to be in same dir as input
             final_isolated_wav = os.path.join(wd, f"{base_name}_isolated.wav")
             if os.path.exists(final_isolated_wav): os.remove(final_isolated_wav)
             os.rename(expected_output, final_isolated_wav)
             
-            # Clean up the htdemucs folder immediately since we moved the file
-            try: shutil.rmtree(os.path.join(wd, DEMUCS_MODEL))
+            # Clean up the model folder immediately
+            try: shutil.rmtree(os.path.join(wd, model))
             except: pass
             
             return final_isolated_wav
@@ -505,7 +517,14 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                 temp_files_to_cleanup.append(enhanced)
         
         elif step == 'isolate' and args.isolate:
-            isolated = isolate_audio_with_demucs(transcription_source, args.output_dir)
+            isolated = isolate_audio_with_demucs(
+                transcription_source, 
+                args.output_dir,
+                model=getattr(args, 'demucs_model', DEFAULT_DEMUCS_MODEL),
+                shifts=getattr(args, 'demucs_shifts', DEFAULT_DEMUCS_SHIFTS),
+                overlap=getattr(args, 'demucs_overlap', DEFAULT_DEMUCS_OVERLAP),
+                use_float32=getattr(args, 'demucs_float32', DEFAULT_DEMUCS_FLOAT32)
+            )
             if isolated and os.path.exists(isolated):
                 transcription_source = isolated
                 temp_files_to_cleanup.append(isolated)
@@ -615,12 +634,12 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                     os.remove(tmp)
                     print(f"   🧹 Removed temp file: {os.path.basename(tmp)}")
                 except: pass
-        # Cleanup Demucs folder (deprecated by move-rename but kept for safety)
+        # Cleanup Demucs folder
         if args.isolate:
-            # {output_dir}/htdemucs/{base_name}
+            model = getattr(args, 'demucs_model', DEFAULT_DEMUCS_MODEL)
             base_name = os.path.splitext(os.path.basename(file_path))[0]
             wd = args.output_dir if args.output_dir else os.path.dirname(file_path)
-            demucs_folder = os.path.join(wd, DEMUCS_MODEL)
+            demucs_folder = os.path.join(wd, model)
             if os.path.exists(demucs_folder):
                  try: shutil.rmtree(demucs_folder)
                  except: pass
@@ -651,6 +670,13 @@ def main():
     parser.add_argument("-ni", "--no-isolate", action=PipelineAction, nargs=0, const=False, dest="isolate", help="Disable vocal isolation")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep downloaded audio files (default: delete)")
     
+    # Advanced Demucs Tuning
+    parser.add_argument("--demucs_model", type=str, default=DEFAULT_DEMUCS_MODEL, help=f"Demucs model (Default: {DEFAULT_DEMUCS_MODEL})")
+    parser.add_argument("--demucs_shifts", type=int, default=DEFAULT_DEMUCS_SHIFTS, help=f"Number of shifts (Default: {DEFAULT_DEMUCS_SHIFTS})")
+    parser.add_argument("--demucs_overlap", type=float, default=DEFAULT_DEMUCS_OVERLAP, help=f"Overlap (Default: {DEFAULT_DEMUCS_OVERLAP})")
+    parser.add_argument("--demucs_float32", action="store_true", default=DEFAULT_DEMUCS_FLOAT32, help=f"Use float32 (Default: {DEFAULT_DEMUCS_FLOAT32})")
+    parser.add_argument("--no_demucs_float32", action="store_false", dest="demucs_float32", help="Disable float32 for Demucs")
+
     # Advanced Whisper CLI Overrides
     parser.add_argument("--beam_size", type=int, default=DEFAULT_BEAM_SIZE)
     parser.add_argument("--best_of", type=int, default=DEFAULT_BEST_OF)
