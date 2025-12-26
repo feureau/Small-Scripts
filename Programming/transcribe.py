@@ -56,8 +56,8 @@ DEFAULT_MIN_SILENCE_DURATION_WT = 100 # ms
 DEFAULT_VAD_THRESHOLD = 0.3
 DEFAULT_MAX_WORD_DURATION = 750       # ms
 
-DEFAULT_ENHANCE = False  # Normalize / Pre-process audio levels
-DEFAULT_ISOLATE = False # Use Demucs to isolate vocals
+DEFAULT_ENHANCE = True  # Normalize / Pre-process audio levels
+DEFAULT_ISOLATE = True # Use Demucs to isolate vocals
 DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
 DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
 
