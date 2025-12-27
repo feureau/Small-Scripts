@@ -99,7 +99,7 @@ import subprocess
 import shutil
 import json
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, font, colorchooser
+from tkinter import ttk, filedialog, messagebox, font, colorchooser, simpledialog
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import unicodedata
 from ftfy import fix_text
@@ -152,24 +152,6 @@ DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per v
 DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"           # Name of pooled output directory. Default: Output
 
 # -------------------------- Workflow Presets --------------------------
-# 1. Default settings for videos containing NO subtitles
-PRESET_NO_SUBTITLES = {
-    "orientation": "horizontal",
-    "resolution": "4k",
-    "normalize_audio": True,
-    "audio_type": "surround_51", 
-    "burn_subtitles": False
-}
-
-# 2. Default settings for videos WITH subtitles (Embedded or .srt)
-PRESET_WITH_SUBTITLES = {
-    "orientation": "hybrid (stacked)",
-    "resolution": "4k",
-    "normalize_audio": True,
-    "audio_type": "mono",
-    "burn_subtitles": True,
-    "subtitle_alignment": "seam" # FIX: Explicitly set Seam alignment for all hybrid jobs
-}
 
 # Audio normalization settings
 DEFAULT_NORMALIZE_AUDIO = False                     # Enable EBU R128 normalization (loudnorm). Default: False
@@ -678,6 +660,203 @@ class CollapsiblePane(ttk.Frame):
             self.container.grid()
             self.toggle_button.config(text=f"▼ {self.text}")
 
+class WorkflowPresetManager:
+    def __init__(self, filename="vid.py.preset.json"):
+        self.filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        self.presets = {}
+        
+        # Master dictionary of all possible options and their default values
+        self.MASTER_OPTIONS = {
+            "resolution": DEFAULT_RESOLUTION,
+            "upscale_algo": DEFAULT_UPSCALE_ALGO,
+            "output_format": DEFAULT_OUTPUT_FORMAT,
+            "orientation": DEFAULT_ORIENTATION,
+            "aspect_mode": DEFAULT_ASPECT_MODE,
+            "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
+            "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
+            "hybrid_top_aspect": "16:9",
+            "hybrid_top_mode": "crop",
+            "hybrid_bottom_aspect": "4:5",
+            "hybrid_bottom_mode": "crop",
+            "fruc": DEFAULT_FRUC,
+            "fruc_fps": DEFAULT_FRUC_FPS,
+            "burn_subtitles": DEFAULT_BURN_SUBTITLES,
+            "use_sharpening": DEFAULT_USE_SHARPENING,
+            "sharpening_algo": DEFAULT_SHARPENING_ALGO,
+            "sharpening_strength": DEFAULT_SHARPENING_STRENGTH,
+            "output_to_subfolders": DEFAULT_OUTPUT_TO_SUBFOLDERS,
+            "normalize_audio": DEFAULT_NORMALIZE_AUDIO,
+            "use_dynaudnorm": DEFAULT_USE_DYNAUDNORM,
+            "dyn_frame_len": DEFAULT_DYNAUDNORM_FRAME_LEN,
+            "dyn_gauss_win": DEFAULT_DYNAUDNORM_GAUSS_WIN,
+            "dyn_peak": DEFAULT_DYNAUDNORM_PEAK,
+            "dyn_max_gain": DEFAULT_DYNAUDNORM_MAX_GAIN,
+            "use_loudness_war": DEFAULT_USE_LOUDNESS_WAR,
+            "comp_threshold": DEFAULT_COMPRESSOR_THRESHOLD,
+            "comp_ratio": DEFAULT_COMPRESSOR_RATIO,
+            "comp_attack": DEFAULT_COMPRESSOR_ATTACK,
+            "comp_release": DEFAULT_COMPRESSOR_RELEASE,
+            "comp_makeup": DEFAULT_COMPRESSOR_MAKEUP,
+            "limit_limit": DEFAULT_LIMITER_LIMIT,
+            "measure_loudness": DEFAULT_MEASURE_LOUDNESS,
+            "loudness_target": DEFAULT_LOUDNESS_TARGET,
+            "loudness_range": DEFAULT_LOUDNESS_RANGE,
+            "true_peak": DEFAULT_TRUE_PEAK,
+            "audio_mono": DEFAULT_AUDIO_MONO,
+            "audio_stereo_downmix": DEFAULT_AUDIO_STEREO_DOWNMIX,
+            "audio_stereo_sofalizer": DEFAULT_AUDIO_STEREO_SOFALIZER,
+            "audio_surround_51": DEFAULT_AUDIO_SURROUND_51,
+            "audio_passthrough": DEFAULT_AUDIO_PASSTHROUGH,
+            "sofa_file": DEFAULT_SOFA_PATH,
+            "lut_file": DEFAULT_LUT_PATH,
+            "subtitle_font": DEFAULT_SUBTITLE_FONT,
+            "subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,
+            "subtitle_alignment": DEFAULT_SUBTITLE_ALIGNMENT,
+            "subtitle_bold": DEFAULT_SUBTITLE_BOLD,
+            "subtitle_italic": DEFAULT_SUBTITLE_ITALIC,
+            "subtitle_underline": DEFAULT_SUBTITLE_UNDERLINE,
+            "subtitle_margin_v": DEFAULT_SUBTITLE_MARGIN_V,
+            "subtitle_margin_l": DEFAULT_SUBTITLE_MARGIN_L,
+            "subtitle_margin_r": DEFAULT_SUBTITLE_MARGIN_R,
+            "fill_color": DEFAULT_FILL_COLOR,
+            "fill_alpha": DEFAULT_FILL_ALPHA,
+            "outline_color": DEFAULT_OUTLINE_COLOR,
+            "outline_alpha": DEFAULT_OUTLINE_ALPHA,
+            "outline_width": DEFAULT_OUTLINE_WIDTH,
+            "shadow_color": DEFAULT_SHADOW_COLOR,
+            "shadow_alpha": DEFAULT_SHADOW_ALPHA,
+            "shadow_offset_x": DEFAULT_SHADOW_OFFSET_X,
+            "shadow_offset_y": DEFAULT_SHADOW_OFFSET_Y,
+            "shadow_blur": DEFAULT_SHADOW_BLUR,
+            "reformat_subtitles": DEFAULT_REFORMAT_SUBTITLES,
+            "wrap_limit": DEFAULT_WRAP_LIMIT,
+            "override_bitrate": False,
+            "manual_bitrate": "0"
+        }
+        self.load_presets()
+
+    def load_presets(self):
+        if os.path.exists(self.filename):
+            try:
+                with open(self.filename, 'r') as f:
+                    self.presets = json.load(f)
+                return
+            except Exception as e:
+                print(f"[WARN] Failed to load presets from {self.filename}: {e}. Loading defaults.")
+
+        self.presets = self.get_default_presets()
+        self.save_presets()
+
+    def save_presets(self):
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(self.presets, f, indent=4)
+        except Exception as e:
+            print(f"[ERROR] Failed to save presets to {self.filename}: {e}")
+
+    def get_preset_names(self):
+        return sorted(list(self.presets.keys()))
+
+    def get_preset(self, name):
+        preset = self.presets.get(name)
+        if not preset: return None
+        
+        # Deepcopy and merge with MASTER_OPTIONS, strictly ignoring None values
+        full_options = copy.deepcopy(self.MASTER_OPTIONS)
+        preset_opts = preset.get('options', {})
+        for k, v in preset_opts.items():
+            if v is not None:
+                full_options[k] = v
+        
+        return {
+            "options": full_options,
+            "triggers": preset.get('triggers', {})
+        }
+
+    def save_preset(self, name, options, triggers):
+        # Clean up options to remove UI-specific transient keys if any
+        clean_options = copy.deepcopy(options)
+        self.presets[name] = {
+            "options": clean_options,
+            "triggers": triggers
+        }
+        self.save_presets()
+
+    def delete_preset(self, name):
+        if name in self.presets:
+            del self.presets[name]
+            self.save_presets()
+
+    def rename_preset(self, old_name, new_name):
+        if old_name not in self.presets: return False
+        if new_name in self.presets: return False # Prevent overwrite
+        
+        self.presets[new_name] = self.presets.pop(old_name)
+        self.save_presets()
+        return True
+
+    def get_default_presets(self):
+        # 1. Horizontal Clean (Replaces PRESET_NO_SUBTITLES)
+        h_clean_opts = {
+            "orientation": "horizontal",
+            "resolution": "4k",
+            "normalize_audio": True,
+            "audio_type": "surround_51", 
+            "burn_subtitles": False
+        }
+        
+        h_clean = {
+            "options": h_clean_opts,
+            "triggers": {
+                "on_no_sub": True,
+                "on_clean_copy_if_subs": True,
+                "on_scan_subs": False,
+                "suffix_filter": None 
+            }
+        }
+        
+        # 2. Vertical Hybrid Seam Hardsub (Replaces PRESET_WITH_SUBTITLES)
+        v_hybrid_opts = {
+            "orientation": "hybrid (stacked)",
+            "resolution": "4k",
+            "normalize_audio": True,
+            "audio_type": "mono",
+            "burn_subtitles": True,
+            "subtitle_alignment": "seam"
+        }
+        
+        v_hybrid = {
+            "options": v_hybrid_opts,
+            "triggers": {
+                "on_no_sub": False,
+                "on_clean_copy_if_subs": False,
+                "on_scan_subs": True,
+                "suffix_filter": None # Matches ALL (Wildcard)
+            }
+        }
+
+        # 3. Horizontal Hardsub (New for -cn)
+        h_hardsub_opts = copy.deepcopy(h_clean_opts) 
+        h_hardsub_opts["burn_subtitles"] = True
+        h_hardsub_opts["subtitle_alignment"] = "bottom"
+        h_hardsub_opts["orientation"] = "horizontal"
+        
+        h_hardsub = {
+            "options": h_hardsub_opts,
+            "triggers": {
+                "on_no_sub": False,
+                "on_clean_copy_if_subs": False,
+                "on_scan_subs": True,
+                "suffix_filter": "-cn" # Matches ONLY -cn
+            }
+        }
+
+        return {
+            "Horizontal Clean": h_clean,
+            "Vertical Hybrid Seam Hardsub": v_hybrid,
+            "Horizontal Hardsub (-cn)": h_hardsub
+        }
+
 class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
@@ -685,8 +864,15 @@ class VideoProcessorApp:
         self.root.geometry("1200x850")
         self.output_mode = output_mode
         self.processing_jobs = []
+        self.preset_manager = WorkflowPresetManager()
 
         # --- Initialize all tk Variables ---
+        self.current_preset_var = tk.StringVar(value=self.preset_manager.get_preset_names()[0] if self.preset_manager.get_preset_names() else "")
+        self.trigger_clean_mode_var = tk.StringVar(value="Always (Clean + Backup)") # Default: Always
+        self.trigger_scan_subs_var = tk.BooleanVar(value=False)
+        self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
+        self.trigger_suffix_var = tk.StringVar(value="")
+
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
@@ -803,8 +989,17 @@ class VideoProcessorApp:
         input_frame = ttk.Frame(main_pane, padding=5)
         main_pane.add(input_frame, weight=1)
 
-        settings_notebook = ttk.Notebook(main_pane)
-        main_pane.add(settings_notebook, weight=2)
+        # Right Side Container (Presets + Settings)
+        right_pane_frame = ttk.Frame(main_pane)
+        main_pane.add(right_pane_frame, weight=2)
+        
+        self.setup_presets_ui(right_pane_frame)
+        
+        right_pane_frame.rowconfigure(1, weight=1)
+        right_pane_frame.columnconfigure(0, weight=1)
+        
+        settings_notebook = ttk.Notebook(right_pane_frame)
+        settings_notebook.pack(fill='both', expand=True, pady=(5,0))
 
         # Bottom Bar with Progress
         bottom_frame = ttk.Frame(self.root)
@@ -833,6 +1028,14 @@ class VideoProcessorApp:
         self.setup_video_tab(video_tab)
         self.setup_audio_tab(audio_tab)
         self.setup_subtitle_tab(subtitle_tab)
+    
+        # Add Apply Buttons below settings
+        apply_frame = ttk.Frame(right_pane_frame)
+        apply_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5, padx=5)
+        
+        ttk.Button(apply_frame, text="Apply Preset & Settings to Selected Jobs", command=self.apply_preset_settings_to_selected).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        ttk.Button(apply_frame, text="Apply to ALL Jobs", command=self.apply_preset_settings_to_all).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+    
         self.setup_button_row(button_frame)
 
         self._toggle_orientation_options()
@@ -840,7 +1043,102 @@ class VideoProcessorApp:
         self._toggle_audio_norm_options()
         self._update_audio_options_ui() 
         self._update_bitrate_display()
+        
+        # Load initial preset
+        if self.current_preset_var.get():
+            self.load_preset_to_gui(self.current_preset_var.get())
 
+    def setup_presets_ui(self, parent):
+        preset_frame = ttk.LabelFrame(parent, text="Workflow Presets", padding=10)
+        preset_frame.pack(fill=tk.X, side=tk.TOP)
+        
+        # Row 1: Selection and CRUD
+        row1 = ttk.Frame(preset_frame)
+        row1.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(row1, text="Active Preset:").pack(side=tk.LEFT, padx=(0, 5))
+        self.preset_combo = ttk.Combobox(row1, textvariable=self.current_preset_var, values=self.preset_manager.get_preset_names(), state="readonly", width=30)
+        self.preset_combo.pack(side=tk.LEFT, padx=5)
+        self.preset_combo.bind("<<ComboboxSelected>>", lambda e: self.load_preset_to_gui(self.current_preset_var.get()))
+        
+        ttk.Button(row1, text="New Preset", command=self.create_new_preset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1, text="Save Changes", command=self.save_current_preset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1, text="Save As New...", command=self.save_preset_as_new).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1, text="Rename", command=self.rename_current_preset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1, text="Delete", command=self.delete_current_preset).pack(side=tk.LEFT, padx=5)
+
+        # Row 2: Auto-Assignment Triggers
+        # Row 2: Auto-Assignment Triggers
+        row2 = ttk.LabelFrame(preset_frame, text="Auto-Assignment Triggers (When to add this preset automatically)", padding=5)
+        row2.pack(fill=tk.X, pady=5)
+        
+        row2_1 = ttk.Frame(row2)
+        row2_1.pack(fill=tk.X, pady=2)
+        ttk.Label(row2_1, text="Auto-add Clean Version (No Subs):").pack(side=tk.LEFT, padx=(5, 5))
+        self.clean_mode_combo = ttk.Combobox(row2_1, textvariable=self.trigger_clean_mode_var, values=["Disabled", "Always (Clean + Backup)", "Only if No Subtitles (Fallback)"], state="readonly", width=35)
+        self.clean_mode_combo.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.clean_mode_combo, "Disabled: Never add this as a clean job.\nAlways: Add clean job even if subs found (Backup).\nOnly if No Subs: Add clean job ONLY if no subs found.")
+
+        scan_frame = ttk.Frame(row2)
+        scan_frame.pack(side=tk.TOP, fill=tk.X, anchor=tk.W, padx=5, pady=2)
+        
+        ttk.Checkbutton(scan_frame, text="Auto-add Job for found Subtitles", variable=self.trigger_scan_subs_var).pack(side=tk.TOP, anchor=tk.W)
+        
+        # Suffix constraint options indented under "Scan Subtitles"
+        constraint_frame = ttk.Frame(scan_frame)
+        constraint_frame.pack(side=tk.TOP, fill=tk.X, anchor=tk.W, padx=(25, 0), pady=0)
+        
+        ttk.Checkbutton(constraint_frame, text="Only match Suffix:", variable=self.trigger_suffix_enable_var).pack(side=tk.LEFT, padx=(0, 5))
+        
+        entry_widget = ttk.Entry(constraint_frame, textvariable=self.trigger_suffix_var, width=10)
+        entry_widget.pack(side=tk.LEFT, padx=5)
+        
+        ToolTip(constraint_frame, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Unchecked: Matches ALL subtitles.")
+
+        # Logic to toggle state of Suffix constraint based on Scan Subs checkbox
+        def update_ui_states(*args):
+             # 1. If Scan Subs is OFF, disable Suffix options completely
+            if not self.trigger_scan_subs_var.get():
+                for child in constraint_frame.winfo_children():
+                    child.state(['disabled'])
+            else:
+                # 2. If Scan Subs is ON, enable Checkbox
+                for child in constraint_frame.winfo_children():
+                    if "!entry" not in str(child): # Hacky way to skip entry for a moment
+                         child.state(['!disabled'])
+                
+                # 3. Entry is enabled only if Suffix Enable is ON
+                state = "normal" if self.trigger_suffix_enable_var.get() else "disabled"
+                entry_widget.config(state=state)
+
+        self.trigger_scan_subs_var.trace_add("write", update_ui_states)
+        self.trigger_suffix_enable_var.trace_add("write", update_ui_states)
+        
+        # Init state, wait a moment for widgets to be ready? No, direct call is fine usually.
+        # But we need to make sure the trace logic works.
+        # simpler approach:
+        def toggle_suffix_logic(*args):
+            scan_on = self.trigger_scan_subs_var.get()
+            suffix_filter_on = self.trigger_suffix_enable_var.get()
+            
+            # Suffix Checkbox State
+            # Note: tk state is !disabled or disabled
+            if scan_on:
+                # Re-enable checkbox
+                 # Accessing widget directly strictly could be hard without var ref, 
+                 # but we can rely on variable trace or widget refs if we kept them.
+                 # Actually, let's keep it simple.
+                 pass
+            
+            entry_state = "normal" if (scan_on and suffix_filter_on) else "disabled"
+            entry_widget.config(state=entry_state)
+            
+        # Re-binding logic more robustly
+        self.trigger_scan_subs_var.trace_add("write", lambda *a: toggle_suffix_logic())
+        self.trigger_suffix_enable_var.trace_add("write", lambda *a: toggle_suffix_logic())
+        
+        # We need to manually invoke this once after loading a preset or init
+        
     def setup_input_pane(self, parent):
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
@@ -1407,81 +1705,305 @@ class VideoProcessorApp:
             "sharpening_strength": self.sharpening_strength_var.get(),
         }
 
-    def _apply_workflow_preset(self, options, preset_config):
-        """Applies dictionary-based presets to the job options."""
-        if "orientation" in preset_config: options["orientation"] = preset_config["orientation"]
-        if "resolution" in preset_config: options["resolution"] = preset_config["resolution"]
-        if "normalize_audio" in preset_config: options["normalize_audio"] = preset_config["normalize_audio"]
-        if "burn_subtitles" in preset_config: options["burn_subtitles"] = preset_config["burn_subtitles"]
-        # FIX: Ensure alignment from preset is applied
-        if "subtitle_alignment" in preset_config: options["subtitle_alignment"] = preset_config["subtitle_alignment"]
+    def load_preset_to_gui(self, preset_name):
+        preset = self.preset_manager.get_preset(preset_name)
+        if not preset: return
+        
+        # 1. Load Options
+        # Wrap in a dummy job structure to reuse update_gui_from_job_options
+        dummy_job = {'options': preset['options']}
+        self.update_gui_from_job_options(dummy_job)
+        
+        # 2. Load Triggers
+        triggers = preset['triggers']
+        
+        on_no_sub = triggers.get('on_no_sub', False)
+        on_clean_copy = triggers.get('on_clean_copy_if_subs', False)
+        
+        if on_no_sub and on_clean_copy:
+            self.trigger_clean_mode_var.set("Always (Clean + Backup)")
+        elif on_no_sub and not on_clean_copy:
+            self.trigger_clean_mode_var.set("Only if No Subtitles (Fallback)")
+        else:
+            self.trigger_clean_mode_var.set("Disabled")
+            
+        self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
+        
+        suffix_val = triggers.get('suffix_filter')
+        if suffix_val is not None:
+            self.trigger_suffix_enable_var.set(True)
+            self.trigger_suffix_var.set(suffix_val)
+        else:
+            self.trigger_suffix_enable_var.set(False)
+            self.trigger_suffix_var.set("")
+            
+        self.current_preset_var.set(preset_name)
+    
+        # 3. Auto-Apply to Selected Jobs (Sync GUI -> Selection)
+        # If jobs are selected, apply this preset to them immediately.
+        selected_indices = self.job_listbox.curselection()
+        if selected_indices:
+            for index in selected_indices:
+                job = self.processing_jobs[index]
+                job['options'] = copy.deepcopy(preset['options'])
+                job['preset_name'] = preset_name
+                
+                # Use stored tag if available, else try to parse (legacy fallback)
+                tag = job.get('display_tag', "")
+                if not tag:
+                     # Fallback regex
+                     import re
+                     match = re.search(r'(.*) (\[.*\]) \[.*\]', job['display_name'])
+                     if match:
+                         tag = match.group(2)
+                
+                base_name = os.path.basename(job['video_path'])
+                job['display_name'] = f"{base_name} {tag} [{preset_name}]".strip()
+                     
+                self.job_listbox.delete(index)
+                self.job_listbox.insert(index, job['display_name'])
+                self.job_listbox.selection_set(index) # Reselect
 
-        if "audio_type" in preset_config:
-            options["audio_passthrough"] = False
-            options["audio_mono"] = False
-            options["audio_stereo_downmix"] = False
-            options["audio_stereo_sofalizer"] = False
-            options["audio_surround_51"] = False
+    def apply_preset_settings_to_selected(self):
+        """Applies current GUI settings (custom or preset) to selected jobs."""
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("Info", "No jobs selected.")
+            return
+            
+        current_options = self.get_current_gui_options()
+        preset_name = self.current_preset_var.get()
+        
+        for index in selected_indices:
+            self._update_job_at_index(index, current_options, preset_name)
+            
+        messagebox.showinfo("Success", f"Applied settings to {len(selected_indices)} job(s).")
 
-            atype = preset_config["audio_type"]
-            if atype == "passthrough": options["audio_passthrough"] = True
-            elif atype == "mono": options["audio_mono"] = True
-            elif atype == "stereo": options["audio_stereo_downmix"] = True
-            elif atype == "sofalizer": options["audio_stereo_sofalizer"] = True
-            elif atype == "surround_51": options["audio_surround_51"] = True
+    def apply_preset_settings_to_all(self):
+        """Applies current GUI settings to ALL jobs."""
+        if not self.processing_jobs: return
+        
+        current_options = self.get_current_gui_options()
+        preset_name = self.current_preset_var.get()
+        
+        for index in range(len(self.processing_jobs)):
+            self._update_job_at_index(index, current_options, preset_name)
+            
+        messagebox.showinfo("Success", f"Applied settings to all {len(self.processing_jobs)} job(s).")
+
+    def _update_job_at_index(self, index, options, preset_name):
+        job = self.processing_jobs[index]
+        job['options'] = copy.deepcopy(options)
+        job['preset_name'] = preset_name
+        
+        # Use stored tag
+        tag = job.get('display_tag', "")
+        # No fallback regex here needed if we ensure creation stores it. 
+        # But for safety if old jobs exist in list (unlikely in this session flow):
+        if not tag:
+             import re
+             match = re.search(r'(.*) (\[.*\]) \[.*\]', job['display_name'])
+             if match: tag = match.group(2)
+        
+        base_name = os.path.basename(job['video_path'])
+        job['display_name'] = f"{base_name} {tag} [{preset_name}]".strip()
+        
+        self.job_listbox.delete(index)
+        self.job_listbox.insert(index, job['display_name'])
+        self.job_listbox.selection_set(index)
+
+    def save_current_preset(self):
+        name = self.current_preset_var.get()
+        if not name: return
+        self._save_preset_internal(name)
+
+    def save_preset_as_new(self):
+        new_name = simpledialog.askstring("New Preset", "Enter name for new preset:")
+        if new_name:
+            if new_name in self.preset_manager.get_preset_names():
+                if not messagebox.askyesno("Overwrite?", f"Preset '{new_name}' already exists. Overwrite?"):
+                    return
+            self._save_preset_internal(new_name)
+            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self.current_preset_var.set(new_name)
+            self.load_preset_to_gui(new_name)
+
+    def _save_preset_internal(self, name):
+        options = self.get_current_gui_options()
+        
+        # Map Dropdown back to Booleans
+        mode = self.trigger_clean_mode_var.get()
+        on_no_sub = False
+        on_clean_copy = False
+        
+        if mode == "Always (Clean + Backup)":
+            on_no_sub = True
+            on_clean_copy = True
+        elif mode == "Only if No Subtitles (Fallback)":
+            on_no_sub = True
+            on_clean_copy = False
+            
+        triggers = {
+            "on_no_sub": on_no_sub,
+            "on_clean_copy_if_subs": on_clean_copy,
+            "on_scan_subs": self.trigger_scan_subs_var.get(),
+            "suffix_filter": self.trigger_suffix_var.get() if self.trigger_suffix_enable_var.get() else None
+        }
+        self.preset_manager.save_preset(name, options, triggers)
+        messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
+
+    def create_new_preset(self):
+        new_name = simpledialog.askstring("New Preset", "Enter name for new preset:")
+        if not new_name: return
+        
+        if new_name in self.preset_manager.get_preset_names():
+             messagebox.showerror("Error", f"Preset '{new_name}' already exists.")
+             return
+
+        # Load defaults from 'Horizontal Clean' as a safe base
+        defaults = self.preset_manager.get_default_presets()["Horizontal Clean"]
+        
+        # Save new preset
+        self.preset_manager.save_preset(new_name, defaults['options'], defaults['triggers'])
+        
+        # Update UI
+        self.preset_combo['values'] = self.preset_manager.get_preset_names()
+        self.current_preset_var.set(new_name)
+        self.load_preset_to_gui(new_name)
+        messagebox.showinfo("Success", f"Created new preset '{new_name}' from defaults.")
+
+    def rename_current_preset(self):
+        old_name = self.current_preset_var.get()
+        if not old_name: return
+        
+        new_name = simpledialog.askstring("Rename Preset", f"Enter new name for '{old_name}':", initialvalue=old_name)
+        if not new_name or new_name == old_name: return
+        
+        if new_name in self.preset_manager.get_preset_names():
+            messagebox.showerror("Error", f"Preset '{new_name}' already exists.")
+            return
+            
+        if self.preset_manager.rename_preset(old_name, new_name):
+            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self.current_preset_var.set(new_name)
+            messagebox.showinfo("Success", f"Renamed '{old_name}' to '{new_name}'.")
+        else:
+            messagebox.showerror("Error", "Failed to rename preset.")
+
+    def delete_current_preset(self):
+        name = self.current_preset_var.get()
+        if not name: return
+        if messagebox.askyesno("Delete Preset", f"Are you sure you want to delete '{name}'?"):
+            self.preset_manager.delete_preset(name)
+            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            
+            # Select another if available
+            remaining = self.preset_manager.get_preset_names()
+            if remaining:
+                self.current_preset_var.set(remaining[0])
+                self.load_preset_to_gui(remaining[0])
+            else:
+                self.current_preset_var.set("")
 
     def add_video_files_and_discover_jobs(self, file_paths):
         for video_path in file_paths:
             video_path = os.path.abspath(video_path)
             dir_name, video_basename = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
-            current_options = self.get_current_gui_options()
             
-            # 1. Base Job (No Subtitles)
-            no_sub_job = {
-                "job_id": f"job_{time.time()}_{len(self.processing_jobs)}",
-                "video_path": video_path,
-                "subtitle_path": None,
-                "options": copy.deepcopy(current_options)
-            }
-            self._apply_workflow_preset(no_sub_job['options'], PRESET_NO_SUBTITLES)
-            no_sub_job["display_name"] = f"{os.path.basename(video_path)} [No Subtitles]"
-            self.processing_jobs.append(no_sub_job)
-            self.job_listbox.insert(tk.END, no_sub_job["display_name"])
-
-            # 2. External .srt
+            # --- Step 1: Detect Subtitles ---
+            detected_subs = []
+            
+            # 1a. Scan for External .srt
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
                         srt_basename = os.path.splitext(item)[0]
-                        if srt_basename == video_basename or (srt_basename.startswith(video_basename) and len(srt_basename) > len(video_basename) and srt_basename[len(video_basename)] in [' ', '.', '-', '_']):
-                            full_path = os.path.join(dir_name, item)
-                            tag = srt_basename[len(video_basename):].strip(' .-_') or "(exact match)"
-                            
-                            sub_job = copy.deepcopy(no_sub_job)
-                            sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
-                            sub_job['subtitle_path'] = full_path
-                            self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
-                            sub_job['display_name'] = f"{os.path.basename(video_path)} [Sub: {tag}]"
-                            self.processing_jobs.append(sub_job)
-                            self.job_listbox.insert(tk.END, sub_job['display_name'])
+                        if srt_basename == video_basename:
+                            # Exact match -> Suffix is empty string (default)
+                            detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': srt_basename})
+                        elif srt_basename.startswith(video_basename):
+                            remainder = srt_basename[len(video_basename):]
+                            # Check if valid suffix (starts with separator)
+                            if remainder and remainder[0] in [' ', '.', '-', '_']:
+                                full_path = os.path.join(dir_name, item)
+                                # Store the raw basename of the SRT for flexible matching
+                                detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': srt_basename})
             except Exception as e:
-                print(f"[WARN] Could not scan for external subtitles in {dir_name}: {e}")
+                print(f"[WARN] Error scanning external subs: {e}")
 
-            # 3. Embedded Subtitles
+            # 1b. Scan for Embedded Subtitles
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
                 lang = tags.get("language", "und")
                 title = tags.get("title", f"Track {sub_stream.get('index')}")
-                codec = sub_stream.get('codec_name', 'sub').upper()
+                # Embedded subs have empty suffix (conceptually standard/default)
+                detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
+
+            has_subs = len(detected_subs) > 0
+
+            # --- Step 2: Iterate Presets & Triggers ---
+            # --- Step 2: Iterate Presets & Triggers ---
+            # 2a. First, collect ALL specific suffix filters from ALL presets
+            # This allows us to implement "Exclusive" logic (Wildcards yield to Specifics)
+            specific_suffix_filters = set()
+            for p_name in self.preset_manager.get_preset_names():
+                p = self.preset_manager.get_preset(p_name)
+                s_filter = p['triggers'].get('suffix_filter')
+                if s_filter: 
+                     specific_suffix_filters.add(s_filter)
+
+            for preset_name in self.preset_manager.get_preset_names():
+                preset = self.preset_manager.get_preset(preset_name)
+                triggers = preset['triggers']
                 
-                sub_job = copy.deepcopy(no_sub_job)
-                sub_job['job_id'] = f"job_{time.time()}_{len(self.processing_jobs)}"
-                sub_job['subtitle_path'] = f"embedded:{relative_index}"
-                self._apply_workflow_preset(sub_job['options'], PRESET_WITH_SUBTITLES)
-                sub_job['display_name'] = f"{os.path.basename(video_path)} [Embedded: {lang.title()} - {title} ({codec})]"
-                self.processing_jobs.append(sub_job)
-                self.job_listbox.insert(tk.END, sub_job['display_name'])
+                # --- Trigger 1: On NO Subtitles ---
+                if not has_subs and triggers.get('on_no_sub'):
+                    self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+
+                # --- Trigger 2: Clean Copy when Video HAS Subtitles ---
+                if has_subs and triggers.get('on_clean_copy_if_subs'):
+                     self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles (Clean)]")
+
+                # --- Trigger 3: Scan Subtitles ---
+                if has_subs and triggers.get('on_scan_subs'):
+                    filter_suffix = triggers.get('suffix_filter')
+                    
+                    for sub in detected_subs:
+                        match = False
+                        
+                        if filter_suffix is None:
+                            # Wildcard: Matches EVERYTHING...
+                            # UNLESS it is specifically handled by another preset!
+                            
+                            is_claimed_specifically = False
+                            for specific in specific_suffix_filters:
+                                # Re-use the "endswith" logic or equality logic for robustness
+                                if specific == "":
+                                    if sub['suffix'] == "": is_claimed_specifically = True
+                                else:
+                                    if sub['basename'] and sub['basename'].endswith(specific): is_claimed_specifically = True
+                                    elif sub['suffix'] == specific: is_claimed_specifically = True
+                            
+                            if not is_claimed_specifically:
+                                match = True
+                            
+                        elif filter_suffix == "":
+                            # Strict Empty: Matches Exact Basename OR Embedded
+                            # i.e. sub['suffix'] == ""
+                            if sub['suffix'] == "":
+                                match = True
+                                
+                        else:
+                            # Specific Suffix (e.g. "-cn")
+                            # Use endswith() on the SRT basename to handle cases like "Video_Subtitle 2-cn.srt"
+                            if sub['basename'] and sub['basename'].endswith(filter_suffix):
+                                match = True
+                            elif sub['suffix'] == filter_suffix: # Fallback for equality
+                                match = True
+                            
+                        if match:
+                             self._create_job_entry(video_path, sub['path'], preset['options'], preset_name, sub['display_tag'])
 
         if self.processing_jobs:
             self.job_listbox.selection_clear(0, tk.END)
@@ -1489,11 +2011,67 @@ class VideoProcessorApp:
             self.on_input_file_select(None)
         self._update_bitrate_display()
 
+    def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
+        new_job = {
+            "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
+            "video_path": video_path,
+            "subtitle_path": subtitle_path,
+            "options": copy.deepcopy(options),
+            "preset_name": preset_name, # Store preset name
+            "display_tag": display_tag   # Store tag permanently
+        }
+        new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
+        self.processing_jobs.append(new_job)
+        self.job_listbox.insert(tk.END, new_job["display_name"])
+
     def on_input_file_select(self, event=None):
         sel = self.job_listbox.curselection()
         if len(sel) == 1:
+            # Single Select: Sync Selection -> GUI
             selected_job = self.processing_jobs[sel[0]]
-            self.update_gui_from_job_options(selected_job)
+            
+            # Load the preset of this job into the GUI
+            # Note: This might overwrite some manual changes if we strictly reload the preset.
+            # But user wants "preset name and setting in the gui needs to also switch".
+            # If the job has a known preset, we load it.
+            preset_name = selected_job.get('preset_name')
+            if preset_name and preset_name in self.preset_manager.get_preset_names():
+                 # We avoid calling load_preset_to_gui because that triggers "Apply to Selected" logic!
+                 # We must manually update the GUI variables to match the Job (which might be custom)
+                 # and just set the Combobox to the name.
+                 
+                 self.current_preset_var.set(preset_name)
+                 self.update_gui_from_job_options(selected_job)
+                 
+                 # Also update triggers UI? 
+                 # The job doesn't store triggers, only the preset does.
+                 # If we want to show the preset's triggers, we fetch them.
+                 preset = self.preset_manager.get_preset(preset_name)
+                 if preset:
+                     triggers = preset['triggers']
+                     
+                     on_no_sub = triggers.get('on_no_sub', False)
+                     on_clean = triggers.get('on_clean_copy_if_subs', False)
+                     if on_no_sub and on_clean:
+                         self.trigger_clean_mode_var.set("Always (Clean + Backup)")
+                     elif on_no_sub and not on_clean:
+                         self.trigger_clean_mode_var.set("Only if No Subtitles (Fallback)")
+                     else:
+                         self.trigger_clean_mode_var.set("Disabled")
+                         
+                     self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
+                     suffix_val = triggers.get('suffix_filter')
+                     if suffix_val is not None:
+                         self.trigger_suffix_enable_var.set(True)
+                         self.trigger_suffix_var.set(suffix_val)
+                     else:
+                        self.trigger_suffix_enable_var.set(False)
+                        self.trigger_suffix_var.set("")
+            else:
+                self.current_preset_var.set("") # Custom or Unknown
+                self.update_gui_from_job_options(selected_job)
+                
+        # Multi-Select: Do NOTHING (Keep current GUI state)
 
     def update_gui_from_job_options(self, job):
         options = job['options']
@@ -1683,8 +2261,7 @@ class VideoProcessorApp:
                 h_aspect = options.get('horizontal_aspect').replace(':', 'x')
                 if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
             
-            tag_match = re.search(r'(\[.*\])', job['display_name'])
-            tag = tag_match.group(1) if tag_match else "Subtitles"
+            tag = job.get('display_tag', "Subtitles")
             safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
             final_sub_path = os.path.join(folder_name, safe_subtitle_folder_name)
         else:
@@ -1715,12 +2292,16 @@ class VideoProcessorApp:
                     if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
                         res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
                         target_w = width_map.get(res_key, 1080)
-                        num_top, den_top = map(int, options.get('hybrid_top_aspect').split(':')); top_h = (int(target_w * den_top / num_top) // 2) * 2
-                        num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect').split(':')); bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
-                        total_real_h = top_h + bot_h
-                        if total_real_h > 0:
-                            seam_y_on_canvas = int((top_h / total_real_h) * 1080)
-                            options["calculated_pos"] = (960, seam_y_on_canvas)
+                        try:
+                            num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                            num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
+                            top_h = (int(target_w * den_top / num_top) // 2) * 2; bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
+                            total_real_h = top_h + bot_h
+                            if total_real_h > 0:
+                                seam_y_on_canvas = int((top_h / total_real_h) * 1080)
+                                options["calculated_pos"] = (960, seam_y_on_canvas)
+                        except (ValueError, AttributeError, ZeroDivisionError):
+                            print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                     ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
                     if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
             
@@ -1758,20 +2339,38 @@ class VideoProcessorApp:
             audio_cmd_parts.pop(audio_fc_index)
         except ValueError: pass
         if orientation == "hybrid (stacked)":
-            res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
-            target_w = width_map.get(res_key, 1080)
+            res_key = options.get('resolution')
+            width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+            target_w = width_map.get(res_key)
+            if target_w is None: 
+                raise VideoProcessingError(f"Invalid resolution '{res_key}' for Hybrid mode. Must be HD, 4k, or 8k.")
+            
             def get_block_filters(aspect_str, mode, upscale_algo):
-                num, den = map(int, aspect_str.split(':')); target_h = (int(target_w * den / num) // 2) * 2
+                if not aspect_str: raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")
+                if not mode: raise VideoProcessingError("Missing Mode setting in preset (Hybrid block).")
+                if not upscale_algo: raise VideoProcessingError("Missing Upscale Algorithm setting in preset.")
+                
+                try:
+                    num, den = map(int, aspect_str.split(':'))
+                except (ValueError, AttributeError):
+                    raise VideoProcessingError(f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
+                
+                target_h = (int(target_w * den / num) // 2) * 2
                 scale = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={upscale_algo}"
                 if mode == 'stretch': return scale, "", target_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
                 cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black" if mode == 'pad' else f"crop={target_w}:{target_h}"
                 return vf, cpu, target_h
-            top_vf, top_cpu, _ = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), options.get('upscale_algo'))
-            bot_vf, bot_cpu, _ = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), options.get('upscale_algo'))
+
+            safe_algo = options.get('upscale_algo')
+            if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
+            
+            top_vf, top_cpu, _ = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
+            bot_vf, bot_cpu, _ = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo)
+            
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
@@ -1791,15 +2390,38 @@ class VideoProcessorApp:
         else:
             vf_filters, cpu_filters = [], []
             if orientation != "original":
-                res_key, aspect_str = (options.get('resolution'), options.get('vertical_aspect')) if orientation == "vertical" else (options.get('resolution'), options.get('horizontal_aspect'))
-                width_map = {"HD": 1080, "4k": 2160, "8k": 4320} if orientation == "vertical" else {"HD": 1920, "4k": 3840, "8k": 7680}
-                target_w = width_map.get(res_key, 1920); num, den = map(int, aspect_str.split(':')); target_h = int(target_w * den / num)
+                res_key = options.get('resolution')
+                if orientation == "vertical":
+                    aspect_str = options.get('vertical_aspect')
+                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    if not aspect_str: raise VideoProcessingError("Missing 'Vertical Aspect Ratio' in preset.")
+                else:
+                    aspect_str = options.get('horizontal_aspect')
+                    width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
+                    if not aspect_str: raise VideoProcessingError("Missing 'Horizontal Aspect Ratio' in preset.")
+                
+                target_w = width_map.get(res_key)
+                if target_w is None:
+                    raise VideoProcessingError(f"Invalid resolution '{res_key}' for {orientation} mode. Must be HD, 4k, or 8k.")
+                    
+                try:
+                    num, den = map(int, aspect_str.split(':'))
+                except (ValueError, AttributeError):
+                    raise VideoProcessingError(f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
+                    
+                target_h = int(target_w * den / num)
                 target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
-                scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={options.get('upscale_algo')}"
-                if options.get("aspect_mode") == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
-                elif options.get("aspect_mode") == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
+                
+                safe_algo = options.get('upscale_algo')
+                if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
+                
+                scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                
+                aspect_mode = options.get("aspect_mode", "pad")
+                if aspect_mode == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
+                elif aspect_mode == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
-            if info["is_hdr"] and not is_hdr_output and os.path.exists(options.get("lut_file", "")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
@@ -1895,6 +2517,11 @@ class VideoProcessorApp:
             print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-"*80)
             try:
                 orientation = job['options'].get("orientation", "horizontal")
+                resolution = job['options'].get("resolution", "Unknown")
+                print(f"[DEBUG] Job: {job['display_name']}")
+                print(f"[DEBUG] Orientation: {orientation}")
+                print(f"[DEBUG] Resolution: {resolution}")
+                
                 if orientation == "horizontal + vertical":
                     self.build_ffmpeg_command_and_run(job, "horizontal")
                     self.build_ffmpeg_command_and_run(job, "vertical")

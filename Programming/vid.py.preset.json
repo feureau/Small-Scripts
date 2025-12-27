@@ -1,0 +1,125 @@
+{
+    "Horizontal Clean": {
+        "options": {
+            "orientation": "horizontal",
+            "resolution": "4k",
+            "normalize_audio": true,
+            "audio_type": "surround_51",
+            "burn_subtitles": false
+        },
+        "triggers": {
+            "on_no_sub": true,
+            "on_clean_copy_if_subs": true,
+            "on_scan_subs": false,
+            "suffix_filter": null
+        }
+    },
+    "Horizontal Hardsub (-cn)": {
+        "options": {
+            "orientation": "horizontal",
+            "resolution": "4k",
+            "normalize_audio": true,
+            "audio_type": "surround_51",
+            "burn_subtitles": true,
+            "subtitle_alignment": "bottom"
+        },
+        "triggers": {
+            "on_no_sub": false,
+            "on_clean_copy_if_subs": false,
+            "on_scan_subs": true,
+            "suffix_filter": "-cn"
+        }
+    },
+    "Vertical Hybrid Seam Hardsub HD": {
+        "options": {
+            "resolution": "HD",
+            "upscale_algo": "bicubic",
+            "output_format": "sdr",
+            "fruc": false,
+            "fruc_fps": "60",
+            "generate_log": false,
+            "orientation": "hybrid (stacked)",
+            "aspect_mode": "crop",
+            "horizontal_aspect": "16:9",
+            "vertical_aspect": "4:5",
+            "burn_subtitles": true,
+            "override_bitrate": false,
+            "manual_bitrate": "90000",
+            "use_dynaudnorm": true,
+            "dyn_frame_len": "100",
+            "dyn_gauss_win": "3",
+            "dyn_peak": "1.0",
+            "dyn_max_gain": "100.0",
+            "use_loudness_war": true,
+            "comp_threshold": "-60",
+            "comp_ratio": "3",
+            "comp_attack": "0.7",
+            "comp_release": "50",
+            "comp_makeup": "12",
+            "limit_limit": "0",
+            "measure_loudness": false,
+            "normalize_audio": true,
+            "loudness_target": "-13",
+            "loudness_range": "7",
+            "true_peak": "-1.0",
+            "audio_mono": false,
+            "audio_stereo_downmix": false,
+            "audio_stereo_sofalizer": false,
+            "audio_surround_51": false,
+            "audio_passthrough": true,
+            "sofa_file": "",
+            "lut_file": "",
+            "hybrid_top_aspect": "16:9",
+            "hybrid_top_mode": "crop",
+            "hybrid_bottom_aspect": "4:5",
+            "hybrid_bottom_mode": "crop",
+            "subtitle_font": "HelveticaNeueLT Std Blk",
+            "subtitle_font_size": "32",
+            "subtitle_alignment": "seam",
+            "subtitle_bold": true,
+            "subtitle_italic": false,
+            "subtitle_underline": false,
+            "subtitle_margin_v": "335",
+            "subtitle_margin_l": "50",
+            "subtitle_margin_r": "100",
+            "fill_color": "#FFAA00",
+            "fill_alpha": 0,
+            "outline_color": "#000000",
+            "outline_alpha": 0,
+            "outline_width": "9",
+            "shadow_color": "#202020",
+            "shadow_alpha": 120,
+            "shadow_offset_x": "2",
+            "shadow_offset_y": "4",
+            "shadow_blur": "5",
+            "reformat_subtitles": true,
+            "wrap_limit": "42",
+            "output_to_subfolders": false,
+            "use_sharpening": true,
+            "sharpening_algo": "unsharp",
+            "sharpening_strength": "0.5"
+        },
+        "triggers": {
+            "on_no_sub": false,
+            "on_clean_copy_if_subs": false,
+            "on_scan_subs": true,
+            "suffix_filter": null
+        }
+    },
+    "Vertical Hybrid Seam Hardsub 4K": {
+        "options": {
+            "orientation": "hybrid (stacked)",
+            "resolution": "4k",
+            "normalize_audio": true,
+            "audio_type": "mono",
+            "burn_subtitles": true,
+            "subtitle_alignment": "seam"
+        },
+        "triggers": {
+            "on_no_sub": false,
+            "on_clean_copy_if_subs": false,
+            "on_scan_subs": true,
+            "suffix_filter": null
+        }
+    }
+}
