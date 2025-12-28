@@ -1,18 +1,56 @@
 
 """
-================================================================================
-Multimodal AI Batch Processor (GPTBatcher) v25.6
-================================================================================
-Updates in v25.6:
-- ✅ FEATURE: Added "Enforce Schema" sub-option for JSON validation.
-         Ensures output contains: title, description, hashtags, tags.
-Updates in v25.5:
-- ✅ FEATURE: Added "Stream Output" checkbox to GUI.
-- ✅ FEATURE: Streaming enabled by default for new sessions.
-Updates in v25.4:
-- ✅ FEATURE: Real-time console streaming implemented for Google, Ollama, & LM Studio.
-- ✅ FEATURE: Added "Clean Markdown Fences" GUI option (auto-removes ``` wrappers).
-================================================================================
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.7
+
+A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
+
+---
+
+## ✨ Key Features
+
+- **🌐 Multi-Engine Support**: Native integration with Google Gemini (via Files API), Ollama, and LM Studio.
+- **🖼️ Multimodal Power**: Batch upload images and documents for analysis, OCR, or creative tasks.
+- **📦 Intelligent Grouping**: Process files individually or group them (e.g., 3 images per prompt) to save tokens and context.
+- **🔄 Upload Modes**: 
+  - **Parallel**: High-speed multi-threaded uploads (internal ordering preserved).
+  - **Sequential**: Strict one-by-one uploading for reliable logging and order.
+- **🎯 Precision Control**: 
+  - **JSON Validation**: Enforce valid JSON output with optional schema checks.
+  - **Markdown Cleanup**: Automatically strip ```json wrappers for clean raw data.
+  - **Prompt Templates**: Save and switch between custom processing presets.
+- **🌊 Real-time Feedback**: Live console streaming and detailed processing logs.
+- **🛡️ Safety & Reliability**: Integrated safety filters, custom job delays, and automatic retries for failed jobs.
+
+---
+
+## 🛠️ Configuration & Setup
+
+1. **Google API Key**: Set your `GOOGLE_API_KEY` environment variable or enter it directly via the GUI.
+2. **Local Engines**: Ensure Ollama or LM Studio are running locally (defaults to standard ports).
+3. **Output Structure**:
+   - `processing_logs/`: Detailed metadata, prompts, and timestamps for every job.
+   - `failed/`: Automatic backups of files that failed to process.
+
+---
+
+## 📜 Recent Changelog
+
+### v25.7
+- ✅ **FEATURE**: Added "Upload Mode" (Parallel/Sequential) radio buttons.
+- ✅ **IMPROVEMENT**: Human-readable error messages for Google Finish Reasons (e.g., "Max Tokens", "Safety").
+- ✅ **BUGFIX**: Fixed status stuck on "Waiting for User" after quota recovery.
+- ✅ **IMPROVEMENT**: Enhanced documentation header with GitHub-style formatting.
+
+### v25.6
+- ✅ **FEATURE**: Added "Enforce Schema" sub-option for JSON validation (title, description, hashtags, tags).
+
+---
+
+## ⚖️ License & Credits
+Developed by Feureau. Designed for efficiency, reliability, and precision in AI-assisted workflows.
+
+> [!IMPORTANT]
+> This documentation block is a core part of the script and **must** be updated with every feature addition, bug fix, or logic change.
 """
 
 
@@ -105,6 +143,19 @@ LOG_SUBFOLDER_NAME = "processing_logs"
 FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
+
+GOOGLE_FINISH_REASONS = {
+    0: "Unspecified: The finish reason is unspecified.",
+    1: "Stop: The model completed the response naturally.",
+    2: "Max Tokens: The response exceeded the maximum token limit. Try increasing the limit or shortening the prompt.",
+    3: "Safety: The content was blocked by safety settings. Adjust safety filters in the 'Safety' tab.",
+    4: "Recitation: The model was blocked to prevent copyright infringement or exact recitation.",
+    5: "Other: An unknown error occurred.",
+    6: "Blocklist: The content contained blocked terms or text.",
+    7: "Prohibited: The content referenced prohibited topics.",
+    8: "SPII: The content was blocked because it may contain Sensitive Personally Identifiable Information.",
+    9: "Malicious: The content was flagged as potentially malicious."
+}
 
 ################################################################################
 # --- Core Logic & Helpers ---
@@ -205,22 +256,39 @@ def upload_image_file(path, retries=3):
     console_log(f"❌ [UPLOAD FAILED] {path}: {last_error}", "ERROR")
     return None, False
 
-def upload_images_parallel(image_paths, max_workers=4):
-    uploaded_files = []
+def upload_images_parallel(image_paths, max_workers=4, sequential=False):
+    uploaded_files = [None] * len(image_paths)
     if not image_paths: return []
         
     console_log(f"Preparing {len(image_paths)} images...", "INFO")
     cached_count = 0
     new_upload_count = 0
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(upload_image_file, p): p for p in image_paths}
-        for future in as_completed(futures):
-            file_obj, was_cached = future.result()
-            if file_obj:
-                uploaded_files.append(file_obj)
-                if was_cached: cached_count += 1
-                else: new_upload_count += 1
+    if sequential:
+        files_list = []
+        for i, p in enumerate(image_paths):
+             file_obj, was_cached = upload_image_file(p)
+             if file_obj:
+                 files_list.append(file_obj)
+                 if was_cached: cached_count += 1
+                 else: new_upload_count += 1
+        uploaded_files = files_list
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {executor.submit(upload_image_file, p): i for i, p in enumerate(image_paths)}
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    file_obj, was_cached = future.result()
+                    if file_obj:
+                        uploaded_files[index] = file_obj
+                        if was_cached: cached_count += 1
+                        else: new_upload_count += 1
+                except Exception as e:
+                    console_log(f"Error uploading image at index {index}: {e}", "ERROR")
+        
+        # Filter out Nones (failed uploads)
+        uploaded_files = [f for f in uploaded_files if f is not None]
     
     msg = f"Ready: {len(uploaded_files)} images."
     details = []
@@ -340,10 +408,9 @@ def call_google_gemini_api(prompt_text, api_key, model_name, google_file_objects
             return full_text
         else:
             if response.candidates and response.candidates[0].finish_reason != 1:
-                reason = response.candidates[0].finish_reason
-                msg = f"Fatal: Blocked by Google (Finish Reason: {reason})"
-                if reason == 4: msg += " [COPYRIGHT/RECITATION]"
-                elif reason == 3: msg += " [SAFETY]"
+                reason_code = response.candidates[0].finish_reason
+                reason_desc = GOOGLE_FINISH_REASONS.get(reason_code, f"Unknown Reason ({reason_code})")
+                msg = f"Fatal: Blocked by Google. Reason: {reason_desc}"
                 raise FatalProcessingError(msg)
 
             if not response.parts and response.prompt_feedback:
@@ -502,7 +569,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         # 1. Handle Images
         if image_files:
             if engine == "google":
-                google_file_objects = upload_images_parallel(image_files)
+                sequential_upload = kwargs.get('sequential_upload', False)
+                google_file_objects = upload_images_parallel(image_files, sequential=sequential_upload)
             else:
                 for img_path in image_files:
                     content, mime, _, err = read_file_content(img_path)
@@ -736,6 +804,9 @@ class AppGUI(tk.Tk):
         self.delay_min_var = tk.IntVar(value=0)
         self.delay_sec_var = tk.IntVar(value=0)
 
+        # Upload Mode (Parallel vs Sequential)
+        self.upload_mode_var = tk.StringVar(value=getattr(self.args, 'upload_mode', 'parallel'))
+
         self.create_widgets()
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
@@ -837,12 +908,19 @@ class AppGUI(tk.Tk):
         self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
         self.json_keys_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
         
+        # Upload Mode Radio Buttons
+        ttk.Label(tab_out, text="Upload Mode:").grid(row=7, column=0, sticky="w", pady=(5, 0))
+        u_frame = ttk.Frame(tab_out)
+        u_frame.grid(row=7, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
+        ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
+
         self.stream_check = ttk.Checkbutton(tab_out, text="Stream Output to Console", variable=self.stream_var)
-        self.stream_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.stream_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=8, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=9, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
@@ -908,6 +986,7 @@ class AppGUI(tk.Tk):
             set_var(self.clean_markdown_var, 'clean_markdown', True) 
             set_var(self.delay_min_var, 'delay_min', 0)
             set_var(self.delay_sec_var, 'delay_sec', 0)
+            set_var(self.upload_mode_var, 'upload_mode', 'parallel')
             self.ollama_search_var.set(False)
             
             self.toggle_overwrite()
@@ -928,7 +1007,9 @@ class AppGUI(tk.Tk):
             'validate_json_keys': self.validate_keys_var.get(), # Save new setting
             'clean_markdown': self.clean_markdown_var.get(),
             'delay_min': self.delay_min_var.get(),
-            'delay_sec': self.delay_sec_var.get()
+            'delay_min': self.delay_min_var.get(),
+            'delay_sec': self.delay_sec_var.get(),
+            'upload_mode': self.upload_mode_var.get()
         }
 
     def save_current_preset(self):
@@ -1086,7 +1167,8 @@ class AppGUI(tk.Tk):
                 'validate_json': self.validate_json_var.get(),
                 'validate_json_keys': self.validate_keys_var.get(), # Pass new setting
                 'clean_markdown': self.clean_markdown_var.get(),
-                'job_delay_seconds': total_delay
+                'job_delay_seconds': total_delay,
+                'sequential_upload': (self.upload_mode_var.get() == 'sequential')
             }
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
@@ -1233,6 +1315,7 @@ class AppGUI(tk.Tk):
                             params['model_name'] = new_model
                             if new_engine == 'google': params['api_key'] = self.api_key
                             self.after(0, lambda: self.update_tree_models(new_model))
+                            self.result_queue.put({'job_id': jid, 'status': 'Running'})
                             attempt -= 1 
                             continue 
                         else:
