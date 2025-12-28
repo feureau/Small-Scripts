@@ -882,7 +882,18 @@ def main():
     parser.add_argument("--logprob_threshold", type=float, default=DEFAULT_LOGPROB_THRESHOLD)
     parser.add_argument("--compression_ratio_threshold", type=float, default=DEFAULT_COMPRESSION_RATIO_THRESHOLD)
 
+    # Quick mode flag
+    parser.add_argument("-q", "--quick", action="store_true", help="Quick transcription: use turbo model with VAD enabled, disable heavy preprocessing")
+
     args = parser.parse_args()
+
+    # Apply quick mode settings
+    if args.quick:
+        args.model = "turbo"
+        args.use_vad = True
+        args.enhance = False
+        args.isolate = False
+        args.cl = False
 
     # Finalize pipeline for default behaviors if no flags were passed
     if not hasattr(args, 'pipeline'):

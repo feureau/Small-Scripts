@@ -137,13 +137,30 @@ DEFAULT_RESOLUTION = "4k"                           # Output resolution. Default
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
 DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
 DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
-DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch
+DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate
+DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
+DEFAULT_PIXELATE_BRIGHTNESS = "-0.4"                # Background brightness adjustment. Default: -0.4
+DEFAULT_PIXELATE_SATURATION = "0.6"                  # Background saturation adjustment. Default: 0.6
+DEFAULT_BLUR_SIGMA = "30"                           # Blur strength for background. Default: 30, Range: 0.5 to 100+
+DEFAULT_BLUR_STEPS = "1"                            # Blur quality iterations. Default: 1, Range: 1 to 6
 DEFAULT_HORIZONTAL_ASPECT = "16:9"                  # Horizontal aspect ratio. Default: 16:9, Common: 16:9, 21:9, 4:3
 DEFAULT_VERTICAL_ASPECT = "4:5"                     # Vertical aspect ratio. Default: 4:5, Common: 4:5, 9:16
 DEFAULT_FRUC = False                                # Enable frame rate up-conversion. Default: False
 DEFAULT_FRUC_FPS = "60"                             # Target FPS for FRUC. Default: 60, Range: 30 to 120
-DEFAULT_BURN_SUBTITLES = False                      # Burn subtitles into video. Default: False
+DEFAULT_BURN_SUBTITLES = True                       # Burn subtitles into video. Default: True
 DEFAULT_USE_SHARPENING = True                       # Enable video sharpening. Default: True
+
+# --- Encoder Config Group ---
+DEFAULT_NVENC_PRESET = "p1"                         # NVENC preset. Options: p1 to p7 (p1 is fastest/lowest quality)
+DEFAULT_NVENC_TUNE = "hq"                           # NVENC tuning. Options: hq, ll, ull, lossless
+DEFAULT_NVENC_PROFILE_SDR = "high"                  # NVENC profile for SDR. Options: high, main, baseline
+DEFAULT_NVENC_PROFILE_HDR = "main10"                # NVENC profile for HDR. Options: main10
+DEFAULT_NVENC_RC_LOOKAHEAD = "32"                   # Rate control lookahead. Default: 32
+DEFAULT_NVENC_MULTIPASS = "fullres"                 # Multipass mode. Options: disabled, qres, fullres
+DEFAULT_NVENC_SPATIAL_AQ = "1"                      # Spatial AQ. Default: 1 (Enabled)
+DEFAULT_NVENC_TEMPORAL_AQ = "1"                     # Temporal AQ. Default: 1 (Enabled)
+DEFAULT_NVENC_BFRAMES = "4"                         # Number of B-frames. Default: 4
+DEFAULT_NVENC_B_REF_MODE = "middle"                 # B-frame reference mode. Default: middle
 DEFAULT_SHARPENING_ALGO = "unsharp"                 # Sharpening algorithm. Default: cas, Options: cas, unsharp
 DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Default: 0.5, Range: 0.0 to 1.0
 
@@ -672,6 +689,11 @@ class WorkflowPresetManager:
             "output_format": DEFAULT_OUTPUT_FORMAT,
             "orientation": DEFAULT_ORIENTATION,
             "aspect_mode": DEFAULT_ASPECT_MODE,
+            "pixelate_multiplier": DEFAULT_PIXELATE_MULTIPLIER,
+            "pixelate_brightness": DEFAULT_PIXELATE_BRIGHTNESS,
+            "pixelate_saturation": DEFAULT_PIXELATE_SATURATION,
+            "blur_sigma": DEFAULT_BLUR_SIGMA,
+            "blur_steps": DEFAULT_BLUR_STEPS,
             "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
             "hybrid_top_aspect": "16:9",
@@ -730,6 +752,16 @@ class WorkflowPresetManager:
             "shadow_blur": DEFAULT_SHADOW_BLUR,
             "reformat_subtitles": DEFAULT_REFORMAT_SUBTITLES,
             "wrap_limit": DEFAULT_WRAP_LIMIT,
+            "nvenc_preset": DEFAULT_NVENC_PRESET,
+            "nvenc_tune": DEFAULT_NVENC_TUNE,
+            "nvenc_profile_sdr": DEFAULT_NVENC_PROFILE_SDR,
+            "nvenc_profile_hdr": DEFAULT_NVENC_PROFILE_HDR,
+            "nvenc_rc_lookahead": DEFAULT_NVENC_RC_LOOKAHEAD,
+            "nvenc_multipass": DEFAULT_NVENC_MULTIPASS,
+            "nvenc_spatial_aq": DEFAULT_NVENC_SPATIAL_AQ,
+            "nvenc_temporal_aq": DEFAULT_NVENC_TEMPORAL_AQ,
+            "nvenc_bframes": DEFAULT_NVENC_BFRAMES,
+            "nvenc_b_ref_mode": DEFAULT_NVENC_B_REF_MODE,
             "override_bitrate": False,
             "manual_bitrate": "0"
         }
@@ -861,7 +893,7 @@ class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
         self.root.title("Video Processing Tool (vid.py)")
-        self.root.geometry("1200x850")
+        self.root.geometry("1400x850")
         self.output_mode = output_mode
         self.processing_jobs = []
         self.preset_manager = WorkflowPresetManager()
@@ -880,6 +912,16 @@ class VideoProcessorApp:
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
+        self.pixelate_multiplier_var = tk.StringVar(value=DEFAULT_PIXELATE_MULTIPLIER)
+        self.pixelate_multiplier_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_multiplier'))
+        self.pixelate_brightness_var = tk.StringVar(value=DEFAULT_PIXELATE_BRIGHTNESS)
+        self.pixelate_brightness_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_brightness'))
+        self.pixelate_saturation_var = tk.StringVar(value=DEFAULT_PIXELATE_SATURATION)
+        self.pixelate_saturation_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_saturation'))
+        self.blur_sigma_var = tk.StringVar(value=DEFAULT_BLUR_SIGMA)
+        self.blur_sigma_var.trace_add('write', lambda *args: self._update_selected_jobs('blur_sigma'))
+        self.blur_steps_var = tk.StringVar(value=DEFAULT_BLUR_STEPS)
+        self.blur_steps_var.trace_add('write', lambda *args: self._update_selected_jobs('blur_steps'))
         self.horizontal_aspect_var = tk.StringVar(value=DEFAULT_HORIZONTAL_ASPECT)
         self.vertical_aspect_var = tk.StringVar(value=DEFAULT_VERTICAL_ASPECT)
         self.fruc_var = tk.BooleanVar(value=DEFAULT_FRUC)
@@ -923,6 +965,28 @@ class VideoProcessorApp:
         self.limit_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('limit_limit'))
 
         self.measure_loudness_var = tk.BooleanVar(value=DEFAULT_MEASURE_LOUDNESS)
+
+        # Encoder Variables
+        self.nvenc_preset_var = tk.StringVar(value=DEFAULT_NVENC_PRESET)
+        self.nvenc_preset_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_preset'))
+        self.nvenc_tune_var = tk.StringVar(value=DEFAULT_NVENC_TUNE)
+        self.nvenc_tune_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_tune'))
+        self.nvenc_profile_sdr_var = tk.StringVar(value=DEFAULT_NVENC_PROFILE_SDR)
+        self.nvenc_profile_sdr_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_profile_sdr'))
+        self.nvenc_profile_hdr_var = tk.StringVar(value=DEFAULT_NVENC_PROFILE_HDR)
+        self.nvenc_profile_hdr_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_profile_hdr'))
+        self.nvenc_rc_lookahead_var = tk.StringVar(value=DEFAULT_NVENC_RC_LOOKAHEAD)
+        self.nvenc_rc_lookahead_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_rc_lookahead'))
+        self.nvenc_multipass_var = tk.StringVar(value=DEFAULT_NVENC_MULTIPASS)
+        self.nvenc_multipass_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_multipass'))
+        self.nvenc_spatial_aq_var = tk.StringVar(value=DEFAULT_NVENC_SPATIAL_AQ)
+        self.nvenc_spatial_aq_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_spatial_aq'))
+        self.nvenc_temporal_aq_var = tk.StringVar(value=DEFAULT_NVENC_TEMPORAL_AQ)
+        self.nvenc_temporal_aq_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_temporal_aq'))
+        self.nvenc_bframes_var = tk.StringVar(value=DEFAULT_NVENC_BFRAMES)
+        self.nvenc_bframes_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_bframes'))
+        self.nvenc_b_ref_mode_var = tk.StringVar(value=DEFAULT_NVENC_B_REF_MODE)
+        self.nvenc_b_ref_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_b_ref_mode'))
 
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
@@ -1020,14 +1084,17 @@ class VideoProcessorApp:
         video_tab = ttk.Frame(settings_notebook, padding=10)
         audio_tab = ttk.Frame(settings_notebook, padding=10)
         subtitle_tab = ttk.Frame(settings_notebook, padding=10)
+        encoder_tab = ttk.Frame(settings_notebook, padding=10)
 
         settings_notebook.add(video_tab, text="Video")
         settings_notebook.add(audio_tab, text="Audio")
         settings_notebook.add(subtitle_tab, text="Subtitles")
+        settings_notebook.add(encoder_tab, text="Encoder")
 
         self.setup_video_tab(video_tab)
         self.setup_audio_tab(audio_tab)
         self.setup_subtitle_tab(subtitle_tab)
+        self.setup_encoder_tab(encoder_tab)
     
         # Add Apply Buttons below settings
         apply_frame = ttk.Frame(right_pane_frame)
@@ -1047,6 +1114,90 @@ class VideoProcessorApp:
         # Load initial preset
         if self.current_preset_var.get():
             self.load_preset_to_gui(self.current_preset_var.get())
+
+    def setup_encoder_tab(self, parent):
+        scroll_canvas = tk.Canvas(parent, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=scroll_canvas.yview)
+        scroll_frame = ttk.Frame(scroll_canvas)
+
+        scroll_frame.bind("<Configure>", lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
+        scroll_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Basic NVENC Settings
+        basic_group = ttk.LabelFrame(scroll_frame, text="Basic NVENC Settings", padding=10)
+        basic_group.pack(fill=tk.X, pady=5, padx=5)
+
+        # Preset
+        ttk.Label(basic_group, text="Preset:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        preset_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_preset_var, values=[f"p{i}" for i in range(1, 8)], width=10, state="readonly")
+        preset_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
+
+        # Tune
+        ttk.Label(basic_group, text="Tune:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        tune_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_tune_var, values=["hq", "ll", "ull", "lossless"], width=10, state="readonly")
+        tune_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
+
+        # Profile SDR
+        ttk.Label(basic_group, text="Profile (SDR):").grid(row=2, column=0, sticky=tk.W, pady=2)
+        profile_sdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_sdr_var, values=["high", "main", "baseline"], width=10, state="readonly")
+        profile_sdr_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(profile_sdr_combo, "NVENC Profile for SDR output.")
+
+        # Profile HDR
+        ttk.Label(basic_group, text="Profile (HDR):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
+        profile_hdr_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
+
+        # GOP & B-Frames
+        gop_group = ttk.LabelFrame(scroll_frame, text="GOP & B-Frames", padding=10)
+        gop_group.pack(fill=tk.X, pady=5, padx=5)
+
+        # B-Frames
+        ttk.Label(gop_group, text="B-Frames:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        bframes_entry = ttk.Entry(gop_group, textvariable=self.nvenc_bframes_var, width=5)
+        bframes_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(bframes_entry, "Number of B-Frames. Default is 4.")
+
+        # B-Ref Mode
+        ttk.Label(gop_group, text="B-Ref Mode:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        bref_combo = ttk.Combobox(gop_group, textvariable=self.nvenc_b_ref_mode_var, values=["disabled", "each", "middle"], width=10, state="readonly")
+        bref_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(bref_combo, "B-Frame reference mode. middle is standard.")
+
+        # Rate Control & AQ
+        rc_group = ttk.LabelFrame(scroll_frame, text="Rate Control & Quality", padding=10)
+        rc_group.pack(fill=tk.X, pady=5, padx=5)
+
+        # RC Lookahead
+        ttk.Label(rc_group, text="RC Lookahead:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        lookahead_entry = ttk.Entry(rc_group, textvariable=self.nvenc_rc_lookahead_var, width=5)
+        lookahead_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(lookahead_entry, "Rate control lookahead frames. Default 32.")
+
+        # Multipass
+        ttk.Label(rc_group, text="Multipass:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        multipass_combo = ttk.Combobox(rc_group, textvariable=self.nvenc_multipass_var, values=["disabled", "qres", "fullres"], width=10, state="readonly")
+        multipass_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(multipass_combo, "Multipass encoding mode.")
+
+        # Spatial AQ
+        ttk.Label(rc_group, text="Spatial AQ:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        spatial_combo = ttk.Combobox(rc_group, textvariable=self.nvenc_spatial_aq_var, values=["0", "1"], width=5, state="readonly")
+        spatial_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(spatial_combo, "Enable/Disable Spatial Adaptive Quantization.")
+
+        # Temporal AQ
+        ttk.Label(rc_group, text="Temporal AQ:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        temporal_combo = ttk.Combobox(rc_group, textvariable=self.nvenc_temporal_aq_var, values=["0", "1"], width=5, state="readonly")
+        temporal_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(temporal_combo, "Enable/Disable Temporal Adaptive Quantization.")
 
     def setup_presets_ui(self, parent):
         preset_frame = ttk.LabelFrame(parent, text="Workflow Presets", padding=10)
@@ -1220,6 +1371,33 @@ class VideoProcessorApp:
         ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
         ttk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        ttk.Radiobutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_mode_var, value="blur", command=self._toggle_upscale_options).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_mode_var, value="pixelate", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        
+        ttk.Label(aspect_handling_frame, text="Mult:").pack(side=tk.LEFT, padx=(10, 2))
+        self.pixelate_multiplier_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_multiplier_var, width=3)
+        self.pixelate_multiplier_entry.pack(side=tk.LEFT)
+        ToolTip(self.pixelate_multiplier_entry, "Pixelation factor. 16 is default.")
+
+        ttk.Label(aspect_handling_frame, text="Dark:").pack(side=tk.LEFT, padx=(5, 2))
+        self.pixelate_brightness_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_brightness_var, width=4)
+        self.pixelate_brightness_entry.pack(side=tk.LEFT)
+        ToolTip(self.pixelate_brightness_entry, "Darkness level. -0.4 is default. Lower is darker.")
+
+        ttk.Label(aspect_handling_frame, text="Sat:").pack(side=tk.LEFT, padx=(5, 2))
+        self.pixelate_saturation_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_saturation_var, width=3)
+        self.pixelate_saturation_entry.pack(side=tk.LEFT)
+        ToolTip(self.pixelate_saturation_entry, "Saturation boost. 0.6 is default. 1.0 is original.")
+
+        ttk.Label(aspect_handling_frame, text="Sigma:").pack(side=tk.LEFT, padx=(10, 2))
+        self.blur_sigma_entry = ttk.Entry(aspect_handling_frame, textvariable=self.blur_sigma_var, width=3)
+        self.blur_sigma_entry.pack(side=tk.LEFT)
+        ToolTip(self.blur_sigma_entry, "Blur strength. 30 is default. Higher = more blur.")
+
+        ttk.Label(aspect_handling_frame, text="Steps:").pack(side=tk.LEFT, padx=(5, 2))
+        self.blur_steps_entry = ttk.Entry(aspect_handling_frame, textvariable=self.blur_steps_var, width=2)
+        self.blur_steps_entry.pack(side=tk.LEFT)
+        ToolTip(self.blur_steps_entry, "Blur quality. 1 is default. Higher = smoother (1-6).")
 
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10); quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
@@ -1267,18 +1445,21 @@ class VideoProcessorApp:
         self.sharpen_strength_entry = ttk.Entry(sharpen_group, textvariable=self.sharpening_strength_var, width=5)
         self.sharpen_strength_entry.pack(side=tk.LEFT)
         ToolTip(sharpen_group, "CAS: 0.5 is ideal. Unsharp: 0.5-1.0 is good.")
+        
+        self._toggle_upscale_options()
 
     def setup_audio_tab(self, parent):
-        # --- Loudness War (Compressor & Limiter) ---
-        lw_group = ttk.LabelFrame(parent, text="Loudness War (Combat Dynamic Range)", padding=10)
-        lw_group.pack(fill=tk.X, pady=(0, 5))
+        # --- Loudness & Normalization (Combined Group) ---
+        loudness_group = ttk.LabelFrame(parent, text="Loudness & Normalization", padding=10)
+        loudness_group.pack(fill=tk.X, pady=(0, 5))
 
-        ttk.Checkbutton(lw_group, text="Enable Compression & Limiting (acompressor + alimiter)", 
+        # Loudness War Checkbox
+        ttk.Checkbutton(loudness_group, text="Enable Compression & Limiting (acompressor + alimiter)", 
                         variable=self.use_loudness_war_var, 
                         command=self._toggle_audio_norm_options).pack(anchor="w")
 
-        self.lw_frame = ttk.Frame(lw_group)
-        self.lw_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.lw_frame = ttk.Frame(loudness_group)
+        self.lw_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
         self.lw_frame.columnconfigure(1, weight=1)
         self.lw_frame.columnconfigure(3, weight=1)
         self.lw_frame.columnconfigure(5, weight=1)
@@ -1306,15 +1487,13 @@ class VideoProcessorApp:
         ttk.Label(self.lw_frame, text="Limit Peak (dB):").grid(row=1, column=4, sticky="w", pady=2, padx=(10, 0))
         self.limit_limit_entry = ttk.Entry(self.lw_frame, textvariable=self.limit_limit_var, width=8)
         self.limit_limit_entry.grid(row=1, column=5, sticky="w", padx=5)
-
-        norm_group = ttk.LabelFrame(parent, text="Normalization", padding=10)
-        norm_group.pack(fill=tk.X, pady=5)
         
-        ttk.Checkbutton(norm_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
-                        command=self._toggle_audio_norm_options).pack(anchor="w")
+        # Dynamic Normalization Checkbox
+        ttk.Checkbutton(loudness_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
+                        command=self._toggle_audio_norm_options).pack(anchor="w", pady=(5, 0))
         
-        self.dyn_norm_frame = ttk.Frame(norm_group)
-        self.dyn_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.dyn_norm_frame = ttk.Frame(loudness_group)
+        self.dyn_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
         self.dyn_norm_frame.columnconfigure(1, weight=1)
         ttk.Label(self.dyn_norm_frame, text="Frame Len (ms):").grid(row=0, column=0, sticky="w", pady=2)
         self.dyn_frame_len_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_frame_len_var, width=8)
@@ -1329,11 +1508,12 @@ class VideoProcessorApp:
         self.dyn_max_gain_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_max_gain_var, width=8)
         self.dyn_max_gain_entry.grid(row=1, column=3, sticky="w", padx=5)
 
-        ttk.Checkbutton(norm_group, text="EBU R128 Normalization (loudnorm)", variable=self.normalize_audio_var, 
+        # EBU R128 Normalization Checkbox
+        ttk.Checkbutton(loudness_group, text="EBU R128 Normalization (loudnorm)", variable=self.normalize_audio_var, 
                         command=self._toggle_audio_norm_options).pack(anchor="w", pady=(5, 0))
 
-        self.audio_norm_frame = ttk.Frame(norm_group)
-        self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=5)
+        self.audio_norm_frame = ttk.Frame(loudness_group)
+        self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
         self.audio_norm_frame.columnconfigure(1, weight=1)
 
         ttk.Label(self.audio_norm_frame, text="Loudness Target (LUFS):").grid(row=0, column=0, sticky="w", pady=2)
@@ -1348,12 +1528,10 @@ class VideoProcessorApp:
         self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
         self.true_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
 
-        # --- Measurement Option ---
-        measure_group = ttk.LabelFrame(parent, text="Loudness Measurement", padding=10)
-        measure_group.pack(fill=tk.X, pady=5)
-        ttk.Checkbutton(measure_group, text="Measure Output Loudness (Save JSON metadata)", 
+        # Loudness Measurement Checkbox
+        ttk.Checkbutton(loudness_group, text="Measure Output Loudness (Save JSON metadata)", 
                         variable=self.measure_loudness_var, 
-                        command=lambda: self._update_selected_jobs("measure_loudness")).pack(anchor="w")
+                        command=lambda: self._update_selected_jobs("measure_loudness")).pack(anchor="w", pady=(5, 0))
 
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
@@ -1590,6 +1768,22 @@ class VideoProcessorApp:
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
     def _toggle_upscale_options(self):
+        aspect_mode = self.aspect_mode_var.get()
+        
+        # Pixelate controls (Mult, Dark, Sat)
+        pixelate_state = "normal" if aspect_mode == "pixelate" else "disabled"
+        self.pixelate_multiplier_entry.config(state=pixelate_state)
+        
+        # Shared controls (Dark, Sat) - enabled for both blur and pixelate
+        shared_state = "normal" if aspect_mode in ["pixelate", "blur"] else "disabled"
+        self.pixelate_brightness_entry.config(state=shared_state)
+        self.pixelate_saturation_entry.config(state=shared_state)
+        
+        # Blur controls (Sigma, Steps)
+        blur_state = "normal" if aspect_mode == "blur" else "disabled"
+        self.blur_sigma_entry.config(state=blur_state)
+        self.blur_steps_entry.config(state=blur_state)
+        
         self._update_selected_jobs("aspect_mode")
 
     def _toggle_audio_norm_options(self):
@@ -1665,6 +1859,11 @@ class VideoProcessorApp:
             "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+            "pixelate_multiplier": self.pixelate_multiplier_var.get(),
+            "pixelate_brightness": self.pixelate_brightness_var.get(),
+            "pixelate_saturation": self.pixelate_saturation_var.get(),
+            "blur_sigma": self.blur_sigma_var.get(),
+            "blur_steps": self.blur_steps_var.get(),
             "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(), 
@@ -1703,6 +1902,16 @@ class VideoProcessorApp:
             "use_sharpening": self.use_sharpening_var.get(),
             "sharpening_algo": self.sharpening_algo_var.get(),
             "sharpening_strength": self.sharpening_strength_var.get(),
+            "nvenc_preset": self.nvenc_preset_var.get(),
+            "nvenc_tune": self.nvenc_tune_var.get(),
+            "nvenc_profile_sdr": self.nvenc_profile_sdr_var.get(),
+            "nvenc_profile_hdr": self.nvenc_profile_hdr_var.get(),
+            "nvenc_rc_lookahead": self.nvenc_rc_lookahead_var.get(),
+            "nvenc_multipass": self.nvenc_multipass_var.get(),
+            "nvenc_spatial_aq": self.nvenc_spatial_aq_var.get(),
+            "nvenc_temporal_aq": self.nvenc_temporal_aq_var.get(),
+            "nvenc_bframes": self.nvenc_bframes_var.get(),
+            "nvenc_b_ref_mode": self.nvenc_b_ref_mode_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -2077,7 +2286,13 @@ class VideoProcessorApp:
         options = job['options']
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
-        self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE)); self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
+        self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
+        self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
+        self.pixelate_brightness_var.set(options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS))
+        self.pixelate_saturation_var.set(options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION))
+        self.blur_sigma_var.set(options.get("blur_sigma", DEFAULT_BLUR_SIGMA))
+        self.blur_steps_var.set(options.get("blur_steps", DEFAULT_BLUR_STEPS))
+        self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); 
@@ -2119,6 +2334,17 @@ class VideoProcessorApp:
         self.use_sharpening_var.set(options.get("use_sharpening", DEFAULT_USE_SHARPENING))
         self.sharpening_algo_var.set(options.get("sharpening_algo", DEFAULT_SHARPENING_ALGO))
         self.sharpening_strength_var.set(options.get("sharpening_strength", DEFAULT_SHARPENING_STRENGTH))
+        
+        self.nvenc_preset_var.set(options.get("nvenc_preset", DEFAULT_NVENC_PRESET))
+        self.nvenc_tune_var.set(options.get("nvenc_tune", DEFAULT_NVENC_TUNE))
+        self.nvenc_profile_sdr_var.set(options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR))
+        self.nvenc_profile_hdr_var.set(options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR))
+        self.nvenc_rc_lookahead_var.set(options.get("nvenc_rc_lookahead", DEFAULT_NVENC_RC_LOOKAHEAD))
+        self.nvenc_multipass_var.set(options.get("nvenc_multipass", DEFAULT_NVENC_MULTIPASS))
+        self.nvenc_spatial_aq_var.set(options.get("nvenc_spatial_aq", DEFAULT_NVENC_SPATIAL_AQ))
+        self.nvenc_temporal_aq_var.set(options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ))
+        self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
+        self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
 
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
@@ -2330,6 +2556,7 @@ class VideoProcessorApp:
         use_cuda_decoder = "_cuvid" in decoder
         cmd = [FFMPEG_CMD, "-y", "-hide_banner"] + (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
         filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
         audio_cmd_parts = self.build_audio_segment(file_path, options)
         audio_fc_str = ""
@@ -2418,7 +2645,46 @@ class VideoProcessorApp:
                 scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
                 
                 aspect_mode = options.get("aspect_mode", "pad")
-                if aspect_mode == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
+                video_in_tag = "[0:v]"
+                if aspect_mode == 'pixelate':
+                    mult = options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER)
+                    try: m = max(1, int(mult))
+                    except: m = 16
+                    
+                    bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
+                    sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
+                    
+                    target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                    pixelate_fc = (
+                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
+                        f"[v_bg_in]scale_cuda=w={target_w//m}:h={target_h//m}:interp_algo={safe_algo}:format={target_fmt},"
+                        f"hwdownload,format={target_fmt},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
+                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:format={target_fmt}[v_bg_pixelated];"
+                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
+                        f"[v_bg_pixelated][v_fg_scaled]overlay_cuda=x=({target_w}-w)/2:y=({target_h}-h)/2,setsar=1[v_pixelate_combined]"
+                    )
+                    filter_complex_parts.append(pixelate_fc)
+                    video_in_tag = "[v_pixelate_combined]"
+                elif aspect_mode == 'blur':
+                    # Blur mode: Downscale, blur on CPU, upscale
+                    sigma = options.get("blur_sigma", DEFAULT_BLUR_SIGMA)
+                    steps = options.get("blur_steps", DEFAULT_BLUR_STEPS)
+                    bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
+                    sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
+                    
+                    target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                    # Downscale by 2x for performance
+                    blur_fc = (
+                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
+                        f"[v_bg_in]scale_cuda=w={target_w//2}:h={target_h//2}:interp_algo={safe_algo}:format={target_fmt},"
+                        f"hwdownload,format={target_fmt},gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
+                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];"
+                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
+                        f"[v_bg_blurred][v_fg_scaled]overlay_cuda=x=({target_w}-w)/2:y=({target_h}-h)/2,setsar=1[v_blur_combined]"
+                    )
+                    filter_complex_parts.append(blur_fc)
+                    video_in_tag = "[v_blur_combined]"
+                elif aspect_mode == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
                 elif aspect_mode == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
@@ -2434,8 +2700,14 @@ class VideoProcessorApp:
                 if not is_hdr_output: processing_chain.append("format=nv12")
                 vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
             if vf_filters:
-                filter_complex_parts.append(f"[0:v]{','.join(vf_filters)}[v_out]")
+                filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
                 video_out_tag = "[v_out]"
+            elif video_in_tag != "[0:v]":
+                video_out_tag = video_in_tag
+        
+        # Track effective resolution for metadata/aspect forcing
+        eff_w, eff_h = (target_w, target_h) if (orientation != "original" and 'target_w' in locals() and 'target_h' in locals()) else (None, None)
+
         if filter_complex_parts or audio_fc_str:
             full_fc = ";".join(filter(None, filter_complex_parts + ([audio_fc_str] if audio_fc_str else [])))
             cmd.extend(["-filter_complex", full_fc])
@@ -2443,22 +2715,40 @@ class VideoProcessorApp:
         cmd.extend(audio_cmd_parts)
         bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output)
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
+        
+        # Base encoder options
+        nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
+        nv_tune = options.get("nvenc_tune", DEFAULT_NVENC_TUNE)
+        nv_lookahead = options.get("nvenc_rc_lookahead", DEFAULT_NVENC_RC_LOOKAHEAD)
+        nv_multipass = options.get("nvenc_multipass", DEFAULT_NVENC_MULTIPASS)
+        nv_spatial_aq = options.get("nvenc_spatial_aq", DEFAULT_NVENC_SPATIAL_AQ)
+        nv_temporal_aq = options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ)
+        nv_bframes = options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES)
+        nv_b_ref_mode = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
+
         if is_hdr_output:
+            nv_profile = options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR)
             encoder_opts = [
-                "-c:v", "hevc_nvenc", "-preset", "p1", "-tune", "hq", "-profile:v", "main10",
+                "-c:v", "hevc_nvenc", "-preset", nv_preset, "-tune", nv_tune, "-profile:v", nv_profile,
                 "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
-                "-g", str(gop_len), "-bf", "4", "-b_ref_mode", "middle",
-                "-multipass", "fullres", "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32",
+                "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
+                "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead,
                 "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"
             ]
         else:
+            nv_profile = options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR)
             encoder_opts = [
-                "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "hq", "-profile:v", "high",
+                "-c:v", "h264_nvenc", "-preset", nv_preset, "-tune", nv_tune, "-profile:v", nv_profile,
                 "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
-                "-g", str(gop_len), "-bf", "4", "-b_ref_mode", "middle",
-                "-multipass", "fullres", "-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32",
+                "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
+                "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead,
                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"
             ]
+
+        # Force rotation strip and aspect ratio for landscape output if we had a vertical source
+        if eff_w and eff_h:
+            encoder_opts.extend(["-metadata:s:v", "rotate=0", "-aspect", f"{eff_w}:{eff_h}"])
+        
         cmd.extend(encoder_opts)
         cmd.extend(["-f", "mp4", output_file])
         return cmd
