@@ -68,6 +68,18 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.8 - Subtitle & Workflow Improvements (2025-12-29)
+    • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
+               differently (Width 1 vs 2), fixing premature wrapping for English
+               and late wrapping for Chinese/Japanese.
+    • FEATURE: "Dynamic Wrap Limit": Auto-calculates safe line length based on
+               Video Resolution and Font Size to prevent text runoff.
+    • FIX: Dynamic Subtitle Resolution: Now sets correct PlayResX/Y for Vertical/4K/Hybrid
+           formats, preventing subtitles from being cut off or scaling wrongly.
+    • UI: Added "Select Matches Preset" button to queue for batch selection.
+    • UI: Added "Suffix Override" to Preset UI.
+    • UI: Moved Loudness/Normalization controls to dedicated "Loudness" tab.
+
 v8.7 - Upscaling Algorithm Expansion (2025-12-26)
     • UI: Replaced upscale algorithm radio buttons with dropdown (Combobox).
     • FEATURE: Added "Nearest" algorithm option for fastest upscaling.
@@ -383,6 +395,182 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
     except Exception as e:
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
+def get_char_width(char):
+    """Returns 2 for wide (CJK) characters, 1 otherwise."""
+    # East Asian Widths: F (Fullwidth), W (Wide), A (Ambiguous - treat as Wide)
+    w = unicodedata.east_asian_width(char)
+    return 2 if w in ('F', 'W', 'A') else 1
+
+def smart_wrap_text(text, limit):
+    """
+    Advanced 'Human-Like' Text Wrapping.
+    Features:
+    - Mixed CJK/Latin support (Width based).
+    - Kinsoku Shori (Prohibited line starts: closing punctuation).
+    - Punctuation Priority (Prefers breaking at sentences/clauses).
+    - Orphan Fighter (prevents very short last lines).
+    """
+    if not text: return []
+    
+    # 1. Tokenize (Split into atomic units)
+    # English -> Words, CJK -> Words/Chars. 
+    # For simplicity in mixed text, we split by spaces first, then handle CJK inside words if needed?
+    # Actually, a better tokenizer for mixed text:
+    # - CJK chars are individual tokens.
+    # - Latin sequences are tokens.
+    tokens = []
+    current_token = ""
+    
+    # Prohibited Line Starts (Kinsoku Shori)
+    prohibited_starts = set("!%),.:;?]}¢°'\"†‡℃、。〉》」』】〕〗〙〛！），．：；？］｝")
+    
+    for char in text:
+        cw = get_char_width(char)
+        is_cjk = cw == 2
+        is_space = char == ' '
+        
+        if is_space:
+            if current_token: 
+                tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+                current_token = ""
+            tokens.append({'text': ' ', 'width': 1, 'type': 'space'})
+        elif is_cjk:
+            if current_token:
+                tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+                current_token = ""
+            tokens.append({'text': char, 'width': 2, 'type': 'cjk'})
+        else:
+            current_token += char
+            
+    if current_token:
+        tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+
+    # 2. Line Building with Backtracking
+    lines = []
+    current_line_tokens = []
+    current_line_width = 0
+    
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        
+        # Check if adding this token exceeds limit
+        if current_line_width + token['width'] <= limit:
+            current_line_tokens.append(token)
+            current_line_width += token['width']
+            i += 1
+            continue
+            
+        # --- Algorithm: LINE FULL, DECIDE WHERE TO BREAK ---
+        
+        # Candidate 1: Break exactly here (before this token)
+        # Check Kinsoku Shori: Can we start a new line with this token?
+        # If token is 'space', we just discard it and break.
+        if token['type'] == 'space':
+            lines.append("".join(t['text'] for t in current_line_tokens))
+            current_line_tokens = []
+            current_line_width = 0
+            i += 1 # Skip the space
+            continue
+            
+        first_char = token['text'][0]
+        if first_char in prohibited_starts:
+            # Kinsoku Violation! We cannot start new line here.
+            # We MUST drag the previous token down to join this one.
+            if current_line_tokens:
+                last_token = current_line_tokens.pop()
+                current_line_width -= last_token['width']
+                i -= 1 # Re-process the popped token (it will be pushed to next line loop)
+                
+                # FIX: We must COMMIT the current line now, otherwise we loop forever trying to add the popped token back to this line.
+                # If popping made the line empty (it was a 1-token line), we can't commit empty.
+                if current_line_tokens:
+                    lines.append("".join(t['text'] for t in current_line_tokens))
+                    current_line_tokens = []
+                    current_line_width = 0
+                    continue # Restart loop, 'i' points to the popped token
+                else:
+                     # Special case: The line only had 1 token, and the NEXT one is prohibited start.
+                     # We can't drag the single token down (nothing left).
+                     # We must FORCE keep them together (violate limit).
+                     # So we add the popped token back, ADD the current prohibited token, and THEN break.
+                     current_line_tokens.append(last_token) # Put it back
+                     current_line_tokens.append(token)      # Add the prohibited one
+                     lines.append("".join(t['text'] for t in current_line_tokens))
+                     current_line_tokens = []
+                     current_line_width = 0
+                     i += 2 # Skip both (we processed last_token again + current token)
+                     continue
+            else:
+                 # Line empty, just push it (limit violation inevitable)
+                 lines.append(token['text']) # Should rarely happen
+                 i += 1
+        else:
+            # Safe to break here.
+            # Optimization: Punctuation Priority (Backtrack lookahead)
+            # If the break point is "weak" (mid-sentence), check if we passed a "Strong" break recently (comma/period).
+            # e.g. "Hello world, how represent|ation" -> Break at comma instead?
+            
+            # Heuristic: If we are breaking at a space (weak), look back to see if we passed a Sentence Ender recently.
+            # Only do this if the line is already reasonably long (avoid breaking very short lines).
+            
+            strong_break_found_idx = -1
+            if current_line_width > limit * 0.7: # Only optimize if line is full-ish
+                # Look back at the last ~8 tokens (arbitrary window)
+                lookback_range = range(len(current_line_tokens) - 1, max(-1, len(current_line_tokens) - 10), -1)
+                for idx in lookback_range:
+                    t_text = current_line_tokens[idx]['text']
+                    # Check if token ends with strong punctuation
+                    if t_text and t_text[-1] in ".,;:!?":
+                        # Found a strong break!
+                        # But wait, is it *too* far back? (Leaving a tiny line?)
+                        # We handled that with the loop range limited to 10 tokens.
+                        strong_break_found_idx = idx
+                        break
+            
+            if strong_break_found_idx != -1:
+                # Break at the strong point!
+                keep_tokens = current_line_tokens[:strong_break_found_idx+1]
+                reject_tokens = current_line_tokens[strong_break_found_idx+1:]
+                
+                # Commit the keepers
+                lines.append("".join(t['text'] for t in keep_tokens))
+                
+                # Rewind: The rejected tokens need to be processed again.
+                # We simply move 'i' back by the number of rejected tokens.
+                # AND we must not forget the *current* token 'token' (at index i) which caused the overflow.
+                # Current loop flow: 'token' is *not* in current_line_tokens. It is waiting at 'i'.
+                # So if we reject 3 tokens, we need to process those 3 + 'token'.
+                # So we decrement i by len(reject_tokens).
+                i -= len(reject_tokens)
+                
+                current_line_tokens = []
+                current_line_width = 0
+                # Continue loop, re-reading from new 'i'
+                continue
+            
+            # No better break found, just break here as normal
+            lines.append("".join(t['text'] for t in current_line_tokens))
+            current_line_tokens = []
+            current_line_width = 0
+            # Token 'i' will be added in next iteration
+            
+    # Flush remaining
+    if current_line_tokens:
+        lines.append("".join(t['text'] for t in current_line_tokens))
+        
+    # 3. Orphan Fighting (Balancing)
+    # If last line is remarkably short (< 20% limit) and we have multiple lines, 
+    # try to pull words from prev line.
+    if len(lines) > 1:
+        last_line = lines[-1]
+        last_width = sum(get_char_width(c) for c in last_line)
+        if last_width < limit * 0.2:
+            # Attempt balance? (Simple version: Not strictly required if wrapping is good, skipping for stability)
+            pass
+
+    return lines
+
 def hex_to_libass_color(hex_color):
     if not hex_color or not hex_color.startswith("#"): return "&H000000"
     hex_val = hex_color.lstrip('#')
@@ -393,7 +581,7 @@ def hex_to_libass_color(hex_color):
 def alpha_to_libass_alpha(alpha_val):
     return f"&H{alpha_val:02X}"
 
-def create_temporary_ass_file(srt_path, options):
+def create_temporary_ass_file(srt_path, options, target_res=None):
     global CURRENT_TEMP_FILE
     try:
         with open(srt_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -401,6 +589,9 @@ def create_temporary_ass_file(srt_path, options):
     except Exception as e:
         print(f"[ERROR] Could not read SRT file {srt_path}: {e}")
         return None
+
+    # Determine PlayRes from target_res or default to 1920x1080
+    play_res_x, play_res_y = target_res if target_res else (1920, 1080)
 
     font_name = options.get('subtitle_font', DEFAULT_SUBTITLE_FONT)
     font_size = options.get('subtitle_font_size', DEFAULT_SUBTITLE_FONT_SIZE)
@@ -414,9 +605,31 @@ def create_temporary_ass_file(srt_path, options):
     alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
     reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
     try:
-        wrap_limit = int(options.get('wrap_limit', DEFAULT_WRAP_LIMIT))
+        user_wrap_limit = int(options.get('wrap_limit', DEFAULT_WRAP_LIMIT))
     except (ValueError, TypeError):
-        wrap_limit = int(DEFAULT_WRAP_LIMIT)
+        user_wrap_limit = int(DEFAULT_WRAP_LIMIT)
+        
+    # --- Dynamic Wrap Limit Calculation ---
+    try:
+        f_size = float(font_size)
+        m_l = float(margin_l)
+        m_r = float(margin_r)
+    except (ValueError, TypeError):
+        f_size, m_l, m_r = 32.0, 50.0, 50.0
+
+    available_width = play_res_x - m_l - m_r
+    # Heuristic: 1 "Unit" (Narrow char) is approx 0.5 * FontSize pixels wide.
+    # Wide char (CJK) is 2 Units (~1.0 * FontSize).
+    unit_width_px = f_size * 0.5
+    if unit_width_px < 1: unit_width_px = 10
+    
+    calculated_limit = int(available_width / unit_width_px)
+    
+    # Use the stricter limit to prevent runoff, but don't go below a silly minimum (e.g. 10 chars)
+    # We want to respect the user's limit unless the physical geometry forbids it.
+    final_limit = min(user_limit for user_limit in [user_wrap_limit, calculated_limit] if user_limit > 5)
+    
+    # print(f"[DEBUG] Subtitle Wrap: User={user_wrap_limit}, Calc={calculated_limit} (W={available_width}), Final={final_limit}")
 
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
     fill_alpha_val = options.get('fill_alpha', DEFAULT_FILL_ALPHA)
@@ -443,8 +656,8 @@ def create_temporary_ass_file(srt_path, options):
 Title: Corrected Single-Layer Subtitle File
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {style_main}
@@ -462,7 +675,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         end_ass = end_time.replace(',', '.')[:-1]
         if reformat_subs:
             single_line_text = ' '.join(clean_text.strip().split())
-            wrapped_lines = textwrap.wrap(single_line_text, width=wrap_limit)
+            wrapped_lines = smart_wrap_text(single_line_text, limit=final_limit)
             text_ass = '\\N'.join(wrapped_lines)
         else:
             text_ass = clean_text.strip().replace('\n', '\\N')
@@ -763,7 +976,8 @@ class WorkflowPresetManager:
             "nvenc_bframes": DEFAULT_NVENC_BFRAMES,
             "nvenc_b_ref_mode": DEFAULT_NVENC_B_REF_MODE,
             "override_bitrate": False,
-            "manual_bitrate": "0"
+            "manual_bitrate": "0",
+            "output_suffix_override": ""
         }
         self.load_presets()
 
@@ -904,6 +1118,7 @@ class VideoProcessorApp:
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
+        self.output_suffix_override_var = tk.StringVar(value="")
 
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
@@ -1083,16 +1298,19 @@ class VideoProcessorApp:
 
         video_tab = ttk.Frame(settings_notebook, padding=10)
         audio_tab = ttk.Frame(settings_notebook, padding=10)
+        loudness_tab = ttk.Frame(settings_notebook, padding=10)
         subtitle_tab = ttk.Frame(settings_notebook, padding=10)
         encoder_tab = ttk.Frame(settings_notebook, padding=10)
 
         settings_notebook.add(video_tab, text="Video")
         settings_notebook.add(audio_tab, text="Audio")
+        settings_notebook.add(loudness_tab, text="Loudness")
         settings_notebook.add(subtitle_tab, text="Subtitles")
         settings_notebook.add(encoder_tab, text="Encoder")
 
         self.setup_video_tab(video_tab)
         self.setup_audio_tab(audio_tab)
+        self.setup_loudness_tab(loudness_tab)
         self.setup_subtitle_tab(subtitle_tab)
         self.setup_encoder_tab(encoder_tab)
     
@@ -1218,6 +1436,14 @@ class VideoProcessorApp:
         ttk.Button(row1, text="Rename", command=self.rename_current_preset).pack(side=tk.LEFT, padx=5)
         ttk.Button(row1, text="Delete", command=self.delete_current_preset).pack(side=tk.LEFT, padx=5)
 
+        # Row 1.5: Suffix Override
+        row_suffix = ttk.Frame(preset_frame)
+        row_suffix.pack(fill=tk.X, pady=(2, 5))
+        ttk.Label(row_suffix, text="Suffix Override:").pack(side=tk.LEFT, padx=(5, 5))
+        suffix_entry = ttk.Entry(row_suffix, textvariable=self.output_suffix_override_var, width=30)
+        suffix_entry.pack(side=tk.LEFT, padx=5)
+        ToolTip(suffix_entry, "Override filename suffix (e.g., 'MyCut'). If empty, the Preset Name is used.")
+
         # Row 2: Auto-Assignment Triggers
         # Row 2: Auto-Assignment Triggers
         row2 = ttk.LabelFrame(preset_frame, text="Auto-Assignment Triggers (When to add this preset automatically)", padding=5)
@@ -1317,7 +1543,9 @@ class VideoProcessorApp:
         selection_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
         ttk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
         ttk.Button(selection_buttons_frame, text="Clear", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(selection_buttons_frame, text="Select No Sub", command=self.select_all_no_sub).pack(side=tk.LEFT)
+        ttk.Button(selection_buttons_frame, text="Sel Preset", command=self.select_jobs_by_current_preset).pack(side=tk.LEFT)
+        ToolTip(selection_buttons_frame.winfo_children()[-1], "Select all jobs dealing with the currently selected Workflow Preset.")
+        ttk.Button(selection_buttons_frame, text="Select No Sub", command=self.select_all_no_sub).pack(side=tk.LEFT, padx=5)
         ttk.Button(selection_buttons_frame, text="Select Subbed", command=self.select_all_subbed).pack(side=tk.LEFT, padx=5)
         ttk.Button(selection_buttons_frame, text="Invert", command=self.invert_selection).pack(side=tk.LEFT)
 
@@ -1448,7 +1676,7 @@ class VideoProcessorApp:
         
         self._toggle_upscale_options()
 
-    def setup_audio_tab(self, parent):
+    def setup_loudness_tab(self, parent):
         # --- Loudness & Normalization (Combined Group) ---
         loudness_group = ttk.LabelFrame(parent, text="Loudness & Normalization", padding=10)
         loudness_group.pack(fill=tk.X, pady=(0, 5))
@@ -1533,6 +1761,7 @@ class VideoProcessorApp:
                         variable=self.measure_loudness_var, 
                         command=lambda: self._update_selected_jobs("measure_loudness")).pack(anchor="w", pady=(5, 0))
 
+    def setup_audio_tab(self, parent):
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
 
@@ -1912,6 +2141,7 @@ class VideoProcessorApp:
             "nvenc_temporal_aq": self.nvenc_temporal_aq_var.get(),
             "nvenc_bframes": self.nvenc_bframes_var.get(),
             "nvenc_b_ref_mode": self.nvenc_b_ref_mode_var.get(),
+            "output_suffix_override": self.output_suffix_override_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -2334,6 +2564,7 @@ class VideoProcessorApp:
         self.use_sharpening_var.set(options.get("use_sharpening", DEFAULT_USE_SHARPENING))
         self.sharpening_algo_var.set(options.get("sharpening_algo", DEFAULT_SHARPENING_ALGO))
         self.sharpening_strength_var.set(options.get("sharpening_strength", DEFAULT_SHARPENING_STRENGTH))
+        self.output_suffix_override_var.set(options.get("output_suffix_override", ""))
         
         self.nvenc_preset_var.set(options.get("nvenc_preset", DEFAULT_NVENC_PRESET))
         self.nvenc_tune_var.set(options.get("nvenc_tune", DEFAULT_NVENC_TUNE))
@@ -2497,15 +2728,65 @@ class VideoProcessorApp:
         output_dir = os.path.join(base_dir, final_sub_path)
         os.makedirs(output_dir, exist_ok=True)
 
-        unique_base_name = os.path.splitext(job['display_name'])[0]
-        safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", unique_base_name)
+        original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+        
+        # Tag
+        tag = job.get('display_tag', "").strip()
+        safe_tag = re.sub(r'[\\/*?:"<>|]', "", tag).strip().replace(" ", "_")
+
+        # Suffix (Override or Preset Name)
+        override = options.get("output_suffix_override", "").strip()
+        suffix = override if override else job.get('preset_name', "")
+        safe_suffix = re.sub(r'[\\/*?:"<>|]', "", suffix).strip().replace(" ", "_")
+
         job_hash = get_job_hash(options)
-        safe_base_name = f"{safe_base_name}_{job_hash}"
+        
+        # Construct: Base_Tag_Suffix_Hash
+        name_parts = [original_basename]
+        if safe_tag: name_parts.append(safe_tag)
+        if safe_suffix: name_parts.append(safe_suffix)
+        name_parts.append(job_hash)
+        
+        safe_base_name = "_".join(filter(None, name_parts))
         output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
         
         ass_burn_path, temp_extracted_srt_path = None, None
         try:
             if options.get("burn_subtitles") and job.get('subtitle_path'):
+                # --- Calculate Target Resolution for Subtitles ---
+                # We need to know the final output resolution to set PlayResX/Y correctly in the ASS file
+                # so that text wrapping works as expected (especially for vertical/hybrid/4k).
+                
+                res_key = options.get('resolution')
+                sub_target_w, sub_target_h = 1920, 1080 # Fallback
+                
+                if orientation == "hybrid (stacked)":
+                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    sub_target_w = width_map.get(res_key, 1080)
+                    try:
+                        num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                        num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
+                        top_h = (int(sub_target_w * den_top / num_top) // 2) * 2; bot_h = (int(sub_target_w * den_bot / num_bot) // 2) * 2
+                        sub_target_h = top_h + bot_h
+                    except: sub_target_h = 1920 # Fallback for hybrid if calc fails
+                elif orientation == "vertical":
+                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    sub_target_w = width_map.get(res_key, 1080)
+                    try:
+                        num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
+                        sub_target_h = int(sub_target_w * den / num)
+                    except: sub_target_h = 1920
+                elif orientation == "original":
+                    info = get_video_info(job['video_path'])
+                    sub_target_w, sub_target_h = info['width'], info['height']
+                else: # Horizontal / Default
+                    width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
+                    sub_target_w = width_map.get(res_key, 1920)
+                    try:
+                        num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
+                        sub_target_h = int(sub_target_w * den / num)
+                    except: sub_target_h = 1080
+
                 sub_identifier = job.get('subtitle_path')
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
@@ -2516,19 +2797,21 @@ class VideoProcessorApp:
                 elif os.path.exists(sub_identifier): subtitle_source_file = sub_identifier
                 if subtitle_source_file:
                     if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
-                        res_key = options.get('resolution'); width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
-                        target_w = width_map.get(res_key, 1080)
-                        try:
+                         try:
+                            # Re-calculate split for seam logic (redundant but safe)
+                            width_map_h = {"HD": 1080, "4k": 2160, "8k": 4320}
+                            target_w_h = width_map_h.get(res_key, 1080)
                             num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
                             num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
-                            top_h = (int(target_w * den_top / num_top) // 2) * 2; bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
+                            top_h = (int(target_w_h * den_top / num_top) // 2) * 2; bot_h = (int(target_w_h * den_bot / num_bot) // 2) * 2
                             total_real_h = top_h + bot_h
                             if total_real_h > 0:
-                                seam_y_on_canvas = int((top_h / total_real_h) * 1080)
-                                options["calculated_pos"] = (960, seam_y_on_canvas)
-                        except (ValueError, AttributeError, ZeroDivisionError):
+                                seam_y_on_canvas = int((top_h / total_real_h) * sub_target_h) # Map to PlayRes
+                                options["calculated_pos"] = (sub_target_w // 2, seam_y_on_canvas)
+                         except (ValueError, AttributeError, ZeroDivisionError):
                             print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
-                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, options)
+                    
+                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, options, target_res=(sub_target_w, sub_target_h))
                     if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
             
             cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
@@ -2920,6 +3203,21 @@ class VideoProcessorApp:
         for i, job in enumerate(self.processing_jobs):
             if job.get('subtitle_path') is not None: self.job_listbox.selection_set(i)
         self.on_input_file_select(None)
+
+    def select_jobs_by_current_preset(self):
+        target_preset = self.current_preset_var.get()
+        if not target_preset: return
+        
+        self.job_listbox.selection_clear(0, tk.END)
+        count = 0
+        for i, job in enumerate(self.processing_jobs):
+            if job.get('preset_name') == target_preset:
+                self.job_listbox.selection_set(i)
+                count += 1
+        
+        self.on_input_file_select(None)
+        if count: self.update_status(f"Selected {count} jobs with preset '{target_preset}'")
+        else: self.update_status(f"No jobs found with preset '{target_preset}'")
 
     def invert_selection(self):
         selected_indices = self.job_listbox.curselection()

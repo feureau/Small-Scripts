@@ -63,14 +63,14 @@
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "subtitle_font": "HelveticaNeueLT Std Blk",
-            "subtitle_font_size": "128",
+            "subtitle_font_size": "256",
             "subtitle_alignment": "bottom",
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
-            "subtitle_margin_v": "335",
-            "subtitle_margin_l": "50",
-            "subtitle_margin_r": "100",
+            "subtitle_margin_v": "750",
+            "subtitle_margin_l": "300",
+            "subtitle_margin_r": "300",
             "fill_color": "#FFAA00",
             "fill_alpha": 0,
             "outline_color": "#000000",
@@ -96,7 +96,8 @@
             "nvenc_spatial_aq": "1",
             "nvenc_temporal_aq": "1",
             "nvenc_bframes": "4",
-            "nvenc_b_ref_mode": "middle"
+            "nvenc_b_ref_mode": "middle",
+            "output_suffix_override": "-cn"
         },
         "triggers": {
             "on_no_sub": false,
