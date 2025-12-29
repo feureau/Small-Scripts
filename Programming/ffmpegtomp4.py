@@ -17,13 +17,18 @@ Primary problem fixed:
     encoding (cp1252) and encountered bytes not representable in that codec.
 
 Key changes in this release:
+  - Synchronized subtitle naming logic with `srtextract.py`.
+  - Expanded language codes to full names (e.g. `eng` -> `English`) using `pycountry`.
+  - Prioritized `Language` tag over `Title` for consistent naming.
+  - Added automatic detection of `[Forced]` tracks via stream disposition.
+  - Implemented Unicode-safe filename sanitization (preserving characters like `Á`).
+  - Added internal collision detection for duplicate track names.
   - Centralized subprocess invocation via `run_command()` which sets:
       text=True, encoding='utf-8', errors='replace'
     This forces safe UTF-8 decoding and replaces undecodable bytes instead
     of raising exceptions.
   - Consistent handling of CompletedProcess objects and clearer error logs.
   - Safer cleanup of zero-byte outputs on failure.
-  - Minor logging improvements for clarity.
   - All existing behavior preserved unless otherwise stated.
 
 RATIONALE
@@ -47,6 +52,8 @@ DEPENDENCIES
 --------------------------------------------------------------------------------
 - FFmpeg and FFprobe must be installed and in system PATH.
   https://ffmpeg.org/download.html
+- pycountry library (optional but recommended for full language names).
+  Install via: pip install pycountry
 
 --------------------------------------------------------------------------------
 LICENSE / NOTES
@@ -62,6 +69,11 @@ import subprocess
 import json
 import traceback
 from shutil import which
+
+try:
+    import pycountry # For language name expansion
+except ImportError:
+    pycountry = None
 
 # ---------------------------------------------------------------------------
 # Configuration: change these if you need different decoding behavior
@@ -165,11 +177,28 @@ KNOWN_TEXT_SUBTITLE_CODECS = [
     'subviewer', 'microdvd', 'eia_608', 'cea608'
 ]
 
+def _get_language_name(code):
+    """
+    Converts ISO 639-2 (3-letter) or ISO 639-1 (2-letter) codes to full names.
+    Falls back to original code if pycountry missing or name not found.
+    """
+    if not code or not pycountry:
+        return code
+    try:
+        lang = pycountry.languages.get(alpha_3=code.lower())
+        if not lang:
+            lang = pycountry.languages.get(alpha_2=code.lower())
+        return lang.name if lang else code
+    except Exception:
+        return code
+
 def _probe_subtitle_streams(video_path):
     """Probe subtitle streams via ffprobe (returns list of stream dicts)."""
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "s",
-        "-show_entries", "stream=index,codec_name,tags", "-of", "json", video_path
+        "-show_streams",
+        "-show_entries", "stream=index,codec_name,disposition,tags", 
+        "-of", "json", video_path
     ]
     proc = run_command(cmd, capture_output=True)
     if proc is None:
@@ -195,14 +224,45 @@ def _probe_subtitle_streams(video_path):
         traceback.print_exc()
         return []
 
-def _safe_filename(s):
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)
+def _generate_subtitle_filename(video_basename, stream_info, ext, output_dir):
+    tags = stream_info.get('tags', {})
+    disposition = stream_info.get('disposition', {})
+    
+    # Case-insensitive lookup for Title and Language
+    title = None
+    language = None
+    for k, v in tags.items():
+        if k.lower() == 'title':
+            title = v
+        if k.lower() == 'language':
+            language = _get_language_name(v)
 
-def _generate_subtitle_filename(video_basename, stream_info, i, ext):
-    codec = stream_info.get('codec_name', 'unknown').lower()
-    lang = stream_info.get('tags', {}).get('language', 'und')
-    name = f"{video_basename}_sub{i}_idx{stream_info['index']}_{lang}_{codec}.{ext}"
-    return _safe_filename(name)[:180]
+    # Check for Forced flag
+    is_forced = str(disposition.get('forced', '0')) == '1'
+
+    # Prioritize Language, then Title, then "Unknown"
+    tag = language if language else (title if title else "Unknown")
+
+    # Add [Forced] suffix if needed
+    if is_forced and "[Forced]" not in tag and "forced" not in tag.lower():
+        tag = f"{tag} [Forced]"
+
+    # Sanitization
+    illegal_chars = r'\/:*?"<>|'
+    sanitized_tag = "".join(c for c in tag if c not in illegal_chars).strip()
+    if not sanitized_tag:
+        sanitized_tag = "Unknown"
+
+    filename = f"{video_basename} - {sanitized_tag}.{ext}"
+    
+    # Collision detection
+    base_name_no_ext = f"{video_basename} - {sanitized_tag}"
+    counter = 1
+    while os.path.exists(os.path.join(output_dir, filename)):
+        filename = f"{base_name_no_ext} ({counter}).{ext}"
+        counter += 1
+
+    return filename
 
 def _ensure_srt_subfolder(video_path):
     """Ensure a subfolder named 'SRT' exists in the same directory as the video."""
@@ -216,7 +276,8 @@ def _extract_to_srt(video_path, streams, basename):
         return
     output_dir = _ensure_srt_subfolder(video_path)
     for i, s in enumerate(streams, 1):
-        output_path = os.path.join(output_dir, _generate_subtitle_filename(basename, s, i, "srt"))
+        output_filename = _generate_subtitle_filename(basename, s, "srt", output_dir)
+        output_path = os.path.join(output_dir, output_filename)
         cmd = ["ffmpeg", "-hide_banner", "-i", video_path, "-map", f"0:{s['index']}", "-y", output_path]
         print(f"  Extracting stream {s['index']} to {output_path}")
         proc = run_command(cmd, capture_output=True)
@@ -242,7 +303,8 @@ def _package_bitmap_subs(video_path, streams, basename):
         return
     output_dir = _ensure_srt_subfolder(video_path)
     for i, s in enumerate(streams, 1):
-        output_path = os.path.join(output_dir, _generate_subtitle_filename(basename, s, i, "mkv"))
+        output_filename = _generate_subtitle_filename(basename, s, "mkv", output_dir)
+        output_path = os.path.join(output_dir, output_filename)
         cmd = ["ffmpeg", "-hide_banner", "-i", video_path, "-map", f"0:{s['index']}", "-c", "copy", "-y", output_path]
         print(f"  Packaging stream {s['index']} to {output_path}")
         proc = run_command(cmd, capture_output=True)
