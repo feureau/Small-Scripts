@@ -33,6 +33,9 @@
 #  * chardet library: A Python library used for robust character encoding detection. It must be
 #    installed via pip:
 #      pip install chardet
+#  * pycountry library: A Python library used for converting language codes to names.
+#    It must be installed via pip:
+#      pip install pycountry
 #
 # --------------------------------------------------------------------------------------------------
 #  3. USAGE AND EXAMPLES
@@ -110,15 +113,18 @@
 #  4.4. Filename Generation: `_generate_subtitle_filename(...)`
 #  ---
 #
-#    - WHAT: Constructs a descriptive and safe filename for the extracted subtitle file.
-#    - RATIONALE: A good filename prevents conflicts and is informative. The chosen format
-#      `video_basename_sub<order>_idx<index>_<lang>_<codec>.ext` was designed to be:
-#      - `Informative`: Includes the original video name, stream index, language, and codec.
-#      - `Unique`: The combination of order number and stream index prevents accidental overwrites.
-#      - `Safe`: The code sanitizes the generated string by removing characters that are illegal
-#        in filenames across different operating systems.
-#      - `Length-Limited`: It truncates excessively long filenames as a safeguard against file
-#        systems with path length limitations.
+#    - WHAT: Constructs a descriptive, human-readable filename for the extracted subtitle file.
+#    - RATIONALE:
+#      - `Readability`: The format `[VideoName] - [Tag].ext` mirrors standard naming conventions
+#        and removes technical noise (like stream indices).
+#      - `Smart Tag Selection`: It prioritizes the "Title" tag (e.g., "English [Forced]") first,
+#        falling back to "Language", and finally "Unknown". This preserves vital context often
+#        found in track titles.
+#      - `Sanitization`: File-system unsafe characters are removed, but readable characters like
+#        spaces, brackets [], and parentheses () are preserved.
+#      - `Collision Handling`: Since unique stream IDs were removed for cleanliness, the function
+#        automatically detects if a filename exists and appends a counter (e.g., " (1)") to
+#        prevent overwriting.
 #
 #  ---
 #  4.5. Extraction Functions: `_extract_subtitle_streams_as_srt(...)` and `_package_single_subtitle_to_mkv(...)`
@@ -168,6 +174,16 @@
 #        and processed in a predictable, alphabetical order (due to `sorted`).
 #
 # ==================================================================================================
+#  5. UPDATE HISTORY
+# ==================================================================================================
+#
+#  - 2025-12-29 (Revision 3): Expanded language codes to full names.
+#    - Integrated `pycountry` to convert 3-letter codes (eng, ara) to full names (English, Arabic).
+#    - Implemented graceful fallback to original code if `pycountry` is missing or code unknown.
+#    - Refined tag priority and stream selection (Revision 2).
+#    - Maintained 'Forced' track detection and Unicode sanitization.
+#
+# ==================================================================================================
 """
 
 import subprocess
@@ -177,6 +193,11 @@ import glob
 import argparse
 import json
 import chardet  # Required for encoding detection
+
+try:
+    import pycountry # Optional but recommended for language name expansion
+except ImportError:
+    pycountry = None
 
 # Define known text-based subtitle codecs that ffmpeg can reasonably convert to SRT
 KNOWN_TEXT_SUBTITLE_CODECS = [
@@ -222,50 +243,105 @@ def _run_command_and_decode(command_args):
         return None, last_line_of_error, e.returncode
 
 
+def _get_language_name(code):
+    """
+    Converts ISO 639-2 (3-letter) or ISO 639-1 (2-letter) codes to full names.
+    Falls back to the original code if pycountry is missing or name not found.
+    """
+    if not code or not pycountry:
+        return code
+    
+    try:
+        # Try finding by alpha_3 (3-letter) or alpha_2 (2-letter)
+        lang = pycountry.languages.get(alpha_3=code.lower())
+        if not lang:
+            lang = pycountry.languages.get(alpha_2=code.lower())
+        
+        return lang.name if lang else code
+    except Exception:
+        return code
+
+
 def _probe_subtitle_streams(video_path):
     ffprobe_command = [
         "ffprobe",
         "-v", "error",
         "-select_streams", "s",
-        "-show_entries", "stream=index,codec_name,tags",
+        "-show_streams",
+        "-show_entries", "stream=index,codec_name,disposition,tags",
         "-of", "json",
         video_path
     ]
     
-    decoded_stdout, decoded_stderr, returncode = _run_command_and_decode(ffprobe_command)
-
-    if returncode != 0 or decoded_stdout is None:
-        print(f"  FFprobe error while probing subtitles in {video_path}:")
-        print(f"    {decoded_stderr}")
-        return None
-    
+    # JSON output should always be UTF-8. 
+    # We'll use a safer version of _run_command_and_decode logic for JSON specifically.
     try:
+        process = subprocess.run(
+            ffprobe_command,
+            capture_output=True,
+            check=True
+        )
+        # Try UTF-8 first for JSON
+        try:
+            decoded_stdout = process.stdout.decode('utf-8')
+        except UnicodeDecodeError:
+            # Fallback to chardet if UTF-8 fails (extremely rare for JSON)
+            import chardet
+            detected = chardet.detect(process.stdout)['encoding'] or 'utf-8'
+            decoded_stdout = process.stdout.decode(detected, errors='replace')
+            
         probe_data = json.loads(decoded_stdout)
         return probe_data.get("streams", [])
-    except json.JSONDecodeError:
-        print(f"  Error: Could not parse ffprobe JSON output for {video_path}.")
+
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        print(f"  Error probing subtitles in {video_path}: {e}")
         return None
 
 
-def _generate_subtitle_filename(video_basename, stream_info, subtitle_processing_order_num, extension):
-    stream_index = stream_info['index']
-    codec_name = stream_info.get('codec_name', 'unknown').lower()
-    if codec_name == "hdmv_pgs_subtitle": codec_name = "pgs"
-    if codec_name == "dvd_subtitle": codec_name = "dvdsub"
+def _generate_subtitle_filename(video_basename, stream_info, extension, output_dir):
+    tags = stream_info.get('tags', {})
+    disposition = stream_info.get('disposition', {})
+    
+    # Case-insensitive lookup for Title and Language in tags
+    title = None
+    language = None
+    for k, v in tags.items():
+        if k.lower() == 'title':
+            title = v
+        if k.lower() == 'language':
+            language = _get_language_name(v)
 
-    lang_tag = stream_info.get('tags', {}).get('language', '')
-    name_parts = [video_basename, f"sub{subtitle_processing_order_num}", f"idx{stream_index}"]
-    if lang_tag:
-        name_parts.append(lang_tag)
-    name_parts.append(codec_name)
+    # Check for Forced flag in disposition (not tags)
+    is_forced = str(disposition.get('forced', '0')) == '1'
 
-    filename_base = "_".join(name_parts)
-    safe_chars = "._-"
-    filename_base = "".join(c if c.isalnum() or c in safe_chars else '_' for c in filename_base)
-    if len(filename_base) > 180:
-        filename_base = filename_base[:180]
+    # Prioritize Language, then Title, then "Unknown"
+    tag = language if language else (title if title else "Unknown")
 
-    return f"{filename_base}.{extension}"
+    # Add [Forced] suffix if not already in the title
+    if is_forced and "[Forced]" not in tag and "forced" not in tag.lower():
+        tag = f"{tag} [Forced]"
+
+    # Sanitize the tag
+    # Allow alphanumeric (including Unicode letters like Á), spaces, (), [], -, _
+    # Disallow typically risky chars for filenames: \ / : * ? " < > |
+    illegal_chars = r'\/:*?"<>|'
+    sanitized_tag = "".join(c for c in tag if c not in illegal_chars)
+    sanitized_tag = sanitized_tag.strip()
+    
+    # Fallback if sanitization completely emptied the string
+    if not sanitized_tag:
+        sanitized_tag = "Unknown"
+
+    filename = f"{video_basename} - {sanitized_tag}.{extension}"
+    
+    # Collision Handling: Append (1), (2), etc. if file exists
+    base_name_no_ext = f"{video_basename} - {sanitized_tag}"
+    counter = 1
+    while os.path.exists(os.path.join(output_dir, filename)):
+        filename = f"{base_name_no_ext} ({counter}).{extension}"
+        counter += 1
+
+    return filename
 
 
 def _extract_subtitle_streams_as_srt(video_path, subtitle_streams_info, video_basename):
@@ -277,7 +353,7 @@ def _extract_subtitle_streams_as_srt(video_path, subtitle_streams_info, video_ba
     output_dir = os.path.dirname(video_path)
 
     for i, stream_info in enumerate(subtitle_streams_info):
-        output_srt_filename = _generate_subtitle_filename(video_basename, stream_info, i + 1, "srt")
+        output_srt_filename = _generate_subtitle_filename(video_basename, stream_info, "srt", output_dir)
         output_srt_path = os.path.join(output_dir, output_srt_filename)
 
         ffmpeg_command = [
@@ -313,8 +389,8 @@ def _extract_subtitle_streams_as_srt(video_path, subtitle_streams_info, video_ba
 
 
 def _package_single_subtitle_to_mkv(video_path, stream_info, subtitle_order_num, video_basename):
-    output_mkv_filename = _generate_subtitle_filename(video_basename, stream_info, subtitle_order_num, "mkv")
     output_dir = os.path.dirname(video_path)
+    output_mkv_filename = _generate_subtitle_filename(video_basename, stream_info, "mkv", output_dir)
     output_mkv_path = os.path.join(output_dir, output_mkv_filename)
 
     ffmpeg_command = [
