@@ -158,7 +158,7 @@
         "output_extension": "txt",
         "overwrite_original": false,
         "stream_output": false,
-        "group_size": 5,
+        "group_size": 12,
         "group_files": true,
         "validate_json": false,
         "validate_json_keys": false,
