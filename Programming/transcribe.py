@@ -52,16 +52,16 @@ MODEL_ALIASES = {
     "small": "small"
 }
 
-DEFAULT_MODEL_KEY = "large-v3"
+DEFAULT_MODEL_KEY = "turbo"
 DEFAULT_TASK = "transcribe"
 DEFAULT_MIN_SILENCE_DURATION_WT = 100 # ms
 DEFAULT_VAD_THRESHOLD = 0.3
 DEFAULT_MAX_WORD_DURATION = 750       # ms
 
-DEFAULT_ENHANCE = True  # Normalize / Pre-process audio levels
-DEFAULT_ISOLATE = True # Use Demucs to isolate vocals
-DEFAULT_CL = True # Use compression limiter to prevent clipping
-DEFAULT_VAD_ALIGN = False # Enable Silero VAD alignment (heavy)
+DEFAULT_ENHANCE = False  # Normalize / Pre-process audio levels
+DEFAULT_ISOLATE = False # Use Demucs to isolate vocals
+DEFAULT_CL = False # Use compression limiter to prevent clipping
+DEFAULT_VAD_ALIGN = True # Enable Silero VAD alignment (heavy)
 DEFAULT_VAD_FILTER = False  # Enable Whisper internal VAD filter
 
 # --- Custom Pipeline Tracking for Argparse ---
@@ -883,17 +883,19 @@ def main():
     parser.add_argument("--compression_ratio_threshold", type=float, default=DEFAULT_COMPRESSION_RATIO_THRESHOLD)
 
     # Quick mode flag
-    parser.add_argument("-q", "--quick", action="store_true", help="Quick transcription: use turbo model with VAD enabled, disable heavy preprocessing")
+    # High Quality mode flag
+    parser.add_argument("-hq", "--high-quality", action="store_true", help="High Quality: use large-v3 model, enable enhancement, isolation, and limiter")
 
     args = parser.parse_args()
 
     # Apply quick mode settings
-    if args.quick:
-        args.model = "turbo"
-        args.use_vad = True
-        args.enhance = False
-        args.isolate = False
-        args.cl = False
+    # Apply high-quality mode settings
+    if args.high_quality:
+        args.model = "large-v3"
+        args.use_vad = False
+        args.enhance = True
+        args.isolate = True
+        args.cl = True
 
     # Finalize pipeline for default behaviors if no flags were passed
     if not hasattr(args, 'pipeline'):
