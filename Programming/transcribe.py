@@ -30,6 +30,7 @@ import os
 import argparse
 import re
 import glob
+import urllib.parse
 import torch
 import torchaudio
 import torchaudio.transforms as T
@@ -150,6 +151,47 @@ def is_text_file(filepath: str) -> bool:
     except Exception:
         return False
 
+def clean_url(url: str) -> str:
+    """Strips tracking parameters and cleans URLs for supported platforms."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        domain = parsed.netloc.lower()
+        
+        # Site-specific rules
+        if "tiktok.com" in domain or "instagram.com" in domain:
+            # Path contains everything needed. Strip all query params.
+            return parsed._replace(query="").geturl()
+        
+        elif "youtube.com" in domain or "m.youtube.com" in domain:
+            # YouTube: Keep 'v', 't', 'list', 'index'.
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            allowed = {'v', 't', 'list', 'index', 'start', 'end'}
+            new_query = {k: v for k, v in query.items() if k in allowed}
+            return parsed._replace(query=urllib.parse.urlencode(new_query, doseq=True)).geturl()
+            
+        elif "youtu.be" in domain:
+             # Short links: Keep 't'
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            allowed = {'t'}
+            new_query = {k: v for k, v in query.items() if k in allowed}
+            return parsed._replace(query=urllib.parse.urlencode(new_query, doseq=True)).geturl()
+            
+        else:
+            # Generic: Strip common tracking params
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            tracking_params = {
+                'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+                'fbclid', 'gclid', 'cclid', 'igsh', 'share_id', 'share_link_id', 
+                'share_app_id', 'si', '_d', '_svg', 'checksum', 'sec_user_id', 
+                'share_item_id', 'share_region', 'share_scene', 'sharer_language', 'source'
+            }
+            new_query = {k: v for k, v in query.items() if k not in tracking_params}
+            return parsed._replace(query=urllib.parse.urlencode(new_query, doseq=True)).geturl()
+            
+    except Exception as e:
+        print(f"Warning: URL cleaning failed for {url}: {e}")
+        return url
+
 def download_audio(url: str, output_dir: str = None) -> str:
     print(f"⬇️  Downloading audio from: {url}")
     target_dir = output_dir if output_dir else os.getcwd()
@@ -199,7 +241,7 @@ def collect_input_files(paths_or_patterns):
         for pattern in paths_or_patterns:
             # 1. Direct URL (valid for any yt-dlp supported site)
             if pattern.startswith("http://") or pattern.startswith("https://"):
-                urls.add(pattern)
+                urls.add(clean_url(pattern))
                 continue
                 
             # 2. Files via Glob or Direct Path
@@ -219,7 +261,7 @@ def collect_input_files(paths_or_patterns):
                                 for line in f:
                                     line = line.strip()
                                     if line and (line.startswith("http://") or line.startswith("https://")):
-                                        urls.add(line)
+                                        urls.add(clean_url(line))
                         except Exception as e:
                             print(f"   ⚠️  Could not read list file {path}: {e}")
 
