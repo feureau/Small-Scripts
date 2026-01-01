@@ -487,7 +487,7 @@ def load_vad_model():
             return False
     return True
 
-def detect_true_speech_regions(audio_path: str, threshold=0.45, min_silence_ms=120):
+def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD, min_silence_ms=120):
     global vad_model, vad_utils
     if not load_vad_model(): return []
     (get_speech_timestamps, _, _, _, _) = vad_utils
@@ -525,12 +525,34 @@ def detect_true_speech_regions(audio_path: str, threshold=0.45, min_silence_ms=1
         print(f"⚠️ VAD Error (Skipping True VAD): {e}")
         return []
 
-def snap_to_vad(word_start, word_end, regions):
+def snap_to_vad(word_start, word_end, regions, lock_margin=0.4):
+    """
+    Tries to snap Whisper word timestamps to Silero VAD speech regions.
+    - If overlap exists: Snap to VAD boundaries (with 100ms padding).
+    - If no overlap: Check if word is very close (within lock_margin) to a region and snap.
+    """
+    best_match = None
+    min_dist = float('inf')
+    
     for start, end in regions:
-        if end < word_start - 0.2: continue 
-        if start > word_end + 0.2: break 
-        if (start - 0.15) <= word_start and word_end <= (end + 0.15):
-            return max(word_start, start - 0.15), min(word_end, end + 0.15)
+        # 1. Perfect Overlap / Partial Overlap
+        overlap_start = max(word_start, start)
+        overlap_end = min(word_end, end)
+        
+        if overlap_end > overlap_start:
+            # Shift boundaries to match VAD, but keep it within reason
+            return max(word_start - 0.1, start - 0.1), min(word_end + 0.1, end + 0.1)
+
+        # 2. Proximity Check (If word is slightly outside a speech block)
+        dist = min(abs(word_start - end), abs(word_end - start))
+        if dist < min_dist and dist <= lock_margin:
+            min_dist = dist
+            best_match = (start, end)
+
+    if best_match:
+        start, end = best_match
+        return max(word_start - 0.1, start - 0.1), min(word_end + 0.1, end + 0.1)
+            
     return word_start, word_end
 
 # --- Processing Logic ---
@@ -805,7 +827,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         print("   🔍 Aligning with Silero VAD...")
         # Use the enhanced file for VAD if available, as it might help detection too
         vad_source = transcription_source 
-        true_regions = detect_true_speech_regions(vad_source)
+        true_regions = detect_true_speech_regions(vad_source, threshold=args.vad_threshold)
         if true_regions:
             c = 0
             for seg in cleaned_data["segments"]:
@@ -852,7 +874,7 @@ def main():
     parser.add_argument("--task", type=str, default=DEFAULT_TASK, choices=["transcribe", "translate"])
 
     parser.add_argument("--use_vad", action="store_true", default=DEFAULT_VAD_ALIGN, help=f"Enable Silero VAD alignment (Default: {'ON' if DEFAULT_VAD_ALIGN else 'OFF'})")
-    parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD, help="VAD threshold (0-1). Lower is more sensitive. Default: 0.5")
+    parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD, help=f"VAD threshold (0-1). Lower is more sensitive. Default: {DEFAULT_VAD_THRESHOLD}")
     parser.add_argument("--vad_filter", action="store_true", default=None, help="Enable Whisper internal VAD filter")
     parser.add_argument("--no_vad_filter", action="store_false", dest="vad_filter", help="Disable Whisper internal VAD filter")
     
@@ -927,6 +949,7 @@ def main():
     # Quick mode flag
     # High Quality mode flag
     parser.add_argument("-hq", "--high-quality", action="store_true", help="High Quality: use large-v3 model, enable enhancement, isolation, and limiter")
+    parser.add_argument("-c", "--clipboard", action="store_true", help="Process URL from clipboard (Windows Only)")
 
     args = parser.parse_args()
 
@@ -945,6 +968,33 @@ def main():
         if args.cl: args.pipeline.append('cl')
         if args.enhance: args.pipeline.append('enhance')
         if args.isolate: args.pipeline.append('isolate')
+
+    # Explicit Clipboard Mode (-c)
+    if args.clipboard:
+        if sys.platform == 'win32':
+            try:
+                cb = subprocess.check_output(['powershell', '-NoProfile', '-Command', 'Get-Clipboard'], text=True).strip()
+                if cb.startswith(('http://', 'https://')):
+                    print(f"📋 Clipboard Flag Detected: Using URL from clipboard.")
+                    args.files.append(cb)
+                else:
+                    print("⚠️  Clipboard does not contain a valid URL.")
+            except Exception as e:
+                print(f"❌ Failed to read clipboard: {e}")
+        else:
+            print("⚠️  Clipboard support is currently Windows-only.")
+
+    # Interactive Mode (Safe Paste)
+    if not args.files and sys.stdin.isatty():
+        print("💡 Tip: To avoid shell errors with messy URLs (containing '&'), paste them below.")
+        print("      Or use 'transcribe.py -c' to run from clipboard.")
+        user_input = input("🔗 Enter URL or file path: ").strip()
+        
+        if user_input:
+            # Handle quoted input if user added quotes manually
+            if (user_input.startswith('"') and user_input.endswith('"')) or (user_input.startswith("'") and user_input.endswith("'")):
+                user_input = user_input[1:-1]
+            args.files = [user_input]
 
     files_to_process = collect_input_files(args.files)
     if not files_to_process: sys.exit(0)
