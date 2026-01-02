@@ -39,5 +39,4 @@
 
 # File naming
 # Naming: Channel - Date - Title - ID
---output "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s"
-
+--output "%(channel)s - %(upload_date)s - %(title)s [%(id)s] [%(view_count)s].%(ext)s"
