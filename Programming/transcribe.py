@@ -988,13 +988,22 @@ def main():
     if not args.files and sys.stdin.isatty():
         print("💡 Tip: To avoid shell errors with messy URLs (containing '&'), paste them below.")
         print("      Or use 'transcribe.py -c' to run from clipboard.")
-        user_input = input("🔗 Enter URL or file path: ").strip()
+        print("      Press Enter without input to scan current directory tree for media files.")
+        try:
+            user_input = input("🔗 Enter URL or file path (or press Enter to scan): ").strip()
+        except KeyboardInterrupt:
+            print("\n\n👋 Exiting gracefully...")
+            sys.exit(0)
         
         if user_input:
             # Handle quoted input if user added quotes manually
             if (user_input.startswith('"') and user_input.endswith('"')) or (user_input.startswith("'") and user_input.endswith("'")):
                 user_input = user_input[1:-1]
             args.files = [user_input]
+        else:
+            # Empty input - trigger directory scan by leaving args.files empty
+            print("📂 No input provided. Scanning current directory tree...")
+            args.files = []
 
     files_to_process = collect_input_files(args.files)
     if not files_to_process: sys.exit(0)
@@ -1040,8 +1049,9 @@ def main():
                     print(f"   ⚠️  Failed to delete temp file: {e}")
                     
         except KeyboardInterrupt:
-            print("\n🛑 Stopped by user.")
-            break
+            print("\n\n🛑 Processing interrupted by user. Exiting gracefully...")
+            print(f"📊 Results so far: Success: {success_count}, Failed: {fail_count}")
+            sys.exit(0)
         except Exception as e:
             print(f"❌ Critical Error: {e}")
             fail_count += 1
@@ -1049,4 +1059,8 @@ def main():
     print(f"\nDone. Success: {success_count}, Failed: {fail_count}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n🛑 Script interrupted by user. Exiting gracefully...")
+        sys.exit(0)
