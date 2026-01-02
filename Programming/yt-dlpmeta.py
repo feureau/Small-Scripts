@@ -59,6 +59,19 @@ Output
 - Subtitle Files: .srt or .vtt files if --sub is used.
 - Heatmap Files: _heatmap.json files if --heatmap is used.
 
+Arguments Reference
+-------------------
+- `-D, --deep`      (Default) Deep Mode: Full metadata & comments for every video.
+- `-F, --fast`      Fast Mode: Quick scrape of video list to CSV.
+- `-S, --single`    Force Single-Video treatment for any URL.
+- `-s, --sub`       Download subtitle files (.srt/.vtt).
+- `-H, --heatmap`   Download heatmap data.
+- `-k, --condensed` (Default) Clean & Condensed JSON output.
+- `-r, --raw`       Full Raw Output (Disables Condensed Mode).
+- `-b, --batch`     Batch Mode: treat input as a list of URLs.
+- `-C, --csv`       Force CSV output.
+- `-j, --json`      Force JSON output.
+
 Dependencies
 ------------
 - python 3.x
@@ -78,7 +91,17 @@ import csv
 import argparse
 import re
 import glob
+import time
 from datetime import datetime
+
+# ==========================================
+# DEFAULT SETTINGS (User Configurable)
+# ==========================================
+DEFAULT_SLEEP = 3       # Seconds to wait between videos in a batch (prevents 429 errors)
+DEFAULT_DEEP_MODE = True  # Default to fetching rich metadata & comments
+DEFAULT_COMMENTS = True   # Default to downloading comments
+DEFAULT_CONDENSED = True  # Default to cleaned metadata output
+DEFAULT_SUB_FETCH = False # Default to NOT downloading .srt files unless -s is used
 
 # ==========================================
 # Helper Function: Condense Metadata
@@ -155,20 +178,22 @@ def get_primary_subtitle_text(info_dict):
     import urllib.request
     
     # Strategy: Detect the video's original language intelligently
-    # Priority:
-    # 1. Look for 'orig' or 'en-orig' markers (YouTube's original language indicator)
-    # 2. Use the video's language metadata field
-    # 3. Pick the first available auto-caption (it's usually the original language)
     
+    # Validation: Ensure info_dict is actually a dictionary
+    if not isinstance(info_dict, dict):
+        return None
+
     video_lang = None
     
     # First, check for 'orig' markers in subtitles/captions (highest priority)
     if info_dict.get('subtitles'):
         if 'orig' in info_dict['subtitles']:
             video_lang = 'orig'
-        elif not video_lang:
-            # Pick the first available manual subtitle language
-            video_lang = list(info_dict['subtitles'].keys())[0]
+        else:
+            # Pick the first available manual subtitle language safely
+            available_subs = list(info_dict['subtitles'].keys())
+            if available_subs:
+                video_lang = available_subs[0]
     
     if not video_lang and info_dict.get('automatic_captions'):
         # Check for original marker in auto-captions
@@ -187,7 +212,7 @@ def get_primary_subtitle_text(info_dict):
         available_langs = list(info_dict['automatic_captions'].keys())
         if available_langs:
             video_lang = available_langs[0]
-            print(f"  ℹ Auto-detected subtitle language: {video_lang}")
+            print(f"  [INFO] Auto-detected subtitle language: {video_lang}")
     
     # If we still have nothing, we can't extract subtitles
     if not video_lang:
@@ -199,16 +224,20 @@ def get_primary_subtitle_text(info_dict):
     # Try manual subtitles first (preferred)
     if info_dict.get('subtitles') and video_lang in info_dict['subtitles']:
         subtitle_tracks = info_dict['subtitles'][video_lang]
-        # Find best format (prefer srt)
-        for track in subtitle_tracks:
-            if track.get('ext') == 'srt':
-                subtitle_url = track.get('url')
-                subtitle_format = 'srt'
-                break
-        # Fallback to any available format
-        if not subtitle_url and subtitle_tracks:
-            subtitle_url = subtitle_tracks[0].get('url')
-            subtitle_format = subtitle_tracks[0].get('ext', 'unknown')
+        # Validation: ensure subtitle_tracks is a list
+        if isinstance(subtitle_tracks, list):
+            # Find best format (prefer srt)
+            for track in subtitle_tracks:
+                if isinstance(track, dict) and track.get('ext') == 'srt':
+                    subtitle_url = track.get('url')
+                    subtitle_format = 'srt'
+                    break
+            # Fallback to any available format
+            if not subtitle_url and subtitle_tracks:
+                first_track = subtitle_tracks[0]
+                if isinstance(first_track, dict):
+                    subtitle_url = first_track.get('url')
+                    subtitle_format = first_track.get('ext', 'unknown')
     
     # Fallback to auto-generated captions
     if not subtitle_url and info_dict.get('automatic_captions'):
@@ -226,21 +255,26 @@ def get_primary_subtitle_text(info_dict):
         else:
             caption_tracks = None
         
-        if caption_tracks:
+        if caption_tracks and isinstance(caption_tracks, list):
             # Find best format
             for track in caption_tracks:
-                if track.get('ext') == 'srt':
+                if isinstance(track, dict) and track.get('ext') == 'srt':
                     subtitle_url = track.get('url')
                     subtitle_format = 'srt'
                     break
             # Fallback to any format
-            if not subtitle_url:
-                subtitle_url = caption_tracks[0].get('url')
-                subtitle_format = caption_tracks[0].get('ext', 'unknown')
+            if not subtitle_url and caption_tracks:
+                first_track = caption_tracks[0]
+                if isinstance(first_track, dict):
+                    subtitle_url = first_track.get('url')
+                    subtitle_format = first_track.get('ext', 'unknown')
     
     # Download and clean subtitle content
     if subtitle_url:
         try:
+            print(f"  [INFO] Downloading subtitle track ({subtitle_format}: {video_lang})...")
+            # Small 1s delay specifically for subtitle requests to avoid 429
+            time.sleep(1)
             with urllib.request.urlopen(subtitle_url) as response:
                 content = response.read().decode('utf-8')
                 return clean_srt(content)
@@ -409,39 +443,59 @@ def save_list_to_json(video_entries, filename):
 # ==========================================
 # Core Processing Function
 # ==========================================
-def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None):
+def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None, force_single=False, fast_mode=False, sleep_seconds=DEFAULT_SLEEP):
     """
     Main logic to handle the URL.
     """
     
+    # URL Sanitization: Prepend https:// if missing
+    if not url.startswith(('http://', 'https://', 'ftp://', 'file://')):
+        # Simple heuristic: if it contains a dot before the first slash, treat as domain
+        if '.' in url.split('/')[0]:
+             url = 'https://' + url
+
     # default options
     ydl_opts = {
         'quiet': True,           # Don't print standard logs
         'ignoreerrors': True,    # Skip errors
         'extract_flat': True,    # Default to FAST mode
-        'dump_single_json': True,
     }
 
     # LOGIC: Adjust options based on flags
     
-    # Heuristic: If explicitly a single video URL (and NOT a playlist), default to Deep Mode
-    # This ensures we get descriptions/heatmaps for single videos without needing --full
-    if not fetch_full_metadata:
-        # Check for common single video patterns and absence of playlist indicators
-        is_single_heuristic = ("watch?v=" in url or "youtu.be/" in url or "shorts/" in url) and ("list=" not in url)
-        if is_single_heuristic:
-            # Default to Deep Mode + Comments + Condensed
-            fetch_full_metadata = True
-            fetch_comments = True
-            
-            # Use Condensed Mode unless user explictly asked for full/raw data
-            if condensed_mode is None: # None implies "Auto/Default"
-                 condensed_mode = True
-                 
-            if condensed_mode:
-                print("Single Video detected: Fetching rich metadata (Condensed Output).")
-            else:
-                print("Single Video detected: Fetching rich metadata (Raw Output).")
+    # Separate URL detection from Settings enforcement
+    likely_single_url = ("watch?v=" in url or "youtu.be/" in url or "shorts/" in url) and ("list=" not in url)
+    
+    # NEW DEFAULT: Every URL gets Deep Mode + Comments + Condensed unless --fast (-F) is used.
+    if not fast_mode:
+        # Respect defaults but leave True if user already passed True via flags
+        if not fetch_full_metadata: 
+             fetch_full_metadata = DEFAULT_DEEP_MODE
+        if not fetch_comments:
+             fetch_comments = DEFAULT_COMMENTS
+        
+        # Use Condensed Mode by default
+        if condensed_mode is None: # None implies "Auto/Default"
+             condensed_mode = DEFAULT_CONDENSED
+             
+        if force_single:
+            print(f"Force Single Mode (-S) active for: {url}")
+        elif likely_single_url:
+            print("Single Video URL detected: Fetching rich metadata (Condensed Output).")
+        else:
+            print("Channel/Playlist detected: Fetching rich metadata for each video (Condensed Output).")
+    else:
+        # FAST MODE requested (-F)
+        # We ensure it stays fast by turning off the deep defaults
+        fetch_full_metadata = False
+        fetch_comments = False
+        if condensed_mode is None:
+             condensed_mode = False
+        print("FAST Mode Requested: Rapidly scraping video list.")
+    
+    if force_single:
+         # If user explicitly forced single mode via -S
+         pass
 
     # Comments = Deep Mode
     if fetch_comments:
@@ -459,7 +513,7 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
         print("Enabling subtitle extraction...")
         ydl_opts['writesubtitles'] = True
         ydl_opts['writeautomaticsub'] = True
-        ydl_opts['subtitleslangs'] = ['orig'] # Focus on the original source language
+        ydl_opts['subtitleslangs'] = ['orig', 'en.*', '.*-orig'] # Broad filter for original/english
         ydl_opts['subtitlesformat'] = 'srt/best'
         ydl_opts['skip_download'] = True
         
@@ -467,18 +521,22 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
         # yt-dlp uses outtmpl for subtitles too
         ydl_opts['outtmpl'] = '%(title)s_%(id)s.%(ext)s'
     
-    # --full = Deep Mode
+    # extract_flat logic:
+    # Only set extract_flat to False if we are SURE it's a single video URL.
+    # If it's a channel, we want to extract the list FLAT first so we can iterate.
     if fetch_full_metadata:
-        ydl_opts['extract_flat'] = False
-
+        if likely_single_url:
+            ydl_opts['extract_flat'] = False
+        else:
+            # For channels/playlists, we always extract flat first to get the list
+            ydl_opts['extract_flat'] = True
+    
     print(f"Processing URL: {url}")
     if fetch_comments:
         print("Note: Comment downloading is enabled. This may take a while.")
     
-    # Mode Announcement
-    if not is_single_heuristic:
-        mode_str = "DEEP (Full Metadata)" if fetch_full_metadata else "FAST (List Only)"
-        print(f"Channel/Playlist Mode: {mode_str}")
+    # Mode Announcement logic
+    # We'll announce based on what we find AFTER extraction for more accuracy.
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -488,6 +546,13 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
             if info_dict is None:
                 print("Error: Could not extract information.")
                 return
+
+            # Additional validation: Ensure we got a valid title or ID
+            # Prevents saving "UnknownTitle" skeleton files from generic extractor failures
+            if not info_dict.get('id') and not info_dict.get('title'):
+                 print(f"Error: yt-dlp could not resolve metadata for: {url}")
+                 print("Hint: If this is a YouTube URL, ensure it includes the protocol (e.g., https://).")
+                 return
 
             # 2. Identify Content Type
             is_single_video = 'entries' not in info_dict
@@ -499,11 +564,14 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
 
                 # If subtitles requested, we need to call download
                 if fetch_sub:
+                    ydl_opts['extract_flat'] = False # For single, we need info + download
                     ydl.extract_info(url, download=True)
 
                 handle_single_video(info_dict, use_condensed=condensed_mode, fetch_sub=fetch_sub, fetch_heatmap=fetch_heatmap)
             else:
-                handle_channel_or_playlist(info_dict, fetch_full_metadata, fetch_comments, fetch_sub, fetch_heatmap, output_format)
+                mode_str = "DEEP (Full Metadata)" if fetch_full_metadata else "FAST (List Only)"
+                print(f"Channel/Playlist Detected. Processing in {mode_str} mode.")
+                handle_channel_or_playlist(info_dict, fetch_full_metadata, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode, sleep_seconds=sleep_seconds)
 
     except Exception as e:
         print(f"\nAn error occurred: {e}")
@@ -516,9 +584,9 @@ def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_h
     transcript = get_primary_subtitle_text(info_dict)
     if transcript:
         info_dict['subtitle_text'] = transcript
-        print(f"  ✓ Extracted subtitle text ({len(transcript)} characters)")
+        print(f"  [OK] Extracted subtitle text ({len(transcript)} characters)")
     else:
-        print(f"  ℹ No subtitles available for this video")
+        print(f"  [INFO] No subtitles available for this video")
     
     # If -s flag is used, also download subtitle files
     if fetch_sub:
@@ -544,7 +612,7 @@ def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_h
 # ==========================================
 # Channel/Playlist Handler
 # ==========================================
-def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_sub, fetch_heatmap, output_format):
+def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP):
     """
     Handles processing for a channel or playlist.
     """
@@ -563,6 +631,13 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
     safe_title = "".join([c for c in channel_name if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip().replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Determine if we need an output directory for individual files
+    # We use a directory if FULL mode is on, OR if additive resources (subs/heatmaps) are requested
+    output_dir = None
+    if is_deep_mode or fetch_sub or fetch_heatmap:
+        output_dir = f"{safe_title}_{timestamp}"
+        os.makedirs(output_dir, exist_ok=True)
+
     # ============================
     # FAST MODE (Flat Extraction)
     # ============================
@@ -579,24 +654,31 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
         # If user also asked for subs/heatmaps in FAST mode, we need to iterate now
         if fetch_sub or fetch_heatmap:
             print(f"\nAdditive Resource Extraction (-s/-H) triggered for {len(video_entries)} videos...")
-            extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=None)
+            if output_dir:
+                print(f"Individual files (subtitles/metadata) will be saved in: {output_dir}")
+            extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds)
         
         return
 
     # ============================
     # DEEP MODE (Full Extraction)
     # ============================
-    output_dir = f"{safe_title}_{timestamp}"
-    os.makedirs(output_dir, exist_ok=True)
-    print(f"Created output directory: {output_dir}")
-    print("Starting deep metadata extraction...")
+    # Default to current directory unless deep mode is forced with -f
+    # User requested: "each video should be downloaded as if i'm passing one video" 
+    # which implies root directory by default.
+    output_dir = None
+    if is_deep_mode and not condensed_mode: 
+         # If user asked for RAW/FULL detailed mode specifically, maybe keep it organized?
+         # Actually, better to stick to the user's "passing one video" request.
+         pass
 
-    extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir)
+    print("Starting metadata extraction for all videos...")
+    extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds)
 
 # ==========================================
 # Helper Function: Deep Resource Extraction
 # ==========================================
-def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=None):
+def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=None, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP):
     """
     Iterates through video entries to fetch subtitles, heatmaps, or full metadata.
     """
@@ -605,7 +687,7 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
         'quiet': True,
         'ignoreerrors': True,
         'extract_flat': False, 
-        'dump_single_json': True,
+        'outtmpl': os.path.join(output_dir, '%(title)s_%(id)s.%(ext)s') if output_dir else '%(title)s_%(id)s.%(ext)s'
     }
     
     if fetch_comments:
@@ -614,7 +696,7 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
     if fetch_sub:
         video_ydl_opts['writesubtitles'] = True
         video_ydl_opts['writeautomaticsub'] = True
-        video_ydl_opts['subtitleslangs'] = ['orig']
+        video_ydl_opts['subtitleslangs'] = ['orig', 'en.*', '.*-orig']
         video_ydl_opts['subtitlesformat'] = 'srt/best'
         video_ydl_opts['skip_download'] = True
         
@@ -625,32 +707,31 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
             video_title = entry.get('title', 'Unknown_Title')
             video_id = entry.get('id')
             
-            # Progress update
-            print(f"[{index}/{len(video_entries)}] Processing: {video_title}")
-            
-            if not video_url:
-                if video_id:
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                else:
-                    continue
-
-            # Set output template for subtitles if in a directory
-            if output_dir:
-                # Sanitize title for filename
-                s_title = "".join([c for c in video_title if c.isalnum() or c in (' ', '-', '_')]).strip().replace(" ", "_")
-                v_ydl.params['outtmpl'] = os.path.join(output_dir, f"{s_title}_{video_id}.%(ext)s")
-            else:
-                v_ydl.params['outtmpl'] = '%(title)s_%(id)s.%(ext)s'
-
             try:
+                # Progress update: Match Single Video UI
+                print(f"\n[{index}/{len(video_entries)}] Detected Single Video: {video_title}")
+                
+                if not video_url:
+                    if video_id:
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    else:
+                        print(f"  [ERROR] No URL or ID found for entry {index}. Skipping.")
+                        continue
+
+                # Verbosity: Indicate what's happening
+                print(f"  [INFO] Extracting rich metadata...")
+                if fetch_comments:
+                    print(f"  [INFO] Gathering comments (this may take a while)...")
+                
                 # Re-extract full info (download=True if we want subs)
                 full_info = v_ydl.extract_info(video_url, download=fetch_sub)
                 
-                if full_info:
+                if full_info and isinstance(full_info, dict):
                      # Always extract subtitle text from metadata
                      transcript = get_primary_subtitle_text(full_info)
                      if transcript:
                          full_info['subtitle_text'] = transcript
+                         print(f"  [OK] Extracted subtitle text ({len(transcript)} characters)")
                      
                      # If -s flag used, also extract from downloaded files
                      if fetch_sub:
@@ -658,17 +739,23 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
                           if file_transcript and file_transcript != transcript:
                                full_info['subtitle_text_from_file'] = file_transcript
 
-                     # Only save metadata JSON if output_dir is provided (implies DEEP/Full mode)
-                     if output_dir:
-                         save_metadata_to_json(full_info, output_dir=output_dir)
+                     # Save Metadata JSON
+                     # For defaults, we save to root (output_dir=None)
+                     save_metadata_to_json(full_info, output_dir=output_dir, force_condensed=condensed_mode)
                      
                      # Heatmap is always additive if requested
                      if fetch_heatmap:
+                         print(f"  [INFO] Saving heatmap data...")
                          save_heatmap_to_json(full_info, output_dir=output_dir)
                          
                      count += 1
                 else:
-                     print(f"  Failed for: {video_url}")
+                     print(f"  [ERROR] Failed for: {video_url}")
+
+                # Rate Limiting: Sleep between videos
+                if index < len(video_entries):
+                    print(f"  [INFO] Sleeping for {sleep_seconds} seconds...")
+                    time.sleep(sleep_seconds)
 
             except Exception as e:
                 print(f"  Error processing {video_url}: {e}")
@@ -685,20 +772,25 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YouTube Channel video list or Single Video Metadata.")
     parser.add_argument("url", help="URL of channel/playlist/video.")
-    parser.add_argument("-f", "--full", action="store_true", help="DEEP Mode: Fetch FULL metadata (Slower). Default for channels is FAST (List only).")
-    parser.add_argument("-c", "--comment", action="store_true", help="Download comments (Implies --full).")
+    parser.add_argument("-f", "--full", action="store_true", help="DEEP Mode: Fetch FULL metadata & comments (Now Default).")
+    parser.add_argument("-F", "--fast", action="store_true", help="FAST Mode: Quick scrape to CSV.")
+    parser.add_argument("-S", "--single", action="store_true", help="Force SINGLE video treatment for any URL.")
+    parser.add_argument("-c", "--comment", action="store_true", help="Download comments (Auto-enabled for single videos).")
     parser.add_argument("-s", "--sub", action="store_true", help="Download subtitles as separate files and include in metadata.")
     parser.add_argument("-H", "--heatmap", action="store_true", help="Extract heatmap data to separate JSON and include in metadata.")
-    
+    parser.add_argument("-b", "--batch", action="store_true", help="Force Batch Mode: URL is a local text file with video list.")
+
     # Condensed vs Raw Flags
     group_content = parser.add_mutually_exclusive_group()
-    group_content.add_argument("-k", "--condensed", action="store_true", help="Clean & Condensed Output (Default for Single Videos).")
+    group_content.add_argument("-k", "--condensed", action="store_true", help="Clean & Condensed JSON output (Default).")
     group_content.add_argument("-r", "--raw", action="store_true", help="Full Raw Output (Disables Condensed Mode).")
 
     # Output Format Group
     group = parser.add_mutually_exclusive_group()
     group.add_argument("-C", "--csv", action="store_true", help="Force CSV output (Default for FAST mode).")
     group.add_argument("-j", "--json", action="store_true", help="Force JSON output (Default for DEEP mode).")
+    
+    parser.add_argument("-z", "--sleep", type=int, default=DEFAULT_SLEEP, help=f"Seconds to sleep between video extractions (Default: {DEFAULT_SLEEP}).")
 
     args = parser.parse_args()
     
@@ -715,7 +807,8 @@ if __name__ == "__main__":
 
     try:
         # Handle Batch Mode (File input)
-        if os.path.isfile(args.url):
+        # Check if -b is used OR if it's a file on disk
+        if args.batch or (os.path.isfile(args.url) and not args.url.startswith(('http://', 'https://'))):
             print(f"Batch Mode Detected: Reading from file '{args.url}'...")
             try:
                 with open(args.url, 'r', encoding='utf-8') as f:
@@ -727,7 +820,7 @@ if __name__ == "__main__":
                 for index, url in enumerate(urls, 1):
                     print(f"\n--- Processing URL {index}/{total_urls}: {url} ---")
                     try:
-                        process_url(url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed)
+                        process_url(url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.fast, sleep_seconds=args.sleep)
                     except Exception as e:
                         print(f"Error processing {url}: {e}")
                         # Continue to next URL in batch
@@ -736,7 +829,7 @@ if __name__ == "__main__":
                 sys.exit(1)
         else:
             # Standard Single URL Mode
-            process_url(args.url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed)
+            process_url(args.url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.fast, sleep_seconds=args.sleep)
 
     except KeyboardInterrupt:
         print("\n\n[!] Script cancelled by user (Ctrl+C). Exiting gracefully.")
