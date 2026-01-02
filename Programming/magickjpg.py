@@ -247,7 +247,7 @@ def convert_worker(payload):
 
 def main():
     parser = argparse.ArgumentParser(description="Convert images to JPG using ImageMagick")
-    parser.add_argument("pattern", nargs="?", help="Glob pattern for input files (default: all supported types)")
+    parser.add_argument("patterns", nargs="*", help="Glob pattern(s) or file paths (default: all supported types)")
     parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY, help="JPEG quality (1-100)")
     parser.add_argument("-d", "--density", type=int, default=DEFAULT_DENSITY, help="Density (DPI) for vector formats")
     parser.add_argument("-i", "--interlace", choices=["none", "line", "plane", "partition"], default=DEFAULT_INTERLACE, help="JPEG interlace mode")
@@ -259,8 +259,13 @@ def main():
     args = parser.parse_args()
 
     # Build file list
-    if args.pattern:
-        input_files = glob.glob(args.pattern)
+    # Filter out potential empty strings from Windows shell/registry associations
+    valid_patterns = [p for p in args.patterns if p.strip()] if args.patterns else []
+
+    if valid_patterns:
+        input_files = []
+        for p in valid_patterns:
+            input_files.extend(glob.glob(p))
     else:
         input_files = []
         for ext in SUPPORTED_EXTENSIONS:
