@@ -76,6 +76,8 @@ import os
 import json
 import csv
 import argparse
+import re
+import glob
 from datetime import datetime
 
 # ==========================================
@@ -90,12 +92,18 @@ def condense_metadata(info):
         'id', 'title', 'description', 'uploader', 'uploader_id', 'uploader_url',
         'upload_date', 'timestamp', 'duration', 'view_count', 'like_count', 
         'comment_count', 'channel', 'channel_id', 'channel_url', 
-        'categories', 'tags', 'heatmaps', 'webpage_url',
+        'categories', 'tags', 'heatmaps', 'webpage_url', 'transcript',
         'subtitles', 'automatic_captions' # Added for integrated metadata
     ]
     
     condensed = {k: info.get(k) for k in keys_to_keep if info.get(k) is not None}
     
+    # Clean up Subtitles/Captions metadata (too noisy)
+    # Just keep the language keys if available
+    for key in ['subtitles', 'automatic_captions']:
+        if key in condensed and isinstance(condensed[key], dict):
+            condensed[key] = list(condensed[key].keys())
+
     # Simplify Comments
     if 'comments' in info and info['comments']:
         simplified_comments = []
@@ -109,6 +117,74 @@ def condense_metadata(info):
         condensed['comments'] = simplified_comments
     
     return condensed
+
+# ==========================================
+# Helper Function: Clean SRT Content
+# ==========================================
+def clean_srt(content):
+    """
+    Strips timestamps and sequence numbers from SRT content.
+    """
+    # Remove sequence numbers and timestamps
+    # Pattern: \d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}
+    content = re.sub(r'\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}', '', content)
+    
+    # Remove remaining VTT-style timestamps if any
+    content = re.sub(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}', '', content)
+    
+    # Remove HTML tags
+    content = re.sub(r'<[^>]*>', '', content)
+    
+    # Clean up whitespace
+    lines = [line.strip() for line in content.split('\n') if line.strip()]
+    
+    # Remove potential duplicates (common in auto-captions)
+    unique_lines = []
+    for line in lines:
+        if not unique_lines or line != unique_lines[-1]:
+            unique_lines.append(line)
+            
+    return " ".join(unique_lines)
+
+# ==========================================
+# Helper Function: Get Subtitle Content
+# ==========================================
+def get_subtitle_content(video_id, title, output_dir=None):
+    """
+    Locates and reads the primary subtitle file for a video.
+    Returns cleaned text.
+    """
+    # Sanitize title as per outtmpl
+    # ydl_opts['outtmpl'] = '%(title)s_%(id)s.%(ext)s'
+    # Actually yt-dlp might sanitize it differently. Let's use glob with ID.
+    
+    search_pattern = f"*_{video_id}.*.srt"
+    if output_dir:
+        search_pattern = os.path.join(output_dir, search_pattern)
+    
+    files = glob.glob(search_pattern)
+    if not files:
+        # Try without the title prefix just in case (e.g. if title processing was different)
+        search_pattern = f"*{video_id}*.srt"
+        if output_dir:
+            search_pattern = os.path.join(output_dir, search_pattern)
+        files = glob.glob(search_pattern)
+
+    if not files:
+        return None
+
+    # Pick the first one (since we target 'orig' now, it should be the primary track)
+    target_file = files[0]
+
+    # print(f"Reading subtitle: {os.path.basename(target_file)}")
+    
+    try:
+        with open(target_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            return clean_srt(content)
+    except Exception as e:
+        print(f"Error reading subtitle file {target_file}: {e}")
+        return None
 
 # ==========================================
 # Helper Function: Save Metadata (Individual JSON)
@@ -279,6 +355,7 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
         print("Enabling subtitle extraction...")
         ydl_opts['writesubtitles'] = True
         ydl_opts['writeautomaticsub'] = True
+        ydl_opts['subtitleslangs'] = ['orig'] # Focus on the original source language
         ydl_opts['subtitlesformat'] = 'srt/best'
         ydl_opts['skip_download'] = True
         
@@ -331,6 +408,13 @@ def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_h
     title = info_dict.get('title', 'UnknownTitle')
     print(f"Detected Single Video: {title}")
     
+    if fetch_sub:
+        title = info_dict.get('title', 'UnknownTitle')
+        video_id = info_dict.get('id', 'UnknownID')
+        transcript = get_subtitle_content(video_id, title)
+        if transcript:
+             info_dict['transcript'] = transcript
+
     # Save Metadata JSON
     save_metadata_to_json(info_dict, force_condensed=use_condensed)
     
@@ -416,6 +500,7 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
     if fetch_sub:
         video_ydl_opts['writesubtitles'] = True
         video_ydl_opts['writeautomaticsub'] = True
+        video_ydl_opts['subtitleslangs'] = ['orig']
         video_ydl_opts['subtitlesformat'] = 'srt/best'
         video_ydl_opts['skip_download'] = True
         
@@ -448,6 +533,12 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
                 full_info = v_ydl.extract_info(video_url, download=fetch_sub)
                 
                 if full_info:
+                     # If subtitles requested, embed transcript
+                     if fetch_sub:
+                          transcript = get_subtitle_content(video_id, video_title, output_dir=output_dir)
+                          if transcript:
+                               full_info['transcript'] = transcript
+
                      # Only save metadata JSON if output_dir is provided (implies DEEP/Full mode)
                      if output_dir:
                          save_metadata_to_json(full_info, output_dir=output_dir)
