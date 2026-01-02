@@ -41,6 +41,10 @@ import shutil
 import yt_dlp
 import subprocess
 from tqdm import tqdm
+import warnings
+
+# Suppress torchaudio/torchcodec warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -298,6 +302,30 @@ def has_valid_audio_track(file_path: str) -> bool:
         # but let's return False to be safe and skip it.
         print(f"   ⚠️  Probe Error: {e}")
         return False
+
+def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
+    """
+    Extracts audio to a standard 16kHz mono WAV file for processing.
+    """
+    try:
+        wd = output_dir if output_dir else os.path.dirname(input_path)
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        temp_wav = os.path.join(wd, f"{base_name}_base.wav")
+        
+        print(f"   📦 Extracting audio for processing...")
+        cmd = [
+            "ffmpeg", "-y", "-v", "error", "-stats",
+            "-i", input_path,
+            "-map", "0:a:0",
+            "-ar", "16000",
+            "-ac", "1",
+            temp_wav
+        ]
+        subprocess.run(cmd, check=True)
+        return temp_wav
+    except Exception as e:
+        print(f"   ⚠️  Audio Extraction Failed: {e}")
+        return None
 
 def preprocess_audio(input_path: str, output_dir: str = None, 
                      do_normalize=DEFAULT_ENHANCE_NORMALIZE,
@@ -687,6 +715,14 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     transcription_source = file_path
     temp_files_to_cleanup = []
 
+    # 1.4 Base Audio Extraction (Ensures VAD compatibility & single-decode efficiency)
+    is_wav = file_path.lower().endswith(".wav")
+    if not is_wav:
+        base_wav = extract_audio_to_wav(file_path, args.output_dir)
+        if base_wav:
+            transcription_source = base_wav
+            temp_files_to_cleanup.append(base_wav)
+
     # Step: Dynamic Preprocessing Pipeline
     # Follow the order specified in args.pipeline (or the default order)
     for step in getattr(args, 'pipeline', []):
@@ -868,6 +904,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
 def main():
     parser = argparse.ArgumentParser(description="Whisper Transcription Ultimate")
     parser.add_argument("files", nargs="*", help="Files to process")
+    parser.add_argument("-u", "--url", type=str, action="append", help="URLs to process")
     parser.add_argument("-o", "--output_dir", type=str)
     parser.add_argument("-m", "--model", type=str, default=DEFAULT_MODEL_KEY, help=f"Model: {', '.join(MODEL_ALIASES.keys())}")
     parser.add_argument("-l", "--lang", type=str)
@@ -969,6 +1006,11 @@ def main():
         if args.enhance: args.pipeline.append('enhance')
         if args.isolate: args.pipeline.append('isolate')
 
+    # Collect URLs from flags
+    if args.url:
+        for u in args.url:
+            args.files.append(u)
+
     # Explicit Clipboard Mode (-c)
     if args.clipboard:
         if sys.platform == 'win32':
@@ -984,26 +1026,10 @@ def main():
         else:
             print("⚠️  Clipboard support is currently Windows-only.")
 
-    # Interactive Mode (Safe Paste)
-    if not args.files and sys.stdin.isatty():
-        print("💡 Tip: To avoid shell errors with messy URLs (containing '&'), paste them below.")
-        print("      Or use 'transcribe.py -c' to run from clipboard.")
-        print("      Press Enter without input to scan current directory tree for media files.")
-        try:
-            user_input = input("🔗 Enter URL or file path (or press Enter to scan): ").strip()
-        except KeyboardInterrupt:
-            print("\n\n👋 Exiting gracefully...")
-            sys.exit(0)
-        
-        if user_input:
-            # Handle quoted input if user added quotes manually
-            if (user_input.startswith('"') and user_input.endswith('"')) or (user_input.startswith("'") and user_input.endswith("'")):
-                user_input = user_input[1:-1]
-            args.files = [user_input]
-        else:
-            # Empty input - trigger directory scan by leaving args.files empty
-            print("📂 No input provided. Scanning current directory tree...")
-            args.files = []
+    # Directory Scan is default if no input provided
+    if not args.files:
+        print("📂 No input provided. Scanning current directory tree...")
+        # collect_input_files handle the scan if list is empty
 
     files_to_process = collect_input_files(args.files)
     if not files_to_process: sys.exit(0)
