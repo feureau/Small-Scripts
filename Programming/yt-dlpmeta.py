@@ -92,6 +92,7 @@ import argparse
 import re
 import glob
 import time
+import random
 from datetime import datetime
 
 # ==========================================
@@ -271,16 +272,36 @@ def get_primary_subtitle_text(info_dict):
     
     # Download and clean subtitle content
     if subtitle_url:
-        try:
-            print(f"  [INFO] Downloading subtitle track ({subtitle_format}: {video_lang})...")
-            # Small 1s delay specifically for subtitle requests to avoid 429
-            time.sleep(1)
-            with urllib.request.urlopen(subtitle_url) as response:
-                content = response.read().decode('utf-8')
-                return clean_srt(content)
-        except Exception as e:
-            print(f"  Warning: Could not download subtitle from {subtitle_url[:50]}... - {e}")
-            return None
+        max_retries = 3
+        retry_delay = 5 # Initial delay
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                     print(f"  [INFO] Retrying subtitle download (Attempt {attempt + 1}/{max_retries})...")
+                     time.sleep(retry_delay)
+                     retry_delay *= 2 # Exponential backoff
+                
+                print(f"  [INFO] Downloading subtitle track ({subtitle_format}: {video_lang})...")
+                
+                # Use headers to avoid 429
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                req = urllib.request.Request(subtitle_url, headers=headers)
+                
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    content = response.read().decode('utf-8')
+                    return clean_srt(content)
+                    
+            except Exception as e:
+                if "429" in str(e):
+                    print(f"  [WARN] Rate limited (429) during subtitle download.")
+                    if attempt == max_retries - 1:
+                        print("  [ERROR] Max retries reached for subtitles.")
+                else:
+                    print(f"  Warning: Could not download subtitle - {e}")
+                    break # Not a rate limit issue, don't retry
     
     return None
 
@@ -578,24 +599,27 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
 
 def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_heatmap=False):
     title = info_dict.get('title', 'UnknownTitle')
+    video_id = info_dict.get('id', 'UnknownID')
     print(f"Detected Single Video: {title}")
     
-    # Always try to extract subtitle text from metadata
-    transcript = get_primary_subtitle_text(info_dict)
+    # Optimized Subtitle Extraction logic:
+    # 1. If -s was used, try reading from disk first
+    transcript = None
+    if fetch_sub:
+        transcript = get_subtitle_content(video_id, title)
+        if transcript:
+             print(f"  [OK] Extracted subtitle text from local file.")
+    
+    # 2. Fallback to extracting from metadata/URL
+    if not transcript:
+        transcript = get_primary_subtitle_text(info_dict)
+        if transcript:
+            print(f"  [OK] Extracted subtitle text from metadata ({len(transcript)} characters)")
+        else:
+            print(f"  [INFO] No subtitles available for this video")
+    
     if transcript:
         info_dict['subtitle_text'] = transcript
-        print(f"  [OK] Extracted subtitle text ({len(transcript)} characters)")
-    else:
-        print(f"  [INFO] No subtitles available for this video")
-    
-    # If -s flag is used, also download subtitle files
-    if fetch_sub:
-        video_id = info_dict.get('id', 'UnknownID')
-        file_transcript = get_subtitle_content(video_id, title)
-        if file_transcript:
-            # Store file-based transcript separately if different
-            if file_transcript != transcript:
-                info_dict['subtitle_text_from_file'] = file_transcript
 
     # Save Metadata JSON
     save_metadata_to_json(info_dict, force_condensed=use_condensed)
@@ -618,14 +642,34 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
     """
     channel_name = info_dict.get('uploader', info_dict.get('title', 'Unknown_Channel'))
     
+    video_entries = []
     if 'entries' in info_dict:
-        # Convert to list immediately
-        video_entries = list(info_dict['entries'])
+        # YouTube channels often return "Tabs" (Videos, Live, Shorts) as top-level entries
+        # when extract_flat is True. We need to flatten these.
+        raw_entries = list(info_dict['entries'])
+        seen_ids = set()
+        
+        for entry in raw_entries:
+            # If the entry is a sub-playlist (like a channel tab), grab its contents
+            if entry.get('_type') == 'playlist' and 'entries' in entry:
+                for sub_entry in entry['entries']:
+                    eid = sub_entry.get('id')
+                    if eid and eid not in seen_ids:
+                        video_entries.append(sub_entry)
+                        seen_ids.add(eid)
+            else:
+                eid = entry.get('id')
+                # Skip if it's already a channel ID or invalid
+                if eid and eid not in seen_ids:
+                    # Basic heuristic: video IDs are usually not the same as the parent ID
+                    if eid != info_dict.get('id'):
+                        video_entries.append(entry)
+                        seen_ids.add(eid)
     else:
         print("No videos found.")
         return
 
-    print(f"Found {len(video_entries)} videos.")
+    print(f"Found {len(video_entries)} unique videos.")
 
     # Sanitize channel name for filenames
     safe_title = "".join([c for c in channel_name if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip().replace(" ", "_")
@@ -708,15 +752,20 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
             video_id = entry.get('id')
             
             try:
-                # Progress update: Match Single Video UI
-                print(f"\n[{index}/{len(video_entries)}] Detected Single Video: {video_title}")
-                
+                # Filter: Skip entries that aren't videos (e.g. channel tabs that didn't flatten)
+                if entry.get('_type') == 'playlist' and 'entries' not in entry:
+                    print(f"\n[{index}/{len(video_entries)}] Skipping non-video entry: {video_title}")
+                    continue
+
                 if not video_url:
-                    if video_id:
+                    if video_id and len(video_id) == 11: # Standard YouTube Video ID length
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
                     else:
-                        print(f"  [ERROR] No URL or ID found for entry {index}. Skipping.")
+                        print(f"\n[{index}/{len(video_entries)}] [SKIP] Invalid video ID/URL: {video_title}")
                         continue
+
+                # Progress update: Match Single Video UI
+                print(f"\n[{index}/{len(video_entries)}] Detected Single Video: {video_title}")
 
                 # Verbosity: Indicate what's happening
                 print(f"  [INFO] Extracting rich metadata...")
@@ -727,17 +776,22 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
                 full_info = v_ydl.extract_info(video_url, download=fetch_sub)
                 
                 if full_info and isinstance(full_info, dict):
-                     # Always extract subtitle text from metadata
-                     transcript = get_primary_subtitle_text(full_info)
-                     if transcript:
-                         full_info['subtitle_text'] = transcript
-                         print(f"  [OK] Extracted subtitle text ({len(transcript)} characters)")
-                     
-                     # If -s flag used, also extract from downloaded files
+                     # Optimized Subtitle Extraction logic:
+                     # 1. If -s was used, try reading from disk first (avoids HTTP request)
+                     transcript = None
                      if fetch_sub:
-                          file_transcript = get_subtitle_content(video_id, video_title, output_dir=output_dir)
-                          if file_transcript and file_transcript != transcript:
-                               full_info['subtitle_text_from_file'] = file_transcript
+                          transcript = get_subtitle_content(video_id, video_title, output_dir=output_dir)
+                          if transcript:
+                               print(f"  [OK] Extracted subtitle text from local file.")
+                     
+                     # 2. Fallback to extracting from metadata/URL if not found on disk OR if -s was NOT used
+                     if not transcript:
+                          transcript = get_primary_subtitle_text(full_info)
+                          if transcript:
+                               print(f"  [OK] Extracted subtitle text from metadata ({len(transcript)} characters)")
+                     
+                     if transcript:
+                          full_info['subtitle_text'] = transcript
 
                      # Save Metadata JSON
                      # For defaults, we save to root (output_dir=None)
@@ -745,17 +799,19 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
                      
                      # Heatmap is always additive if requested
                      if fetch_heatmap:
-                         print(f"  [INFO] Saving heatmap data...")
-                         save_heatmap_to_json(full_info, output_dir=output_dir)
-                         
+                          print(f"  [INFO] Saving heatmap data...")
+                          save_heatmap_to_json(full_info, output_dir=output_dir)
+                          
                      count += 1
                 else:
                      print(f"  [ERROR] Failed for: {video_url}")
 
-                # Rate Limiting: Sleep between videos
+                # Rate Limiting: Sleep between videos with Jitter
                 if index < len(video_entries):
-                    print(f"  [INFO] Sleeping for {sleep_seconds} seconds...")
-                    time.sleep(sleep_seconds)
+                    jitter = random.uniform(0, 2)
+                    total_sleep = sleep_seconds + jitter
+                    print(f"  [INFO] Sleeping for {total_sleep:.2f} seconds...")
+                    time.sleep(total_sleep)
 
             except Exception as e:
                 print(f"  Error processing {video_url}: {e}")
