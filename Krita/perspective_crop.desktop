@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=perspective_crop
+X-Python-2-Compatible=false
+X-Krita-Manual=Manual.html
+Name=Perspective Crop Tool
+Comment=A tool to crop and fix perspective in one go.
