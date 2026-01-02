@@ -33,25 +33,24 @@ import shutil
 import filecmp
 import argparse
 
+def get_long_path(path):
+    """Handle long paths on Windows by prepending \\\\?\\ to absolute paths."""
+    abs_path = os.path.abspath(path)
+    if os.name == 'nt' and len(abs_path) > 260 and not abs_path.startswith('\\\\?\\'):
+        return '\\\\?\\' + abs_path
+    return abs_path
+
 def safe_exists(path):
     """Check if path exists, handling long paths on Windows."""
-    if os.name == 'nt' and len(os.path.abspath(path)) > 260:
-        path = r'\\?\ ' + os.path.abspath(path)
-    return os.path.exists(path)
+    return os.path.exists(get_long_path(path))
 
 def safe_cmp(src, dst):
     """Compare files, handling long paths on Windows."""
-    if os.name == 'nt' and (len(os.path.abspath(src)) > 260 or len(os.path.abspath(dst)) > 260):
-        src = r'\\?\ ' + os.path.abspath(src)
-        dst = r'\\?\ ' + os.path.abspath(dst)
-    return filecmp.cmp(src, dst, shallow=False)
+    return filecmp.cmp(get_long_path(src), get_long_path(dst), shallow=False)
 
 def safe_move(src, dst):
     """Move file, handling long paths on Windows."""
-    if os.name == 'nt' and len(os.path.abspath(dst)) > 260:
-        src = r'\\?\ ' + os.path.abspath(src)
-        dst = r'\\?\ ' + os.path.abspath(dst)
-    shutil.move(src, dst)
+    shutil.move(get_long_path(src), get_long_path(dst))
 
 def flatten_directory_tree(root_dir, prefix=False, folders=None):
     """
@@ -82,7 +81,7 @@ def flatten_directory_tree(root_dir, prefix=False, folders=None):
                 if safe_cmp(src_path, dest_path):
                     print(f"Duplicate found: {src_path} (identical to {dest_path}). Deleting source.")
                     try:
-                        os.remove(src_path)
+                        os.remove(get_long_path(src_path))
                     except OSError as e:
                         print(f"Error deleting duplicate {src_path}: {e}")
                     continue
@@ -104,7 +103,7 @@ def flatten_directory_tree(root_dir, prefix=False, folders=None):
         # Remove empty directories after moving files
         if dirpath != root_dir:
             try:
-                os.rmdir(dirpath)
+                os.rmdir(get_long_path(dirpath))
                 print(f"Removed empty directory: {dirpath}")
             except OSError as e:
                 print(f"Could not remove directory {dirpath}: {e}")
@@ -113,7 +112,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Flatten directory tree with optional folder prefixing and selection.")
     parser.add_argument('-p', '--prefix-folder', action='store_true', help="Prefix filenames with their folder name.")
     parser.add_argument('-f', '--folders', nargs='+', help="Only flatten the specified folder names (multiple allowed).")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
 
     current_dir = os.getcwd()  # The directory where the script is called
     flatten_directory_tree(current_dir, args.prefix_folder, args.folders)
