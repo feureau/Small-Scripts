@@ -92,17 +92,14 @@ def condense_metadata(info):
         'id', 'title', 'description', 'uploader', 'uploader_id', 'uploader_url',
         'upload_date', 'timestamp', 'duration', 'view_count', 'like_count', 
         'comment_count', 'channel', 'channel_id', 'channel_url', 
-        'categories', 'tags', 'heatmaps', 'webpage_url', 'transcript',
-        'subtitles', 'automatic_captions' # Added for integrated metadata
+        'categories', 'tags', 'heatmaps', 'webpage_url', 'subtitle_text',
+        'language'  # Include language to show video's original language
     ]
     
     condensed = {k: info.get(k) for k in keys_to_keep if info.get(k) is not None}
     
-    # Clean up Subtitles/Captions metadata (too noisy)
-    # Just keep the language keys if available
-    for key in ['subtitles', 'automatic_captions']:
-        if key in condensed and isinstance(condensed[key], dict):
-            condensed[key] = list(condensed[key].keys())
+    # Note: We preserve subtitles/automatic_captions structure for now
+    # The get_primary_subtitle_text function will handle extraction
 
     # Simplify Comments
     if 'comments' in info and info['comments']:
@@ -145,6 +142,113 @@ def clean_srt(content):
             unique_lines.append(line)
             
     return " ".join(unique_lines)
+
+# ==========================================
+# Helper Function: Get Primary Subtitle Text
+# ==========================================
+def get_primary_subtitle_text(info_dict):
+    """
+    Extracts subtitle text in the video's original language.
+    Prioritizes manual subtitles, falls back to auto-generated.
+    Returns cleaned subtitle text or None.
+    """
+    import urllib.request
+    
+    # Strategy: Detect the video's original language intelligently
+    # Priority:
+    # 1. Look for 'orig' or 'en-orig' markers (YouTube's original language indicator)
+    # 2. Use the video's language metadata field
+    # 3. Pick the first available auto-caption (it's usually the original language)
+    
+    video_lang = None
+    
+    # First, check for 'orig' markers in subtitles/captions (highest priority)
+    if info_dict.get('subtitles'):
+        if 'orig' in info_dict['subtitles']:
+            video_lang = 'orig'
+        elif not video_lang:
+            # Pick the first available manual subtitle language
+            video_lang = list(info_dict['subtitles'].keys())[0]
+    
+    if not video_lang and info_dict.get('automatic_captions'):
+        # Check for original marker in auto-captions
+        if 'en-orig' in info_dict['automatic_captions']:
+            video_lang = 'en-orig'
+        elif 'orig' in info_dict['automatic_captions']:
+            video_lang = 'orig'
+    
+    # If still no language detected, try the metadata language field
+    if not video_lang:
+        video_lang = info_dict.get('language', None)
+    
+    # Final fallback: pick the first available auto-caption language
+    # (YouTube always generates captions in the video's original language first)
+    if not video_lang and info_dict.get('automatic_captions'):
+        available_langs = list(info_dict['automatic_captions'].keys())
+        if available_langs:
+            video_lang = available_langs[0]
+            print(f"  ℹ Auto-detected subtitle language: {video_lang}")
+    
+    # If we still have nothing, we can't extract subtitles
+    if not video_lang:
+        return None
+    
+    subtitle_url = None
+    subtitle_format = None
+    
+    # Try manual subtitles first (preferred)
+    if info_dict.get('subtitles') and video_lang in info_dict['subtitles']:
+        subtitle_tracks = info_dict['subtitles'][video_lang]
+        # Find best format (prefer srt)
+        for track in subtitle_tracks:
+            if track.get('ext') == 'srt':
+                subtitle_url = track.get('url')
+                subtitle_format = 'srt'
+                break
+        # Fallback to any available format
+        if not subtitle_url and subtitle_tracks:
+            subtitle_url = subtitle_tracks[0].get('url')
+            subtitle_format = subtitle_tracks[0].get('ext', 'unknown')
+    
+    # Fallback to auto-generated captions
+    if not subtitle_url and info_dict.get('automatic_captions'):
+        # Try the detected language
+        if video_lang in info_dict['automatic_captions']:
+            caption_tracks = info_dict['automatic_captions'][video_lang]
+        # Try 'orig' marker
+        elif 'orig' in info_dict['automatic_captions']:
+            caption_tracks = info_dict['automatic_captions']['orig']
+        elif 'en-orig' in info_dict['automatic_captions']:
+            caption_tracks = info_dict['automatic_captions']['en-orig']
+        # Try English as last resort
+        elif 'en' in info_dict['automatic_captions']:
+            caption_tracks = info_dict['automatic_captions']['en']
+        else:
+            caption_tracks = None
+        
+        if caption_tracks:
+            # Find best format
+            for track in caption_tracks:
+                if track.get('ext') == 'srt':
+                    subtitle_url = track.get('url')
+                    subtitle_format = 'srt'
+                    break
+            # Fallback to any format
+            if not subtitle_url:
+                subtitle_url = caption_tracks[0].get('url')
+                subtitle_format = caption_tracks[0].get('ext', 'unknown')
+    
+    # Download and clean subtitle content
+    if subtitle_url:
+        try:
+            with urllib.request.urlopen(subtitle_url) as response:
+                content = response.read().decode('utf-8')
+                return clean_srt(content)
+        except Exception as e:
+            print(f"  Warning: Could not download subtitle from {subtitle_url[:50]}... - {e}")
+            return None
+    
+    return None
 
 # ==========================================
 # Helper Function: Get Subtitle Content
@@ -408,12 +512,22 @@ def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_h
     title = info_dict.get('title', 'UnknownTitle')
     print(f"Detected Single Video: {title}")
     
+    # Always try to extract subtitle text from metadata
+    transcript = get_primary_subtitle_text(info_dict)
+    if transcript:
+        info_dict['subtitle_text'] = transcript
+        print(f"  ✓ Extracted subtitle text ({len(transcript)} characters)")
+    else:
+        print(f"  ℹ No subtitles available for this video")
+    
+    # If -s flag is used, also download subtitle files
     if fetch_sub:
-        title = info_dict.get('title', 'UnknownTitle')
         video_id = info_dict.get('id', 'UnknownID')
-        transcript = get_subtitle_content(video_id, title)
-        if transcript:
-             info_dict['transcript'] = transcript
+        file_transcript = get_subtitle_content(video_id, title)
+        if file_transcript:
+            # Store file-based transcript separately if different
+            if file_transcript != transcript:
+                info_dict['subtitle_text_from_file'] = file_transcript
 
     # Save Metadata JSON
     save_metadata_to_json(info_dict, force_condensed=use_condensed)
@@ -533,11 +647,16 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
                 full_info = v_ydl.extract_info(video_url, download=fetch_sub)
                 
                 if full_info:
-                     # If subtitles requested, embed transcript
+                     # Always extract subtitle text from metadata
+                     transcript = get_primary_subtitle_text(full_info)
+                     if transcript:
+                         full_info['subtitle_text'] = transcript
+                     
+                     # If -s flag used, also extract from downloaded files
                      if fetch_sub:
-                          transcript = get_subtitle_content(video_id, video_title, output_dir=output_dir)
-                          if transcript:
-                               full_info['transcript'] = transcript
+                          file_transcript = get_subtitle_content(video_id, video_title, output_dir=output_dir)
+                          if file_transcript and file_transcript != transcript:
+                               full_info['subtitle_text_from_file'] = file_transcript
 
                      # Only save metadata JSON if output_dir is provided (implies DEEP/Full mode)
                      if output_dir:
