@@ -84,9 +84,55 @@ This section explains *why* the script is built the way it is.
 
 import pypandoc
 import sys
-import os
 import glob
 from pathlib import Path
+
+# Optional PDF conversion dependencies
+try:
+    import markdown
+    from xhtml2pdf import pisa
+    LIB_PDF_AVAILABLE = True
+except ImportError:
+    LIB_PDF_AVAILABLE = False
+
+def convert_to_pdf_lib(input_path, output_path, input_format=None):
+    """
+    Convert a file to PDF using xhtml2pdf (pisa).
+    Supports MD, TXT, HTML directly. 
+    Supports DOCX by converting to HTML via pypandoc first.
+    """
+    if not LIB_PDF_AVAILABLE:
+        raise RuntimeError("Missing xhtml2pdf or markdown libraries for library-based PDF conversion.")
+    
+    file_path = Path(input_path)
+    ext = file_path.suffix.lower()
+    
+    html_content = ""
+    
+    if input_format == 'markdown' or ext in ('.md', '.markdown'):
+        text = file_path.read_text(encoding='utf-8')
+        # Use simple markdown for robust conversion
+        html_content = markdown.markdown(text, extensions=['extra', 'codehilite'])
+    elif ext == '.txt':
+        text = file_path.read_text(encoding='utf-8')
+        html_content = f"<html><body><pre>{text}</pre></body></html>"
+    elif input_format == 'docx' or ext == '.docx':
+        # Convert DOCX to HTML via Pandoc first
+        html_content = pypandoc.convert_file(str(file_path), 'html')
+    elif input_format == 'html' or ext in ('.html', '.htm'):
+        html_content = file_path.read_text(encoding='utf-8')
+    else:
+        # Fallback: try to let pandoc handle the HTML conversion if we can't guess
+        try:
+            html_content = pypandoc.convert_file(str(file_path), 'html')
+        except:
+            return False
+
+    # Create the PDF
+    with open(output_path, "wb") as pdf_file:
+        pisa_status = pisa.CreatePDF(html_content, dest=pdf_file)
+    
+    return not pisa_status.err
 
 def ensure_pandoc():
     """
@@ -114,7 +160,7 @@ def ensure_pandoc():
             print("- Or run: conda install -c conda-forge pandoc")
             return False
 
-def convert_files(input_pattern, output_format='docx', input_format=None):
+def convert_files(input_pattern, output_format='docx', input_format=None, force_pandoc=False):
     """
     Convert files matching the input pattern to the specified format.
     
@@ -122,6 +168,7 @@ def convert_files(input_pattern, output_format='docx', input_format=None):
         input_pattern (str): File pattern to match (e.g., "*.md", "file.txt")
         output_format (str): Target format for conversion (default: 'docx')
         input_format (str, optional): Explicit input format for pandoc.
+        force_pandoc (bool): Skip xhtml2pdf and use raw pandoc for PDF.
     """
     if not ensure_pandoc():
         print("Cannot proceed without pandoc")
@@ -163,7 +210,19 @@ def convert_files(input_pattern, output_format='docx', input_format=None):
                 continue
             
             output_filename = file_path.with_suffix(f'.{output_format}')
-            print(f"Converting {file_path.name} to {output_filename.name}...")
+
+            if output_format.lower() == 'pdf' and not force_pandoc:
+                print(f"Converting {file_path.name} to {output_filename.name} using xhtml2pdf...")
+                try:
+                    if convert_to_pdf_lib(file_path, output_filename, input_format):
+                        print(f"  ✓ Success")
+                        converted_count += 1
+                        continue
+                    else:
+                        print(f"  ✗ xhtml2pdf failed, falling back to Pandoc...")
+                except Exception as e:
+                    print(f"  ! Library conversion skipped: {e}")
+                    print(f"  → Falling back to Pandoc (requires system PDF engine)...")
 
             # Determine the input format specifier for Pandoc
             format_specifier = input_format  # Prioritize user-provided format
@@ -174,10 +233,11 @@ def convert_files(input_pattern, output_format='docx', input_format=None):
             if format_specifier:
                 print(f"  → Explicitly using input format: '{format_specifier}'")
 
+            print(f"Converting {file_path.name} to {output_filename.name}...")
             pypandoc.convert_file(
                 str(file_path),
                 output_format,
-                format=format_specifier,  # This will be user's choice, our guess for .txt, or None
+                format=format_specifier,
                 outputfile=str(output_filename)
             )
             
@@ -206,12 +266,14 @@ Arguments:
 
 Options:
   -f, --from [format]    Explicitly specify the input format (e.g., markdown, latex, html, rtf)
+  -p, --pandoc           Force use of Pandoc for PDF (requires system PDF engine)
   -h, --help             Show this help message
 
 Examples:
   python pandoc_converter.py "*.md" docx               # Convert all .md files to .docx
-  python pandoc_converter.py "report.txt" pdf          # Auto-detect .txt as markdown
-  python pandoc_converter.py "book.epub" odt -f epub   # Explicitly define input format
+  python pandoc_converter.py "report.md" pdf           # Convert MD to PDF using xhtml2pdf
+  python pandoc_converter.py "book.docx" pdf           # Convert DOCX to PDF (hybrid pipeline)
+  python pandoc_converter.py "paper.md" pdf --pandoc   # Force Pandoc (requires LaTeX/etc)
 """
     print(help_text)
 
@@ -226,22 +288,24 @@ def main():
     input_pattern = args.pop(0)
     output_format = 'docx'
     input_format = None
+    force_pandoc = False
     
     # Check if output_format is provided and it's not a flag
     if args and not args[0].startswith('-'):
         output_format = args.pop(0)
         
-    # Check for the input format flag
+    # Manual flag parsing
     if '-f' in args:
         idx = args.index('-f')
-        if len(args) > idx + 1:
-            input_format = args[idx+1]
+        if len(args) > idx + 1: input_format = args[idx+1]
     elif '--from' in args:
         idx = args.index('--from')
-        if len(args) > idx + 1:
-            input_format = args[idx+1]
+        if len(args) > idx + 1: input_format = args[idx+1]
+    
+    if '-p' in args or '--pandoc' in args:
+        force_pandoc = True
 
-    convert_files(input_pattern, output_format, input_format)
+    convert_files(input_pattern, output_format, input_format, force_pandoc)
 
 if __name__ == "__main__":
     main()
