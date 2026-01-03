@@ -210,7 +210,10 @@ def generate_group_base_name(filepaths_group):
 def hash_file(path, chunk_size=1024 * 1024):
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        while chunk := f.read(chunk_size):
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
             h.update(chunk)
     return h.hexdigest()
 
@@ -453,7 +456,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
             )
             return response['message']['content']
     except Exception as e:
-        return f"Error calling Ollama API: {str(e)}"
+        return f"Error: Ollama API: {str(e)}"
 
 def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_output=False, **kwargs):
     headers = {"Content-Type": "application/json"}
@@ -600,7 +603,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             clean_markdown=kwargs.get('clean_markdown', True) # Pass clean setting
         )
         
-        if response and response.startswith("Error:"): raise Exception(response)
+        if response and str(response).strip().startswith("Error"): 
+            raise Exception(response)
 
         # --- JSON VALIDITY CHECK ---
         if kwargs.get('validate_json', False):
@@ -1298,7 +1302,10 @@ class AppGUI(tk.Tk):
                         self.result_queue.put({'job_id': jid, 'status': 'Failed (Blocked)'})
                         break
 
-                    is_quota = isinstance(e, QuotaExhaustedError) or "Quota exhausted" in str(e) or "429" in str(e)
+                    is_quota = (isinstance(e, QuotaExhaustedError) or 
+                                "Quota exhausted" in str(e) or 
+                                "429" in str(e) or 
+                                "Open WebUI: Server Connection Error" in str(e))
                     if is_quota:
                         console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
                         self.result_queue.put({'job_id': jid, 'status': 'Waiting for User...'})
