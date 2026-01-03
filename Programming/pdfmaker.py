@@ -279,8 +279,8 @@ def convert_image_to_pdf(img_path, dpi, compression, rotate, resize, grayscale, 
 
 
 def merge_to_pdf(files, output_pdf, dpi, compression, rotate, resize, grayscale,
-                 order, pdf_engine, use_pandoc, verbose):
-    """Convert each file to PDF then merge into one PDF."""
+                 order, pdf_engine, use_pandoc, individual, verbose):
+    """Convert each file to PDF then merge into one PDF (or keep individual)."""
     files = sorted(files, key=os.path.getmtime) if order=='date' else sorted(files)
     temp_pdfs = []
     success_count = 0
@@ -292,15 +292,25 @@ def merge_to_pdf(files, output_pdf, dpi, compression, rotate, resize, grayscale,
             # *** UPDATED THIS LINE TO INCLUDE .tif ***
             if ext in ['.jpg','.jpeg','.png','.gif','.bmp','.tiff', '.tif']:
                 pdf_path = convert_image_to_pdf(f, dpi, compression, rotate, resize, grayscale, verbose)
-                temp_pdfs.append(pdf_path)
                 success_count += 1
             elif ext in ['.docx','.md','.txt']:
                 pdf_path = convert_doc_to_pdf(f, pdf_engine, use_pandoc, verbose)
-                temp_pdfs.append(pdf_path)
                 success_count += 1
             else:
                 if verbose:
                     print(f"Skipping unsupported file type: {f}")
+                continue
+
+            if individual:
+                # If individual mode, move the temp PDF to the final destination
+                final_output = os.path.splitext(f)[0] + ".pdf"
+                if verbose:
+                    print(f"Saving individual PDF: {final_output}")
+                import shutil
+                shutil.move(pdf_path, final_output)
+            else:
+                temp_pdfs.append(pdf_path)
+
         except (Image.UnidentifiedImageError, FileNotFoundError) as e:
              print(f"Error opening or identifying file {f}: {e}", file=sys.stderr)
              error_count += 1
@@ -321,6 +331,12 @@ def merge_to_pdf(files, output_pdf, dpi, compression, rotate, resize, grayscale,
                 import traceback
                 traceback.print_exc()
 
+    if individual:
+        print("-" * 20)
+        print(f"Successfully converted {success_count} file(s) to individual PDFs.")
+        if error_count > 0:
+            print(f"Encountered errors with {error_count} file(s).", file=sys.stderr)
+        return
 
     if not temp_pdfs:
         print("No files were successfully converted to PDF. Cannot merge.", file=sys.stderr)
@@ -336,13 +352,13 @@ def merge_to_pdf(files, output_pdf, dpi, compression, rotate, resize, grayscale,
         if verbose:
             print(f"\nMerging {len(temp_pdfs)} PDF files...")
         for pdf in temp_pdfs:
-            if verbose:
-                print(f"  Appending {os.path.basename(pdf)}")
-            try:
-                merger.append(pdf)
-            except Exception as merge_err:
-                 print(f"Error appending {os.path.basename(pdf)} to merge list: {merge_err}", file=sys.stderr)
-                 error_count += 1 # Count merge errors as errors
+             if verbose:
+                 print(f"  Appending {os.path.basename(pdf)}")
+             try:
+                 merger.append(pdf)
+             except Exception as merge_err:
+                  print(f"Error appending {os.path.basename(pdf)} to merge list: {merge_err}", file=sys.stderr)
+                  error_count += 1 # Count merge errors as errors
 
         merger.write(output_pdf)
     except Exception as e:
@@ -399,6 +415,8 @@ def parse_arguments():
                         help="Use Pandoc for DOCX/MD/TXT conversion (requires Pandoc installed).\nPure-Python libraries (ReportLab, python-docx, markdown) are used otherwise.")
     parser.add_argument("-e","--pdf-engine", metavar='ENGINE', default=None,
                         help="Pandoc PDF engine (e.g., 'xelatex', 'weasyprint', 'wkhtmltopdf'). Only used with --pandoc.")
+    parser.add_argument("-i","--individual", action="store_true",
+                        help="Output individual PDF files instead of merging them.")
     parser.add_argument("-v","--verbose", action="store_true",
                         help="Print detailed information during processing.")
     return parser.parse_args()
@@ -443,6 +461,7 @@ def main():
         print(f"Using Pandoc for docs: {args.pandoc}")
         if args.pandoc:
             print(f"Pandoc PDF Engine: {args.pdf_engine or 'default'}")
+        print(f"Output Individual PDFs: {args.individual}")
         print("-" * 20)
 
 
@@ -461,7 +480,7 @@ def main():
     merge_to_pdf(
         files, args.output, args.dpi, args.compression,
         args.rotate, args.resize, args.grayscale,
-        args.order, args.pdf_engine, args.pandoc, args.verbose
+        args.order, args.pdf_engine, args.pandoc, args.individual, args.verbose
     )
 
 if __name__ == "__main__":
