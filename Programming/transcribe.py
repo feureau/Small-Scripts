@@ -42,9 +42,39 @@ import yt_dlp
 import subprocess
 from tqdm import tqdm
 import warnings
+import numpy as np
 
 # Suppress torchaudio/torchcodec warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+
+# --- DLL Injection for Windows (Pip-installed CUDA support) ---
+if sys.platform == "win32":
+    import site
+    # Combine standard site-packages and user site-packages
+    packages_dirs = site.getsitepackages()
+    if site.ENABLE_USER_SITE:
+        packages_dirs.append(site.getusersitepackages())
+        
+    # Also add the directory where torch is installed as a fallback search root
+    try:
+        import torch
+        packages_dirs.append(os.path.dirname(os.path.dirname(torch.__file__)))
+    except Exception: pass
+
+    for base in set(packages_dirs): # Use set to avoid duplicates
+        if not base or not os.path.exists(base): continue
+        nvidia_path = os.path.join(base, "nvidia")
+        if os.path.exists(nvidia_path):
+            for subfolder in os.listdir(nvidia_path):
+                bin_path = os.path.join(nvidia_path, subfolder, "bin")
+                if os.path.exists(bin_path):
+                    try:
+                        os.add_dll_directory(bin_path)
+                        # Ensure it's also in the PATH for good measure (some libraries need this)
+                        if bin_path not in os.environ['PATH']:
+                            os.environ['PATH'] = bin_path + os.pathsep + os.environ['PATH']
+                        print(f"   📂 Added CUDA DLL path: {bin_path}")
+                    except Exception: pass
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -196,6 +226,38 @@ def clean_url(url: str) -> str:
         print(f"Warning: URL cleaning failed for {url}: {e}")
         return url
 
+# --- yt-dlp Progress Integration ---
+class YdlTqdmLogger:
+    def debug(self, msg):
+        if msg.startswith('[debug] '): pass
+        else: self.info(msg)
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): print(f"   ❌ {msg}")
+
+def ydl_progress_hook(d):
+    global _ydl_pbar
+    if d['status'] == 'downloading':
+        total = d.get('total_bytes') or d.get('total_bytes_estimate')
+        downloaded = d.get('downloaded_bytes', 0)
+        if total:
+            if '_ydl_pbar' not in globals() or _ydl_pbar is None:
+                from tqdm import tqdm
+                globals()['_ydl_pbar'] = tqdm(
+                    total=total, 
+                    unit='B', 
+                    unit_scale=True, 
+                    desc="   Downloading", 
+                    leave=False, 
+                    dynamic_ncols=True
+                )
+            _ydl_pbar.n = downloaded
+            _ydl_pbar.refresh()
+    elif d['status'] == 'finished':
+        if '_ydl_pbar' in globals() and _ydl_pbar is not None:
+            _ydl_pbar.close()
+            globals()['_ydl_pbar'] = None
+
 def download_audio(url: str, output_dir: str = None) -> str:
     print(f"⬇️  Downloading audio from: {url}")
     target_dir = output_dir if output_dir else os.getcwd()
@@ -209,8 +271,10 @@ def download_audio(url: str, output_dir: str = None) -> str:
         }],
         'outtmpl': os.path.join(target_dir, '%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s'),
         'noplaylist': True,
-        'quiet': False,     # Enable output for debugging
-        'no_warnings': False,
+        'quiet': True,      # Suppress default output to favor our custom pbar
+        'no_warnings': True,
+        'logger': YdlTqdmLogger(),
+        'progress_hooks': [ydl_progress_hook],
         # Fix for 403 Forbidden: Impersonate Android client
         'extractor_args': {
             'youtube': {
@@ -525,11 +589,25 @@ def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD,
         if file_size_mb > 500:
             print(f"⚠️ File is large ({file_size_mb:.1f}MB). VAD might use high RAM.")
 
-        wav, sr = torchaudio.load(audio_path)
-        if sr != 16000:
-            wav = T.Resample(sr, 16000)(wav)
-        if wav.shape[0] > 1:
-            wav = wav.mean(dim=0, keepdim=True)
+        # Robust loading using PyAV (av) to avoid torchcodec/torchaudio backend issues
+        import av
+        container = av.open(audio_path)
+        audio_stream = container.streams.audio[0]
+        
+        # Collect all samples
+        resampler = av.AudioResampler(format='fltp', layout='mono', rate=16000)
+        frames = []
+        for frame in container.decode(audio_stream):
+            frame.pts = None
+            resampled_frames = resampler.resample(frame)
+            if resampled_frames:
+                for rf in resampled_frames:
+                    frames.append(rf.to_ndarray())
+        container.close()
+        
+        if not frames: return []
+        wav_np = np.concatenate(frames, axis=1) # frames are 1xN
+        wav = torch.from_numpy(wav_np)
 
         speech_timestamps = get_speech_timestamps(
             wav, vad_model, threshold=threshold, min_silence_duration_ms=min_silence_ms, window_size_samples=512
@@ -684,14 +762,35 @@ def ensure_model_loaded(model_alias):
         
     if transcription_model is not None:
         print(f"♻️  Switching models: Unloading '{current_model_path}'...")
-        del transcription_model
+        transcription_model = None  # Don't use 'del', just nullify to keep global name alive
         gc.collect()
         torch.cuda.empty_cache()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🚀 Loading Whisper model '{model_path}' on {device}...")
-    transcription_model = WhisperModel(model_path, device=device, compute_type="float16" if device == "cuda" else "int8")
-    current_model_path = model_path
+    try:
+        transcription_model = WhisperModel(model_path, device=device, compute_type="float16" if device == "cuda" else "int8")
+        current_model_path = model_path
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "cublas" in err_msg or "cudnn" in err_msg:
+            print(f"   ⚠️  CUDA Error: {e}")
+            cuda_ver = getattr(torch.version, 'cuda', 'unknown')
+            if cuda_ver and cuda_ver.startswith('13'):
+                print(f"   💡 TIP: CTranslate2 requires CUDA 12 libraries even on CUDA 13 systems.")
+                print(f"   💡 FIX: Run 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12'")
+            else:
+                print(f"   💡 TIP: Try installing the required libraries: 'pip install nvidia-cublas-cu12 nvidia-cudnn-cu12'")
+        
+        if "brotli" in err_msg or "can_accept_more_data" in err_msg:
+            print(f"\n   🔴 FATAL ERROR: MODEL CORRUPTION DETECTED (Brotli Error).")
+            print(f"   💡 This happens if a model download was interrupted.")
+            print(f"   💡 FIX: Close this script and delete your cache folder:")
+            print(f"      C:\\Users\\Feureau\\.cache\\huggingface\\hub")
+            print(f"   💡 Re-run the script and it will download fresh, healthy files.\n")
+        
+        # If GPU loading fails for any reason, we just raise the error now as per user request (no CPU fallback)
+        raise e
 
 def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, str]:
     global transcription_model
@@ -844,16 +943,24 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         else:
             print(f"   ⚠️  Model Error: {e}")
 
-    # Attempt 3: Fallback to Large-V2 if everything else failed
-    if cleaned_data is None and args.model != "large-v2":
-        print("   ⚠️  Switching to fallback model 'large-v2'...")
-        try:
-            ensure_model_loaded("large-v2")
-            cleaned_data = try_transcribe(True)
-        except Exception as e3:
-            return False, f"All strategies failed: {e3}"
+    # Attempt 3: Fallback Sequence (requested -> large-v3 -> large-v2)
+    if cleaned_data is None:
+        fallbacks = ["large-v3", "large-v2"]
+        # Remove the currently requested model from fallback list to avoid loops
+        if args.model in fallbacks:
+            fallbacks.remove(args.model)
+            
+        for fallback_model in fallbacks:
+            print(f"   ⚠️  Switching to fallback model '{fallback_model}'...")
+            try:
+                ensure_model_loaded(fallback_model)
+                cleaned_data = try_transcribe(True)
+                if cleaned_data:
+                    break
+            except Exception as e_fb:
+                print(f"      ❌ Fallback to '{fallback_model}' failed: {e_fb}")
 
-    if not cleaned_data: return False, "No data produced"
+    if not cleaned_data: return False, "All transcription strategies failed."
 
     # 3. Post-Process
     cleaned_data = post_process_word_timestamps(cleaned_data, DEFAULT_MAX_WORD_DURATION)
