@@ -80,10 +80,10 @@ import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import google.generativeai as genai
-from google.generativeai.types import File
+
+from google import genai
+from google.genai import types
 from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, PermissionDenied
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 import argparse
 import tkinter as tk
@@ -102,7 +102,7 @@ except ImportError:
     json_repair = None
 
 # --- GLOBAL CACHE FOR UPLOADED FILES (Deduplication) ---
-# Stores { "sha256_hash": genai.FileObject }
+# Stores { "sha256_hash": types.File }
 UPLOADED_FILE_CACHE = {}
 UPLOAD_LOCK = threading.Lock()
 
@@ -144,18 +144,7 @@ FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
 
-GOOGLE_FINISH_REASONS = {
-    0: "Unspecified: The finish reason is unspecified.",
-    1: "Stop: The model completed the response naturally.",
-    2: "Max Tokens: The response exceeded the maximum token limit. Try increasing the limit or shortening the prompt.",
-    3: "Safety: The content was blocked by safety settings. Adjust safety filters in the 'Safety' tab.",
-    4: "Recitation: The model was blocked to prevent copyright infringement or exact recitation.",
-    5: "Other: An unknown error occurred.",
-    6: "Blocklist: The content contained blocked terms or text.",
-    7: "Prohibited: The content referenced prohibited topics.",
-    8: "SPII: The content was blocked because it may contain Sensitive Personally Identifiable Information.",
-    9: "Malicious: The content was flagged as potentially malicious."
-}
+
 
 ################################################################################
 # --- Core Logic & Helpers ---
@@ -218,7 +207,7 @@ def hash_file(path, chunk_size=1024 * 1024):
     return h.hexdigest()
 
 # --- GEMINI FILES API UPLOADER (Cached & Robust) ---
-def upload_image_file(path, retries=3):
+def upload_image_file(path, client, retries=3):
     try:
         file_hash = hash_file(path)
         with UPLOAD_LOCK:
@@ -232,13 +221,13 @@ def upload_image_file(path, retries=3):
     for attempt in range(1, retries + 2):
         try:
             mime_type = mimetypes.guess_type(path)[0] or "image/png"
-            uploaded_file = genai.upload_file(path=path, mime_type=mime_type)
+            uploaded_file = client.files.upload(file=path, config={'mime_type': mime_type})
             
-            while uploaded_file.state.name == "PROCESSING":
+            while uploaded_file.state == "PROCESSING":
                 time.sleep(1)
-                uploaded_file = genai.get_file(uploaded_file.name)
+                uploaded_file = client.files.get(name=uploaded_file.name)
                 
-            if uploaded_file.state.name == "FAILED":
+            if uploaded_file.state == "FAILED":
                 raise ValueError("Google says file processing failed.")
 
             with UPLOAD_LOCK:
@@ -259,7 +248,7 @@ def upload_image_file(path, retries=3):
     console_log(f"❌ [UPLOAD FAILED] {path}: {last_error}", "ERROR")
     return None, False
 
-def upload_images_parallel(image_paths, max_workers=4, sequential=False):
+def upload_images_parallel(image_paths, client, max_workers=4, sequential=False):
     uploaded_files = [None] * len(image_paths)
     if not image_paths: return []
         
@@ -270,7 +259,7 @@ def upload_images_parallel(image_paths, max_workers=4, sequential=False):
     if sequential:
         files_list = []
         for i, p in enumerate(image_paths):
-             file_obj, was_cached = upload_image_file(p)
+             file_obj, was_cached = upload_image_file(p, client)
              if file_obj:
                  files_list.append(file_obj)
                  if was_cached: cached_count += 1
@@ -278,7 +267,7 @@ def upload_images_parallel(image_paths, max_workers=4, sequential=False):
         uploaded_files = files_list
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {executor.submit(upload_image_file, p): i for i, p in enumerate(image_paths)}
+            future_to_index = {executor.submit(upload_image_file, p, client): i for i, p in enumerate(image_paths)}
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
                 try:
@@ -305,8 +294,11 @@ def fetch_google_models(api_key):
     if not api_key: return [], "API key not available."
     try:
         console_log("Fetching Google models...", "INFO")
-        genai.configure(api_key=api_key)
-        models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+        client = genai.Client(api_key=api_key)
+        # client.models.list() returns internal model objects, we need the name
+        models = [m.name for m in client.models.list()]
+        # Filter for models that likely support generation (not strictly necessary but good)
+        models = [m for m in models if "gemini" in m]
         models.sort(key=lambda x: (0 if 'latest' in x else 1 if '2.5' in x else 2 if '2.0' in x else 3, 0 if 'pro' in x else 1 if 'flash' in x else 2, x))
         return models, None
     except Exception as e: return [], str(e)
@@ -384,40 +376,64 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
         return sanitize_api_response(response_text)
     return response_text
 
-def call_google_gemini_api(prompt_text, api_key, model_name, google_file_objects=None, stream_output=False, safety_settings=None, **kwargs):
+def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google_file_objects=None, stream_output=False, safety_settings=None, **kwargs):
     global last_request_time
     if not api_key: return "Error: Google API Key not configured."
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name, safety_settings=safety_settings)
+        if not client:
+             client = genai.Client(api_key=api_key)
+             
         if last_request_time and (time.time() - last_request_time < REQUEST_INTERVAL_SECONDS):
             time.sleep(REQUEST_INTERVAL_SECONDS - (time.time() - last_request_time))
         last_request_time = time.time()
         
-        payload = [prompt_text]
+        # Prepare contents
+        contents = []
         if google_file_objects:
-            payload.extend(google_file_objects)
+            # New SDK can take types.File directly or 'file' objects
+            for f in google_file_objects:
+                 contents.append(f)
+        contents.append(prompt_text)
         
-        response = model.generate_content(payload, stream=stream_output)
+        # Configuration
+        config = types.GenerateContentConfig(
+             safety_settings=safety_settings
+        )
+
+        if stream_output:
+            response = client.models.generate_content_stream(model=model_name, contents=contents, config=config)
+        else:
+            response = client.models.generate_content(model=model_name, contents=contents, config=config)
         
         if stream_output:
             full_text = ""
             print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
             for chunk in response:
                 text_part = chunk.text
-                print(text_part, end="", flush=True)
-                full_text += text_part
+                if text_part:
+                    print(text_part, end="", flush=True)
+                    full_text += text_part
             print("\n----------------------------------------------\n", flush=True)
             return full_text
         else:
-            if response.candidates and response.candidates[0].finish_reason != 1:
-                reason_code = response.candidates[0].finish_reason
-                reason_desc = GOOGLE_FINISH_REASONS.get(reason_code, f"Unknown Reason ({reason_code})")
-                msg = f"Fatal: Blocked by Google. Reason: {reason_desc}"
-                raise FatalProcessingError(msg)
+            # Check finish reason
+            # response.candidates[0].finish_reason is now a string or enum in types
+            # Accessing via attributes
+            candidate = response.candidates[0] if response.candidates else None
+            if not candidate:
+                if response.prompt_feedback:
+                    raise FatalProcessingError(f"Fatal: Blocked by Prompt Filter. Reason: {response.prompt_feedback.block_reason}")
+                raise FatalProcessingError("Fatal: No candidates returned.")
 
-            if not response.parts and response.prompt_feedback:
-                 raise FatalProcessingError(f"Fatal: Blocked by Prompt Filter. Reason: {response.prompt_feedback.block_reason.name}")
+            # Assuming finish_reason is convertible to str or comparable
+            # New SDK finish reasons are strings like "STOP", "MAX_TOKENS", "SAFETY"
+            reason = str(candidate.finish_reason)
+            
+            if reason != "STOP":
+                 # Map new string reasons to our readable dict if possible, or just use raw
+                 # Our old dict was integer based.
+                 msg = f"Fatal: Blocked by Google. Reason: {reason}"
+                 raise FatalProcessingError(msg)
                  
             return response.text
             
@@ -568,12 +584,16 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         images_data_legacy = [] # For Ollama/LMStudio (Base64)
         google_file_objects = [] # For Gemini (Files API)
         prompt_parts = []
-        
+        client = None
+
+        if engine == "google":
+             client = genai.Client(api_key=api_key)
+
         # 1. Handle Images
         if image_files:
             if engine == "google":
                 sequential_upload = kwargs.get('sequential_upload', False)
-                google_file_objects = upload_images_parallel(image_files, sequential=sequential_upload)
+                google_file_objects = upload_images_parallel(image_files, client, sequential=sequential_upload)
             else:
                 for img_path in image_files:
                     content, mime, _, err = read_file_content(img_path)
@@ -594,7 +614,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             engine, 
             full_prompt, 
             api_key, 
-            model_name, 
+            model_name,
+            client=client,
             images_data_list=images_data_legacy, # For Ollama/LMStudio
             google_file_objects=google_file_objects, # For Gemini
             stream_output=kwargs['stream_output'], 
@@ -798,7 +819,7 @@ class AppGUI(tk.Tk):
         self.validate_keys_var = tk.BooleanVar(value=False) # New schema validation var (v25.6)
         self.clean_markdown_var = tk.BooleanVar(value=True) # Default On
         self.enable_safety_var = tk.BooleanVar(value=False)
-        self.safety_map = {'Off': HarmBlockThreshold.BLOCK_NONE, 'High Only': HarmBlockThreshold.BLOCK_ONLY_HIGH, 'Med+': HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE}
+        self.safety_map = {'Off': 'BLOCK_NONE', 'High Only': 'BLOCK_ONLY_HIGH', 'Med+': 'BLOCK_MEDIUM_AND_ABOVE'}
         self.harassment_var = tk.StringVar(value='Off')
         self.hate_speech_var = tk.StringVar(value='Off')
         self.sexually_explicit_var = tk.StringVar(value='Off')
@@ -1143,12 +1164,19 @@ class AppGUI(tk.Tk):
         safe = {}
         if self.engine_var.get() == 'google':
              if self.enable_safety_var.get():
-                 safe = {HarmCategory.HARM_CATEGORY_HARASSMENT: self.safety_map[self.harassment_var.get()],
-                         HarmCategory.HARM_CATEGORY_HATE_SPEECH: self.safety_map[self.hate_speech_var.get()],
-                         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: self.safety_map[self.sexually_explicit_var.get()],
-                         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: self.safety_map[self.dangerous_content_var.get()]}
+                 safe = [
+                    types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold=self.safety_map[self.harassment_var.get()]),
+                    types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold=self.safety_map[self.hate_speech_var.get()]),
+                    types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold=self.safety_map[self.sexually_explicit_var.get()]),
+                    types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold=self.safety_map[self.dangerous_content_var.get()])
+                 ]
              else:
-                 safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in HarmCategory if cat != HarmCategory.HARM_CATEGORY_UNSPECIFIED}
+                 safe = [
+                     types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                     types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                     types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                     types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                 ]
 
         
         # Capture current delay settings when adding jobs
