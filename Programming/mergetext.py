@@ -89,6 +89,12 @@ END_MARKER_FORMAT = f"\n{MARKER_CHAR * MARKER_LENGTH}\n>> END OF LINE: {{filenam
 # --- Default Output Settings ---
 DEFAULT_OUTPUT_BASENAME = "merged_output"
 DEFAULT_OUTPUT_EXTENSION = "txt"
+
+# --- Default Plaintext Extensions (used when no file patterns provided) ---
+DEFAULT_PLAINTEXT_EXTENSIONS = [
+    "txt", "json", "md", "srt", "log", "csv", "xml", "yaml", "yml",
+    "ini", "cfg", "conf", "html", "htm", "css", "js", "py", "sh", "bat"
+]
 #================================================================================
 
 
@@ -205,7 +211,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter
     )
 
-    parser.add_argument("file_patterns", nargs='+', help="One or more file patterns to match (e.g., '*.txt', 'chapter-*.md')")
+    parser.add_argument("file_patterns", nargs='*', help="One or more file patterns to match (e.g., '*.txt', 'chapter-*.md'). If not provided, processes all common plaintext files.")
     parser.add_argument("-o", "--output", default=f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}", help="Name of the output file (default derives from first pattern).")
     parser.add_argument("-lb", "--linebreak", action="store_true", help="Add a blank line between merged files.")
     parser.add_argument("-strip", "--strip", action="store_true", help="Strip linebreaks within paragraphs and join hyphenated words.")
@@ -213,6 +219,12 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--markers", action="store_true", help="Add start and end markers for each merged file's content.")
 
     args = parser.parse_args()
+
+    # Use default plaintext extensions if no patterns provided
+    if not args.file_patterns:
+        args.file_patterns = [f"*.{ext}" for ext in DEFAULT_PLAINTEXT_EXTENSIONS]
+        print(f"No file patterns specified. Using default plaintext extensions:")
+        print(f"  {', '.join(DEFAULT_PLAINTEXT_EXTENSIONS)}\n")
 
     merge_text_files(
         file_patterns=args.file_patterns,
@@ -222,3 +234,4 @@ if __name__ == "__main__":
         remove_strings=args.remove_strings,
         add_markers=args.markers
     )
+
