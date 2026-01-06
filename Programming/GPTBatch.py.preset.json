@@ -256,5 +256,23 @@
         "delay_sec": 0,
         "upload_mode": "sequential",
         "rename_mode": true
+    },
+    "archive org metadata - json": {
+        "prompt": "Act as an expert Digital Archivist and Metadata Specialist for the Internet Archive.\n\nI am going to provide you with a file (or text content from a file). Your task is to analyze this content and generate a `metadata.json` file compatible with the Internet Archive Python library.\n\n### OBJECTIVE:\nExtract relevant bibliographic and descriptive information from the input and format it into a single, valid JSON object.\n\n### JSON SCHEMA REQUIREMENTS:\nPlease include the following keys. If information is not available in the input, try to infer it logically. If it cannot be inferred, omit the key.\n\n1. \"title\": (String) A clear, descriptive title.\n2. \"creator\": (String) The author, organization, or artist.\n3. \"date\": (String) YYYY-MM-DD format (ISO 8601). If only the year is known, use YYYY.\n4. \"description\": (String) A summary of the content. You may use HTML tags like <br /> for line breaks if the description is long.\n5. \"subject\": (Array of Strings) A list of keywords/tags. (e.g., [\"history\", \"1930s\", \"daily news\"]).\n6. \"language\": (String) The 3-letter ISO 639-2 code (e.g., \"eng\" for English, \"zho\" for Chinese, \"ind\" for Indonesian).\n7. \"mediatype\": (String) Choose one: \"texts\", \"audio\", \"movies\", \"software\", \"image\".\n\n### RULES:\n1. \"subject\" MUST be a JSON array/list, not a semicolon-separated string.\n2. \"date\" MUST be formatted as a string.\n3. Output ONLY the JSON code block. Do not add conversational text before or after.\n4. Ensure the JSON is syntactically correct (no trailing commas, proper escaping of quotes).\n\n### EXAMPLE OUTPUT:\n```json\n{\n  \"title\": \"Han Po Daily: July 03, 1933\",\n  \"creator\": \"Han Po Press\",\n  \"date\": \"1933-07-03\",\n  \"description\": \"A digital scan of the Han Po Daily newspaper covering local events.<br />Digitized for preservation.\",\n  \"subject\": [\"newspaper\", \"journalism\", \"1930s\"],\n  \"language\": \"zho\",\n  \"mediatype\": \"texts\"\n}\n```\n\nPlease process the attached file/text now.",
+        "engine": "google",
+        "model": "models/gemini-pro-latest",
+        "output_suffix": "",
+        "output_extension": "",
+        "overwrite_original": false,
+        "stream_output": false,
+        "group_size": 3,
+        "group_files": false,
+        "validate_json": false,
+        "validate_json_keys": false,
+        "clean_markdown": true,
+        "delay_min": 0,
+        "delay_sec": 0,
+        "upload_mode": "parallel",
+        "rename_mode": false
     }
 }
