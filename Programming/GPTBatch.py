@@ -613,8 +613,6 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             if add_filename_to_prompt: prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
             prompt_parts.append(f"\n{content}\n")
         
-        if kwargs.get('rename_mode', False):
-             user_prompt += "\n\nSYSTEM INSTRUCTION: Based on the file content, suggest a concise, safe filename. Return ONLY the filename text. Do not include the extension. Do not use blockquotes or markdown. Do not be conversational."
         
         full_prompt = user_prompt + "".join(prompt_parts)
         log_data['prompt_sent'] = full_prompt
@@ -1170,7 +1168,6 @@ class AppGUI(tk.Tk):
         self.ext_ent.config(state=state)
         self.over_check.config(state=state)
         self.group_check.config(state=state)
-        self.stream_check.config(state=state) # Usually keep stream on? Actually rename logic logs to console anyway.
         
         # Force Grouping to False/1 if Rename Mode is ON
         if is_rename:
