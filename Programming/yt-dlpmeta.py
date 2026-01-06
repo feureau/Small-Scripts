@@ -485,8 +485,8 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
 
     # LOGIC: Adjust options based on flags
     
-    # Separate URL detection from Settings enforcement
-    likely_single_url = ("watch?v=" in url or "youtu.be/" in url or "shorts/" in url) and ("list=" not in url)
+    # Detect likely single video URLs (YouTube + TikTok + others)
+    likely_single_url = ("watch?v=" in url or "youtu.be/" in url or "shorts/" in url or "tiktok.com" in url) and ("list=" not in url)
     
     # NEW DEFAULT: Every URL gets Deep Mode + Comments + Condensed unless --fast (-F) is used.
     if not fast_mode:
@@ -573,7 +573,7 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
             # Prevents saving "UnknownTitle" skeleton files from generic extractor failures
             if not info_dict.get('id') and not info_dict.get('title'):
                  print(f"Error: yt-dlp could not resolve metadata for: {url}")
-                 print("Hint: If this is a YouTube URL, ensure it includes the protocol (e.g., https://).")
+                 print("Hint: Ensure the URL includes the protocol (e.g., https://) and is accessible.")
                  return
 
             # 2. Identify Content Type
