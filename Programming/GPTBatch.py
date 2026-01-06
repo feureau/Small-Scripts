@@ -144,6 +144,12 @@ FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
 
+def sanitize_filename(name):
+    # Strip illegal chars and typical markdown noise
+    keep = (" ", ".", "_", "-")
+    clean = "".join(c for c in name if c.isalnum() or c in keep).strip()
+    return clean[:250] # Truncate to safe length
+
 
 
 ################################################################################
@@ -607,6 +613,9 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             if add_filename_to_prompt: prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
             prompt_parts.append(f"\n{content}\n")
         
+        if kwargs.get('rename_mode', False):
+             user_prompt += "\n\nSYSTEM INSTRUCTION: Based on the file content, suggest a concise, safe filename. Return ONLY the filename text. Do not include the extension. Do not use blockquotes or markdown. Do not be conversational."
+        
         full_prompt = user_prompt + "".join(prompt_parts)
         log_data['prompt_sent'] = full_prompt
         
@@ -626,6 +635,42 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         
         if response and str(response).strip().startswith("Error"): 
             raise Exception(response)
+
+        # --- RENAME MODE LOGIC ---
+        if kwargs.get('rename_mode', False):
+            # 1. Sanitize
+            new_stem = sanitize_filename(response)
+            if not new_stem: raise ValueError("LLM returned empty or invalid filename.")
+            
+            # 2. Collision Handling
+            if len(filepaths_group) > 1: raise ValueError("Rename Mode requires single file groups.")
+            original_path = filepaths_group[0]
+            
+            directory = os.path.dirname(original_path)
+            ext = os.path.splitext(original_path)[1]
+            
+            new_filename = f"{new_stem}{ext}"
+            new_path = os.path.join(directory, new_filename)
+            
+            counter = 1
+            while os.path.exists(new_path) and os.path.normpath(new_path) != os.path.normpath(original_path):
+                 new_path = os.path.join(directory, f"{new_stem}_{counter}{ext}")
+                 counter += 1
+            
+            # 3. Rename
+            if os.path.normpath(new_path) != os.path.normpath(original_path):
+                os.rename(original_path, new_path)
+                console_log(f"Renamed: {os.path.basename(original_path)} -> {os.path.basename(new_path)}", "ACTION")
+                
+                if 'result_metadata' in kwargs:
+                    kwargs['result_metadata']['rename_from'] = original_path
+                    kwargs['result_metadata']['rename_to'] = new_path
+                else: 
+                     console_log("Warning: result_metadata missing, Undo unavailable.", "WARN")
+            else:
+                 console_log(f"Filename unchanged: {os.path.basename(original_path)}", "WARN")
+            
+            return None        
 
         # --- JSON VALIDITY CHECK ---
         if kwargs.get('validate_json', False):
@@ -831,6 +876,9 @@ class AppGUI(tk.Tk):
 
         # Upload Mode (Parallel vs Sequential)
         self.upload_mode_var = tk.StringVar(value=getattr(self.args, 'upload_mode', 'parallel'))
+        
+        # Rename Mode
+        self.rename_mode_var = tk.BooleanVar(value=False)
 
         self.create_widgets()
         self.refresh_presets_combo()
@@ -933,19 +981,23 @@ class AppGUI(tk.Tk):
         self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
         self.json_keys_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
         
+        # Rename Mode
+        self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
+        self.rename_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 0))
+
         # Upload Mode Radio Buttons
-        ttk.Label(tab_out, text="Upload Mode:").grid(row=7, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(tab_out, text="Upload Mode:").grid(row=8, column=0, sticky="w", pady=(5, 0))
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=7, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        u_frame.grid(row=8, column=1, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
         ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
 
         self.stream_check = ttk.Checkbutton(tab_out, text="Stream Output to Console", variable=self.stream_var)
-        self.stream_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.stream_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=9, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=10, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
@@ -979,7 +1031,19 @@ class AppGUI(tk.Tk):
         self.pause_btn = ttk.Button(btn_area, text="Pause", command=self.toggle_pause, state="disabled"); self.pause_btn.pack(side=tk.RIGHT, padx=5)
         self.clear_btn = ttk.Button(btn_area, text="Clear", command=self.clear_queue); self.clear_btn.pack(side=tk.RIGHT, padx=5)
         self.btn_requeue = ttk.Button(btn_area, text="Retry Failed", command=self.requeue_failed); self.btn_requeue.pack(side=tk.RIGHT, padx=5)
+        self.btn_undo = ttk.Button(btn_area, text="Undo Rename", command=self.undo_rename); self.btn_undo.pack(side=tk.RIGHT, padx=5)
         ttk.Style().configure("Accent.TButton", font=('Helvetica', 10, 'bold'), foreground="black")
+
+        # --- Context Menu ---
+        self.context_menu = tk.Menu(self.tree, tearoff=0)
+        self.context_menu.add_command(label="Remove Selected", command=self.remove_selected_jobs)
+        self.context_menu.add_command(label="Retry Selected", command=self.retry_selected_jobs)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Copy Filepath/Group", command=self.copy_job_name)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Clear Completed", command=self.clear_completed_jobs)
+        
+        self.tree.bind("<Button-3>", self.show_context_menu)
 
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
@@ -1012,7 +1076,10 @@ class AppGUI(tk.Tk):
             set_var(self.delay_min_var, 'delay_min', 0)
             set_var(self.delay_sec_var, 'delay_sec', 0)
             set_var(self.upload_mode_var, 'upload_mode', 'parallel')
+            set_var(self.rename_mode_var, 'rename_mode', False)
             self.ollama_search_var.set(False)
+            
+            self.toggle_rename_mode()
             
             self.toggle_overwrite()
             self.toggle_grouping()
@@ -1034,7 +1101,8 @@ class AppGUI(tk.Tk):
             'delay_min': self.delay_min_var.get(),
             'delay_min': self.delay_min_var.get(),
             'delay_sec': self.delay_sec_var.get(),
-            'upload_mode': self.upload_mode_var.get()
+            'upload_mode': self.upload_mode_var.get(),
+            'rename_mode': self.rename_mode_var.get()
         }
 
     def save_current_preset(self):
@@ -1091,6 +1159,25 @@ class AppGUI(tk.Tk):
     def toggle_safety(self):
         st = "readonly" if self.enable_safety_var.get() else "disabled"
         for w in self.safety_widgets: w.config(state=st)
+
+    def toggle_rename_mode(self):
+        is_rename = self.rename_mode_var.get()
+        state = "disabled" if is_rename else "normal"
+        
+        # Disable/Enable Output controls
+        self.out_ent.config(state=state)
+        self.suf_ent.config(state=state)
+        self.ext_ent.config(state=state)
+        self.over_check.config(state=state)
+        self.group_check.config(state=state)
+        self.stream_check.config(state=state) # Usually keep stream on? Actually rename logic logs to console anyway.
+        
+        # Force Grouping to False/1 if Rename Mode is ON
+        if is_rename:
+            self.group_files_var.set(False)
+            self.group_spin.config(state="disabled")
+        else:
+            self.toggle_grouping() # Restore correct state based on checkbox
 
     def prompt_for_api_key(self):
         k = get_api_key(True)
@@ -1200,7 +1287,9 @@ class AppGUI(tk.Tk):
                 'validate_json_keys': self.validate_keys_var.get(), # Pass new setting
                 'clean_markdown': self.clean_markdown_var.get(),
                 'job_delay_seconds': total_delay,
-                'sequential_upload': (self.upload_mode_var.get() == 'sequential')
+                'sequential_upload': (self.upload_mode_var.get() == 'sequential'),
+                'rename_mode': self.rename_mode_var.get(),
+                'result_metadata': {} # Mutable container for returning data
             }
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
@@ -1221,6 +1310,125 @@ class AppGUI(tk.Tk):
                 self.tree.insert('', tk.END, iid=new_id, values=(new_id, generate_group_base_name(new_data['filepaths_group']), 'Pending', new_data['model_name']))
                 count += 1
         console_log(f"Requeued {count} jobs.", "INFO")
+
+    def undo_rename(self):
+        sel_item = self.tree.focus()
+        if not sel_item: return
+        job_id = int(self.tree.item(sel_item)['values'][0])
+        
+        if job_id not in self.job_registry: return
+        job = self.job_registry[job_id]
+        
+        # Check result_metadata first (new way), otherwise fallback or fail
+        history = job.get('result_metadata', {})
+        src = history.get('rename_from')
+        dst = history.get('rename_to')
+        
+        # Fallback for older jobs or direct keys if any (not used currently)
+        if not src or not dst:
+             src = job.get('rename_from') # direct
+             dst = job.get('rename_to')
+             
+        if not src or not dst:
+            tkinter.messagebox.showinfo("Undo", "This job currently cannot be undone (No rename history).")
+            return
+        
+        if os.path.exists(dst) and not os.path.exists(src):
+            try:
+                os.rename(dst, src)
+                self.tree.set(sel_item, 'status', 'Undone')
+                console_log(f"Undid rename: {os.path.basename(dst)} -> {os.path.basename(src)}", "ACTION")
+            except Exception as e:
+                console_log(f"Undo failed: {e}", "ERROR")
+                tkinter.messagebox.showerror("Undo Failed", str(e))
+        else:
+             tkinter.messagebox.showwarning("Undo", "Cannot undo: Target file missing or Source file already exists.")
+
+    def show_context_menu(self, event):
+        item_id = self.tree.identify_row(event.y)
+        if item_id:
+            # If the item clicked is not already selected, select it (and deselect others)
+            # If it IS selected, keep the current selection (so we can act on the group)
+            if item_id not in self.tree.selection():
+                self.tree.selection_set(item_id)
+            self.context_menu.post(event.x_root, event.y_root)
+
+    def remove_selected_jobs(self):
+        selected_items = self.tree.selection()
+        if not selected_items: return
+
+        # Ask for confirmation if any selected job is running? 
+        # For simplicity, we just delete. If running, the worker check will handle it (eventually) or it finishes.
+        # Ideally we shouldn't delete 'Running' jobs effortlessly, but let's allow it with the registry check.
+
+        count = 0
+        for item in selected_items:
+            # The item iid is the job_id (str)
+            try:
+                job_id = int(item)
+                if job_id in self.job_registry:
+                    del self.job_registry[job_id]
+                    # We cannot remove from self.job_queue easily. 
+                    # The worker will pop it, see it's missing from registry, and skip.
+                self.tree.delete(item)
+                count += 1
+            except ValueError: pass # fast mode header or something? shouldn't happen with stored IDs
+        
+        console_log(f"Removed {count} jobs from queue.", "ACTION")
+
+    def retry_selected_jobs(self):
+        selected_items = self.tree.selection()
+        if not selected_items: return
+        
+        count = 0
+        for item in selected_items:
+            try:
+                old_id = int(item)
+                if old_id in self.job_registry:
+                    # Create a clone
+                    new_data = self.job_registry[old_id].copy()
+                    self.job_id_counter += 1
+                    new_id = self.job_id_counter
+                    new_data['job_id'] = new_id
+                    
+                    self.job_registry[new_id] = new_data
+                    self.job_queue.put(new_data)
+                    
+                    self.tree.insert('', tk.END, iid=new_id, values=(new_id, generate_group_base_name(new_data['filepaths_group']), 'Pending', new_data['model_name']))
+                    count += 1
+            except Exception: pass
+        if count > 0:
+            console_log(f"Retrying {count} selected jobs...", "ACTION")
+
+    def copy_job_name(self):
+        selected = self.tree.selection()
+        if not selected: return
+        # Copy the first selected item's name/group
+        # Or all of them newline separated? Let's do newline separated.
+        texts = []
+        for item in selected:
+            vals = self.tree.item(item)['values']
+            if vals and len(vals) > 1:
+                texts.append(str(vals[1]))
+        
+        if texts:
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(texts))
+            console_log(f"Copied {len(texts)} item names to clipboard.", "INFO")
+
+    def clear_completed_jobs(self):
+        # Iterate all items
+        children = self.tree.get_children()
+        count = 0
+        for item in children:
+            vals = self.tree.item(item)['values']
+            status = vals[2]
+            if status == 'Completed':
+                job_id = int(vals[0])
+                if job_id in self.job_registry: del self.job_registry[job_id]
+                self.tree.delete(item)
+                count += 1
+        if count > 0: console_log(f"Cleared {count} completed jobs.", "INFO")
 
     def start_processing(self):
         if not self.job_queue.empty() and (not self.worker_thread or not self.worker_thread.is_alive()):
@@ -1305,6 +1513,12 @@ class AppGUI(tk.Tk):
             # -------------------
 
             jid = job['job_id']
+            
+            # --- CHECK IF JOB WAS REMOVED FROM REGISTRY (Cancelled by User) ---
+            if jid not in self.job_registry:
+                # Silently skip
+                continue
+
             self.result_queue.put({'job_id': jid, 'status': 'Running'})
             params = job.copy(); params.pop('job_id')
             
