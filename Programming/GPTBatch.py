@@ -742,7 +742,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         
         is_json_fail = "JSON Validation Failed" in str(e) or "json_repair failed" in str(e)
         if is_json_fail: console_log(f"Skipping save for {os.path.basename(raw_path)} ({e})", "WARN")
-        else: save_output_files(f"Error: {e}", log_data, raw_path, log_path)
+        else: console_log(f"Skipping save for {os.path.basename(raw_path)} due to error: {e}", "WARN")
         return str(e)
 
 def get_api_key(force_gui=False):
@@ -1544,8 +1544,15 @@ class AppGUI(tk.Tk):
             if self.global_runtime_overrides:
                 params['engine'] = self.global_runtime_overrides['engine']
                 params['model_name'] = self.global_runtime_overrides['model_name']
-                if params['engine'] == 'google' and not params.get('api_key'):
-                    params['api_key'] = self.api_key
+                if params['engine'] == 'google':
+                    if not params.get('api_key'): params['api_key'] = self.api_key
+                    if isinstance(params.get('safety_settings'), dict):
+                        params['safety_settings'] = [
+                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]
 
             attempt = 0
             while attempt < MAX_RETRIES:
@@ -1581,7 +1588,15 @@ class AppGUI(tk.Tk):
                             self.global_runtime_overrides = {'engine': new_engine, 'model_name': new_model}
                             params['engine'] = new_engine
                             params['model_name'] = new_model
-                            if new_engine == 'google': params['api_key'] = self.api_key
+                            if new_engine == 'google': 
+                                params['api_key'] = self.api_key
+                                if isinstance(params.get('safety_settings'), dict):
+                                    params['safety_settings'] = [
+                                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                                    ]
                             self.after(0, lambda: self.update_tree_models(new_model))
                             self.result_queue.put({'job_id': jid, 'status': 'Running'})
                             attempt -= 1 
