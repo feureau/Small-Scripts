@@ -15,29 +15,36 @@ def organize_and_count_files():
         # Define what counts as a video file (must be lowercase)
         video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".ts", ".3gp"}
 
-        # --- STEP 0: RESET FOLDERS ---
-        # Find all folders that match our patterns and empty them back to root
+        # --- STEP 1: CONSOLIDATE FILES FROM EXISTING FOLDERS ---
+        # Move files out of existing Replay/Horz folders to root, then remove old folders
+        
         all_items = os.listdir(current_directory)
+        folders_to_remove = []
+        
         for item in all_items:
             full_path = os.path.join(current_directory, item)
             if os.path.isdir(full_path):
-                # Check if it's one of our target folders (e.g. "Replay", "Replay 0", "Replay-15", "Horz 1-5")
-                # We look for the base name. simpler check: starts with base name
+                # Check if it's a Replay or Horz folder
                 if item.startswith(base_replay_name) or item.startswith(base_horz_name):
-                    # Move all files out
-                    sub_items = os.listdir(full_path)
-                    for sub_item in sub_items:
+                    folders_to_remove.append(full_path)
+                    # Move all video files out to root
+                    for sub_item in os.listdir(full_path):
                         sub_full_path = os.path.join(full_path, sub_item)
                         if os.path.isfile(sub_full_path):
-                            # Move to root
-                            shutil.move(sub_full_path, os.path.join(current_directory, sub_item))
-                    # Remove the now empty directory
-                    try:
-                        os.rmdir(full_path)
-                    except OSError:
-                        pass # Directory might not be empty if there were non-files?
-
-        # --- STEP 1: MOVE FILES IN CHUNKS ---
+                            _, ext = os.path.splitext(sub_item)
+                            if ext.lower() in video_extensions:
+                                dest_path = os.path.join(current_directory, sub_item)
+                                if not os.path.exists(dest_path):
+                                    shutil.move(sub_full_path, dest_path)
+        
+        # Remove old folders (they should be empty or have non-video files)
+        for folder_path in folders_to_remove:
+            try:
+                shutil.rmtree(folder_path)
+            except OSError:
+                pass
+        
+        # --- STEP 2: GATHER AND DISTRIBUTE FILES ---
         
         def get_video_files():
             files = [f for f in os.listdir(current_directory) if os.path.isfile(os.path.join(current_directory, f))]
