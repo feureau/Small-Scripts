@@ -4,6 +4,7 @@ import sys
 import os
 import platform
 import argparse
+import glob
 
 def get_gs_executable(custom_gs=None):
     """
@@ -101,7 +102,17 @@ def main():
     
     gs_executable = get_gs_executable(args.gs)
     
-    for input_pdf in args.pdf_files:
+    # Expand glob patterns (e.g., *.pdf) into actual file names
+    expanded_files = []
+    for pattern in args.pdf_files:
+        matches = glob.glob(pattern)
+        if matches:
+            expanded_files.extend(matches)
+        else:
+            # If no matches, keep the original (might be a literal filename)
+            expanded_files.append(pattern)
+    
+    for input_pdf in expanded_files:
         if not os.path.isfile(input_pdf):
             print(f"File not found: {input_pdf}")
             continue
