@@ -728,7 +728,16 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
 
     except Exception as e:
         log_data.update({'status': 'Failure', 'error': str(e)})
-        if isinstance(e, QuotaExhaustedError): raise
+        
+        # Check for Quota/429 errors to prevent writing them to file
+        error_str = str(e).lower()
+        if isinstance(e, QuotaExhaustedError) or \
+           "quota exhausted" in error_str or \
+           "429" in error_str or \
+           "limit reached" in error_str or \
+           "content connection error" in error_str:
+            raise QuotaExhaustedError(str(e))
+
         if isinstance(e, FatalProcessingError): raise
         
         is_json_fail = "JSON Validation Failed" in str(e) or "json_repair failed" in str(e)
