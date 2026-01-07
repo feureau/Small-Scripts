@@ -433,12 +433,25 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
 
             # Assuming finish_reason is convertible to str or comparable
             # New SDK finish reasons are strings like "STOP", "MAX_TOKENS", "SAFETY"
-            reason = str(candidate.finish_reason)
+            # It might return "FinishReason.STOP" (Enum string) so we need to be careful.
+            raw_reason = str(candidate.finish_reason)
+            
+            # Normalize: "FinishReason.STOP" -> "STOP"
+            reason = raw_reason.split('.')[-1].upper() if '.' in raw_reason else raw_reason.upper()
             
             if reason != "STOP":
-                 # Map new string reasons to our readable dict if possible, or just use raw
-                 # Our old dict was integer based.
-                 msg = f"Fatal: Blocked by Google. Reason: {reason}"
+                 # Map new string reasons to readable descriptions
+                 reason_map = {
+                     "SAFETY": "Safety Filter Triggered",
+                     "RECITATION": "Copyright/Recitation Check Failed",
+                     "MAX_TOKENS": "Max Token Limit Reached (Incomplete Output)",
+                     "OTHER": "Unknown Google Error",
+                     "BLOCKLIST": "Blocked by Terminology Blocklist",
+                     "PROHIBITED_CONTENT": "Prohibited Content Filter"
+                 }
+                 
+                 readable_reason = reason_map.get(reason, raw_reason)
+                 msg = f"Fatal: Blocked by Google. Reason: {readable_reason}"
                  raise FatalProcessingError(msg)
                  
             return response.text
