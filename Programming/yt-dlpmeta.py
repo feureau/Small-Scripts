@@ -318,11 +318,19 @@ def get_subtitle_content(video_id, title, output_dir=None):
     # ydl_opts['outtmpl'] = '%(title)s_%(id)s.%(ext)s'
     # Actually yt-dlp might sanitize it differently. Let's use glob with ID.
     
-    search_pattern = f"*_{video_id}.*.srt"
+    search_pattern = f"*[{video_id}]*.srt"
     if output_dir:
         search_pattern = os.path.join(output_dir, search_pattern)
     
     files = glob.glob(search_pattern)
+    
+    # Fallback to old patterns if not found
+    if not files:
+        search_pattern = f"*_{video_id}.*.srt"
+        if output_dir:
+            search_pattern = os.path.join(output_dir, search_pattern)
+        files = glob.glob(search_pattern)
+
     if not files:
         # Try without the title prefix just in case (e.g. if title processing was different)
         search_pattern = f"*{video_id}*.srt"
@@ -369,8 +377,20 @@ def save_metadata_to_json(info_dict, output_dir=None, force_condensed=False):
     safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip().replace(" ", "_")
     
     # Create filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_filename = f"{safe_title}_{video_id}_metadata_{timestamp}.json"
+    # Create filename
+    # Format: {channel} - {upload_date} - {title} [{id}] [{view_count}].json
+    channel = info_dict.get('channel', info_dict.get('uploader', 'UnknownChannel'))
+    upload_date = info_dict.get('upload_date', 'UnknownDate')
+    view_count = info_dict.get('view_count', 'NA')
+    
+    # Sanitize components
+    def sanitize(s):
+        return "".join([c for c in str(s) if c.isalnum() or c in (' ', '-', '_', '.')]).strip()
+
+    safe_channel = sanitize(channel)
+    safe_title = sanitize(title)
+        
+    json_filename = f"{safe_channel} - {upload_date} - {safe_title} [{video_id}] [{view_count}].json"
     
     if output_dir:
         output_path = os.path.join(output_dir, json_filename)
@@ -399,9 +419,19 @@ def save_heatmap_to_json(info_dict, output_dir=None):
 
     video_id = info_dict.get('id', 'UnknownID')
     title = info_dict.get('title', 'UnknownTitle')
-    safe_title = "".join([c for c in title if c.isalnum() or c in (' ', '-', '_')]).strip().replace(" ", "_")
+    # Format: {channel} - {upload_date} - {title} [{id}] [{view_count}]_heatmap.json
+    channel = info_dict.get('channel', info_dict.get('uploader', 'UnknownChannel'))
+    upload_date = info_dict.get('upload_date', 'UnknownDate')
+    view_count = info_dict.get('view_count', 'NA')
     
-    json_filename = f"{safe_title}_{video_id}_heatmap.json"
+    # Sanitize components
+    def sanitize(s):
+        return "".join([c for c in str(s) if c.isalnum() or c in (' ', '-', '_', '.')]).strip()
+
+    safe_channel = sanitize(channel)
+    safe_title = sanitize(title)
+    
+    json_filename = f"{safe_channel} - {upload_date} - {safe_title} [{video_id}] [{view_count}]_heatmap.json"
     
     if output_dir:
         output_path = os.path.join(output_dir, json_filename)
@@ -541,7 +571,7 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
         
         # Ensure subtitle filename matches our convention
         # yt-dlp uses outtmpl for subtitles too
-        ydl_opts['outtmpl'] = '%(title)s_%(id)s.%(ext)s'
+        ydl_opts['outtmpl'] = '%(channel)s - %(upload_date)s - %(title)s [%(id)s] [%(view_count)s].%(ext)s'
     
     # extract_flat logic:
     # Only set extract_flat to False if we are SURE it's a single video URL.
@@ -732,7 +762,7 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
         'quiet': True,
         'ignoreerrors': True,
         'extract_flat': False, 
-        'outtmpl': os.path.join(output_dir, '%(title)s_%(id)s.%(ext)s') if output_dir else '%(title)s_%(id)s.%(ext)s'
+        'outtmpl': os.path.join(output_dir, '%(channel)s - %(upload_date)s - %(title)s [%(id)s] [%(view_count)s].%(ext)s') if output_dir else '%(channel)s - %(upload_date)s - %(title)s [%(id)s] [%(view_count)s].%(ext)s'
     }
     
     if fetch_comments:
