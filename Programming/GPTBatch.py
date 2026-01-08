@@ -1631,7 +1631,13 @@ def main():
     
     fps = []
     if args.files:
-        for p in args.files: fps.extend(glob.glob(p, recursive=True))
+        for p in args.files:
+            # Check if it's a literal file path first (handles special chars like brackets)
+            if os.path.isfile(p):
+                fps.append(p)
+            else:
+                # Fall back to glob expansion for wildcards
+                fps.extend(glob.glob(p, recursive=True))
     else:
         console_log("No files specified. Scanning current directory for supported formats...", "INFO")
         cwd = os.getcwd()
