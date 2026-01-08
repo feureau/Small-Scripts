@@ -45,6 +45,7 @@ import io
 import threading
 import multiprocessing
 import shutil
+import glob
 from PIL import Image, __version__ as pil_version
 from PIL import features
 from pathlib import Path
@@ -286,24 +287,47 @@ def main():
     print(f"Pillow: {pil_version} | LibTIFF: {features.check('libtiff')}")
     print(f"Deflate: {features.check('zlib')}")
 
-    input_base = Path(args.path).resolve()
-    if not input_base.exists(): sys.exit(1)
-
-    selected_strategy = "overwrite"
-    if args.pool: selected_strategy = "pool"
-    elif args.subfolder: selected_strategy = "subfolder"
-
+    input_path = args.path
+    
+    # Expand glob patterns (Windows doesn't expand wildcards in shell)
+    expanded_paths = glob.glob(input_path)
+    
     files_to_process = []
-    if input_base.is_file():
-        if input_base.suffix.lower() in ALLOWED_EXTENSIONS: files_to_process.append(input_base)
+    
+    if expanded_paths:
+        # Glob matched something - process each match
+        for p in expanded_paths:
+            path_obj = Path(p).resolve()
+            if path_obj.is_file() and path_obj.suffix.lower() in ALLOWED_EXTENSIONS:
+                files_to_process.append(path_obj)
+            elif path_obj.is_dir():
+                for root, _, files in os.walk(path_obj):
+                    for f in files:
+                        if f.lower().endswith(ALLOWED_EXTENSIONS):
+                            files_to_process.append(Path(root) / f)
     else:
-        for root, _, files in os.walk(input_base):
-            for f in files:
-                if f.lower().endswith(ALLOWED_EXTENSIONS): files_to_process.append(Path(root) / f)
+        # No glob match - treat as literal path
+        input_base = Path(input_path).resolve()
+        if not input_base.exists():
+            print(f"Path not found: {input_path}")
+            sys.exit(1)
+        
+        if input_base.is_file():
+            if input_base.suffix.lower() in ALLOWED_EXTENSIONS:
+                files_to_process.append(input_base)
+        else:
+            for root, _, files in os.walk(input_base):
+                for f in files:
+                    if f.lower().endswith(ALLOWED_EXTENSIONS):
+                        files_to_process.append(Path(root) / f)
 
     if not files_to_process:
         print("No TIFF files found.")
         return
+
+    selected_strategy = "overwrite"
+    if args.pool: selected_strategy = "pool"
+    elif args.subfolder: selected_strategy = "subfolder"
 
     sys_cores = os.cpu_count() or 1
     max_workers = int(args.jobs) if args.jobs != "auto" else sys_cores
