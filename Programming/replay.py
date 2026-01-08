@@ -16,56 +16,94 @@ def organize_and_count_files():
         video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".ts", ".3gp"}
 
         # --- STEP 1: CONSOLIDATE FILES FROM EXISTING FOLDERS ---
-        # Move files out of existing Replay/Horz folders to root, then remove old folders
+        # Collect files from existing Replay/Horz folders in order, then remove folders
         
-        all_items = os.listdir(current_directory)
-        folders_to_remove = []
+        def get_folder_index(folder_name):
+            # Extract number from "Horz 2-14" or "Horz 2"
+            parts = folder_name.split()
+            if len(parts) > 1:
+                idx_part = parts[1].split('-')[0]
+                try:
+                    return int(idx_part)
+                except ValueError:
+                    return 0
+            return 0
+
+        existing_replay_videos = []
+        existing_horz_videos = []
+        processed_files = set()
+        
+        all_items = sorted(os.listdir(current_directory))
+        replay_folders = []
+        horz_folders = []
         
         for item in all_items:
             full_path = os.path.join(current_directory, item)
             if os.path.isdir(full_path):
-                # Check if it's a Replay or Horz folder
-                if item.startswith(base_replay_name) or item.startswith(base_horz_name):
-                    folders_to_remove.append(full_path)
-                    # Move all video files out to root
-                    for sub_item in os.listdir(full_path):
-                        sub_full_path = os.path.join(full_path, sub_item)
-                        if os.path.isfile(sub_full_path):
-                            _, ext = os.path.splitext(sub_item)
-                            if ext.lower() in video_extensions:
-                                dest_path = os.path.join(current_directory, sub_item)
-                                if not os.path.exists(dest_path):
-                                    shutil.move(sub_full_path, dest_path)
+                if item.startswith(base_replay_name):
+                    replay_folders.append(item)
+                elif item.startswith(base_horz_name):
+                    horz_folders.append(item)
         
-        # Remove old folders (they should be empty or have non-video files)
-        for folder_path in folders_to_remove:
-            try:
-                shutil.rmtree(folder_path)
-            except OSError:
-                pass
+        # Sort folders numerically by index
+        replay_folders.sort(key=get_folder_index)
+        horz_folders.sort(key=get_folder_index)
+        
+        def collect_from_folders(folders, video_list):
+            for folder_name in folders:
+                folder_path = os.path.join(current_directory, folder_name)
+                # Sort files within the folder alphabetically
+                folder_content = sorted(os.listdir(folder_path))
+                for sub_item in folder_content:
+                    sub_full_path = os.path.join(folder_path, sub_item)
+                    if os.path.isfile(sub_full_path):
+                        _, ext = os.path.splitext(sub_item)
+                        if ext.lower() in video_extensions:
+                            # Move to root Temporarily (or just track them)
+                            dest_path = os.path.join(current_directory, sub_item)
+                            if not os.path.exists(dest_path):
+                                shutil.move(sub_full_path, dest_path)
+                            video_list.append(sub_item)
+                            processed_files.add(sub_item)
+                
+                # Remove the old folder
+                try:
+                    shutil.rmtree(folder_path)
+                except OSError:
+                    pass
+
+        collect_from_folders(replay_folders, existing_replay_videos)
+        collect_from_folders(horz_folders, existing_horz_videos)
         
         # --- STEP 2: GATHER AND DISTRIBUTE FILES ---
         
-        def get_video_files():
-            files = [f for f in os.listdir(current_directory) if os.path.isfile(os.path.join(current_directory, f))]
-            videos = []
-            for f in files:
-                _, ext = os.path.splitext(f)
-                if ext.lower() in video_extensions:
-                    videos.append(f)
-            return videos
-
-        all_videos = get_video_files()
+        # Get remaining (new) videos from root
+        root_files = os.listdir(current_directory)
+        new_replay_videos = []
+        new_horz_videos = []
         
-        replay_videos = sorted([f for f in all_videos if "Replay" in f])
-        horz_videos = sorted([f for f in all_videos if "Rec" in f]) # "Rec" for Horz as per original script
+        for f in sorted(root_files):
+            if f in processed_files:
+                continue
+            if not os.path.isfile(os.path.join(current_directory, f)):
+                continue
+                
+            _, ext = os.path.splitext(f)
+            if ext.lower() in video_extensions:
+                if "Replay" in f:
+                    new_replay_videos.append(f)
+                elif "Rec" in f:
+                    new_horz_videos.append(f)
+        
+        # Combine: Existing Groups first, then New Files alphabetically
+        replay_videos = existing_replay_videos + new_replay_videos
+        horz_videos = existing_horz_videos + new_horz_videos
 
         def distribute_files(file_list, base_folder_name):
             chunks = [file_list[i:i + file_limit] for i in range(0, len(file_list), file_limit)]
             created_folders = []
             
             for i, chunk in enumerate(chunks):
-                # "Replay 0", "Replay 1", etc.
                 folder_name = f"{base_folder_name} {i}"
                 folder_path = os.path.join(current_directory, folder_name)
                 os.makedirs(folder_path, exist_ok=True)
@@ -78,8 +116,8 @@ def organize_and_count_files():
                         shutil.move(source, dest)
             return created_folders
 
-        replay_folders = distribute_files(replay_videos, base_replay_name)
-        horz_folders = distribute_files(horz_videos, base_horz_name)
+        final_replay_folders = distribute_files(replay_videos, base_replay_name)
+        final_horz_folders = distribute_files(horz_videos, base_horz_name)
 
         # --- STEP 2: COUNT AND RENAME FOLDERS ---
         
@@ -89,7 +127,6 @@ def organize_and_count_files():
                 if not os.path.exists(folder_path):
                     continue
                 
-                # Count videos
                 items = os.listdir(folder_path)
                 count = 0
                 for item in items:
@@ -99,11 +136,6 @@ def organize_and_count_files():
                              count += 1
                 
                 total_count += count
-                
-                # Rename: "Replay 0" -> "Replay 0-15"
-                # If folder already ends with dash-number, we might need to be careful? 
-                # But we just created them as "Replay X", so they are clean.
-                
                 parent = os.path.dirname(folder_path)
                 base = os.path.basename(folder_path)
                 new_name = f"{base}-{count}"
@@ -112,8 +144,8 @@ def organize_and_count_files():
                 os.rename(folder_path, new_path)
             return total_count
 
-        replay_total = process_folders(replay_folders)
-        horz_total = process_folders(horz_folders)
+        replay_total = process_folders(final_replay_folders)
+        horz_total = process_folders(final_horz_folders)
 
         # --- STEP 3: CREATE TOTAL FILE ---
         
