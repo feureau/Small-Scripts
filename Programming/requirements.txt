@@ -141,7 +141,7 @@ PyJWT @ file:///C:/miniconda3/conda-bld/pyjwt_1764332257117/work
 PyMuPDF==1.26.7
 pypandoc==1.16.2
 pyparsing==3.3.1
-pypdf==6.5.0
+pypdf==6.6.0
 PyPDF2==3.0.1
 pyreadline3==3.5.4
 PySocks @ file:///C:/miniconda3/conda-bld/pysocks_1761753030965/work
