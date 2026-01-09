@@ -145,9 +145,11 @@ PASSTHROUGH_NORMALIZE_BITRATE_K = 192               # Bitrate when passthrough w
 DEFAULT_LUT_PATH = ""                               # Path to 3D LUT file for HDR to SDR conversion. Default: "" (none)
 DEFAULT_SOFA_PATH = ""                              # Path to SOFA file for binaural audio (Sofalizer). Default: "" (none)
 
-DEFAULT_RESOLUTION = "4k"                           # Output resolution. Default: 4k, Options: HD, 4k, 8k
+DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default: 2160p (4k)
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
 DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
+DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
+DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
 DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
@@ -771,17 +773,21 @@ def extract_embedded_subtitle(video_path, subtitle_index):
         return None
 
 def get_bitrate(output_resolution_key, framerate, is_hdr):
+    # Revised Defaults (roughly 50% of previous high-quality defaults)
     BITRATES = {
-        "SDR_NORMAL_FPS": {"HD": 16000, "4k": 90000, "8k": 320000},
-        "SDR_HIGH_FPS": {"HD": 24000, "4k": 136000, "8k": 480000},
-        "HDR_NORMAL_FPS": {"HD": 20000, "4k": 112000, "8k": 400000},
-        "HDR_HIGH_FPS": {"HD": 30000, "4k": 170000, "8k": 600000}
+        "SDR_NORMAL_FPS": {"720p": 5000, "1080p": 8000, "2160p": 45000, "4320p": 160000},
+        "SDR_HIGH_FPS":   {"720p": 7500, "1080p": 12000, "2160p": 68000, "4320p": 240000},
+        "HDR_NORMAL_FPS": {"720p": 6000, "1080p": 10000, "2160p": 56000, "4320p": 200000},
+        "HDR_HIGH_FPS":   {"720p": 9000, "1080p": 15000, "2160p": 85000, "4320p": 300000}
     }
     fps_category = "HIGH_FPS" if framerate > 40 else "NORMAL_FPS"
     dr_category = "HDR" if is_hdr else "SDR"
     key = f"{dr_category}_{fps_category}"
-    mapped_resolution_key = "HD" if output_resolution_key == "HD" else output_resolution_key.lower()
-    return BITRATES.get(key, {}).get(mapped_resolution_key, BITRATES["SDR_NORMAL_FPS"]["HD"])
+    # Map old keys for backward compatibility if needed, though we primarily use the new ones now
+    res_map = {"mobile": "720p", "hd": "1080p", "4k": "2160p", "8k": "4320p"}
+    mapped_key = res_map.get(output_resolution_key.lower(), output_resolution_key.lower())
+    
+    return BITRATES.get(key, {}).get(mapped_key, BITRATES["SDR_NORMAL_FPS"]["1080p"])
 
 def get_job_hash(job_options):
     keys_to_hash = [
@@ -901,6 +907,10 @@ class WorkflowPresetManager:
             "upscale_algo": DEFAULT_UPSCALE_ALGO,
             "output_format": DEFAULT_OUTPUT_FORMAT,
             "orientation": DEFAULT_ORIENTATION,
+            "max_size_mb": DEFAULT_MAX_SIZE_MB,
+            "max_duration": DEFAULT_MAX_DURATION,
+            "manual_bitrate": "0",
+            "override_bitrate": False,
             "aspect_mode": DEFAULT_ASPECT_MODE,
             "pixelate_multiplier": DEFAULT_PIXELATE_MULTIPLIER,
             "pixelate_brightness": DEFAULT_PIXELATE_BRIGHTNESS,
@@ -1145,8 +1155,12 @@ class VideoProcessorApp:
         self.generate_log_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         self.override_bitrate_var = tk.BooleanVar(value=False)
-        self.manual_bitrate_var = tk.StringVar()
+        self.manual_bitrate_var = tk.StringVar(value="0")
         self.manual_bitrate_var.trace_add('write', lambda *args: self._update_selected_jobs('manual_bitrate'))
+        self.max_size_mb_var = tk.StringVar(value=str(DEFAULT_MAX_SIZE_MB))
+        self.max_size_mb_var.trace_add('write', lambda *args: self._update_selected_jobs('max_size_mb'))
+        self.max_duration_var = tk.StringVar(value=str(DEFAULT_MAX_DURATION))
+        self.max_duration_var.trace_add('write', lambda *args: self._update_selected_jobs('max_duration'))
         self.use_dynaudnorm_var = tk.BooleanVar(value=DEFAULT_USE_DYNAUDNORM)
         self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
         self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
@@ -1630,15 +1644,17 @@ class VideoProcessorApp:
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10); quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
         ttk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
-        self.rb_hd = ttk.Radiobutton(resolution_options_frame, text="HD", variable=self.resolution_var, value="HD", command=lambda: self._update_selected_jobs("resolution")); self.rb_hd.pack(side=tk.LEFT)
-        self.rb_4k = ttk.Radiobutton(resolution_options_frame, text="4k", variable=self.resolution_var, value="4k", command=lambda: self._update_selected_jobs("resolution")); self.rb_4k.pack(side=tk.LEFT, padx=5)
-        self.rb_8k = ttk.Radiobutton(resolution_options_frame, text="8k", variable=self.resolution_var, value="8k", command=lambda: self._update_selected_jobs("resolution")); self.rb_8k.pack(side=tk.LEFT)
+        self.rb_720p = ttk.Radiobutton(resolution_options_frame, text="720p", variable=self.resolution_var, value="720p", command=lambda: self._update_selected_jobs("resolution")); self.rb_720p.pack(side=tk.LEFT)
+        self.rb_1080p = ttk.Radiobutton(resolution_options_frame, text="1080p", variable=self.resolution_var, value="1080p", command=lambda: self._update_selected_jobs("resolution")); self.rb_1080p.pack(side=tk.LEFT, padx=5)
+        self.rb_2160p = ttk.Radiobutton(resolution_options_frame, text="2160p", variable=self.resolution_var, value="2160p", command=lambda: self._update_selected_jobs("resolution")); self.rb_2160p.pack(side=tk.LEFT)
+        self.rb_4320p = ttk.Radiobutton(resolution_options_frame, text="4320p", variable=self.resolution_var, value="4320p", command=lambda: self._update_selected_jobs("resolution")); self.rb_4320p.pack(side=tk.LEFT, padx=5)
+        
         upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
         self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos"], width=10, state="readonly")
         self.upscale_algo_combo.pack(side=tk.LEFT)
         self.upscale_algo_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("upscale_algo"))
-        ToolTip(self.upscale_algo_combo, "Nearest=Fastest/Lowest Quality, Bilinear=Fast/Good, Bicubic=Default/Better (scale_cuda default), Lanczos=Slowest/Best")
+        ToolTip(self.upscale_algo_combo, "Nearest=Fastest, Bilinear=Fast, Bicubic=Default, Lanczos=Best")
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
@@ -1653,10 +1669,25 @@ class VideoProcessorApp:
         ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
         self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var); self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
-        bitrate_frame = ttk.Frame(quality_group); bitrate_frame.pack(fill=tk.X, pady=(5,0))
-        ttk.Checkbutton(bitrate_frame, text="Override Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
-        self.manual_bitrate_entry = ttk.Entry(bitrate_frame, textvariable=self.manual_bitrate_var, width=10, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
-        ttk.Label(bitrate_frame, text="kbps").pack(side=tk.LEFT)
+        
+        # --- Target & Constraints Group ---
+        constraints_group = ttk.LabelFrame(quality_group, text="Target & Constraints", padding=5)
+        constraints_group.pack(fill=tk.X, pady=(5,0))
+        
+        con_row1 = ttk.Frame(constraints_group); con_row1.pack(fill=tk.X)
+        ttk.Checkbutton(con_row1, text="Manual Bitrate", variable=self.override_bitrate_var, command=self._toggle_bitrate_override).pack(side=tk.LEFT)
+        self.manual_bitrate_entry = ttk.Entry(con_row1, textvariable=self.manual_bitrate_var, width=8, state="disabled"); self.manual_bitrate_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(con_row1, text="kbps").pack(side=tk.LEFT)
+        
+        ttk.Label(con_row1, text="Max Size:").pack(side=tk.LEFT, padx=(20, 5))
+        self.max_size_entry = ttk.Entry(con_row1, textvariable=self.max_size_mb_var, width=6); self.max_size_entry.pack(side=tk.LEFT)
+        ToolTip(self.max_size_entry, "Max file size (MB). 0 = Disabled.")
+        ttk.Label(con_row1, text="MB").pack(side=tk.LEFT, padx=(2,0))
+
+        ttk.Label(con_row1, text="Max Dur:").pack(side=tk.LEFT, padx=(20, 5))
+        self.max_dur_entry = ttk.Entry(con_row1, textvariable=self.max_duration_var, width=6); self.max_dur_entry.pack(side=tk.LEFT)
+        ToolTip(self.max_dur_entry, "Max duration (s). 0 = Disabled.")
+        ttk.Label(con_row1, text="s").pack(side=tk.LEFT, padx=(2,0))
         fruc_frame = ttk.Frame(quality_group); fruc_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var, command=lambda: [self.toggle_fruc_fps(), self._update_selected_jobs("fruc")]).pack(side=tk.LEFT)
         ttk.Label(fruc_frame, text="FRUC FPS:").pack(side=tk.LEFT, padx=(5,5))
@@ -2577,6 +2608,10 @@ class VideoProcessorApp:
         self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
 
+        self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
+        self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
+        self.max_duration_var.set(options.get("max_duration", str(DEFAULT_MAX_DURATION)))
+
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
 
@@ -2761,7 +2796,10 @@ class VideoProcessorApp:
                 sub_target_w, sub_target_h = 1920, 1080 # Fallback
                 
                 if orientation == "hybrid (stacked)":
-                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320} # Hybrid uses Vertical widths? Or Horizontal? Hybrid usually based on horz width, but stacked.
+                    # Wait, hybrid stack usually implies vertical output? 
+                    # Existing code: width_map = {"HD": 1080, "4k": 2160...} => implies 1080 width for HD. 
+                    # Let's standardize to the Vertical set for Hybrid Stacked as it produces vertical video.
                     sub_target_w = width_map.get(res_key, 1080)
                     try:
                         num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
@@ -2770,7 +2808,7 @@ class VideoProcessorApp:
                         sub_target_h = top_h + bot_h
                     except: sub_target_h = 1920 # Fallback for hybrid if calc fails
                 elif orientation == "vertical":
-                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
                     sub_target_w = width_map.get(res_key, 1080)
                     try:
                         num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
@@ -2780,7 +2818,7 @@ class VideoProcessorApp:
                     info = get_video_info(job['video_path'])
                     sub_target_w, sub_target_h = info['width'], info['height']
                 else: # Horizontal / Default
-                    width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
+                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
                     sub_target_w = width_map.get(res_key, 1920)
                     try:
                         num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
@@ -2799,7 +2837,7 @@ class VideoProcessorApp:
                     if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
                          try:
                             # Re-calculate split for seam logic (redundant but safe)
-                            width_map_h = {"HD": 1080, "4k": 2160, "8k": 4320}
+                            width_map_h = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
                             target_w_h = width_map_h.get(res_key, 1080)
                             num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
                             num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
@@ -2816,6 +2854,8 @@ class VideoProcessorApp:
             
             cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
             duration = get_file_duration(job['video_path'])
+            max_dur = float(options.get('max_duration', 0))
+            if max_dur > 0: duration = min(duration, max_dur)
             
             if self.run_ffmpeg_command(cmd, duration) != 0: 
                 raise VideoProcessingError(f"Error encoding {job['video_path']}")
@@ -2850,10 +2890,10 @@ class VideoProcessorApp:
         except ValueError: pass
         if orientation == "hybrid (stacked)":
             res_key = options.get('resolution')
-            width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+            width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
             target_w = width_map.get(res_key)
             if target_w is None: 
-                raise VideoProcessingError(f"Invalid resolution '{res_key}' for Hybrid mode. Must be HD, 4k, or 8k.")
+                raise VideoProcessingError(f"Invalid resolution '{res_key}' for Hybrid mode.")
             
             def get_block_filters(aspect_str, mode, upscale_algo):
                 if not aspect_str: raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")
@@ -2903,16 +2943,16 @@ class VideoProcessorApp:
                 res_key = options.get('resolution')
                 if orientation == "vertical":
                     aspect_str = options.get('vertical_aspect')
-                    width_map = {"HD": 1080, "4k": 2160, "8k": 4320}
+                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
                     if not aspect_str: raise VideoProcessingError("Missing 'Vertical Aspect Ratio' in preset.")
                 else:
                     aspect_str = options.get('horizontal_aspect')
-                    width_map = {"HD": 1920, "4k": 3840, "8k": 7680}
+                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
                     if not aspect_str: raise VideoProcessingError("Missing 'Horizontal Aspect Ratio' in preset.")
                 
                 target_w = width_map.get(res_key)
                 if target_w is None:
-                    raise VideoProcessingError(f"Invalid resolution '{res_key}' for {orientation} mode. Must be HD, 4k, or 8k.")
+                    raise VideoProcessingError(f"Invalid resolution '{res_key}' for {orientation} mode.")
                     
                 try:
                     num, den = map(int, aspect_str.split(':'))
@@ -2996,7 +3036,53 @@ class VideoProcessorApp:
             cmd.extend(["-filter_complex", full_fc])
         cmd.extend(["-map", video_out_tag])
         cmd.extend(audio_cmd_parts)
+        
         bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output)
+        
+        # --- Output Constraints Logic (Size & Duration) ---
+        max_size_mb = float(options.get('max_size_mb', 0))
+        max_duration = float(options.get('max_duration', 0))
+        input_duration = get_file_duration(file_path)
+        
+        calc_duration = input_duration
+        if max_duration > 0 and input_duration > max_duration:
+            calc_duration = max_duration
+            # Insert -t before output file (last arg) to trim output
+            # Current cmd structure: [...encoder... -f mp4 output_file]
+            # Insert at -2 (before -f)
+            cmd.insert(len(cmd)-2, "-t")
+            cmd.insert(len(cmd)-2, str(max_duration))
+
+        if max_size_mb > 0:
+            # Dynamic Bitrate Calculation
+            total_bits = max_size_mb * 8 * 1024 * 1024
+            
+            # Estimate Audio Bitrate Deduction
+            audio_deduction_kbps = 0
+            # Rough estimate based on logic in build_audio_segment (fixed bitrates)
+            if options.get("audio_mono"): audio_deduction_kbps += MONO_BITRATE_K
+            if options.get("audio_stereo_downmix"): audio_deduction_kbps += STEREO_BITRATE_K
+            if options.get("audio_stereo_sofalizer"): audio_deduction_kbps += STEREO_BITRATE_K
+            if options.get("audio_surround_51"): audio_deduction_kbps += SURROUND_BITRATE_K
+            if options.get("audio_passthrough"):
+                 # Passthrough is unknown, but assume similar to Stereo/Surround mix (e.g. 512k safe margin)
+                 audio_deduction_kbps += 384 
+
+            audio_bits = audio_deduction_kbps * 1000 * calc_duration
+            available_video_bits = total_bits - audio_bits
+            
+            if available_video_bits > 0 and calc_duration > 0:
+                max_video_rate_kbps = int((available_video_bits / calc_duration) / 1000)
+                # Clamp to minimum usable (e.g. 100kbps)
+                if max_video_rate_kbps < 100: max_video_rate_kbps = 100
+                
+                if bitrate_kbps > max_video_rate_kbps:
+                     print(f"[INFO] Constraint: Limiting video bitrate from {bitrate_kbps}k to {max_video_rate_kbps}k to fit {max_size_mb}MB limit.")
+                     bitrate_kbps = max_video_rate_kbps
+            else:
+                 print("[WARN] Max Size too small for audio/duration! Using minimal video bitrate (100k).")
+                 bitrate_kbps = 100
+        
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
         
         # Base encoder options
