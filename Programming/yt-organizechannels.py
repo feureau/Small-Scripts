@@ -7,7 +7,7 @@ def clean_folder_name(name):
     """
     Removes characters that are illegal in Windows folder names 
     (though fullwidth characters like ｜ and ： are usually fine).
-    Standard illegal: < > : " / \ | ? *
+    Standard illegal: < > : " / \\ | ? *
     """
     # Replace standard illegal characters just in case
     forbidden = [('<', ''), ('>', ''), (':', ' -'), ('"', '\''), 
@@ -67,7 +67,7 @@ def organize_files():
             dest_path = os.path.join(dest_folder, filename)
             try:
                 shutil.move(src_path, dest_path)
-                print(f"[MOVED] {filename} -> \{channel_folder}")
+                print(f"[MOVED] {filename} -> {channel_folder}")
                 files_moved += 1
             except Exception as e:
                 print(f"[ERROR] Could not move {filename}: {e}")

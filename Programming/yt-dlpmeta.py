@@ -702,7 +702,12 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
 
     print(f"Found {len(video_entries)} unique videos.")
 
-    # Sanitize channel name for filenames
+    # Sanitize channel name for folder (keep spaces, like yt-organizechannels.py)
+    # Only remove characters illegal in Windows folder names: < > : " / \ | ? *
+    forbidden_chars = '<>:"/\\|?*'
+    folder_name = "".join([c for c in channel_name if c not in forbidden_chars]).strip()
+    
+    # Sanitize channel name for filenames (with underscores, for CSV/JSON list files)
     safe_title = "".join([c for c in channel_name if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip().replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -710,8 +715,9 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
     # We use a directory if FULL mode is on, OR if additive resources (subs/heatmaps) are requested
     output_dir = None
     if is_deep_mode or fetch_sub or fetch_heatmap:
-        output_dir = f"{safe_title}_{timestamp}"
+        output_dir = folder_name  # Use clean folder name without timestamp
         os.makedirs(output_dir, exist_ok=True)
+        print(f"Files will be saved in: {output_dir}")
 
     # ============================
     # FAST MODE (Flat Extraction)
@@ -738,15 +744,7 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
     # ============================
     # DEEP MODE (Full Extraction)
     # ============================
-    # Default to current directory unless deep mode is forced with -f
-    # User requested: "each video should be downloaded as if i'm passing one video" 
-    # which implies root directory by default.
-    output_dir = None
-    if is_deep_mode and not condensed_mode: 
-         # If user asked for RAW/FULL detailed mode specifically, maybe keep it organized?
-         # Actually, better to stick to the user's "passing one video" request.
-         pass
-
+    # Files are saved inside the output_dir folder created above
     print("Starting metadata extraction for all videos...")
     extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds)
 
