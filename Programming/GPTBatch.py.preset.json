@@ -277,12 +277,12 @@
         "upload_mode": "parallel",
         "rename_mode": false
     },
-    "Transcribe - Gemma": {
+    "Transcribe - Qwen": {
         "prompt": "Transcribe. Give me only the transcription formatted and cleaned up for markdown. No commentary.",
         "engine": "ollama",
-        "model": "gemma3:12b",
+        "model": "qwen3-vl:8b",
         "output_suffix": "",
-        "output_extension": "txt",
+        "output_extension": "md",
         "overwrite_original": false,
         "stream_output": true,
         "group_size": 6,
