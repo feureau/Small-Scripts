@@ -1003,9 +1003,19 @@ def get_tasks_from_url(url):
                 if 'entries' in data and data.get('entries'):
                     for entry in data['entries']:
                         if entry and entry.get('id') and entry.get('formats'):
-                            ytdlp_tasks.append((YTDLP_TASK, entry["id"], entry.get("title", f"Video_{entry['id']}"), url))
+                            # Use 'webpage_url' if available, otherwise fall back to 'url' or construct one
+                            entry_url = entry.get('webpage_url') or entry.get('url')
+                            if not entry_url and entry.get('ie_key') == 'Youtube':
+                                entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                            
+                            ytdlp_tasks.append((YTDLP_TASK, entry_url or url, entry.get("title", f"Video_{entry['id']}"), url))
                 elif data.get('id') and data.get('formats'):
-                    ytdlp_tasks.append((YTDLP_TASK, data["id"], data.get("title", "Unknown Title"), url))
+                    # Use 'webpage_url' if available, otherwise fall back to 'url' or construct one
+                    entry_url = data.get('webpage_url') or data.get('url')
+                    if not entry_url and data.get('ie_key') == 'Youtube':
+                        entry_url = f"https://www.youtube.com/watch?v={data['id']}"
+
+                    ytdlp_tasks.append((YTDLP_TASK, entry_url or url, data.get("title", "Unknown Title"), url))
             except json.JSONDecodeError:
                 continue
         return ytdlp_tasks if ytdlp_tasks else [(GALLERYDL_TASK, url, url, url)]
@@ -1018,8 +1028,8 @@ def get_tasks_from_url(url):
     except FileNotFoundError:
         raise Exception(f"Critical Error: yt-dlp executable not found at '{YTDLP_PATH}'.")
 
-def build_ytdlp_command(video_id, args):
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
+def build_ytdlp_command(target_url, args):
+    video_url = target_url
     command_list = [YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
 
     # This is the custom format and options block based on your config.
@@ -1122,8 +1132,8 @@ def process_url(url, index, total_urls, args):
             with print_lock:
                 print(f"  [{index:>{len(str(total_urls))}}/{total_urls}] Found {len(tasks)} item(s) to download.")
 
-            for i, (task_type, identifier, title, original_url) in enumerate(tasks, 1):
-                status, message = run_download_task(task_type, identifier, title, args, original_url)
+            for i, (task_type, target_url, title, original_url) in enumerate(tasks, 1):
+                status, message = run_download_task(task_type, target_url, title, args, original_url)
                 log_message(args.log_file, status, original_url, message)
                 if status == "FAILURE":
                     with failed_urls_lock:
