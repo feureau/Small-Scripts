@@ -78,6 +78,7 @@ import mimetypes
 import traceback
 import re
 import shutil
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -158,7 +159,9 @@ class InputFileSanitizer:
     """
     def __init__(self, filepaths):
         self.filepaths = filepaths
-        self.temp_dir = TEMP_UPLOAD_DIR
+        # Use centralized temp dir with unique ID for this batch
+        self.temp_dir = os.path.join(TEMP_UPLOAD_DIR, f"safe_batch_{uuid.uuid4().hex[:8]}")
+            
         self.mapping = {} # { original_path: safe_path }
         self.created_files = []
 
@@ -171,6 +174,11 @@ class InputFileSanitizer:
             safe_name = f"safe_{file_hash}{ext}"
             safe_path = os.path.join(self.temp_dir, safe_name)
             
+            if not os.path.exists(original_path):
+                console_log(f"Skipping sanitization for missing file: {original_path}", "WARN")
+                self.mapping[original_path] = original_path # Fallback to avoid KeyError
+                continue
+
             try:
                 # Copy file to safe path
                 shutil.copy2(original_path, safe_path)
@@ -184,17 +192,37 @@ class InputFileSanitizer:
         return self.mapping
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        for f in self.created_files:
-            try:
-                if os.path.exists(f):
-                    os.remove(f)
-            except Exception:
-                pass
+        # Robust cleanup: Nuke the entire unique temp dir for this batch
         try:
-            # Try to remove dir if empty
-            os.rmdir(self.temp_dir)
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
         except Exception:
             pass
+
+def cleanup_stale_temp_files():
+    """Scans and removes any leftover temp directories from previous runs."""
+    if not os.path.exists(TEMP_UPLOAD_DIR): return
+    
+    count = 0
+    try:
+        for item in os.listdir(TEMP_UPLOAD_DIR):
+            item_path = os.path.join(TEMP_UPLOAD_DIR, item)
+            # Clean up both new centralized folders and any old scattered ones if they ended up here
+            if os.path.isdir(item_path) and (item.startswith("safe_") or item.startswith("gptbatch_temp_")):
+                try:
+                    shutil.rmtree(item_path, ignore_errors=True)
+                    count += 1
+                except Exception: pass
+            elif os.path.isfile(item_path) and item.startswith("safe_"): # loose files
+                 try:
+                    os.remove(item_path)
+                    count += 1
+                 except Exception: pass
+    except Exception as e:
+        console_log(f"Error during temp cleanup: {e}", "WARN")
+    
+    if count > 0:
+        console_log(f"Cleaned up {count} stale temporary items.", "INFO")
 
 
 
@@ -640,6 +668,11 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
     base_name = generate_group_base_name(filepaths_group)
     log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name}
     console_log(f"Processing group: {base_name} ({len(filepaths_group)} files)...")
+
+    # --- CHECK FOR EMPTY FILES ---
+    for fp in filepaths_group:
+         if os.path.exists(fp) and os.path.getsize(fp) == 0:
+             raise FatalProcessingError(f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}")
 
     source_dir = os.path.dirname(filepaths_group[0])
     if not source_dir: source_dir = "."
@@ -1641,7 +1674,8 @@ class AppGUI(tk.Tk):
                 except Exception as e:
                     if isinstance(e, FatalProcessingError) or "Fatal:" in str(e):
                         console_log(f"❌ Job {jid} Failed: {e}", "ERROR")
-                        self.result_queue.put({'job_id': jid, 'status': 'Failed (Blocked)'})
+                        err_msg = str(e).replace("Fatal:", "").strip()
+                        self.result_queue.put({'job_id': jid, 'status': f"Fail: {err_msg}"})
                         break
 
                     is_quota = (isinstance(e, QuotaExhaustedError) or 
@@ -1702,6 +1736,9 @@ def main():
     parser.add_argument("-m", "--model")
     parser.add_argument("--add-filename-to-prompt", action='store_true')
     args = parser.parse_args()
+
+    # --- STARTUP CLEANUP ---
+    cleanup_stale_temp_files()
     
     fps = []
     if args.files:
