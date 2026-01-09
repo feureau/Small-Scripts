@@ -143,12 +143,59 @@ LOG_SUBFOLDER_NAME = "processing_logs"
 FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
+TEMP_UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_upload")
 
 def sanitize_filename(name):
     # Strip illegal chars and typical markdown noise
     keep = (" ", ".", "_", "-")
     clean = "".join(c for c in name if c.isalnum() or c in keep).strip()
     return clean[:250] # Truncate to safe length
+
+class InputFileSanitizer:
+    """
+    Context manager that creates temporary, safely-named copies of files 
+    to work around strict API filename requirements or OS special char issues.
+    """
+    def __init__(self, filepaths):
+        self.filepaths = filepaths
+        self.temp_dir = TEMP_UPLOAD_DIR
+        self.mapping = {} # { original_path: safe_path }
+        self.created_files = []
+
+    def __enter__(self):
+        os.makedirs(self.temp_dir, exist_ok=True)
+        for original_path in self.filepaths:
+            # Generate safe name: hash + extension
+            file_hash = hashlib.md5(original_path.encode('utf-8')).hexdigest()[:8]
+            ext = os.path.splitext(original_path)[1]
+            safe_name = f"safe_{file_hash}{ext}"
+            safe_path = os.path.join(self.temp_dir, safe_name)
+            
+            try:
+                # Copy file to safe path
+                shutil.copy2(original_path, safe_path)
+                self.mapping[original_path] = safe_path
+                self.created_files.append(safe_path)
+            except Exception as e:
+                console_log(f"Failed to sanitize file {original_path}: {e}", "WARN")
+                # Fallback to original path if copy fails
+                self.mapping[original_path] = original_path
+        
+        return self.mapping
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for f in self.created_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass
+        try:
+            # Try to remove dir if empty
+            os.rmdir(self.temp_dir)
+        except Exception:
+            pass
+
 
 
 
@@ -213,7 +260,8 @@ def hash_file(path, chunk_size=1024 * 1024):
     return h.hexdigest()
 
 # --- GEMINI FILES API UPLOADER (Cached & Robust) ---
-def upload_image_file(path, client, retries=3):
+def upload_image_file(path, client, retries=3, display_name=None):
+
     try:
         file_hash = hash_file(path)
         with UPLOAD_LOCK:
@@ -227,7 +275,10 @@ def upload_image_file(path, client, retries=3):
     for attempt in range(1, retries + 2):
         try:
             mime_type = mimetypes.guess_type(path)[0] or "image/png"
-            uploaded_file = client.files.upload(file=path, config={'mime_type': mime_type})
+            uploaded_file = client.files.upload(
+                file=path, 
+                config={'mime_type': mime_type, 'display_name': display_name or os.path.basename(path)}
+            )
             
             while uploaded_file.state == "PROCESSING":
                 time.sleep(1)
@@ -254,18 +305,27 @@ def upload_image_file(path, client, retries=3):
     console_log(f"❌ [UPLOAD FAILED] {path}: {last_error}", "ERROR")
     return None, False
 
-def upload_images_parallel(image_paths, client, max_workers=4, sequential=False):
-    uploaded_files = [None] * len(image_paths)
-    if not image_paths: return []
+def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=False):
+    """
+    image_paths_map: dict { safe_path: display_name } or list of paths (if list, display_name=basename)
+    """
+    # Normalize input to list of (path, display_name)
+    if isinstance(image_paths_map, list):
+        items = [(p, os.path.basename(p)) for p in image_paths_map]
+    else:
+        items = list(image_paths_map.items())
+
+    uploaded_files = [None] * len(items)
+    if not items: return []
         
-    console_log(f"Preparing {len(image_paths)} images...", "INFO")
+    console_log(f"Preparing {len(items)} images...", "INFO")
     cached_count = 0
     new_upload_count = 0
 
     if sequential:
         files_list = []
-        for i, p in enumerate(image_paths):
-             file_obj, was_cached = upload_image_file(p, client)
+        for i, (path, name) in enumerate(items):
+             file_obj, was_cached = upload_image_file(path, client, display_name=name)
              if file_obj:
                  files_list.append(file_obj)
                  if was_cached: cached_count += 1
@@ -273,7 +333,7 @@ def upload_images_parallel(image_paths, client, max_workers=4, sequential=False)
         uploaded_files = files_list
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {executor.submit(upload_image_file, p, client): i for i, p in enumerate(image_paths)}
+            future_to_index = {executor.submit(upload_image_file, p, client, display_name=n): i for i, (p, n) in enumerate(items)}
             for future in as_completed(future_to_index):
                 index = future_to_index[future]
                 try:
@@ -464,7 +524,9 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
     try:
         message = {'role': 'user', 'content': prompt_text}
         if images_data_list:
-            message['images'] = [img['bytes'] for img in images_data_list]
+            # Prefer passing paths to Ollama (handles loading/encoding info better)
+            # Fallback to bytes if path is missing (though our new logic adds it)
+            message['images'] = [img.get('path', img['bytes']) for img in images_data_list]
 
         tools_list = [ollama.web_search] if enable_web_search else []
 
@@ -608,41 +670,53 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         if engine == "google":
              client = genai.Client(api_key=api_key)
 
-        # 1. Handle Images
-        if image_files:
-            if engine == "google":
-                sequential_upload = kwargs.get('sequential_upload', False)
-                google_file_objects = upload_images_parallel(image_files, client, sequential=sequential_upload)
-            else:
-                for img_path in image_files:
-                    content, mime, _, err = read_file_content(img_path)
-                    if not err:
-                        images_data_legacy.append({"bytes": content, "mime_type": mime})
+        # --- SANITIZATION WRAPPER ---
+        # Map { original_path: safe_path }
+        # All reads/uploads use safe_path. All logic/prompts refer to Os.basename(original_path).
+        with InputFileSanitizer(filepaths_group) as file_map:
+            
+            # 1. Handle Images
+            if image_files:
+                if engine == "google":
+                    sequential_upload = kwargs.get('sequential_upload', False)
+                    # Prepare map: { safe_path: original_basename } for display names
+                    upload_map = {file_map[f]: os.path.basename(f) for f in image_files}
+                    google_file_objects = upload_images_parallel(upload_map, client, sequential=sequential_upload)
+                else:
+                    for img_path in image_files:
+                        safe_path = file_map[img_path]
+                        content, mime, _, err = read_file_content(safe_path)
+                        if not err:
+                            # Pass SAFE PATH to legacy data so API wrappers can use it directly if supported
+                            images_data_legacy.append({"bytes": content, "mime_type": mime, "path": safe_path})
+                        else:
+                            console_log(f"Skipping failed image {os.path.basename(img_path)}: {err}", "WARN")
 
-        # 2. Handle Text Files
-        for filepath in text_files:
-            content, _, _, err = read_file_content(filepath)
-            if err: raise ValueError(err)
-            if add_filename_to_prompt: prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
-            prompt_parts.append(f"\n{content}\n")
-        
-        
-        full_prompt = user_prompt + "".join(prompt_parts)
-        log_data['prompt_sent'] = full_prompt
-        
-        response = call_generative_ai_api(
-            engine, 
-            full_prompt, 
-            api_key, 
-            model_name,
-            client=client,
-            images_data_list=images_data_legacy, # For Ollama/LMStudio
-            google_file_objects=google_file_objects, # For Gemini
-            stream_output=kwargs['stream_output'], 
-            safety_settings=kwargs.get('safety_settings'),
-            enable_web_search=kwargs.get('enable_web_search', False),
-            clean_markdown=kwargs.get('clean_markdown', True) # Pass clean setting
-        )
+            # 2. Handle Text Files
+            for filepath in text_files:
+                safe_path = file_map[filepath]
+                content, _, _, err = read_file_content(safe_path)
+                if err: raise ValueError(f"Error reading {os.path.basename(filepath)}: {err}")
+                if add_filename_to_prompt: prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
+                prompt_parts.append(f"\n{content}\n")
+            
+            
+            full_prompt = user_prompt + "".join(prompt_parts)
+            log_data['prompt_sent'] = full_prompt
+            
+            response = call_generative_ai_api(
+                engine, 
+                full_prompt, 
+                api_key, 
+                model_name,
+                client=client,
+                images_data_list=images_data_legacy, # For Ollama/LMStudio
+                google_file_objects=google_file_objects, # For Gemini
+                stream_output=kwargs['stream_output'], 
+                safety_settings=kwargs.get('safety_settings'),
+                enable_web_search=kwargs.get('enable_web_search', False),
+                clean_markdown=kwargs.get('clean_markdown', True) # Pass clean setting
+            )
         
         if response and str(response).strip().startswith("Error"): 
             raise Exception(response)
