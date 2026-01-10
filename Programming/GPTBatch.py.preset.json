@@ -294,5 +294,23 @@
         "delay_sec": 0,
         "upload_mode": "sequential",
         "rename_mode": false
+    },
+    "Rename File - Text in image": {
+        "prompt": "Task: Analyze the input image and return only the text/digit in the image. no commentary.",
+        "engine": "ollama",
+        "model": "gemma3:12b",
+        "output_suffix": "",
+        "output_extension": "",
+        "overwrite_original": false,
+        "stream_output": true,
+        "group_size": 3,
+        "group_files": false,
+        "validate_json": false,
+        "validate_json_keys": false,
+        "clean_markdown": true,
+        "delay_min": 0,
+        "delay_sec": 0,
+        "upload_mode": "sequential",
+        "rename_mode": true
     }
 }
