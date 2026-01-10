@@ -590,9 +590,14 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
         contents = []
         if google_file_objects:
             # New SDK can take types.File directly or 'file' objects
+            console_log(f"DEBUG API: Received {len(google_file_objects)} file objects for submission", "INFO")
             for f in google_file_objects:
                  contents.append(f)
+                 console_log(f"DEBUG API: Added file to contents: {getattr(f, 'display_name', getattr(f, 'name', 'unknown'))}", "INFO")
+        else:
+            console_log("DEBUG API: google_file_objects is None or empty!", "WARN")
         contents.append(prompt_text)
+        console_log(f"DEBUG API: Total contents list size: {len(contents)} (should be {(len(google_file_objects) if google_file_objects else 0) + 1})", "INFO")
         
         # Configuration
         config = types.GenerateContentConfig(
@@ -613,15 +618,20 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
                     # Handle Thinking Content (if present)
                     if hasattr(chunk, 'candidates') and chunk.candidates:
                         for part in chunk.candidates[0].content.parts:
-                            if getattr(part, 'thought', None):
+                            # part.thought is a boolean indicating this is thinking content
+                            # The actual thought text is in part.text
+                            if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
                                 # Print thought in gray (ANSI 90m)
-                                print(f"\033[90m{part.thought}\033[0m", end="", flush=True)
+                                print(f"\033[90m{part.text}\033[0m", end="", flush=True)
                 except Exception: pass
 
-                text_part = chunk.text
-                if text_part:
-                    print(text_part, end="", flush=True)
-                    full_text += text_part
+                # Get the regular text output
+                try:
+                    text_part = chunk.text
+                    if text_part:
+                        print(text_part, end="", flush=True)
+                        full_text += text_part
+                except Exception: pass
             print("\n----------------------------------------------\n", flush=True)
             return full_text
         else:
@@ -932,6 +942,9 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             
             full_prompt = user_prompt + "".join(prompt_parts)
             log_data['prompt_sent'] = full_prompt
+            
+            # DEBUG: Verify what's being passed to the API
+            console_log(f"DEBUG process_file_group: google_file_objects has {len(google_file_objects) if google_file_objects else 0} items before API call", "INFO")
             
             response = call_generative_ai_api(
                 engine, 
