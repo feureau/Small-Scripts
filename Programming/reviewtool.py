@@ -96,7 +96,7 @@ class TranscriptionReviewer:
             selectbackground=COLORS["highlight"],
             relief=tk.FLAT,
             padx=15, pady=15,
-            width=1 # Keep small default to allow splitter to work
+            width=40 # Increased default width to ensure visibility
         )
         self.text_editor.pack(fill=tk.BOTH, expand=True)
         
@@ -169,8 +169,16 @@ class TranscriptionReviewer:
         self.lbl_filename.config(text=os.path.basename(txt_path))
         
         try:
+            print(f"Loading text file: {txt_path}")
             with open(txt_path, 'r', encoding='utf-8') as f:
                 content = f.read()
+                
+            print(f"Content length: {len(content)}")
+            print(f"Snippet: {content[:100]!r}")
+            
+            if not content:
+                content = "[File is empty]"
+
             self.text_editor.delete('1.0', tk.END)
             self.text_editor.insert('1.0', content)
             
