@@ -10,6 +10,7 @@ from PIL import Image, ImageTk
 # ==========================================
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif'}
+TEXT_EXTENSIONS = {'.txt', '.md', '.srt', '.log', '.json', '.xml', '.csv', '.ini', '.cfg', '.yaml', '.yml', '.rst', '.html', '.htm'}
 
 # Dark Mode Palette
 COLORS = {
@@ -143,7 +144,7 @@ class TranscriptionReviewer:
     def _find_files_fuzzy(self):
         files = os.listdir(self.working_dir)
         images = sorted([f for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS])
-        text_files = sorted([f for f in files if f.lower().endswith('.txt')])
+        text_files = sorted([f for f in files if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS])
         
         for img_file in images:
             img_basename = os.path.splitext(img_file)[0]
