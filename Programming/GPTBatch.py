@@ -94,6 +94,15 @@ from tkinter import filedialog
 import tkinter.messagebox
 import tkinter.simpledialog
 
+import tkinter.simpledialog
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    print("⚠️ Pillow (PIL) not found. Image conversions (e.g. .tif -> .png) will be disabled.")
+
 import ollama 
 
 # --- OPTIONAL: JSON REPAIR ---
@@ -125,11 +134,30 @@ AUTO_LOAD_EXTENSIONS = [
     '.txt', '.md', '.srt', '.vtt', '.py', '.js', '.html', '.css', '.json', '.csv', 
     '.xml', '.yaml', '.yml', '.ini', '.log', '.bat', '.sh', '.r', '.c', '.cpp', '.h', 
     '.java', '.php', '.sql', '.rb', '.go', '.rs', '.swift', '.kt', '.ts', '.tsx', '.jsx',
-    # Images
-    '.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.bmp', '.tiff'
+    # Images (Native & Convertible)
+    '.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.bmp', '.tiff', '.tif', '.gif',
+    '.apng', '.avif', '.avifs', '.blp', '.bufr', '.bw', '.cur', '.dcx', '.dds', '.dib', 
+    '.emf', '.eps', '.fit', '.fits', '.flc', '.fli', '.ftc', '.ftu', '.gbr', '.grib', 
+    '.h5', '.hdf', '.icb', '.icns', '.ico', '.iim', '.im', '.j2c', '.j2k', '.jfif', 
+    '.jp2', '.jpc', '.jpe', '.jpf', '.jpx', '.mpo', '.msp', '.palm', '.pbm', '.pcd', 
+    '.pcx', '.pfm', '.pgm', '.pnm', '.ppm', '.ps', '.psd', '.pxr', '.qoi', '.ras', 
+    '.rgb', '.rgba', '.sgi', '.tga', '.vda', '.vst', '.wmf', '.xbm', '.xpm'
 ]
 
-SUPPORTED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.bmp', '.tiff']
+# Google/Ollama/LMStudio usually handle these natively (or we want to preserve them like GIFs)
+NATIVE_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.gif']
+
+# These should be converted to PNG for better compatibility
+CONVERTIBLE_IMAGE_EXTENSIONS = [
+    '.apng', '.avif', '.avifs', '.blp', '.bmp', '.bufr', '.bw', '.cur', '.dcx', '.dds', '.dib', 
+    '.emf', '.eps', '.fit', '.fits', '.flc', '.fli', '.ftc', '.ftu', '.gbr', '.grib', '.h5', 
+    '.hdf', '.icb', '.icns', '.ico', '.iim', '.im', '.j2c', '.j2k', '.jfif', '.jp2', '.jpc', 
+    '.jpe', '.jpf', '.jpx', '.mpo', '.msp', '.palm', '.pbm', '.pcd', '.pcx', '.pfm', '.pgm', 
+    '.pnm', '.ppm', '.ps', '.psd', '.pxr', '.qoi', '.ras', '.rgb', '.rgba', '.sgi', '.tga', 
+    '.tif', '.tiff', '.vda', '.vst', '.wmf', '.xbm', '.xpm'
+]
+
+SUPPORTED_IMAGE_EXTENSIONS = list(set(NATIVE_IMAGE_EXTENSIONS + CONVERTIBLE_IMAGE_EXTENSIONS))
 
 DEFAULT_RAW_OUTPUT_SUFFIX = ""
 RAW_OUTPUT_FILE_EXTENSION = ".txt"
@@ -154,15 +182,26 @@ def sanitize_filename(name):
 class InputFileSanitizer:
     """
     Context manager that creates temporary, safely-named copies of files 
-    inside a 'gptbatch_temp' subfolder within the SAME DIRECTORY as the original file.
+    Inside a 'gptbatch_temp' subfolder within the SAME DIRECTORY as the original file.
     This ensures better locality and avoids cross-drive issues.
     """
-    def __init__(self, filepaths):
+    def __init__(self, filepaths, target_fmt="PNG", quality=100, max_dim=0, force_convert=False, **kwargs):
         self.filepaths = filepaths
         self.batch_id = uuid.uuid4().hex[:8]
         self.temp_dirs_created = set() # Track all created temp dirs for cleanup
         self.mapping = {} # { original_path: safe_path }
         self.created_files = []
+        
+        # Image Processing Settings
+        self.target_fmt = target_fmt.upper()
+        self.quality = quality
+        self.max_dim = max_dim
+        self.force_convert = force_convert
+        self.enable_conversion = kwargs.get('enable_conversion', False)
+        
+        # Extensions mapping for target format
+        self.fmt_ext_map = {'PNG': '.png', 'JPEG': '.jpg', 'WEBP': '.webp'}
+        self.target_ext = self.fmt_ext_map.get(self.target_fmt, '.png')
 
     def __enter__(self):
         for original_path in self.filepaths:
@@ -177,19 +216,85 @@ class InputFileSanitizer:
                 local_temp_base = os.path.join(source_dir, "gptbatch_temp_safe")
                 local_batch_dir = os.path.join(local_temp_base, f"batch_{self.batch_id}")
                 
-                os.makedirs(local_batch_dir, exist_ok=True)
-                self.temp_dirs_created.add(local_temp_base) # Track the base temp folder for cleanup checks
-
                 # Generate safe name
                 file_hash = hashlib.md5(original_path.encode('utf-8')).hexdigest()[:8]
-                ext = os.path.splitext(original_path)[1]
-                safe_name = f"safe_{file_hash}{ext}"
-                safe_path = os.path.join(local_batch_dir, safe_name)
+                orig_ext = os.path.splitext(original_path)[1].lower()
+                
+                # DECISION LOGIC:
+                # Convert IF: Enable Conversion AND (PIL Available) AND (Force Convert OR Not Native OR Resizing Needed)
+                
+                should_convert = False
+                if self.enable_conversion and PIL_AVAILABLE and orig_ext in SUPPORTED_IMAGE_EXTENSIONS:
+                     if self.force_convert: should_convert = True
+                     elif orig_ext in (CONVERTIBLE_IMAGE_EXTENSIONS + ['.tif', '.tiff']): should_convert = True # Explicitly check TIF
+                     elif self.max_dim > 0: should_convert = True # Even native files might need resize
+                
+                # DEBUG LOG
+                console_log(f"DEBUG Sanitizer: {os.path.basename(original_path)} | En={self.enable_conversion} | Fmt={self.target_fmt} | Force={self.force_convert} | Should={should_convert}", "DEBUG")
 
-                # Copy file
-                shutil.copy2(original_path, safe_path)
-                self.mapping[original_path] = safe_path
-                self.created_files.append(safe_path)
+                if should_convert:
+                    # ENSURE DIRECTORY EXISTS (Fix for FileNotFoundError)
+                    os.makedirs(local_batch_dir, exist_ok=True)
+                    self.temp_dirs_created.add(local_temp_base)
+
+                    safe_name = f"safe_{file_hash}{self.target_ext}"
+                    safe_path = os.path.join(local_batch_dir, safe_name)
+                    
+                    try:
+                        with Image.open(original_path) as img:
+                            # 1. Resize if needed
+                            if self.max_dim > 0:
+                                w, h = img.size
+                                if w > self.max_dim or h > self.max_dim:
+                                    img.thumbnail((self.max_dim, self.max_dim), Image.Resampling.LANCZOS)
+                            
+                            # 2. Convert Color Mode (JPEG doesn't support RGBA)
+                            if self.target_fmt == 'JPEG':
+                                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                                    bg = Image.new('RGB', img.size, (255, 255, 255))
+                                    if img.mode == 'P': img = img.convert('RGBA')
+                                    bg.paste(img.convert('RGBA'), mask=img.convert('RGBA').split()[3])
+                                    img = bg
+                                else:
+                                    img = img.convert('RGB')
+                            elif self.target_fmt == 'WEBP':
+                                if img.mode == 'P': img = img.convert('RGBA')
+
+                            # 3. Save
+                            save_args = {}
+                            if self.target_fmt in ['JPEG', 'WEBP']:
+                                save_args['quality'] = self.quality
+                            
+                            img.save(safe_path, format=self.target_fmt, **save_args)
+                        
+                        console_log(f"Processed image: {os.path.basename(original_path)} -> {self.target_fmt} ({self.target_ext})", "INFO")
+                        
+                        self.mapping[original_path] = safe_path
+                        self.created_files.append(safe_path)
+
+                    except Exception as e:
+                        console_log(f"Failed to process {original_path}: {e}. Falling back to copy.", "WARN")
+                        # Fallback
+                        safe_name = f"safe_{file_hash}{orig_ext}"
+                        safe_path = os.path.join(local_batch_dir, safe_name)
+                        shutil.copy2(original_path, safe_path)
+                        
+                        self.mapping[original_path] = safe_path
+                        self.created_files.append(safe_path)
+
+                else:
+                    # Standard Move/Copy
+                    # ENSURE DIRECTORY EXISTS
+                    os.makedirs(local_batch_dir, exist_ok=True)
+                    self.temp_dirs_created.add(local_temp_base)
+                    
+                    safe_name = f"safe_{file_hash}{orig_ext}"
+                    safe_path = os.path.join(local_batch_dir, safe_name)
+                    
+                    shutil.copy2(original_path, safe_path)
+                    
+                    self.mapping[original_path] = safe_path
+                    self.created_files.append(safe_path)
 
             except Exception as e:
                 console_log(f"Failed to sanitize file {original_path}: {e}", "WARN")
@@ -491,7 +596,8 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
         
         # Configuration
         config = types.GenerateContentConfig(
-             safety_settings=safety_settings
+             safety_settings=safety_settings,
+             thinking_config=types.ThinkingConfig(include_thoughts=True)
         )
 
         if stream_output:
@@ -503,6 +609,15 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
             full_text = ""
             print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
             for chunk in response:
+                try:
+                    # Handle Thinking Content (if present)
+                    if hasattr(chunk, 'candidates') and chunk.candidates:
+                        for part in chunk.candidates[0].content.parts:
+                            if getattr(part, 'thought', None):
+                                # Print thought in gray (ANSI 90m)
+                                print(f"\033[90m{part.thought}\033[0m", end="", flush=True)
+                except Exception: pass
+
                 text_part = chunk.text
                 if text_part:
                     print(text_part, end="", flush=True)
@@ -567,9 +682,34 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
                 stream=True
             )
             full_text = ""
+            thinking_active = False
             for chunk in stream:
                 part = chunk['message']['content']
-                print(part, end="", flush=True)
+                
+                # Simple Thinking Tag Handling
+                to_print = part
+                if "<think>" in to_print:
+                    thinking_active = True
+                    # If tag is strictly present, try to colorize what's after it
+                    to_print = to_print.replace("<think>", "\033[90m<think>")
+                
+                if "</think>" in to_print:
+                    to_print = to_print.replace("</think>", "</think>\033[0m")
+                    # We only toggle off after printing the closing tag
+                    # Note: This simple logic assumes tags usually don't split awkwardly in a way that breaks ANSI too badly.
+                
+                if thinking_active and "<think>" not in part:
+                     # If we are in thinking mode and no new tag, color whole part (unless closing tag appeared)
+                     if "</think>" not in part:
+                         to_print = f"\033[90m{part}\033[0m"
+                     else:
+                         # Closing tag is present, regex replace handled the reset
+                         pass
+
+                if "</think>" in part:
+                    thinking_active = False
+                
+                print(to_print, end="", flush=True)
                 full_text += part
             print("\n---------------------------------------\n", flush=True)
             return full_text
@@ -610,6 +750,7 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
         if stream_output:
             print(f"\n--- [STREAM] LM Studio ({model_name}) ---\n", end="", flush=True)
             full_text = ""
+            thinking_active = False
             for line in response.iter_lines():
                 if line:
                     decoded_line = line.decode('utf-8').strip()
@@ -620,7 +761,24 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
                             chunk_json = json.loads(json_str)
                             content = chunk_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
                             if content:
-                                print(content, end="", flush=True)
+                                to_print = content
+                                
+                                # Thinking Logic (Duplicated for now, could be helper)
+                                if "<think>" in to_print:
+                                    thinking_active = True
+                                    to_print = to_print.replace("<think>", "\033[90m<think>")
+                                
+                                if "</think>" in to_print:
+                                    to_print = to_print.replace("</think>", "</think>\033[0m")
+                                
+                                if thinking_active and "<think>" not in content:
+                                     if "</think>" not in content:
+                                         to_print = f"\033[90m{content}\033[0m"
+
+                                if "</think>" in content:
+                                    thinking_active = False
+
+                                print(to_print, end="", flush=True)
                                 full_text += content
                         except json.JSONDecodeError: pass
             print("\n-----------------------------------------\n", flush=True)
@@ -681,14 +839,14 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         raw_path = filepaths_group[0]
         log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME)
         os.makedirs(log_dir, exist_ok=True)
-        _, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], log_dir, log_dir)
+        _, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), log_dir, log_dir)
     else:
         out_folder = kwargs.get('output_folder') or source_dir
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
         os.makedirs(out_folder, exist_ok=True); os.makedirs(log_folder, exist_ok=True)
         requested_ext = kwargs.get('output_extension', '').strip()
         ext = ('.' + requested_ext.lstrip('.')) if requested_ext else RAW_OUTPUT_FILE_EXTENSION
-        raw_path, log_path = determine_unique_output_paths(base_name, kwargs['output_suffix'], out_folder, log_folder, ext)
+        raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
 
     try:
         # --- SPLIT TEXT vs IMAGES ---
@@ -706,21 +864,59 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         # --- SANITIZATION WRAPPER ---
         # Map { original_path: safe_path }
         # All reads/uploads use safe_path. All logic/prompts refer to Os.basename(original_path).
-        with InputFileSanitizer(filepaths_group) as file_map:
+        with InputFileSanitizer(
+            filepaths_group, 
+            target_fmt=kwargs.get('temp_img_fmt', 'PNG'),
+            quality=kwargs.get('img_quality', 100),
+            max_dim=kwargs.get('img_max_dim', 0),
+            force_convert=kwargs.get('force_conversion', False),
+            enable_conversion=kwargs.get('enable_img_conversion', False)
+        ) as file_map:
             
             # 1. Handle Images
             if image_files:
+                save_processed = kwargs.get('save_img_to_output', False)
+                output_folder_defined = kwargs.get('output_folder')
+                overwrite = kwargs.get('overwrite_original', False)
+
                 if engine == "google":
                     sequential_upload = kwargs.get('sequential_upload', False)
                     # Prepare map: { safe_path: original_basename } for display names
                     upload_map = {file_map[f]: os.path.basename(f) for f in image_files}
                     google_file_objects = upload_images_parallel(upload_map, client, sequential=sequential_upload)
-                else:
-                    for img_path in image_files:
-                        safe_path = file_map[img_path]
+                
+                # Logic for other engines OR for Saving Processed Images (Universal)
+                for img_path in image_files:
+                    safe_path = file_map[img_path]
+                    
+                    # --- SAVE PROCESSED IMAGE FEATURE ---
+                    if save_processed:
+                        try:
+                            # 1. Determine Dest Dir
+                            if output_folder_defined:
+                                dest_dir = output_folder_defined
+                            else:
+                                dest_dir = os.path.dirname(img_path)
+                            
+                            # 2. Determine Dest Filename (Original Name + New Extension)
+                            orig_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
+                            safe_ext = os.path.splitext(safe_path)[1]
+                            dest_filename = f"{orig_name_no_ext}{safe_ext}"
+                            dest_path = os.path.join(dest_dir, dest_filename)
+
+                            # 3. Check Overwrite
+                            if not os.path.exists(dest_path) or overwrite:
+                                shutil.copy2(safe_path, dest_path)
+                                console_log(f"Saved processed image: {dest_filename}", "INFO")
+                            else:
+                                console_log(f"Skipped saving image (exists): {dest_filename}", "WARN")
+
+                        except Exception as e:
+                            console_log(f"Failed to save processed image {os.path.basename(img_path)}: {e}", "ERROR")
+
+                    if engine != "google":
                         content, mime, _, err = read_file_content(safe_path)
                         if not err:
-                            # Pass SAFE PATH to legacy data so API wrappers can use it directly if supported
                             images_data_legacy.append({"bytes": content, "mime_type": mime, "path": safe_path})
                         else:
                             console_log(f"Skipping failed image {os.path.basename(img_path)}: {err}", "WARN")
@@ -949,6 +1145,9 @@ class ModelSelectionDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
+        self.result = None
+        self.destroy()
+
 class AppGUI(tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
@@ -1006,6 +1205,16 @@ class AppGUI(tk.Tk):
         
         # Rename Mode
         self.rename_mode_var = tk.BooleanVar(value=False)
+        
+        self.rename_mode_var = tk.BooleanVar(value=False)
+        
+        # --- NEW: Image & Format Settings ---
+        self.enable_img_conversion_var = tk.BooleanVar(value=False) # Master Toggle
+        self.temp_img_fmt_var = tk.StringVar(value="PNG")
+        self.img_quality_var = tk.IntVar(value=100)
+        self.img_max_dim_var = tk.IntVar(value=0)
+        self.force_conversion_var = tk.BooleanVar(value=False)
+        self.save_img_to_output_var = tk.BooleanVar(value=False)
 
         self.create_widgets()
         self.refresh_presets_combo()
@@ -1021,6 +1230,8 @@ class AppGUI(tk.Tk):
         self._on_closing()
 
     def create_widgets(self):
+        self.style = ttk.Style() # Keep reference
+        
         toolbar = ttk.Frame(self, padding=(10, 5))
         toolbar.pack(side=tk.TOP, fill=tk.X)
         
@@ -1131,6 +1342,52 @@ class AppGUI(tk.Tk):
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_sec_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="s").pack(side=tk.LEFT)
 
+        # === TAB: Image & Format ===
+        tab_img = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_img, text="Image & Format")
+        
+        # Master Toggle
+        self.convert_check = ttk.Checkbutton(tab_img, text="Enable Image Pre-processing / Conversion", variable=self.enable_img_conversion_var, command=self.toggle_img_settings)
+        self.convert_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        # Container for sub-settings
+        self.img_settings_frame = ttk.Frame(tab_img)
+        self.img_settings_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        ttk.Label(self.img_settings_frame, text="Temporary File Format:", font=('Helvetica', 9, 'bold')).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        fmt_frame = ttk.Frame(self.img_settings_frame)
+        fmt_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        
+        # Format Radios
+        for fmt in ["PNG", "JPEG", "WEBP"]:
+            ttk.Radiobutton(fmt_frame, text=fmt, variable=self.temp_img_fmt_var, value=fmt).pack(side=tk.LEFT, padx=(0, 10))
+            
+        # Quality
+        ttk.Label(self.img_settings_frame, text="Compression Quality (1-100):").grid(row=2, column=0, sticky="w")
+        q_frame = ttk.Frame(self.img_settings_frame)
+        q_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        self.qual_scale = ttk.Scale(q_frame, from_=1, to=100, variable=self.img_quality_var, orient=tk.HORIZONTAL, length=200, command=lambda s: self.img_quality_var.set(int(float(s))))
+        self.qual_scale.pack(side=tk.LEFT)
+        ttk.Label(q_frame, textvariable=self.img_quality_var).pack(side=tk.LEFT, padx=5)
+        ttk.Label(q_frame, text="(JPEG/WEBP only)", font=('Helvetica', 8, 'italic'), foreground="gray").pack(side=tk.LEFT)
+
+        # Max Dimension
+        ttk.Label(self.img_settings_frame, text="Max Dimension (px):").grid(row=4, column=0, sticky="w")
+        dim_frame = ttk.Frame(self.img_settings_frame)
+        dim_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Spinbox(dim_frame, from_=0, to=8192, textvariable=self.img_max_dim_var, width=6, increment=128).pack(side=tk.LEFT)
+        ttk.Label(dim_frame, text="(0 = No Resize)", font=('Helvetica', 8)).pack(side=tk.LEFT, padx=5)
+
+        # Force Convert
+        ttk.Checkbutton(self.img_settings_frame, text="Force Conversion for Native Types", variable=self.force_conversion_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Label(self.img_settings_frame, text="Force re-encoding even for PNG/JPG inputs\n(Apply compression/resizing to everything)", font=('Helvetica', 8, 'italic'), foreground="gray").grid(row=7, column=0, columnspan=2, sticky="w", padx=20)
+
+        # Save to Output Checkbox
+        ttk.Checkbutton(self.img_settings_frame, text="Save Processed Image to Output Folder", variable=self.save_img_to_output_var).grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        
+        self.toggle_img_settings() # Init State
+
+
+
         tab_safe = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_safe, text="Safety")
         ttk.Checkbutton(tab_safe, text="Enable Filters", variable=self.enable_safety_var, command=self.toggle_safety).pack(anchor="w")
         self.safety_widgets = []
@@ -1172,6 +1429,22 @@ class AppGUI(tk.Tk):
         
         self.tree.bind("<Button-3>", self.show_context_menu)
 
+    def toggle_img_settings(self):
+        state = 'normal' if self.enable_img_conversion_var.get() else 'disabled'
+        
+        def recursive_set_state(widget, state):
+            try:
+                widget.configure(state=state)
+            except tk.TclError:
+                pass # Widget doesn't support state (e.g., Frame)
+            
+            for child in widget.winfo_children():
+                recursive_set_state(child, state)
+        
+        # Apply to all children of the container
+        for child in self.img_settings_frame.winfo_children():
+            recursive_set_state(child, state)
+
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
@@ -1191,21 +1464,47 @@ class AppGUI(tk.Tk):
             set_var(self.engine_var, 'engine')
             self.update_models()
             set_var(self.model_var, 'model')
+            set_var(self.output_dir_var, 'output_folder') # Missing Key
             set_var(self.suffix_var, 'output_suffix')
             set_var(self.output_ext_var, 'output_extension', "")
             set_var(self.overwrite_var, 'overwrite_original', False)
-            set_var(self.stream_var, 'stream_output', False)
-            set_var(self.group_size_var, 'group_size', 3)
+            set_var(self.stream_var, 'stream_output', True) # Default True
+            set_var(self.add_filename_var, 'add_filename_to_prompt', False)
+            set_var(self.ollama_search_var, 'enable_web_search', False)
+            
+            # Safety Settings
+            set_var(self.enable_safety_var, 'enable_safety', False)
+            set_var(self.harassment_var, 'safety_harassment', 'Off')
+            set_var(self.hate_speech_var, 'safety_hate_speech', 'Off')
+            set_var(self.sexually_explicit_var, 'safety_sexually_explicit', 'Off')
+            set_var(self.dangerous_content_var, 'safety_dangerous_content', 'Off')
+            
+            # Image Settings
+            set_var(self.enable_img_conversion_var, 'enable_img_conversion', False)
+            set_var(self.temp_img_fmt_var, 'temp_img_fmt', 'PNG')
+            set_var(self.img_quality_var, 'img_quality', 100)
+            set_var(self.img_max_dim_var, 'img_max_dim', 0)
+            set_var(self.img_max_dim_var, 'img_max_dim', 0)
+            set_var(self.force_conversion_var, 'force_conversion', False)
+            set_var(self.save_img_to_output_var, 'save_img_to_output', False)
+            
+            # Batching & Validation
+            set_var(self.group_size_var, 'group_size', 1)
             set_var(self.group_files_var, 'group_files', False)
             set_var(self.validate_json_var, 'validate_json', False)
-            set_var(self.validate_keys_var, 'validate_json_keys', False) # Load new setting
-            set_var(self.clean_markdown_var, 'clean_markdown', True) 
+            set_var(self.validate_keys_var, 'validate_json_keys', False)
+            set_var(self.clean_markdown_var, 'clean_markdown', True)
+            
+            # Delay & Mode
             set_var(self.delay_min_var, 'delay_min', 0)
             set_var(self.delay_sec_var, 'delay_sec', 0)
             set_var(self.upload_mode_var, 'upload_mode', 'parallel')
             set_var(self.rename_mode_var, 'rename_mode', False)
+            
+            self.toggle_safety() # Refresh UI state
             self.ollama_search_var.set(False)
             
+            self.toggle_img_settings() # State Change
             self.toggle_rename_mode()
             
             self.toggle_overwrite()
@@ -1216,6 +1515,7 @@ class AppGUI(tk.Tk):
             'prompt': self.prompt_text.get("1.0", tk.END).strip(),
             'engine': self.engine_var.get(),
             'model': self.model_var.get(),
+            'output_folder': self.output_dir_var.get(), # Missing Key
             'output_suffix': self.suffix_var.get(),
             'output_extension': self.output_ext_var.get(),
             'overwrite_original': self.overwrite_var.get(),
@@ -1226,9 +1526,21 @@ class AppGUI(tk.Tk):
             'validate_json_keys': self.validate_keys_var.get(), # Save new setting
             'clean_markdown': self.clean_markdown_var.get(),
             'delay_min': self.delay_min_var.get(),
-            'delay_min': self.delay_min_var.get(),
             'delay_sec': self.delay_sec_var.get(),
             'upload_mode': self.upload_mode_var.get(),
+            'add_filename_to_prompt': self.add_filename_var.get(),
+            'enable_web_search': self.ollama_search_var.get(),
+            'enable_safety': self.enable_safety_var.get(),
+            'safety_harassment': self.harassment_var.get(),
+            'safety_hate_speech': self.hate_speech_var.get(),
+            'safety_sexually_explicit': self.sexually_explicit_var.get(),
+            'safety_dangerous_content': self.dangerous_content_var.get(),
+            'enable_img_conversion': self.enable_img_conversion_var.get(),
+            'temp_img_fmt': self.temp_img_fmt_var.get(),
+            'img_quality': self.img_quality_var.get(),
+            'img_max_dim': self.img_max_dim_var.get(),
+            'force_conversion': self.force_conversion_var.get(),
+            'save_img_to_output': self.save_img_to_output_var.get(),
             'rename_mode': self.rename_mode_var.get()
         }
 
@@ -1362,6 +1674,21 @@ class AppGUI(tk.Tk):
             files = list(self.files_var.get())
             if not files: tkinter.messagebox.showwarning("Input", "No files in list."); return
 
+        # --- INCOMPATIBLE FILE CHECK ---
+        if not self.enable_img_conversion_var.get():
+            incompatible = []
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in (CONVERTIBLE_IMAGE_EXTENSIONS + ['.tif', '.tiff']) and ext not in NATIVE_IMAGE_EXTENSIONS:
+                    incompatible.append(os.path.basename(f))
+            
+            if incompatible:
+                msg = f"Conversion is OFF, but these files are not native to AI models:\n\n" + ", ".join(incompatible[:5])
+                if len(incompatible) > 5: msg += f" and {len(incompatible)-5} more..."
+                msg += "\n\nThey will likely fail. Continue anyway?"
+                if not tkinter.messagebox.askyesno("Incompatible Files", msg):
+                    return
+
         mod = self.model_var.get()
         if not mod or "Error" in mod: tkinter.messagebox.showwarning("Error", "Invalid Model."); return
         if self.engine_var.get() == 'google' and not self.api_key: tkinter.messagebox.showwarning("Error", "No API Key."); return
@@ -1415,6 +1742,12 @@ class AppGUI(tk.Tk):
                 'job_delay_seconds': total_delay,
                 'sequential_upload': (self.upload_mode_var.get() == 'sequential'),
                 'rename_mode': self.rename_mode_var.get(),
+                'enable_img_conversion': self.enable_img_conversion_var.get(),
+                'temp_img_fmt': self.temp_img_fmt_var.get(),
+                'img_quality': self.img_quality_var.get(),
+                'img_max_dim': self.img_max_dim_var.get(),
+                'force_conversion': self.force_conversion_var.get(),
+                'save_img_to_output': self.save_img_to_output_var.get(),
                 'result_metadata': {} # Mutable container for returning data
             }
             self.job_registry[jid] = job_data
