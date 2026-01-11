@@ -500,11 +500,27 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
     Main logic to handle the URL.
     """
     
-    # URL Sanitization: Prepend https:// if missing
+    # URL Sanitization: Prepend https:// if missing or expand bare IDs
     if not url.startswith(('http://', 'https://', 'ftp://', 'file://')):
-        # Simple heuristic: if it contains a dot before the first slash, treat as domain
-        if '.' in url.split('/')[0]:
-             url = 'https://' + url
+        # 1. Detect common bare YouTube patterns
+        if url.startswith('PL') and len(url) >= 18:
+            # Bare Playlist ID
+            url = 'https://www.youtube.com/playlist?list=' + url
+        elif url.startswith('UC') and len(url) == 24:
+            # Bare Channel ID
+            url = 'https://www.youtube.com/channel/' + url
+        elif url.startswith('@'):
+            # Bare Channel Handle
+            url = 'https://www.youtube.com/' + url
+        elif len(url) == 11 and all(c.isalnum() or c in '-_' for c in url):
+            # Bare Video ID
+            url = 'https://www.youtube.com/watch?v=' + url
+        elif '.' in url.split('/')[0]:
+            # Simple heuristic: if it contains a dot before the first slash, treat as domain
+            url = 'https://' + url
+        else:
+            # Final fallback: just try prepending https:// and hope for the best
+            url = 'https://' + url
 
     # default options
     ydl_opts = {
