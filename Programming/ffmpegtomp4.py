@@ -63,6 +63,7 @@ LICENSE / NOTES
 """
 
 import argparse
+import glob
 import os
 import sys
 import subprocess
@@ -373,9 +374,16 @@ def main():
                     for f in files:
                         if f.lower().endswith(supported_exts):
                             files_to_process.append(os.path.join(root, f))
-            else:
-                if os.path.isfile(pattern) and pattern.lower().endswith(supported_exts):
+            elif os.path.isfile(pattern):
+                # Direct file path
+                if pattern.lower().endswith(supported_exts):
                     files_to_process.append(os.path.abspath(pattern))
+            else:
+                # Treat as glob pattern (e.g., *.mkv) - expands wildcards on Windows
+                expanded = glob.glob(pattern)
+                for match in expanded:
+                    if os.path.isfile(match) and match.lower().endswith(supported_exts):
+                        files_to_process.append(os.path.abspath(match))
     else:
         for root, _, files in os.walk(os.getcwd()):
             for f in files:
