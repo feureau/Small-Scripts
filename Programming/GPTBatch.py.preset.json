@@ -295,7 +295,7 @@
     "Transcribe - Qwen": {
         "prompt": "Transcribe. Give me only the transcription formatted and cleaned up for markdown. No commentary.",
         "engine": "ollama",
-        "model": "qwen3-vl:235b-cloud",
+        "model": "qwen3-vl:8b",
         "output_folder": "qwen-cloud",
         "output_suffix": "",
         "output_extension": "md",
@@ -316,11 +316,14 @@
         "safety_hate_speech": "Off",
         "safety_sexually_explicit": "Off",
         "safety_dangerous_content": "Off",
-        "enable_img_conversion": true,
+        "enable_img_conversion": false,
         "temp_img_fmt": "JPEG",
         "img_quality": 70,
         "img_max_dim": 0,
-        "force_conversion": false
+        "force_conversion": false,
+        "save_img_to_output": false,
+        "rename_mode": false,
+        "enable_thinking": false
     },
     "Rename File - Text in image": {
         "prompt": "Task: Analyze the input image and return only the text/digit in the image. no commentary.",
