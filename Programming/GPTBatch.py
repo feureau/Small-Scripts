@@ -595,14 +595,19 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
                  contents.append(f)
                  console_log(f"DEBUG API: Added file to contents: {getattr(f, 'display_name', getattr(f, 'name', 'unknown'))}", "INFO")
         else:
-            console_log("DEBUG API: google_file_objects is None or empty!", "WARN")
+            # Logic: If no images, we're likely processing text which is appended next.
+            console_log("DEBUG API: google_file_objects is empty. Proceeding with prompt text only.", "INFO")
+        
         contents.append(prompt_text)
-        console_log(f"DEBUG API: Total contents list size: {len(contents)} (should be {(len(google_file_objects) if google_file_objects else 0) + 1})", "INFO")
+        console_log(f"DEBUG API: Total contents list size: {len(contents)} (Prompt + {(len(google_file_objects) if google_file_objects else 0)} files)", "INFO")
         
         # Configuration
+        enable_thinking = kwargs.get('enable_thinking', False)
+        thinking_config = types.ThinkingConfig(include_thoughts=True) if enable_thinking else None
+        
         config = types.GenerateContentConfig(
              safety_settings=safety_settings,
-             thinking_config=types.ThinkingConfig(include_thoughts=True)
+             thinking_config=thinking_config
         )
 
         if stream_output:
@@ -957,6 +962,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 stream_output=kwargs['stream_output'], 
                 safety_settings=kwargs.get('safety_settings'),
                 enable_web_search=kwargs.get('enable_web_search', False),
+                enable_thinking=kwargs.get('enable_thinking', False),
                 clean_markdown=kwargs.get('clean_markdown', True) # Pass clean setting
             )
         
@@ -1195,6 +1201,7 @@ class AppGUI(tk.Tk):
         self.output_ext_var = tk.StringVar(value=getattr(self.args, 'output_ext', ''))
         # --- UPDATE: STREAM ENABLED BY DEFAULT ---
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', True))
+        self.thinking_var = tk.BooleanVar(value=False) # New for Gemini (v25.8)
         self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
@@ -1297,8 +1304,12 @@ class AppGUI(tk.Tk):
         ttk.Label(tab_ai, text="Provider:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(tab_ai, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
         ttk.Label(tab_ai, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
-        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=50); self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
-        ttk.Checkbutton(tab_ai, text="Append Filename to Prompt", variable=self.add_filename_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=50)
+        self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+        
+        ttk.Checkbutton(tab_ai, text="Stream Output", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(tab_ai, text="Enable Thinking (Gemini)", variable=self.thinking_var).grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var).grid(row=4, column=0, columnspan=2, sticky="w")
         
         self.ollama_search_var = tk.BooleanVar(value=False)
         self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
@@ -1482,6 +1493,7 @@ class AppGUI(tk.Tk):
             set_var(self.output_ext_var, 'output_extension', "")
             set_var(self.overwrite_var, 'overwrite_original', False)
             set_var(self.stream_var, 'stream_output', True) # Default True
+            set_var(self.thinking_var, 'enable_thinking', False) # Default False
             set_var(self.add_filename_var, 'add_filename_to_prompt', False)
             set_var(self.ollama_search_var, 'enable_web_search', False)
             
@@ -1554,7 +1566,8 @@ class AppGUI(tk.Tk):
             'img_max_dim': self.img_max_dim_var.get(),
             'force_conversion': self.force_conversion_var.get(),
             'save_img_to_output': self.save_img_to_output_var.get(),
-            'rename_mode': self.rename_mode_var.get()
+            'rename_mode': self.rename_mode_var.get(),
+            'enable_thinking': self.thinking_var.get()
         }
 
     def save_current_preset(self):
@@ -1993,6 +2006,7 @@ class AppGUI(tk.Tk):
 
             self.result_queue.put({'job_id': jid, 'status': 'Running'})
             params = job.copy(); params.pop('job_id')
+            params['enable_thinking'] = self.thinking_var.get() # Pass GUI state
             
             if self.global_runtime_overrides:
                 params['engine'] = self.global_runtime_overrides['engine']
