@@ -1032,6 +1032,9 @@ def build_ytdlp_command(target_url, args):
     video_url = target_url
     command_list = [YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
 
+    if args.verbose:
+        command_list.append('-v')
+
     # This is the custom format and options block based on your config.
     # It will be applied for default downloads (--default_download) or explicit video downloads (--video).
     if getattr(args, 'default_download', False) or args.video:
@@ -1041,34 +1044,34 @@ def build_ytdlp_command(target_url, args):
         command_list.extend([
             '-f', custom_format_string,
             '--merge-output-format', 'mp4',
-            
-            # Thumbnails
-            '--embed-thumbnail',
+
+            # Thumbnails (write only, do not embed to avoid audio stripping)
+            # '--embed-thumbnail',
             '--write-thumbnail',
-            
+
             # Metadata & Description (Default)
             '--add-metadata',
             '--write-description',
             '--write-info-json',
             '--write-comments',
-            
+
             # Subtitles
             '--write-subs',
             '--write-auto-subs',
             '--sub-lang', 'auto',
             '--embed-subs',
-            
+
             # Audio
             '--audio-format', 'aac',
-            
+
             # Progress
             '--progress',
-            
+
             # Retry and Resume
             '--retries', '10',
             '--fragment-retries', '10',
             '--continue',
-            
+
             # Compatibility & User Agent
             '--compat-options', 'no-youtube-unavailable-videos',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
