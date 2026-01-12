@@ -1,6 +1,5 @@
-
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.7
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.8
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +33,10 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v25.8
+- ✅ **BUGFIX**: Defensive natural sorting for image/text files to ensure sequential filename order.
+- ✅ **IMPROVEMENT**: Added DEBUG ORDER trace logging at file split, upload, and API submission points.
 
 ### v25.7
 - ✅ **FEATURE**: Added "Upload Mode" (Parallel/Sequential) radio buttons.
@@ -450,6 +453,9 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
 
     uploaded_files = [None] * len(items)
     if not items: return []
+    
+    # DEBUG: Log input order
+    console_log(f"DEBUG ORDER: upload input order: {[name for (path, name) in items]}", "DEBUG")
         
     console_log(f"Preparing {len(items)} images...", "INFO")
     cached_count = 0
@@ -487,6 +493,9 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
     if cached_count > 0: details.append(f"{cached_count} from cache")
     if details: console_log(f"{msg} ({', '.join(details)})", "SUCCESS")
     elif len(uploaded_files) > 0: console_log(msg, "SUCCESS")
+    
+    # DEBUG: Log output order
+    console_log(f"DEBUG ORDER: upload output order: {[getattr(f, 'display_name', getattr(f, 'name', 'unknown')) for f in uploaded_files]}", "DEBUG")
     return uploaded_files
 
 def fetch_google_models(api_key):
@@ -599,6 +608,9 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
             console_log("DEBUG API: google_file_objects is empty. Proceeding with prompt text only.", "INFO")
         
         contents.append(prompt_text)
+        # DEBUG: Final order summary for API submission
+        file_names_order = [getattr(f, 'display_name', getattr(f, 'name', 'unknown')) for f in google_file_objects] if google_file_objects else []
+        console_log(f"DEBUG ORDER: API submission order: {file_names_order}", "DEBUG")
         console_log(f"DEBUG API: Total contents list size: {len(contents)} (Prompt + {(len(google_file_objects) if google_file_objects else 0)} files)", "INFO")
         
         # Configuration
@@ -864,9 +876,12 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
 
     try:
-        # --- SPLIT TEXT vs IMAGES ---
-        image_files = [f for f in filepaths_group if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS]
-        text_files = [f for f in filepaths_group if f not in image_files]
+        # --- SPLIT TEXT vs IMAGES (with defensive sorting) ---
+        image_files = sorted([f for f in filepaths_group if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS], key=natural_sort_key)
+        text_files = sorted([f for f in filepaths_group if f not in image_files], key=natural_sort_key)
+        
+        # DEBUG: Log file order after splitting
+        console_log(f"DEBUG ORDER: image_files order: {[os.path.basename(f) for f in image_files]}", "DEBUG")
         
         images_data_legacy = [] # For Ollama/LMStudio (Base64)
         google_file_objects = [] # For Gemini (Files API)
