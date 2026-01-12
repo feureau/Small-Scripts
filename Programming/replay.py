@@ -65,6 +65,15 @@ def organize_and_count_files():
                                 shutil.move(sub_full_path, dest_path)
                             video_list.append(sub_item)
                             processed_files.add(sub_item)
+                            # Move corresponding .srt if exists
+                            base, _ = os.path.splitext(sub_item)
+                            srt_name = base + ".srt"
+                            srt_full_path = os.path.join(folder_path, srt_name)
+                            if os.path.exists(srt_full_path):
+                                srt_dest = os.path.join(current_directory, srt_name)
+                                if not os.path.exists(srt_dest):
+                                    shutil.move(srt_full_path, srt_dest)
+                                processed_files.add(srt_name)
                 
                 # Remove the old folder
                 try:
@@ -114,6 +123,13 @@ def organize_and_count_files():
                     dest = os.path.join(folder_path, file_name)
                     if os.path.exists(source) and not os.path.exists(dest):
                         shutil.move(source, dest)
+                    # Move corresponding .srt if exists
+                    base, _ = os.path.splitext(file_name)
+                    srt_name = base + ".srt"
+                    srt_source = os.path.join(current_directory, srt_name)
+                    srt_dest = os.path.join(folder_path, srt_name)
+                    if os.path.exists(srt_source) and not os.path.exists(srt_dest):
+                        shutil.move(srt_source, srt_dest)
             return created_folders
 
         final_replay_folders = distribute_files(replay_videos, base_replay_name)
