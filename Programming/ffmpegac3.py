@@ -109,7 +109,7 @@ def main():
             "-i", file,
             "-map", "0:v:0",
             "-c:v", "copy",
-            "-map", "0:a:0",
+            "-map", "0:a",
             "-c:a", audio_encoder,
             "-b:a", audio_bitrate,
             "-ac", str(channels),
