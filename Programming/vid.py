@@ -344,6 +344,39 @@ def safe_ffprobe(cmd, operation="operation"):
     except Exception as e:
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
+def escape_ffmpeg_filter_path(path, quoted=True):
+    """
+    Escapes a path for use within an FFmpeg filter (e.g., subtitles, lut3d).
+    Replaces backslashes with forward slashes.
+    If quoted=True (default), it handles escaping for a string wrapped in single quotes.
+    FFmpeg filtergraph parser unescapes once, and some filters might unescape again.
+    """
+    if not path:
+        return ""
+    # Convert \ to /
+    p = str(path).replace('\\', '/')
+    
+    if quoted:
+        # We need double escaping for FFmpeg filters on Windows because 
+        # both the filtergraph parser and the filter itself unescape.
+        # 1. Escape backslash
+        p = p.replace('\\', '\\\\')
+        # 2. Escape colon (MUST be escaped for many filters like subtitles/lut3d)
+        p = p.replace(':', '\\\\:')
+        # 3. Escape single quote (Triple backslash is often needed for literal quote)
+        p = p.replace("'", r"\\\'")
+        return p
+    else:
+        # Unquoted: escape , : ; [ ] \ ' and whitespace
+        p = p.replace('\\', '\\\\')
+        p = p.replace(':', '\\:')
+        p = p.replace(',', '\\,')
+        p = p.replace(';', '\\;')
+        p = p.replace('[', '\\[').replace(']', '\\]')
+        p = p.replace("'", "\\'")
+        p = p.replace(' ', '\\ ')
+        return p
+
 def get_file_duration(file_path):
     """Returns the duration of the file in seconds."""
     cmd = [FFPROBE_CMD, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
@@ -697,14 +730,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
 
     full_ass_content = header + "\n".join(dialogue_lines)
-    filename = f"temp_subtitle_{int(time.time() * 1000)}.ass"
+    filename = f"vid_temp_sub_{int(time.time() * 1000)}.ass"
+    # Create in current working directory to allow relative path usage
     filepath = os.path.join(os.getcwd(), filename)
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(full_ass_content)
         CURRENT_TEMP_FILE = filepath
         debug_print(f"Created temporary subtitle file: {filepath}")
-        return filepath
+        # Return the filename only (relative path) to avoid colon/quote issues in absolute paths
+        return filename
     except Exception as e:
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
@@ -2689,7 +2724,7 @@ class VideoProcessorApp:
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
-                safe_sofa = sofa_path.replace("\\", "/").replace(":", "\\:")
+                safe_sofa = escape_ffmpeg_filter_path(sofa_path)
                 fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
@@ -2742,6 +2777,7 @@ class VideoProcessorApp:
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
 
     def build_ffmpeg_command_and_run(self, job, orientation):
+        global CURRENT_TEMP_FILE
         options = copy.deepcopy(job['options'])
         
         if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
@@ -2866,7 +2902,7 @@ class VideoProcessorApp:
             if options.get("measure_loudness"):
                 self.measure_loudness(output_file, options)
         finally:
-            if ass_burn_path and os.path.exists(ass_burn_path): os.remove(ass_burn_path)
+            if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE): os.remove(CURRENT_TEMP_FILE); CURRENT_TEMP_FILE = None
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
 
     def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None):
@@ -2920,14 +2956,18 @@ class VideoProcessorApp:
             
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
-            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")): cpu_chain.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
+                cpu_chain.append(f"lut3d=file='{safe_lut}'")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
                 strength = options.get("sharpening_strength", "0.5")
                 if algo == "cas": cpu_chain.append(f"cas=strength={strength}")
                 else: cpu_chain.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
-            if ass_burn_path: cpu_chain.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
+            if ass_burn_path:
+                safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
+                cpu_chain.append(f"subtitles=filename='{safe_ass}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
             video_fc_parts = [
                 "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
@@ -3010,14 +3050,18 @@ class VideoProcessorApp:
                 elif aspect_mode == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
                 elif aspect_mode == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
-            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")): cpu_filters.append(f"lut3d=file='{options.get('lut_file').replace(':', '\\:').replace('\\\\', '/')}'")
+            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
+                cpu_filters.append(f"lut3d=file='{safe_lut}'")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
                 strength = options.get("sharpening_strength", "0.5")
                 if algo == "cas": cpu_filters.append(f"cas=strength={strength}")
                 else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
-            if ass_burn_path: cpu_filters.append(f"subtitles=filename='{ass_burn_path.replace('\\', '/').replace(':', '\\:')}'")
+            if ass_burn_path:
+                safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
+                cpu_filters.append(f"subtitles=filename='{safe_ass}'")
             if cpu_filters:
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}"] + cpu_filters
                 if not is_hdr_output: processing_chain.append("format=nv12")
