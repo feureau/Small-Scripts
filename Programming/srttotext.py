@@ -188,7 +188,7 @@ def main():
     """
     parser = argparse.ArgumentParser(
         description="Process SRT subtitle files and text files. Cleans SRT files and formats text files with one sentence per line.",
-        epilog="Example: text_processor.py *.srt *.txt -s"
+        epilog="Example: text_processor.py *.srt *.txt -s --output-ext .txt"
     )
     parser.add_argument(
         'files',
@@ -205,7 +205,16 @@ def main():
         action='store_true',
         help="Skip the sentence-per-line formatting for text files."
     )
+    parser.add_argument(
+        '--output-ext',
+        default='.md',
+        help="Specify the output file extension for SRT files (default: .md)"
+    )
     args = parser.parse_args()
+
+    # Ensure output extension starts with a dot
+    if not args.output_ext.startswith('.'):
+        args.output_ext = '.' + args.output_ext
 
     input_files = args.files
     
@@ -252,10 +261,10 @@ def main():
                 output_folder = input_file.parent / "no_timestamps"
                 # Create the output folder if it doesn't exist
                 output_folder.mkdir(exist_ok=True)
-                output_file_path = output_folder / f"{input_file.stem}_no_timestamps.txt"
+                output_file_path = output_folder / f"{input_file.stem}_no_timestamps{args.output_ext}"
             else:
                 # Place output in the same directory as the input file
-                output_file_path = input_file.parent / f"{input_file.stem}_no_timestamps.txt"
+                output_file_path = input_file.parent / f"{input_file.stem}_no_timestamps{args.output_ext}"
 
             if process_srt_file(input_path, output_file_path):
                 srt_processed += 1
