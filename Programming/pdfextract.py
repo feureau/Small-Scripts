@@ -1,6 +1,5 @@
 import fitz  # PyMuPDF
-import io
-from PIL import Image
+
 import pathlib
 import os
 
@@ -68,35 +67,10 @@ def extract_images_from_pdfs(working_dir):
                         image_filename = f"page{page_index + 1:03d}_img{img_index + 1:03d}.{image_ext}"
                         save_path = output_path / image_filename
 
-                        # --- Method 1: Direct Save (Works for common formats like png, jpg) ---
-                        # print(f"    - Saving image {img_index + 1} (xref {xref}) as {save_path.name}")
-                        # with open(save_path, "wb") as img_file:
-                        #     img_file.write(image_bytes)
-                        # images_in_pdf += 1
-
-                        # --- Method 2: Save via Pillow (More robust, handles more types, converts to standard formats) ---
-                        # Use Pillow to open the image from bytes and save it.
-                        # This helps ensure compatibility and can convert formats if needed.
-                        # Let's save as PNG for consistency unless it's already a JPG.
-                        save_ext = 'png' if image_ext.lower() not in ['jpg', 'jpeg'] else 'jpeg'
-                        image_filename_pillow = f"page{page_index + 1:03d}_img{img_index + 1:03d}.{save_ext}"
-                        save_path_pillow = output_path / image_filename_pillow
-
-                        print(f"    - Saving image {img_index + 1} (xref {xref}) as {save_path_pillow.name} using Pillow")
-
-                        image = Image.open(io.BytesIO(image_bytes))
-                        # Preserve transparency if saving as PNG
-                        if save_ext == 'png' and image.mode == 'RGBA':
-                            image.save(save_path_pillow, format='PNG')
-                        elif save_ext == 'jpeg' and image.mode == 'RGBA':
-                            # JPEG doesn't support transparency, convert to RGB
-                             image.convert('RGB').save(save_path_pillow, format='JPEG', quality=90)
-                        elif save_ext == 'jpeg':
-                            image.save(save_path_pillow, format='JPEG', quality=90)
-                        else:
-                            # Fallback for other modes or if original ext was something else Pillow handles
-                             image.save(save_path_pillow) # Let Pillow infer format if possible
-
+                        # --- Method: Direct Save (Extracts content as-is) ---
+                        print(f"    - Saving image {img_index + 1} (xref {xref}) as {save_path.name}")
+                        with open(save_path, "wb") as img_file:
+                            img_file.write(image_bytes)
                         images_in_pdf += 1
 
                     except Exception as img_err:
