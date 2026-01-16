@@ -1099,8 +1099,7 @@ class WorkflowPresetManager:
         h_clean = {
             "options": h_clean_opts,
             "triggers": {
-                "on_no_sub": True,
-                "on_clean_copy_if_subs": True,
+                "video_trigger": "Always (Clean/Backup)",
                 "on_scan_subs": False,
                 "suffix_filter": None 
             }
@@ -1119,8 +1118,7 @@ class WorkflowPresetManager:
         v_hybrid = {
             "options": v_hybrid_opts,
             "triggers": {
-                "on_no_sub": False,
-                "on_clean_copy_if_subs": False,
+                "video_trigger": "Never",
                 "on_scan_subs": True,
                 "suffix_filter": None # Matches ALL (Wildcard)
             }
@@ -1135,8 +1133,7 @@ class WorkflowPresetManager:
         h_hardsub = {
             "options": h_hardsub_opts,
             "triggers": {
-                "on_no_sub": False,
-                "on_clean_copy_if_subs": False,
+                "video_trigger": "Never",
                 "on_scan_subs": True,
                 "suffix_filter": "-cn" # Matches ONLY -cn
             }
@@ -1155,6 +1152,7 @@ class VideoProcessorApp:
         self.root.geometry("1400x850")
         self.output_mode = output_mode
         self.processing_jobs = []
+        self.input_files = [] # New: Staging area for files
         self.preset_manager = WorkflowPresetManager()
 
         # --- Initialize all tk Variables ---
@@ -1305,7 +1303,7 @@ class VideoProcessorApp:
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind("<<Drop>>", self.handle_file_drop)
         self.setup_gui()
-        if initial_files: self.add_video_files_and_discover_jobs(initial_files)
+        if initial_files: self.process_added_files(initial_files)
 
     def setup_gui(self):
         self.root.columnconfigure(0, weight=1)
@@ -1489,114 +1487,155 @@ class VideoProcessorApp:
         row_suffix = ttk.Frame(preset_frame)
         row_suffix.pack(fill=tk.X, pady=(2, 5))
         ttk.Label(row_suffix, text="Suffix Override:").pack(side=tk.LEFT, padx=(5, 5))
+        self.output_suffix_override_var = tk.StringVar(value="")
         suffix_entry = ttk.Entry(row_suffix, textvariable=self.output_suffix_override_var, width=30)
         suffix_entry.pack(side=tk.LEFT, padx=5)
         ToolTip(suffix_entry, "Override filename suffix (e.g., 'MyCut'). If empty, the Preset Name is used.")
 
-        # Row 2: Auto-Assignment Triggers
-        # Row 2: Auto-Assignment Triggers
-        row2 = ttk.LabelFrame(preset_frame, text="Auto-Assignment Triggers (When to add this preset automatically)", padding=5)
+        # Row 2: Auto-Add Triggers (Redesigned)
+        row2 = ttk.LabelFrame(preset_frame, text="Auto-Add Triggers (Add to Job Queue)", padding=5)
         row2.pack(fill=tk.X, pady=5)
         
+        # Trigger 1: Video File
         row2_1 = ttk.Frame(row2)
         row2_1.pack(fill=tk.X, pady=2)
-        ttk.Label(row2_1, text="Auto-add Clean Version (No Subs):").pack(side=tk.LEFT, padx=(5, 5))
-        self.clean_mode_combo = ttk.Combobox(row2_1, textvariable=self.trigger_clean_mode_var, values=["Disabled", "Always (Clean + Backup)", "Only if No Subtitles (Fallback)"], state="readonly", width=35)
-        self.clean_mode_combo.pack(side=tk.LEFT, padx=5)
-        ToolTip(self.clean_mode_combo, "Disabled: Never add this as a clean job.\nAlways: Add clean job even if subs found (Backup).\nOnly if No Subs: Add clean job ONLY if no subs found.")
+        ttk.Label(row2_1, text="Trigger on Video:").pack(side=tk.LEFT, padx=(5, 5))
+        
+        self.trigger_video_always_var = tk.BooleanVar(value=False)
+        self.trigger_video_fallback_var = tk.BooleanVar(value=False)
+        
+        # Logic to ensure logic or allow both?
+        # If Always is checked, Fallback is redundant.
+        # Let's just allow them to be toggled freely, but prioritize logic in Save.
+        
+        cb_always = ttk.Checkbutton(row2_1, text="Always (Clean/Backup)", variable=self.trigger_video_always_var)
+        cb_always.pack(side=tk.LEFT, padx=5)
+        ToolTip(cb_always, "Always auto-add this preset for the video file (e.g. for a Clean Copy), regardless of subtitles.")
 
-        scan_frame = ttk.Frame(row2)
-        scan_frame.pack(side=tk.TOP, fill=tk.X, anchor=tk.W, padx=5, pady=2)
+        cb_fallback = ttk.Checkbutton(row2_1, text="Fallback (If No Subs)", variable=self.trigger_video_fallback_var)
+        cb_fallback.pack(side=tk.LEFT, padx=5)
+        ToolTip(cb_fallback, "Auto-add this preset ONLY if no subtitles matches are found.")
+
+        # Trigger 2: Subtitle File
+        row2_2 = ttk.Frame(row2)
+        row2_2.pack(fill=tk.X, pady=2)
         
-        ttk.Checkbutton(scan_frame, text="Auto-add Job for found Subtitles", variable=self.trigger_scan_subs_var).pack(side=tk.TOP, anchor=tk.W)
+        self.trigger_scan_subs_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row2_2, text="Trigger on Subtitle", variable=self.trigger_scan_subs_var).pack(side=tk.LEFT, padx=(5,5))
         
-        # Suffix constraint options indented under "Scan Subtitles"
-        constraint_frame = ttk.Frame(scan_frame)
-        constraint_frame.pack(side=tk.TOP, fill=tk.X, anchor=tk.W, padx=(25, 0), pady=0)
-        
-        ttk.Checkbutton(constraint_frame, text="Only match Suffix:", variable=self.trigger_suffix_enable_var).pack(side=tk.LEFT, padx=(0, 5))
-        
-        entry_widget = ttk.Entry(constraint_frame, textvariable=self.trigger_suffix_var, width=10)
+        self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row2_2, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var).pack(side=tk.LEFT, padx=(10, 5))
+
+        self.trigger_suffix_var = tk.StringVar(value="")
+        entry_widget = ttk.Entry(row2_2, textvariable=self.trigger_suffix_var, width=8)
         entry_widget.pack(side=tk.LEFT, padx=5)
-        
-        ToolTip(constraint_frame, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Unchecked: Matches ALL subtitles.")
+        ToolTip(entry_widget, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Unchecked: Matches ALL subtitles.")
 
-        # Logic to toggle state of Suffix constraint based on Scan Subs checkbox
-        def update_ui_states(*args):
-             # 1. If Scan Subs is OFF, disable Suffix options completely
-            if not self.trigger_scan_subs_var.get():
-                for child in constraint_frame.winfo_children():
-                    child.state(['disabled'])
-            else:
-                # 2. If Scan Subs is ON, enable Checkbox
-                for child in constraint_frame.winfo_children():
-                    if "!entry" not in str(child): # Hacky way to skip entry for a moment
-                         child.state(['!disabled'])
-                
-                # 3. Entry is enabled only if Suffix Enable is ON
-                state = "normal" if self.trigger_suffix_enable_var.get() else "disabled"
-                entry_widget.config(state=state)
-
-        self.trigger_scan_subs_var.trace_add("write", update_ui_states)
-        self.trigger_suffix_enable_var.trace_add("write", update_ui_states)
-        
-        # Init state, wait a moment for widgets to be ready? No, direct call is fine usually.
-        # But we need to make sure the trace logic works.
-        # simpler approach:
-        def toggle_suffix_logic(*args):
+        # Update Logic for UI states
+        def update_trigger_ui(*args):
             scan_on = self.trigger_scan_subs_var.get()
             suffix_filter_on = self.trigger_suffix_enable_var.get()
             
-            # Suffix Checkbox State
-            # Note: tk state is !disabled or disabled
-            if scan_on:
-                # Re-enable checkbox
-                 # Accessing widget directly strictly could be hard without var ref, 
-                 # but we can rely on variable trace or widget refs if we kept them.
-                 # Actually, let's keep it simple.
-                 pass
-            
+            # Entry is enabled only if Suffix Enable is ON AND Scan is ON
+            # Actually, if Scan is OFF, the Suffix Checkbox theoretically shouldn't matter, 
+            # but let's just control the entry for now.
             entry_state = "normal" if (scan_on and suffix_filter_on) else "disabled"
             entry_widget.config(state=entry_state)
-            
-        # Re-binding logic more robustly
-        self.trigger_scan_subs_var.trace_add("write", lambda *a: toggle_suffix_logic())
-        self.trigger_suffix_enable_var.trace_add("write", lambda *a: toggle_suffix_logic())
+        
+        # Bind traces
+        self.trigger_scan_subs_var.trace_add("write", lambda *a: update_trigger_ui())
+        self.trigger_suffix_enable_var.trace_add("write", lambda *a: update_trigger_ui())
+        
+        # Initial call
+        update_trigger_ui()
         
         # We need to manually invoke this once after loading a preset or init
         
     def setup_input_pane(self, parent):
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
-        file_group = ttk.LabelFrame(parent, text="Input Files / Queue", padding=10)
+        
+        # Main container with PanedWindow
+        file_group = ttk.LabelFrame(parent, text="Queues", padding=5)
         file_group.grid(row=0, column=0, sticky="nsew")
         file_group.rowconfigure(0, weight=1)
         file_group.columnconfigure(0, weight=1)
 
-        listbox_container = ttk.Frame(file_group)
-        listbox_container.grid(row=0, column=0, sticky="nsew", columnspan=2)
-        listbox_container.rowconfigure(0, weight=1)
-        listbox_container.columnconfigure(0, weight=1)
+        paned = ttk.PanedWindow(file_group, orient=tk.VERTICAL)
+        paned.grid(row=0, column=0, sticky="nsew")
 
-        self.job_scrollbar_v = ttk.Scrollbar(listbox_container, orient=tk.VERTICAL)
+        # --- Top Pane: Input Queue ---
+        input_frame = ttk.LabelFrame(paned, text="Step 1: Input Files (Staging)", padding=5)
+        paned.add(input_frame, weight=1)
+        input_frame.rowconfigure(0, weight=1)
+        input_frame.columnconfigure(0, weight=1)
+
+        # Input Listbox
+        il_container = ttk.Frame(input_frame)
+        il_container.grid(row=0, column=0, sticky="nsew")
+        il_container.rowconfigure(0, weight=1)
+        il_container.columnconfigure(0, weight=1)
+
+        self.input_scrollbar_v = ttk.Scrollbar(il_container, orient=tk.VERTICAL)
+        self.input_scrollbar_v.grid(row=0, column=1, sticky="ns")
+        self.input_scrollbar_h = ttk.Scrollbar(il_container, orient=tk.HORIZONTAL)
+        self.input_scrollbar_h.grid(row=1, column=0, sticky="ew")
+        
+        self.input_listbox = tk.Listbox(il_container, selectmode=tk.EXTENDED, exportselection=False, 
+                                      yscrollcommand=self.input_scrollbar_v.set, xscrollcommand=self.input_scrollbar_h.set)
+        self.input_listbox.grid(row=0, column=0, sticky="nsew")
+        
+        self.input_scrollbar_v.config(command=self.input_listbox.yview)
+        self.input_scrollbar_h.config(command=self.input_listbox.xview)
+        # self.input_listbox.bind("<<ListboxSelect>>", self.on_input_file_select) # Maybe needed later
+
+        # Input Toolbar
+        input_toolbar = ttk.Frame(input_frame)
+        input_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        
+        ttk.Button(input_toolbar, text="Add to Jobs (Scan Triggers)", command=self.promote_input_files_auto).pack(side=tk.LEFT, padx=2)
+        ttk.Button(input_toolbar, text="Add to Jobs (Force Current Preset)", command=self.promote_input_files_manual).pack(side=tk.LEFT, padx=2)
+        ttk.Button(input_toolbar, text="Remove Selected", command=self.remove_from_input_queue).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(input_toolbar, text="Clear Input", command=self.clear_input_queue).pack(side=tk.RIGHT, padx=2)
+
+        # --- Bottom Pane: Job Queue ---
+        job_frame = ttk.LabelFrame(paned, text="Step 2: Processing Jobs", padding=5)
+        paned.add(job_frame, weight=1)
+        job_frame.rowconfigure(0, weight=1)
+        job_frame.columnconfigure(0, weight=1)
+
+        # Job Listbox
+        jl_container = ttk.Frame(job_frame)
+        jl_container.grid(row=0, column=0, sticky="nsew")
+        jl_container.rowconfigure(0, weight=1)
+        jl_container.columnconfigure(0, weight=1)
+
+        self.job_scrollbar_v = ttk.Scrollbar(jl_container, orient=tk.VERTICAL)
         self.job_scrollbar_v.grid(row=0, column=1, sticky="ns")
-        self.job_scrollbar_h = ttk.Scrollbar(listbox_container, orient=tk.HORIZONTAL)
+        self.job_scrollbar_h = ttk.Scrollbar(jl_container, orient=tk.HORIZONTAL)
         self.job_scrollbar_h.grid(row=1, column=0, sticky="ew")
-        self.job_listbox = tk.Listbox(listbox_container, selectmode=tk.EXTENDED, exportselection=False, yscrollcommand=self.job_scrollbar_v.set, xscrollcommand=self.job_scrollbar_h.set)
+        
+        self.job_listbox = tk.Listbox(jl_container, selectmode=tk.EXTENDED, exportselection=False, 
+                                    yscrollcommand=self.job_scrollbar_v.set, xscrollcommand=self.job_scrollbar_h.set)
         self.job_listbox.grid(row=0, column=0, sticky="nsew")
+        
         self.job_scrollbar_v.config(command=self.job_listbox.yview)
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
-        self.job_listbox.bind("<<ListboxSelect>>", self.on_input_file_select)
+        self.job_listbox.bind("<<ListboxSelect>>", self.on_job_select) # Renamed method
 
-        selection_buttons_frame = ttk.Frame(file_group)
-        selection_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
-        ttk.Button(selection_buttons_frame, text="Select All", command=self.select_all_files).pack(side=tk.LEFT)
-        ttk.Button(selection_buttons_frame, text="Clear", command=self.clear_file_selection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(selection_buttons_frame, text="Sel Preset", command=self.select_jobs_by_current_preset).pack(side=tk.LEFT)
-        ToolTip(selection_buttons_frame.winfo_children()[-1], "Select all jobs dealing with the currently selected Workflow Preset.")
-        ttk.Button(selection_buttons_frame, text="Select No Sub", command=self.select_all_no_sub).pack(side=tk.LEFT, padx=5)
-        ttk.Button(selection_buttons_frame, text="Select Subbed", command=self.select_all_subbed).pack(side=tk.LEFT, padx=5)
-        ttk.Button(selection_buttons_frame, text="Invert", command=self.invert_selection).pack(side=tk.LEFT)
+        # Job Toolbar
+        job_toolbar = ttk.Frame(job_frame)
+        job_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        
+        ttk.Button(job_toolbar, text="Select All", command=self.select_all_jobs).pack(side=tk.LEFT, padx=2)
+        ttk.Button(job_toolbar, text="Clear Jobs", command=self.clear_all_jobs).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(job_toolbar, text="Remove Selected", command=self.remove_selected_jobs).pack(side=tk.RIGHT, padx=2)
+        
+        # Extra Selection Tools (Optional, kept from old UI)
+        extra_tools = ttk.Frame(job_toolbar)
+        extra_tools.pack(side=tk.LEFT, padx=10)
+        ttk.Button(extra_tools, text="Sel Preset", command=self.select_jobs_by_current_preset).pack(side=tk.LEFT, padx=1)
+
 
         file_buttons_frame = ttk.Frame(file_group)
         file_buttons_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
@@ -2222,18 +2261,26 @@ class VideoProcessorApp:
         # 2. Load Triggers
         triggers = preset['triggers']
         
-        on_no_sub = triggers.get('on_no_sub', False)
-        on_clean_copy = triggers.get('on_clean_copy_if_subs', False)
+        # Handle New Schema vs Old Schema (Migration logic)
+        # Handle New Schema vs Old Schema (Migration logic)
+        vid_trig = triggers.get('video_trigger')
         
-        if on_no_sub and on_clean_copy:
-            self.trigger_clean_mode_var.set("Always (Clean + Backup)")
-        elif on_no_sub and not on_clean_copy:
-            self.trigger_clean_mode_var.set("Only if No Subtitles (Fallback)")
+        # Reset bits
+        self.trigger_video_always_var.set(False)
+        self.trigger_video_fallback_var.set(False)
+
+        if vid_trig:
+            if vid_trig == "Always (Clean/Backup)": self.trigger_video_always_var.set(True)
+            elif vid_trig == "Fallback (If No Subs)": self.trigger_video_fallback_var.set(True)
         else:
-            self.trigger_clean_mode_var.set("Disabled")
-            
+            # Fallback for old presets
+            on_no_sub = triggers.get('on_no_sub', False)
+            on_clean_copy = triggers.get('on_clean_copy_if_subs', False)
+            if on_no_sub and on_clean_copy: self.trigger_video_always_var.set(True)
+            elif on_no_sub and not on_clean_copy: self.trigger_video_fallback_var.set(True)
+
         self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
-        
+
         suffix_val = triggers.get('suffix_filter')
         if suffix_val is not None:
             self.trigger_suffix_enable_var.set(True)
@@ -2241,7 +2288,9 @@ class VideoProcessorApp:
         else:
             self.trigger_suffix_enable_var.set(False)
             self.trigger_suffix_var.set("")
-            
+
+        self.output_suffix_override_var.set(preset['options'].get("output_suffix_override", ""))
+
         self.current_preset_var.set(preset_name)
     
         # 3. Auto-Apply to Selected Jobs (Sync GUI -> Selection)
@@ -2253,15 +2302,8 @@ class VideoProcessorApp:
                 job['options'] = copy.deepcopy(preset['options'])
                 job['preset_name'] = preset_name
                 
-                # Use stored tag if available, else try to parse (legacy fallback)
+                # Update display name
                 tag = job.get('display_tag', "")
-                if not tag:
-                     # Fallback regex
-                     import re
-                     match = re.search(r'(.*) (\[.*\]) \[.*\]', job['display_name'])
-                     if match:
-                         tag = match.group(2)
-                
                 base_name = os.path.basename(job['video_path'])
                 job['display_name'] = f"{base_name} {tag} [{preset_name}]".strip()
                      
@@ -2337,18 +2379,27 @@ class VideoProcessorApp:
         options = self.get_current_gui_options()
         
         # Map Dropdown back to Booleans
-        mode = self.trigger_clean_mode_var.get()
+        # Map Checkboxes back to Schema String
+        
+        mode = "Never"
+        if self.trigger_video_always_var.get():
+            mode = "Always (Clean/Backup)"
+        elif self.trigger_video_fallback_var.get():
+             mode = "Fallback (If No Subs)"
+        
+        # Legacy Boolean Backfill (for compatibility if needed, though mostly using video_trigger now)
         on_no_sub = False
         on_clean_copy = False
         
-        if mode == "Always (Clean + Backup)":
+        if mode == "Always (Clean + Backup)" or mode == "Always (Clean/Backup)": # Handle both variants
             on_no_sub = True
             on_clean_copy = True
-        elif mode == "Only if No Subtitles (Fallback)":
+        elif mode == "Only if No Subtitles (Fallback)" or mode == "Fallback (If No Subs)":
             on_no_sub = True
             on_clean_copy = False
             
         triggers = {
+            "video_trigger": mode,
             "on_no_sub": on_no_sub,
             "on_clean_copy_if_subs": on_clean_copy,
             "on_scan_subs": self.trigger_scan_subs_var.get(),
@@ -2410,111 +2461,177 @@ class VideoProcessorApp:
             else:
                 self.current_preset_var.set("")
 
-    def add_video_files_and_discover_jobs(self, file_paths):
+    def process_added_files(self, file_paths):
+        # 1. Add files to Input Queue
         for video_path in file_paths:
             video_path = os.path.abspath(video_path)
-            dir_name, video_basename = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
+            if video_path not in self.input_files:
+                self.input_files.append(video_path)
+                self.input_listbox.insert(tk.END, os.path.basename(video_path))
+        
+        # 2. Trigger Auto-Add Logic
+        self.promote_input_files_auto(only_for_paths=file_paths)
+
+    def promote_input_files_auto(self, only_for_paths=None):
+        # Scan triggers for files in Input Queue (or specific subset)
+        # Note: We do NOT remove files from Input Queue anymore.
+        
+        targets = only_for_paths if only_for_paths else self.input_files
+        
+        # Pre-calculate Specific Suffix Filters for exclusivity logic
+        specific_suffix_filters = set()
+        for p_name in self.preset_manager.get_preset_names():
+            p = self.preset_manager.get_preset(p_name)
+            s_filter = p['triggers'].get('suffix_filter')
+            if s_filter: specific_suffix_filters.add(s_filter)
+
+        files_processed_count = 0
+        
+        for video_path in targets:
+            video_path = os.path.abspath(video_path)
+            # Find in input_files to match context if needed, but video_path matches.
             
-            # --- Step 1: Detect Subtitles ---
+            dir_name = os.path.dirname(video_path)
+            video_basename = os.path.splitext(os.path.basename(video_path))[0]
+            
+            # Detect Subtitles
             detected_subs = []
             
-            # 1a. Scan for External .srt
+            # Scan external
             try:
                 for item in os.listdir(dir_name):
                     if item.lower().endswith('.srt'):
                         srt_basename = os.path.splitext(item)[0]
                         if srt_basename == video_basename:
-                            # Exact match -> Suffix is empty string (default)
                             detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': srt_basename})
                         elif srt_basename.startswith(video_basename):
                             remainder = srt_basename[len(video_basename):]
-                            # Check if valid suffix (starts with separator)
                             if remainder and remainder[0] in [' ', '.', '-', '_']:
                                 full_path = os.path.join(dir_name, item)
-                                # Store the raw basename of the SRT for flexible matching
                                 detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': srt_basename})
-            except Exception as e:
-                print(f"[WARN] Error scanning external subs: {e}")
-
-            # 1b. Scan for Embedded Subtitles
+            except Exception: pass
+            
+             # Scan embedded
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
                 lang = tags.get("language", "und")
                 title = tags.get("title", f"Track {sub_stream.get('index')}")
-                # Embedded subs have empty suffix (conceptually standard/default)
                 detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
 
             has_subs = len(detected_subs) > 0
-
-            # --- Step 2: Iterate Presets & Triggers ---
-            # --- Step 2: Iterate Presets & Triggers ---
-            # 2a. First, collect ALL specific suffix filters from ALL presets
-            # This allows us to implement "Exclusive" logic (Wildcards yield to Specifics)
-            specific_suffix_filters = set()
-            for p_name in self.preset_manager.get_preset_names():
-                p = self.preset_manager.get_preset(p_name)
-                s_filter = p['triggers'].get('suffix_filter')
-                if s_filter: 
-                     specific_suffix_filters.add(s_filter)
-
+            
+            # Iterate Presets
             for preset_name in self.preset_manager.get_preset_names():
                 preset = self.preset_manager.get_preset(preset_name)
                 triggers = preset['triggers']
+                video_trigger = triggers.get("video_trigger")
+                if not video_trigger:
+                    # Fallback for legacy presets (pre-Update)
+                    t_no_sub = triggers.get('on_no_sub', False)
+                    t_clean = triggers.get('on_clean_copy_if_subs', False)
+                    if t_no_sub and t_clean: video_trigger = "Always (Clean/Backup)"
+                    elif t_no_sub and not t_clean: video_trigger = "Fallback (If No Subs)"
+                    else: video_trigger = "Never"
                 
-                # --- Trigger 1: On NO Subtitles ---
-                if not has_subs and triggers.get('on_no_sub'):
-                    self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
-
-                # --- Trigger 2: Clean Copy when Video HAS Subtitles ---
-                if has_subs and triggers.get('on_clean_copy_if_subs'):
-                     self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles (Clean)]")
-
-                # --- Trigger 3: Scan Subtitles ---
+                # --- Video Trigger ---
+                if video_trigger == "Always (Clean/Backup)":
+                     self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+                     files_processed_count += 1
+                elif video_trigger == "Fallback (If No Subs)" and not has_subs:
+                     self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+                     files_processed_count += 1
+                
+                # --- Subtitle Trigger ---
                 if has_subs and triggers.get('on_scan_subs'):
                     filter_suffix = triggers.get('suffix_filter')
                     
                     for sub in detected_subs:
                         match = False
+                        if filter_suffix is None: # Generic Wildcard
+                             # Check Exclusivity
+                             is_claimed_specifically = False
+                             for specific in specific_suffix_filters:
+                                 if specific == "":
+                                     if sub['suffix'] == "": is_claimed_specifically = True
+                                 else:
+                                     # Exact match check
+                                     if sub['basename'] and sub['basename'].endswith(specific): is_claimed_specifically = True
+                                     elif sub['suffix'] == specific: is_claimed_specifically = True
+                             
+                             if not is_claimed_specifically: match = True
+                        elif filter_suffix == "": # Strict Empty
+                            if sub['suffix'] == "": match = True
+                        else: # Specific Suffix
+                             if sub['basename'] and sub['basename'].endswith(filter_suffix): match = True
+                             elif sub['suffix'] == filter_suffix: match = True
                         
-                        if filter_suffix is None:
-                            # Wildcard: Matches EVERYTHING...
-                            # UNLESS it is specifically handled by another preset!
-                            
-                            is_claimed_specifically = False
-                            for specific in specific_suffix_filters:
-                                # Re-use the "endswith" logic or equality logic for robustness
-                                if specific == "":
-                                    if sub['suffix'] == "": is_claimed_specifically = True
-                                else:
-                                    if sub['basename'] and sub['basename'].endswith(specific): is_claimed_specifically = True
-                                    elif sub['suffix'] == specific: is_claimed_specifically = True
-                            
-                            if not is_claimed_specifically:
-                                match = True
-                            
-                        elif filter_suffix == "":
-                            # Strict Empty: Matches Exact Basename OR Embedded
-                            # i.e. sub['suffix'] == ""
-                            if sub['suffix'] == "":
-                                match = True
-                                
-                        else:
-                            # Specific Suffix (e.g. "-cn")
-                            # Use endswith() on the SRT basename to handle cases like "Video_Subtitle 2-cn.srt"
-                            if sub['basename'] and sub['basename'].endswith(filter_suffix):
-                                match = True
-                            elif sub['suffix'] == filter_suffix: # Fallback for equality
-                                match = True
-                            
                         if match:
                              self._create_job_entry(video_path, sub['path'], preset['options'], preset_name, sub['display_tag'])
+                             files_processed_count += 1
+                             
+        if files_processed_count > 0 and not only_for_paths:
+             self.update_status(f"Auto-added {files_processed_count} jobs from Input Queue.")
 
-        if self.processing_jobs:
-            self.job_listbox.selection_clear(0, tk.END)
-            self.job_listbox.selection_set(0)
-            self.on_input_file_select(None)
-        self._update_bitrate_display()
+    def promote_input_files_manual(self):
+        # Force current preset on selected input files
+        selected_indices = self.input_listbox.curselection()
+        if not selected_indices: return
+        
+        preset_name = self.current_preset_var.get()
+        if not preset_name: 
+             messagebox.showwarning("No Preset", "Please select a preset first.")
+             return
+             
+        preset = self.preset_manager.get_preset(preset_name)
+        if not preset: return
+        
+        for index in selected_indices:
+             video_path = self.input_files[index]
+             # We create a job assuming 'Standard/Clean' flow unless user wants to match subs?
+             # "Add to Jobs (Force Current Preset)" usually implies applying the SETTINGS to the VIDEO.
+             # Handling subtitles manually is tricky here. 
+             # Let's assume we treat it as a "Video Trigger" job (No Subtitles specified manually implies Clean or Embedded?)
+             # Actually, if we force a preset, we should probably check if that preset WANTS subtitles.
+             # Simpler: Just add it as a job with NO subtitle path initially? Or trigger detection?
+             # User expectation: "I want this video processed with this preset."
+             # If the preset burns subtitles, it might fail or pick defaults if we don't specify.
+             # Let's run a "Single Preset Scan" on this file!
+             
+             # Re-use logic but force match?
+             # Let's just create a job for the video file. If the preset has "Scan Subs" enabled, maybe we should scan?
+             # For now, simplistic approach: Add as [Manual] job.
+             self._create_job_entry(video_path, None, preset['options'], preset_name, "[Manual Add]")
+        
+        self.update_status(f"Added {len(selected_indices)} jobs manually.")
+
+    def remove_from_input_queue(self):
+        selected_indices = list(self.input_listbox.curselection())
+        selected_indices.sort(reverse=True)
+        for index in selected_indices:
+            del self.input_files[index]
+            self.input_listbox.delete(index)
+
+    def clear_input_queue(self):
+        self.input_files.clear()
+        self.input_listbox.delete(0, tk.END)
+
+    def select_all_jobs(self):
+        self.job_listbox.selection_set(0, tk.END); self.on_job_select(None)
+    
+    def clear_all_jobs(self):
+        self.processing_jobs.clear(); self.job_listbox.delete(0, tk.END)
+    
+    def remove_selected_jobs(self):
+        for index in reversed(list(self.job_listbox.curselection())):
+            del self.processing_jobs[index]; self.job_listbox.delete(index)
+    
+    def on_job_select(self, event=None):
+         # Renamed from on_input_file_select to match new semantics
+         self.on_input_file_select(event) # Re-use existing logic for now, or copy paste it?
+         # Existing logic is at line 2532. It refers to self.job_listbox.
+         # So just calling it is fine, or I should have renamed it there too.
+         pass
 
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
         new_job = {
@@ -3306,11 +3423,11 @@ class VideoProcessorApp:
 
     def add_files(self):
         files = filedialog.askopenfilenames(filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")])
-        if files: self.add_video_files_and_discover_jobs(files)
+        if files: self.process_added_files(files)
 
     def handle_file_drop(self, event):
         files = self.root.tk.splitlist(event.data);
-        if files: self.add_video_files_and_discover_jobs(files)
+        if files: self.process_added_files(files)
 
     def remove_selected(self):
         for index in reversed(list(self.job_listbox.curselection())):

@@ -191,7 +191,7 @@
             "fruc": false,
             "fruc_fps": "60",
             "generate_log": false,
-            "orientation": "vertical",
+            "orientation": "hybrid (stacked)",
             "aspect_mode": "crop",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
@@ -232,8 +232,8 @@
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "subtitle_font": "HelveticaNeueLT Std Blk",
-            "subtitle_font_size": "32",
-            "subtitle_alignment": "middle",
+            "subtitle_font_size": "64",
+            "subtitle_alignment": "seam",
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
@@ -269,8 +269,9 @@
             "output_suffix_override": ""
         },
         "triggers": {
-            "on_no_sub": false,
-            "on_clean_copy_if_subs": false,
+            "video_trigger": "Always (Clean/Backup)",
+            "on_no_sub": true,
+            "on_clean_copy_if_subs": true,
             "on_scan_subs": true,
             "suffix_filter": null
         }
@@ -283,7 +284,7 @@
             "fruc": false,
             "fruc_fps": "60",
             "generate_log": false,
-            "orientation": "vertical",
+            "orientation": "hybrid (stacked)",
             "aspect_mode": "crop",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
@@ -324,8 +325,8 @@
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "subtitle_font": "HelveticaNeueLT Std Blk",
-            "subtitle_font_size": "64",
-            "subtitle_alignment": "middle",
+            "subtitle_font_size": "128",
+            "subtitle_alignment": "seam",
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
@@ -361,8 +362,9 @@
             "output_suffix_override": "-4K"
         },
         "triggers": {
-            "on_no_sub": false,
-            "on_clean_copy_if_subs": false,
+            "video_trigger": "Always (Clean/Backup)",
+            "on_no_sub": true,
+            "on_clean_copy_if_subs": true,
             "on_scan_subs": true,
             "suffix_filter": null
         }
