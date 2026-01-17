@@ -1,0 +1,56 @@
+{
+    "selected_profile": "LP-9200UB",
+    "profiles": {
+        "LP-9200UB": {
+            "description": "4-inch Shipping Printer (Continuous)",
+            "keyword": "BlueTooth Printer",
+            "paper_width_mm": 100,
+            "dots_per_mm": 8,
+            "feed_extra_dots": 0,
+            "add_height_margin_mm": 0,
+            "baudrate": 9600,
+            "invert_image": false,
+            "density": 15,
+            "speed": 6,
+            "sensor_type": "CONTINUOUS",
+            "action_type": "NONE",
+            "init_commands": [],
+            "protocol": "TSPL",
+            "fixed_label_height_mm": 150
+        },
+        "RPP210A": {
+            "description": "2-inch Portable Receipt Printer (58mm)",
+            "keyword": "RPP210",
+            "paper_width_mm": 58,
+            "dots_per_mm": 8,
+            "feed_extra_dots": 60,
+            "add_height_margin_mm": 0,
+            "baudrate": 9600,
+            "invert_image": false,
+            "density": 10,
+            "speed": 3,
+            "sensor_type": "CONTINUOUS",
+            "action_type": "TEAR",
+            "init_commands": [],
+            "protocol": "TSPL",
+            "fixed_label_height_mm": 0
+        },
+        "LP-9200UB - TSPL - Gap": {
+            "description": "4-inch Shipping Printer (Continuous)",
+            "keyword": "BlueTooth Printer",
+            "paper_width_mm": 100,
+            "dots_per_mm": 8,
+            "feed_extra_dots": 0,
+            "add_height_margin_mm": 0,
+            "baudrate": 9600,
+            "invert_image": false,
+            "density": 15,
+            "speed": 6,
+            "sensor_type": "GAP",
+            "action_type": "NONE",
+            "init_commands": [],
+            "protocol": "TSPL",
+            "fixed_label_height_mm": 150
+        }
+    }
+}
