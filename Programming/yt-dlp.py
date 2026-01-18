@@ -841,6 +841,89 @@ failed_urls_lock = threading.Lock()
 YTDLP_TASK = "yt-dlp"
 GALLERYDL_TASK = "gallery-dl"
 
+def ms_to_srt_time(ms):
+    """Converts milliseconds to SRT timestamp format (HH:MM:SS,mmm)."""
+    seconds, milliseconds = divmod(ms, 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d},{int(milliseconds):03d}"
+
+def process_json3_subtitle(json3_path):
+    """Parses a JSON3 subtitle file and extracts plaintext and word-level SRT."""
+    try:
+        with open(json3_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        events = data.get('events', [])
+        if not events:
+            return "No events found in JSON3 file."
+
+        base_name = os.path.splitext(json3_path)[0]
+        txt_path = f"{base_name}.txt"
+        srt_path = f"{base_name}.srt"
+        
+        full_text_parts = []
+        srt_entries = []
+        srt_index = 1
+        last_event_end_ms = -1
+
+        for event in events:
+            start_ms = event.get('tStartMs', 0)
+            duration = event.get('dDurationMs', 0)
+            segments = event.get('segs', [])
+            
+            if not segments:
+                continue
+
+            # --- Plaintext Extraction (Readability Focus) ---
+            event_text = "".join([s.get('utf8', '') for s in segments]).replace('\n', ' ').strip()
+            if event_text:
+                # Use a threshold (1.5s) to detect a natural break or paragraph
+                if last_event_end_ms != -1 and (start_ms - last_event_end_ms) > 1500:
+                    full_text_parts.append("\n\n")
+                elif full_text_parts and not full_text_parts[-1].endswith("\n\n"):
+                    full_text_parts.append(" ")
+                
+                full_text_parts.append(event_text)
+                last_event_end_ms = start_ms + duration
+
+            # --- SRT Extraction (Word/Segment Level) ---
+            for i, seg in enumerate(segments):
+                text = seg.get('utf8', '').strip()
+                if not text:
+                    continue
+                
+                offset = seg.get('tOffsetMs', 0)
+                seg_start_ms = start_ms + offset
+                
+                if i < len(segments) - 1:
+                    next_offset = segments[i+1].get('tOffsetMs', 0)
+                    if next_offset > offset:
+                         seg_end_ms = start_ms + next_offset
+                    else:
+                         seg_end_ms = seg_start_ms + 100
+                else:
+                    seg_end_ms = start_ms + duration
+                
+                if seg_end_ms <= seg_start_ms:
+                     seg_end_ms = seg_start_ms + 100
+
+                srt_entries.append(f"{srt_index}\n{ms_to_srt_time(seg_start_ms)} --> {ms_to_srt_time(seg_end_ms)}\n{text}\n")
+                srt_index += 1
+
+        # Write Plaintext (Joined parts)
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write("".join(full_text_parts).strip())
+
+        # Write SRT
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(srt_entries))
+            
+        return f"Created {os.path.basename(txt_path)} and {os.path.basename(srt_path)}"
+
+    except Exception as e:
+        return f"Error processing JSON3: {e}"
+
 def log_message(log_file, status, url, message=""):
     """Thread-safe function to write a formatted message to the log file."""
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -920,6 +1003,22 @@ def run_download_task(task_type, identifier, title, args, original_url):
                 print("--------------------")
         
         if process.returncode == 0:
+            if args.json3:
+                # Look for the subtitle file in the output
+                # Output format: "[info] Writing video subtitles to: filename.json3"
+                match = re.search(r'Writing video subtitles to: (.+\.json3)', stdout)
+                if match:
+                    json3_file = match.group(1).strip()
+                    if os.path.exists(json3_file):
+                        proc_msg = process_json3_subtitle(json3_file)
+                        if args.verbose:
+                             with print_lock:
+                                  print(f"  [JSON3] {proc_msg}")
+                    else:
+                        # Sometimes paths are relative or weird, try to resolve? 
+                        # But usually yt-dlp prints the relative path used for writing.
+                        pass
+
             return ("SUCCESS", f"Finished {tool_name}: {display_title}")
         else:
             error_message = stderr.strip().replace('\n', ' ')
@@ -1094,6 +1193,10 @@ def build_ytdlp_command(target_url, args):
             command_list.extend(["--write-description", "--skip-download"])
         if args.comments:
             command_list.extend(["--write-comments", "--write-info-json", "--skip-download"])
+        if args.json3:
+            sub_lang = args.language if args.language else 'en'
+            command_list.extend(['--write-auto-subs', '--sub-langs', sub_lang, '--sub-format', 'json3', '--ignore-errors'])
+            if not any([args.video, args.audio_only]): command_list.append("--skip-download")
 
     command_list.append(video_url)
     return command_list
@@ -1198,6 +1301,7 @@ def main():
     ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json) (default).")
     ytdlp_group.add_argument("-C", "--comments", action="store_true", help="Download video comments into the metadata file (default).")
     ytdlp_group.add_argument("-l", "--language", type=str, help="Language code for audio/subs (e.g., 'id', 'es').")
+    ytdlp_group.add_argument("-j", "--json3", action="store_true", help="Download json3 subtitles (word-level timing).")
     
     gallerydl_group = parser.add_argument_group('gallery-dl Options (for image content in Download Mode)')
     gallerydl_group.add_argument("-gD", "--g-directory", type=str, help="Output directory for downloaded images.")
@@ -1231,7 +1335,7 @@ def main():
         print("❌ No valid URLs were found from the provided inputs. Exiting.", file=sys.stderr)
         sys.exit(1)
     
-    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.comments, args.g_write_metadata])
+    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.comments, args.g_write_metadata, args.json3])
     args.default_download = not is_any_specific_flag
     
     print(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...\n")
