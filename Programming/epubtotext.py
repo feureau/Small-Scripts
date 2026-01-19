@@ -17,9 +17,9 @@ def extract_text_from_html(html_content):
     text = soup.get_text(separator='\n', strip=True)
     return text
 
-def epub_to_text(epub_path, output_txt_path):
+def epub_to_text(epub_path, output_path, split_chapters=False):
     """
-    Converts an EPUB file to a TXT file.
+    Converts an EPUB file to a TXT file or multiple files if split_chapters is True.
     """
     try:
         # Address the UserWarning by being explicit with options
@@ -60,45 +60,80 @@ def epub_to_text(epub_path, output_txt_path):
                 print(f"Error: Could not write empty output file '{output_txt_path}'. {e}", file=sys.stderr)
             return True # Or False if an empty file is considered an error in some contexts
 
-    for item in items_to_process:
-        try:
-            html_content = item.get_content()
-            # Ebooklib usually returns bytes, decode if necessary
-            if isinstance(html_content, bytes):
-                # Try UTF-8 first
-                try:
-                    html_content = html_content.decode('utf-8')
-                except UnicodeDecodeError:
-                    # Fallback to item's encoding or a common one if not specified
-                    encoding = item.encoding if item.encoding else 'latin-1' # Or 'cp1252' or other common fallback
+    if split_chapters:
+        split_output_dir = Path(output_path)
+        if not split_output_dir.exists():
+            try:
+                split_output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                print(f"Error: Could not create directory for split chapters '{split_output_dir}'. {e}", file=sys.stderr)
+                return False
+
+        for i, item in enumerate(items_to_process):
+            try:
+                html_content = item.get_content()
+                if isinstance(html_content, bytes):
                     try:
-                        html_content = item.get_content().decode(encoding, errors='replace')
-                        print(f"  Info: Decoded item {item.get_name()} using {encoding}.", file=sys.stderr)
-                    except Exception as enc_e:
-                        print(f"  Warning: Could not decode content from item {item.get_name()} with encoding {encoding} or UTF-8. Skipping. Error: {enc_e}", file=sys.stderr)
-                        continue
+                        html_content = html_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        encoding = item.encoding if item.encoding else 'latin-1'
+                        html_content = html_content.decode(encoding, errors='replace')
 
-            text = extract_text_from_html(html_content)
-            if text:
-                full_text.append(text)
-        except Exception as e:
-            print(f"  Warning: Could not process item {item.get_name()} in '{epub_path}'. {e}", file=sys.stderr)
-            continue
-
-    if not full_text and not items_to_process: # Case where items_to_process was initially empty
-        pass # Already handled creating an empty file if no processable items
-    elif not full_text and items_to_process: # Case where items were processed but yielded no text
-        print(f"Warning: Processed items from '{epub_path}' yielded no text content.", file=sys.stderr)
-
-    try:
-        with open(output_txt_path, 'w', encoding='utf-8') as f:
-            f.write("\n\n".join(full_text)) # Join chapters/sections with double newlines
-        if full_text or not items_to_process: # Report success if text written or if empty file was intended
-            print(f"Successfully converted '{epub_path}' to '{output_txt_path}'")
+                text = extract_text_from_html(html_content)
+                if text:
+                    # Use index for sorting, or item name if clean
+                    filename = f"chapter_{i+1:03d}.txt"
+                    # Try to get a hint of title from soup if possible?
+                    # For now keep it simple and consistent.
+                    chapter_path = split_output_dir / filename
+                    with open(chapter_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+            except Exception as e:
+                print(f"  Warning: Could not process item {item.get_name()} for splitting. {e}", file=sys.stderr)
+                continue
+        
+        print(f"Successfully split '{epub_path}' into '{split_output_dir}'")
         return True
-    except IOError as e:
-        print(f"Error: Could not write to output file '{output_txt_path}'. {e}", file=sys.stderr)
-        return False
+    else:
+        for item in items_to_process:
+            try:
+                html_content = item.get_content()
+                # Ebooklib usually returns bytes, decode if necessary
+                if isinstance(html_content, bytes):
+                    # Try UTF-8 first
+                    try:
+                        html_content = html_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # Fallback to item's encoding or a common one if not specified
+                        encoding = item.encoding if item.encoding else 'latin-1' # Or 'cp1252' or other common fallback
+                        try:
+                            html_content = item.get_content().decode(encoding, errors='replace')
+                            print(f"  Info: Decoded item {item.get_name()} using {encoding}.", file=sys.stderr)
+                        except Exception as enc_e:
+                            print(f"  Warning: Could not decode content from item {item.get_name()} with encoding {encoding} or UTF-8. Skipping. Error: {enc_e}", file=sys.stderr)
+                            continue
+
+                text = extract_text_from_html(html_content)
+                if text:
+                    full_text.append(text)
+            except Exception as e:
+                print(f"  Warning: Could not process item {item.get_name()} in '{epub_path}'. {e}", file=sys.stderr)
+                continue
+
+        if not full_text and not items_to_process: # Case where items_to_process was initially empty
+            pass # Already handled creating an empty file if no processable items
+        elif not full_text and items_to_process: # Case where items were processed but yielded no text
+            print(f"Warning: Processed items from '{epub_path}' yielded no text content.", file=sys.stderr)
+
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write("\n\n".join(full_text)) # Join chapters/sections with double newlines
+            if full_text or not items_to_process: # Report success if text written or if empty file was intended
+                print(f"Successfully converted '{epub_path}' to '{output_path}'")
+            return True
+        except IOError as e:
+            print(f"Error: Could not write to output file '{output_path}'. {e}", file=sys.stderr)
+            return False
 
 def main():
     parser = argparse.ArgumentParser(
@@ -114,7 +149,12 @@ def main():
     parser.add_argument(
         "-f", "--force",
         action="store_true",
-        help="Overwrite output TXT file if it already exists."
+        help="Overwrite output TXT file or directory if it already exists."
+    )
+    parser.add_argument(
+        "-s", "--split",
+        action="store_true",
+        help="Split each chapter into its own text file. Created files will be placed in a directory."
     )
 
     args = parser.parse_args()
@@ -190,19 +230,25 @@ def main():
         if epub_file_path.suffix.lower() != '.epub':
             print(f"Warning: File '{epub_file_path}' does not have an .epub extension. Attempting to process anyway.", file=sys.stderr)
 
-        # Determine output path
-        txt_filename = epub_file_path.stem + ".txt"
-        if output_dir:
-            output_txt_path = output_dir / txt_filename
+        if args.split:
+            # If split, output_path is a directory
+            output_name = epub_file_path.stem
+            if output_dir:
+                output_path = output_dir / output_name
+            else:
+                output_path = epub_file_path.with_name(output_name)
         else:
-            output_txt_path = epub_file_path.with_name(txt_filename) # More robust than with_suffix for this
+            txt_filename = epub_file_path.stem + ".txt"
+            if output_dir:
+                output_path = output_dir / txt_filename
+            else:
+                output_path = epub_file_path.with_name(txt_filename)
 
-        if output_txt_path.exists() and not args.force:
-            print(f"Skipping '{epub_file_path}': Output file '{output_txt_path}' already exists. Use -f to overwrite.", file=sys.stderr)
-            # Consider this a "skip" not a failure for summary.
+        if output_path.exists() and not args.force:
+            print(f"Skipping '{epub_file_path}': Output '{output_path}' already exists. Use -f to overwrite.", file=sys.stderr)
             continue
 
-        if epub_to_text(epub_file_path, output_txt_path):
+        if epub_to_text(epub_file_path, output_path, split_chapters=args.split):
             success_count += 1
         else:
             failure_count += 1
