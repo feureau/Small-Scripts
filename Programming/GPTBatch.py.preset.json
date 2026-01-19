@@ -365,7 +365,7 @@
         "prompt": "Transcribe. Give me only the transcription formatted and cleaned up for markdown. No commentary.",
         "engine": "ollama",
         "model": "qwen3-vl:8b",
-        "output_folder": "qwen-cloud",
+        "output_folder": "qwen",
         "output_suffix": "",
         "output_extension": "md",
         "overwrite_original": false,
