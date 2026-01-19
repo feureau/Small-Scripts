@@ -824,7 +824,7 @@ import shlex
 import re
 
 # ================== USER CONFIGURABLE VARIABLES ==================
-YTDLP_PATH = "yt-dlp"
+YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
 GALLERYDL_PATH = "gallery-dl"
 OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s")
 PARALLEL_DOWNLOADS = 6
@@ -947,7 +947,7 @@ def run_updates():
     
     print("\n[1/2] Updating yt-dlp...")
     try:
-        update_command_ytdlp = [YTDLP_PATH, "-U"]
+        update_command_ytdlp = [*YTDLP_PATH, "-U"]
         subprocess.run(update_command_ytdlp, check=True)
     except Exception as e:
         print(f"  ❌ An error occurred during yt-dlp update: {e}")
@@ -1057,7 +1057,7 @@ def run_text_extraction_task(url):
     data = None
     
     try:
-        command = [YTDLP_PATH, '--dump-single-json', '--skip-download', '--ignore-no-formats-error', url]
+        command = [*YTDLP_PATH, '--dump-single-json', '--skip-download', '--ignore-no-formats-error', url]
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         data = json.loads(result.stdout)
     except (subprocess.CalledProcessError, json.JSONDecodeError):
@@ -1092,7 +1092,7 @@ def run_text_extraction_task(url):
 
 def get_tasks_from_url(url):
     """Determines if a URL is for yt-dlp or gallery-dl and returns a list of tasks."""
-    command = [YTDLP_PATH, "--dump-json", "--flat-playlist", "--ignore-no-formats-error", url]
+    command = [*YTDLP_PATH, "--dump-json", "--flat-playlist", "--ignore-no-formats-error", url]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         ytdlp_tasks = []
@@ -1129,7 +1129,7 @@ def get_tasks_from_url(url):
 
 def build_ytdlp_command(target_url, args):
     video_url = target_url
-    command_list = [YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
+    command_list = [*YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
 
     if args.verbose:
         command_list.append('-v')
@@ -1137,15 +1137,21 @@ def build_ytdlp_command(target_url, args):
     # This is the custom format and options block based on your config.
     # It will be applied for default downloads (--default_download) or explicit video downloads (--video).
     if getattr(args, 'default_download', False) or args.video:
-        # User requested configuration
-        custom_format_string = "best[ext=mp4]"
+        # Optimized configuration for non-cookie downloads (especially TikTok)
+        # Using a more flexible format and standardizing on mp4 merge
+        custom_format_string = "bv*+ba/b"
         
         command_list.extend([
             '-f', custom_format_string,
             '--merge-output-format', 'mp4',
 
+            # User Agent (Updated to be more modern)
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+
+            # Extractor specific workarounds
+            '--extractor-args', 'tiktok:api_hostname=api16-normal-c-useast1a.tiktokv.com',
+
             # Thumbnails (write only, do not embed to avoid audio stripping)
-            # '--embed-thumbnail',
             '--write-thumbnail',
 
             # Metadata & Description (Default)
@@ -1160,7 +1166,7 @@ def build_ytdlp_command(target_url, args):
             '--sub-lang', 'auto',
             '--embed-subs',
 
-            # Audio
+            # Audio Preference
             '--audio-format', 'aac',
 
             # Progress
@@ -1171,9 +1177,8 @@ def build_ytdlp_command(target_url, args):
             '--fragment-retries', '10',
             '--continue',
 
-            # Compatibility & User Agent
+            # Compatibility
             '--compat-options', 'no-youtube-unavailable-videos',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
         ])
     
     # The original logic for other specific flags remains, in case you use them separately.
