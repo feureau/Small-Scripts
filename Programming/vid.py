@@ -159,6 +159,8 @@ DEFAULT_BLUR_SIGMA = "30"                           # Blur strength for backgrou
 DEFAULT_BLUR_STEPS = "1"                            # Blur quality iterations. Default: 1, Range: 1 to 6
 DEFAULT_HORIZONTAL_ASPECT = "16:9"                  # Horizontal aspect ratio. Default: 16:9, Common: 16:9, 21:9, 4:3
 DEFAULT_VERTICAL_ASPECT = "4:5"                     # Vertical aspect ratio. Default: 4:5, Common: 4:5, 9:16
+DEFAULT_VIDEO_OFFSET_X = "0"                        # Horizontal video offset (pixels). Default: 0
+DEFAULT_VIDEO_OFFSET_Y = "0"                        # Vertical video offset (pixels). Default: 0
 DEFAULT_FRUC = False                                # Enable frame rate up-conversion. Default: False
 DEFAULT_FRUC_FPS = "60"                             # Target FPS for FRUC. Default: 60, Range: 30 to 120
 DEFAULT_BURN_SUBTITLES = True                       # Burn subtitles into video. Default: True
@@ -644,6 +646,11 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     except (ValueError, TypeError):
         user_wrap_limit = int(DEFAULT_WRAP_LIMIT)
         
+    try:
+        m_v_offset = float(margin_v)
+    except (ValueError, TypeError):
+        m_v_offset = 0.0
+        
     # --- Dynamic Wrap Limit Calculation ---
     try:
         f_size = float(font_size)
@@ -724,9 +731,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"\\blur{shadow_blur}"
         )
         pos_override = ""
-        if options.get("subtitle_alignment") == "seam" and "calculated_pos" in options:
+        # Calculate horizontal center based on user's desired "Active Box"
+        cx = (m_l + (play_res_x - m_r)) / 2
+        
+        align_mode = options.get("subtitle_alignment", "bottom")
+        if align_mode == "seam" and "calculated_pos" in options:
             x, y = options["calculated_pos"]
             pos_override = fr"{{\an5\pos({x},{y})}}"
+        elif align_mode == "top":
+            cy = m_v_offset
+            pos_override = fr"{{\an8\pos({cx:.1f},{cy:.1f})}}"
+        elif align_mode == "middle":
+            cy = (play_res_y / 2) + m_v_offset
+            pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
+        elif align_mode == "bottom":
+            cy = play_res_y - m_v_offset
+            pos_override = fr"{{\an2\pos({cx:.1f},{cy:.1f})}}"
+
         dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
 
     full_ass_content = header + "\n".join(dialogue_lines)
@@ -1157,7 +1178,8 @@ class VideoProcessorApp:
 
         # --- Initialize all tk Variables ---
         self.current_preset_var = tk.StringVar(value=self.preset_manager.get_preset_names()[0] if self.preset_manager.get_preset_names() else "")
-        self.trigger_clean_mode_var = tk.StringVar(value="Always (Clean + Backup)") # Default: Always
+        self.trigger_video_always_var = tk.BooleanVar(value=False)
+        self.trigger_video_fallback_var = tk.BooleanVar(value=False)
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
@@ -1170,6 +1192,10 @@ class VideoProcessorApp:
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
+        self.video_offset_x_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_X)
+        self.video_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_x'))
+        self.video_offset_y_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_Y)
+        self.video_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_y'))
         self.pixelate_multiplier_var = tk.StringVar(value=DEFAULT_PIXELATE_MULTIPLIER)
         self.pixelate_multiplier_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_multiplier'))
         self.pixelate_brightness_var = tk.StringVar(value=DEFAULT_PIXELATE_BRIGHTNESS)
@@ -1501,8 +1527,7 @@ class VideoProcessorApp:
         row2_1.pack(fill=tk.X, pady=2)
         ttk.Label(row2_1, text="Trigger on Video:").pack(side=tk.LEFT, padx=(5, 5))
         
-        self.trigger_video_always_var = tk.BooleanVar(value=False)
-        self.trigger_video_fallback_var = tk.BooleanVar(value=False)
+        # Variables are initialized in __init__
         
         # Logic to ensure logic or allow both?
         # If Always is checked, Fallback is redundant.
@@ -1714,6 +1739,16 @@ class VideoProcessorApp:
         self.blur_steps_entry = ttk.Entry(aspect_handling_frame, textvariable=self.blur_steps_var, width=2)
         self.blur_steps_entry.pack(side=tk.LEFT)
         ToolTip(self.blur_steps_entry, "Blur quality. 1 is default. Higher = smoother (1-6).")
+
+        ttk.Label(aspect_handling_frame, text="X-Off:").pack(side=tk.LEFT, padx=(5, 2))
+        self.video_offset_x_entry = ttk.Entry(aspect_handling_frame, textvariable=self.video_offset_x_var, width=4)
+        self.video_offset_x_entry.pack(side=tk.LEFT)
+        ToolTip(self.video_offset_x_entry, "Horizontal video offset in pixels. Pos = Right, Neg = Left.")
+
+        ttk.Label(aspect_handling_frame, text="Y-Off:").pack(side=tk.LEFT, padx=(5, 2))
+        self.video_offset_y_entry = ttk.Entry(aspect_handling_frame, textvariable=self.video_offset_y_var, width=4)
+        self.video_offset_y_entry.pack(side=tk.LEFT)
+        ToolTip(self.video_offset_y_entry, "Vertical video offset in pixels. Pos = Down, Neg = Up.")
 
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10); quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
@@ -2193,6 +2228,8 @@ class VideoProcessorApp:
             "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+            "video_offset_x": self.video_offset_x_var.get(),
+            "video_offset_y": self.video_offset_y_var.get(),
             "pixelate_multiplier": self.pixelate_multiplier_var.get(),
             "pixelate_brightness": self.pixelate_brightness_var.get(),
             "pixelate_saturation": self.pixelate_saturation_var.get(),
@@ -2646,7 +2683,7 @@ class VideoProcessorApp:
         self.processing_jobs.append(new_job)
         self.job_listbox.insert(tk.END, new_job["display_name"])
 
-    def on_input_file_select(self, event=None):
+    def on_job_select(self, event=None):
         sel = self.job_listbox.curselection()
         if len(sel) == 1:
             # Single Select: Sync Selection -> GUI
@@ -2674,12 +2711,8 @@ class VideoProcessorApp:
                      
                      on_no_sub = triggers.get('on_no_sub', False)
                      on_clean = triggers.get('on_clean_copy_if_subs', False)
-                     if on_no_sub and on_clean:
-                         self.trigger_clean_mode_var.set("Always (Clean + Backup)")
-                     elif on_no_sub and not on_clean:
-                         self.trigger_clean_mode_var.set("Only if No Subtitles (Fallback)")
-                     else:
-                         self.trigger_clean_mode_var.set("Disabled")
+                     self.trigger_video_always_var.set(on_no_sub and on_clean)
+                     self.trigger_video_fallback_var.set(on_no_sub and not on_clean)
                          
                      self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
                      suffix_val = triggers.get('suffix_filter')
@@ -2687,11 +2720,17 @@ class VideoProcessorApp:
                          self.trigger_suffix_enable_var.set(True)
                          self.trigger_suffix_var.set(suffix_val)
                      else:
-                        self.trigger_suffix_enable_var.set(False)
-                        self.trigger_suffix_var.set("")
+                         self.trigger_suffix_enable_var.set(False)
+                         self.trigger_suffix_var.set("")
             else:
                 self.current_preset_var.set("") # Custom or Unknown
                 self.update_gui_from_job_options(selected_job)
+                # Reset triggers
+                self.trigger_video_always_var.set(False)
+                self.trigger_video_fallback_var.set(False)
+                self.trigger_scan_subs_var.set(False)
+                self.trigger_suffix_enable_var.set(False)
+                self.trigger_suffix_var.set("")
                 
         # Multi-Select: Do NOTHING (Keep current GUI state)
 
@@ -2700,6 +2739,8 @@ class VideoProcessorApp:
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
         self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
+        self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
+        self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
         self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
         self.pixelate_brightness_var.set(options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS))
         self.pixelate_saturation_var.set(options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION))
@@ -3088,7 +3129,7 @@ class VideoProcessorApp:
             if not is_hdr_output: cpu_chain.append("format=nv12")
             video_fc_parts = [
                 "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
-                f"[v_top_out]hwdownload,format={cpu_pix_fmt},{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},{bot_cpu}[cpu_bot]",
+                f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
                 "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
                 f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
             ]
@@ -3107,6 +3148,9 @@ class VideoProcessorApp:
                     width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
                     if not aspect_str: raise VideoProcessingError("Missing 'Horizontal Aspect Ratio' in preset.")
                 
+                ox = options.get("video_offset_x", "0")
+                oy = options.get("video_offset_y", "0")
+
                 target_w = width_map.get(res_key)
                 if target_w is None:
                     raise VideoProcessingError(f"Invalid resolution '{res_key}' for {orientation} mode.")
@@ -3138,10 +3182,10 @@ class VideoProcessorApp:
                     pixelate_fc = (
                         f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
                         f"[v_bg_in]scale_cuda=w={target_w//m}:h={target_h//m}:interp_algo={safe_algo}:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
+                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,eq=brightness={bright}:saturation={sat},hwupload_cuda,"
                         f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:format={target_fmt}[v_bg_pixelated];"
                         f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
-                        f"[v_bg_pixelated][v_fg_scaled]overlay_cuda=x=({target_w}-w)/2:y=({target_h}-h)/2,setsar=1[v_pixelate_combined]"
+                        f"[v_bg_pixelated][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_pixelate_combined]"
                     )
                     filter_complex_parts.append(pixelate_fc)
                     video_in_tag = "[v_pixelate_combined]"
@@ -3157,15 +3201,19 @@ class VideoProcessorApp:
                     blur_fc = (
                         f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
                         f"[v_bg_in]scale_cuda=w={target_w//2}:h={target_h//2}:interp_algo={safe_algo}:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
+                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
                         f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];"
                         f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
-                        f"[v_bg_blurred][v_fg_scaled]overlay_cuda=x=({target_w}-w)/2:y=({target_h}-h)/2,setsar=1[v_blur_combined]"
+                        f"[v_bg_blurred][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_blur_combined]"
                     )
                     filter_complex_parts.append(blur_fc)
                     video_in_tag = "[v_blur_combined]"
-                elif aspect_mode == 'pad': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease"); cpu_filters.append(f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black")
-                elif aspect_mode == 'crop': vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase"); cpu_filters.append(f"crop={target_w}:{target_h}")
+                elif aspect_mode == 'pad':
+                    vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
+                    vf_filters.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black")
+                elif aspect_mode == 'crop':
+                    vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
+                    cpu_filters.append(f"crop={target_w}:{target_h}")
                 else: vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
@@ -3180,7 +3228,8 @@ class VideoProcessorApp:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
                 cpu_filters.append(f"subtitles=filename='{safe_ass}'")
             if cpu_filters:
-                processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}"] + cpu_filters
+                # One single trip to CPU for all the heavy lifting
+                processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
                 if not is_hdr_output: processing_chain.append("format=nv12")
                 vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
             if vf_filters:
