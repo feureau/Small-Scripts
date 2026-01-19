@@ -42,6 +42,8 @@ COMMAND-LINE ARGUMENTS:
 
 -   `-lb, --linebreak` (Optional): Inserts an extra blank line between files.
 
+-   `-r, --recursive` (Optional): Scans subdirectories for matching files.
+
 -   `-strip, --strip` (Optional): Removes single line breaks within paragraphs
     and de-hyphenates words.
 
@@ -120,12 +122,25 @@ def sanitize_api_response(text):
     return text.strip()
 
 
-def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_linebreaks=False, remove_strings=True, add_markers=False):
+def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_linebreaks=False, remove_strings=True, add_markers=False, recursive=False):
     """Merges all text files matching the given patterns into a single output file."""
     try:
         all_files = set()
         for pattern in file_patterns:
-            matched_files = glob.glob(pattern)
+            # If recursive is True and pattern doesn't already have recursive syntax, adapt it
+            if recursive and '**' not in pattern:
+                # Check if it's already a path-like pattern
+                if os.path.sep in pattern or '/' in pattern:
+                    # It's a path, but might need ** insertion
+                    # This is a bit tricky, but simple strategy: replace last segment if it has wildcards
+                    dirname, basename = os.path.split(pattern)
+                    if '*' in basename:
+                        pattern = os.path.join(dirname, '**', basename)
+                else:
+                    # It's just a glob like *.txt in current dir
+                    pattern = os.path.join('**', pattern)
+
+            matched_files = glob.glob(pattern, recursive=recursive)
             all_files.update(matched_files)
 
         files_to_merge = list(all_files)
@@ -214,6 +229,7 @@ if __name__ == "__main__":
     parser.add_argument("file_patterns", nargs='*', help="One or more file patterns to match (e.g., '*.txt', 'chapter-*.md'). If not provided, processes all common plaintext files.")
     parser.add_argument("-o", "--output", default=f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}", help="Name of the output file (default derives from first pattern).")
     parser.add_argument("-lb", "--linebreak", action="store_true", help="Add a blank line between merged files.")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Scan subdirectories for matching files.")
     parser.add_argument("-strip", "--strip", action="store_true", help="Strip linebreaks within paragraphs and join hyphenated words.")
     parser.add_argument("--no-remove-strings", action="store_false", dest="remove_strings", default=True, help="Disable markdown fence removal.")
     parser.add_argument("-m", "--markers", action="store_true", help="Add start and end markers for each merged file's content.")
@@ -232,6 +248,6 @@ if __name__ == "__main__":
         add_linebreak=args.linebreak,
         strip_linebreaks=args.strip,
         remove_strings=args.remove_strings,
-        add_markers=args.markers
+        add_markers=args.markers,
+        recursive=args.recursive
     )
-
