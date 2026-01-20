@@ -9,16 +9,18 @@
             "generate_log": false,
             "orientation": "horizontal",
             "aspect_mode": "crop",
+            "video_offset_x": "0",
+            "video_offset_y": "0",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
             "pixelate_saturation": "0.6",
             "blur_sigma": "30",
             "blur_steps": "1",
-            "horizontal_aspect": "16:9",
+            "horizontal_aspect": "4:3",
             "vertical_aspect": "4:5",
             "burn_subtitles": false,
             "override_bitrate": false,
-            "manual_bitrate": "90000",
+            "manual_bitrate": "68000",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -85,6 +87,7 @@
             "output_suffix_override": ""
         },
         "triggers": {
+            "video_trigger": "Always (Clean/Backup)",
             "on_no_sub": true,
             "on_clean_copy_if_subs": true,
             "on_scan_subs": false,
@@ -101,6 +104,8 @@
             "generate_log": false,
             "orientation": "horizontal",
             "aspect_mode": "blur",
+            "video_offset_x": "0",
+            "video_offset_y": "0",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
             "pixelate_saturation": "0.6",
@@ -110,7 +115,7 @@
             "vertical_aspect": "4:5",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "90000",
+            "manual_bitrate": "68000",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -177,6 +182,7 @@
             "output_suffix_override": "-cn"
         },
         "triggers": {
+            "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
             "on_scan_subs": true,
@@ -274,7 +280,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": true,
+            "on_scan_subs": false,
             "suffix_filter": null
         }
     },
@@ -369,7 +375,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": true,
+            "on_scan_subs": false,
             "suffix_filter": null
         }
     },
@@ -384,7 +390,7 @@
             "orientation": "vertical",
             "aspect_mode": "blur",
             "video_offset_x": "0",
-            "video_offset_y": "-640",
+            "video_offset_y": "-720",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
             "pixelate_saturation": "0.6",
@@ -394,7 +400,7 @@
             "vertical_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "45000",
+            "manual_bitrate": "68000",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -429,7 +435,7 @@
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
-            "subtitle_margin_v": "384",
+            "subtitle_margin_v": "512",
             "subtitle_margin_l": "50",
             "subtitle_margin_r": "256",
             "fill_color": "#FFAA00",
@@ -458,7 +464,7 @@
             "nvenc_temporal_aq": "1",
             "nvenc_bframes": "4",
             "nvenc_b_ref_mode": "middle",
-            "output_suffix_override": "-4K"
+            "output_suffix_override": ""
         },
         "triggers": {
             "video_trigger": "Never",
@@ -479,7 +485,7 @@
             "orientation": "vertical",
             "aspect_mode": "blur",
             "video_offset_x": "0",
-            "video_offset_y": "-320",
+            "video_offset_y": "-360",
             "pixelate_multiplier": "16",
             "pixelate_brightness": "-0.4",
             "pixelate_saturation": "0.6",
@@ -489,7 +495,7 @@
             "vertical_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "8000",
+            "manual_bitrate": "12000",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -524,7 +530,7 @@
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
-            "subtitle_margin_v": "192",
+            "subtitle_margin_v": "256",
             "subtitle_margin_l": "50",
             "subtitle_margin_r": "128",
             "fill_color": "#FFAA00",
@@ -553,7 +559,7 @@
             "nvenc_temporal_aq": "1",
             "nvenc_bframes": "4",
             "nvenc_b_ref_mode": "middle",
-            "output_suffix_override": "-HD"
+            "output_suffix_override": ""
         },
         "triggers": {
             "video_trigger": "Never",
