@@ -1090,8 +1090,27 @@ def run_text_extraction_task(url):
     except Exception as e:
         return ("FAILURE", f"Error saving file: {e}")
 
+def normalize_url(url):
+    """Normalizes YouTube IDs (video or playlist) into full URLs."""
+    url = url.strip()
+    if '://' in url:
+        return url
+        
+    # YouTube Playlist ID: Usually 34 chars starting with PL, but can be other 2-letter prefixes.
+    if re.match(r'^[A-Z]{2}[a-zA-Z0-9_-]{16,}$', url):
+        return f"https://www.youtube.com/playlist?list={url}"
+        
+    # YouTube Video ID: Exactly 11 characters.
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', url):
+        return f"https://www.youtube.com/watch?v={url}"
+        
+    return url
+
 def get_tasks_from_url(url):
     """Determines if a URL is for yt-dlp or gallery-dl and returns a list of tasks."""
+    url = normalize_url(url)
+    is_youtube = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
+    
     command = [*YTDLP_PATH, "--dump-json", "--flat-playlist", "--ignore-no-formats-error", url]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
@@ -1099,26 +1118,39 @@ def get_tasks_from_url(url):
         for line in result.stdout.strip().splitlines():
             try:
                 data = json.loads(line)
-                if 'entries' in data and data.get('entries'):
-                    for entry in data['entries']:
-                        if entry and entry.get('id') and entry.get('formats'):
-                            # Use 'webpage_url' if available, otherwise fall back to 'url' or construct one
-                            entry_url = entry.get('webpage_url') or entry.get('url')
-                            if not entry_url and entry.get('ie_key') == 'Youtube':
-                                entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                            
-                            ytdlp_tasks.append((YTDLP_TASK, entry_url or url, entry.get("title", f"Video_{entry['id']}"), url))
-                elif data.get('id') and data.get('formats'):
-                    # Use 'webpage_url' if available, otherwise fall back to 'url' or construct one
-                    entry_url = data.get('webpage_url') or data.get('url')
-                    if not entry_url and data.get('ie_key') == 'Youtube':
-                        entry_url = f"https://www.youtube.com/watch?v={data['id']}"
+                
+                # Helper to process a single entry
+                def add_ytdlp_task(entry, original_url):
+                    entry_url = entry.get('webpage_url') or entry.get('url')
+                    if not entry_url and entry.get('ie_key') == 'Youtube':
+                         entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                    title = entry.get("title") or entry.get("title") or f"Media_{entry.get('id', 'unknown')}"
+                    ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url))
 
-                    ytdlp_tasks.append((YTDLP_TASK, entry_url or url, data.get("title", "Unknown Title"), url))
+                if data.get('_type') == 'playlist' and 'entries' in data:
+                    for entry in data['entries']:
+                        if entry and entry.get('id'):
+                            add_ytdlp_task(entry, url)
+                elif data.get('entries'): # Generic entries list
+                    for entry in data['entries']:
+                        if entry and entry.get('id'):
+                            add_ytdlp_task(entry, url)
+                elif data.get('id'): # Single item
+                    add_ytdlp_task(data, url)
+
             except json.JSONDecodeError:
                 continue
+        
+        # If discovery found nothing but it's YouTube, force use of yt-dlp
+        if not ytdlp_tasks and is_youtube:
+            ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url))
+
         return ytdlp_tasks if ytdlp_tasks else [(GALLERYDL_TASK, url, url, url)]
+
     except subprocess.CalledProcessError as e:
+        if is_youtube:
+            return [(YTDLP_TASK, url, "YouTube Content", url)]
+        
         stderr_lower = e.stderr.lower()
         if "no video formats found" in stderr_lower or "unsupported url" in stderr_lower or "no media found" in stderr_lower:
             return [(GALLERYDL_TASK, url, url, url)]
@@ -1220,6 +1252,7 @@ def build_gallerydl_command(url, args):
 
 def process_url(url, index, total_urls, args):
     """Encapsulates the entire workflow for a single URL."""
+    url = normalize_url(url)
     with print_lock:
         print(f"[{index:>{len(str(total_urls))}}/{total_urls}]▶️ Starting processing for: {url}")
     
