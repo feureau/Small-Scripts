@@ -3,6 +3,7 @@ import os
 import requests
 import re
 import time
+import argparse
 
 def download_file(url, folder="."):
     try:
@@ -91,8 +92,8 @@ def main(input_file):
             download_file(url, download_dir)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python archiveorgdownloader.py <path_to_link_list.txt>")
-    else:
-        file_list = sys.argv[1]
-        main(file_list)
+    parser = argparse.ArgumentParser(description="Download files from Archive.org based on a list of links.")
+    parser.add_argument("input_file", help="Path to the text file containing the list of Archive.org links.")
+    
+    args = parser.parse_args()
+    main(args.input_file)
