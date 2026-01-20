@@ -1171,7 +1171,8 @@ def build_ytdlp_command(target_url, args):
     if getattr(args, 'default_download', False) or args.video:
         # Optimized configuration for non-cookie downloads (especially TikTok)
         # Using a more flexible format and standardizing on mp4 merge
-        custom_format_string = "bv*+ba/b"
+        # Prioritize avc1 (H.264) for better compatibility, falling back to best available if not found.
+        custom_format_string = "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b[vcodec^=avc1] / bv*+ba/b"
         
         command_list.extend([
             '-f', custom_format_string,
