@@ -2,28 +2,24 @@ import fitz  # PyMuPDF
 
 import pathlib
 import os
+import sys
 
-def extract_images_from_pdfs(working_dir):
+def extract_images_from_pdfs(pdf_files):
     """
-    Finds all PDFs in the working directory, extracts embedded images from each,
-    and saves them into dedicated subfolders.
+    Extracts embedded images from each PDF in the provided list
+    and saves them into dedicated subfolders relative to the PDF's location.
 
     Args:
-        working_dir (pathlib.Path): The directory where the script is run and PDFs are located.
+        pdf_files (list of pathlib.Path): List of PDF files to process.
     """
     pdf_count = 0
     total_images_extracted = 0
 
-    print(f"Scanning for PDF files in: {working_dir}")
-
-    # Use glob to find all PDF files in the working directory
-    pdf_files = list(working_dir.glob('*.pdf'))
-
     if not pdf_files:
-        print("No PDF files found in the working directory.")
+        print("No PDF files to process.")
         return
 
-    print(f"Found {len(pdf_files)} PDF file(s).")
+    print(f"Found {len(pdf_files)} PDF file(s) to process.")
 
     for pdf_path in pdf_files:
         pdf_count += 1
@@ -32,7 +28,7 @@ def extract_images_from_pdfs(working_dir):
 
         # Create a subdirectory for the images from this PDF
         output_folder_name = f"{pdf_path.stem}_images"
-        output_path = working_dir / output_folder_name
+        output_path = pdf_path.parent / output_folder_name
         output_path.mkdir(exist_ok=True) # Create folder, ignore if already exists
 
         try:
@@ -89,6 +85,31 @@ def extract_images_from_pdfs(working_dir):
 
 
 if __name__ == "__main__":
-    # Get the current working directory (where the script is *run* from)
-    current_working_directory = pathlib.Path.cwd()
-    extract_images_from_pdfs(current_working_directory)
+    args = sys.argv[1:]
+    pdf_to_process = []
+
+    if not args:
+        # Default behavior: scan current working directory
+        cwd = pathlib.Path.cwd()
+        print(f"No arguments provided. Scanning for PDF files in: {cwd}")
+        pdf_to_process.extend(cwd.glob('*.pdf'))
+    else:
+        for arg in args:
+            path = pathlib.Path(arg)
+            if path.is_file():
+                if path.suffix.lower() == '.pdf':
+                    pdf_to_process.append(path)
+                else:
+                    print(f"Skipping non-PDF file: {path}")
+            elif path.is_dir():
+                print(f"Scanning directory: {path}")
+                pdf_to_process.extend(path.glob('*.pdf'))
+            else:
+                print(f"Argument not found (skipping): {arg}")
+
+    if pdf_to_process:
+        # Sort to ensure consistent processing order
+        pdf_to_process.sort()
+        extract_images_from_pdfs(pdf_to_process)
+    else:
+        print("No valid PDF files found to process.")
