@@ -4,6 +4,9 @@ import sys
 import glob
 import subprocess
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
+from tqdm import tqdm
 
 # Define the subfolder name for output image files
 OUTPUT_FOLDER = "converted_images"
@@ -23,6 +26,21 @@ def get_pdf_page_count(pdf_file):
         print(f"Unexpected error while getting page count for {pdf_file}: {e}")
     return 0
 
+def convert_single_page(args):
+    """Worker function to convert a single page of a PDF."""
+    pdf_file, page, pdf_flag, output_prefix, ext = args
+    command = [
+        "pdftoppm", f"-{pdf_flag}",
+        "-f", str(page), "-l", str(page),
+        pdf_file, output_prefix
+    ]
+    try:
+        # pdftoppm appends -<page> to the prefix automatically
+        subprocess.run(command, check=True, capture_output=True)
+        return True, None
+    except subprocess.CalledProcessError as e:
+        return False, f"Error converting page {page} of {pdf_file}: {e.stderr.decode() if e.stderr else str(e)}"
+
 def convert_pdf_to_images(pdf_pattern, pdf_flag, ext):
     """
     Converts each page of matching PDF files to an individual image.
@@ -40,40 +58,41 @@ def convert_pdf_to_images(pdf_pattern, pdf_flag, ext):
         return
 
     print(f"Converting {len(pdf_files)} PDF(s) to {ext.upper()} images...")
+    
+    num_cores = cpu_count()
+    print(f"Using {num_cores} cores.")
 
+    total_tasks = []
     for pdf_file in pdf_files:
         base_name = os.path.splitext(os.path.basename(pdf_file))[0]
         num_pages = get_pdf_page_count(pdf_file)
         if num_pages == 0:
             print(f"Could not determine page count for {pdf_file}. Skipping.")
             continue
-
-        print(f"Converting {num_pages} pages of {pdf_file}...")
-
+        
+        output_prefix = os.path.join(output_dir, f"{base_name}_page")
         for page in range(1, num_pages + 1):
-            # Set output prefix (pdftoppm will append "-<page>" to the prefix)
-            output_prefix = os.path.join(output_dir, f"{base_name}_page")
-            command = [
-                "pdftoppm", f"-{pdf_flag}",
-                "-f", str(page), "-l", str(page),
-                pdf_file, output_prefix
-            ]
-            try:
-                subprocess.run(command, check=True)
-                # The output file will be named like <prefix>-<page>.<ext>
-                output_file = f"{output_prefix}-{page}.{ext}"
-                print(f"Converted page {page} of {pdf_file} -> {output_file}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error converting page {page} of {pdf_file}: {e}")
+            total_tasks.append((pdf_file, page, pdf_flag, output_prefix, ext))
+
+    # Progress bar for overall progress
+    with tqdm(total=len(total_tasks), desc="Total Progress", unit="page") as pbar:
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            futures = [executor.submit(convert_single_page, task) for task in total_tasks]
+            
+            for future in as_completed(futures):
+                success, error = future.result()
+                if not success:
+                    tqdm.write(error)
+                pbar.update(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert each page of PDF files to individual images.",
         epilog=("Examples:\n"
                 "  Convert PDF pages to PNG images:\n"
-                "    python pdf2img.py '*.pdf' --png\n\n"
+                "    python pdftoimages.py '*.pdf' --png\n\n"
                 "  Convert PDF pages to JPEG images:\n"
-                "    python pdf2img.py '*.pdf' --jpg")
+                "    python pdftoimages.py '*.pdf' --jpg")
     )
     parser.add_argument("pdf_pattern", help="Pattern to match PDF files (e.g., '*.pdf').")
     group = parser.add_mutually_exclusive_group(required=False)
