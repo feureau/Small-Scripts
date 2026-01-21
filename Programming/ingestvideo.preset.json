@@ -1,0 +1,30 @@
+{
+    "Default": {
+        "decoding_mode": "Hardware",
+        "max_processes": "1",
+        "frame_rate": "24/1",
+        "output_color_mode": "Auto (Match Source)",
+        "ai_upscale_enable": false,
+        "resolution_choice": "No Resize",
+        "fruc_enable": false,
+        "denoise_enable": false,
+        "artifact_enable": false,
+        "rate_control_mode": "CQP",
+        "qvbr": "30",
+        "cqp_i": "40",
+        "cqp_p": "44",
+        "cqp_b": "48",
+        "gop_len": "6",
+        "bracket_steps": "2",
+        "step_size": "10",
+        "crop_w": "3840",
+        "crop_h": "1608",
+        "crop_x": "0",
+        "crop_y": "276",
+        "no_crop": false,
+        "sleep_enable": false,
+        "audio_converts": [
+            false
+        ]
+    }
+}

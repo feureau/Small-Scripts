@@ -178,7 +178,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "5.3"
+SCRIPT_VERSION = "5.4"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -214,13 +214,15 @@ import cv2
 import platform
 import json
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog, messagebox
 from collections import Counter
 from multiprocessing import Pool
 import glob
 import tempfile
 import math
 from datetime import datetime
+
+PRESET_FILENAME = "ingestvideo.preset.json"
 
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
@@ -361,6 +363,155 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     cqp_i, cqp_p, cqp_b = (tk.StringVar(value=v) for v in [DEFAULT_CQP_I, DEFAULT_CQP_P, DEFAULT_CQP_B])
     bracket_steps = tk.StringVar(value="2")
     step_size = tk.StringVar(value="3")
+    
+    # --- Preset Management Variables & Functions ---
+    current_preset_name = tk.StringVar(value="")
+    presets_dict = {}
+
+    def load_presets():
+        nonlocal presets_dict
+        preset_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), PRESET_FILENAME)
+        if os.path.exists(preset_file):
+            try:
+                with open(preset_file, 'r') as f:
+                    presets_dict = json.load(f)
+            except json.JSONDecodeError:
+                preset_dict = {}
+        else:
+            presets_dict = {}
+        update_preset_combobox()
+
+    def save_presets_to_file():
+        preset_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), PRESET_FILENAME)
+        try:
+            with open(preset_file, 'w') as f:
+                json.dump(presets_dict, f, indent=4)
+        except IOError as e:
+            messagebox.showerror("Error", f"Failed to save presets: {e}")
+
+    def update_preset_combobox():
+        preset_combobox['values'] = sorted(list(presets_dict.keys()))
+        if current_preset_name.get() not in presets_dict:
+             preset_combobox.set('')
+
+    def apply_preset(event=None):
+        name = preset_combobox.get()
+        if name not in presets_dict: return
+        data = presets_dict[name]
+        
+        # Helper to set if key exists
+        def set_if_exists(var, key, type_cast=str):
+             if key in data: var.set(type_cast(data[key]))
+
+        set_if_exists(decoding_mode, 'decoding_mode')
+        set_if_exists(max_processes, 'max_processes')
+        set_if_exists(frame_rate_var, 'frame_rate')
+        set_if_exists(output_color_mode, 'output_color_mode')
+        set_if_exists(ai_upscale_enable, 'ai_upscale_enable', bool)
+        set_if_exists(resolution_var, 'resolution_choice')
+        set_if_exists(fruc_enable, 'fruc_enable', bool)
+        set_if_exists(nvvfx_denoise_var, 'denoise_enable', bool)
+        set_if_exists(artifact_enable, 'artifact_enable', bool)
+        set_if_exists(rate_control_mode, 'rate_control_mode')
+        set_if_exists(qvbr, 'qvbr')
+        set_if_exists(cqp_i, 'cqp_i')
+        set_if_exists(cqp_p, 'cqp_p')
+        set_if_exists(cqp_b, 'cqp_b')
+        set_if_exists(gop_len, 'gop_len')
+        set_if_exists(bracket_steps, 'bracket_steps')
+        set_if_exists(step_size, 'step_size')
+        set_if_exists(crop_w, 'crop_w')
+        set_if_exists(crop_h, 'crop_h')
+        set_if_exists(crop_x, 'crop_x')
+        set_if_exists(crop_y, 'crop_y')
+        set_if_exists(no_crop_var, 'no_crop', bool)
+        set_if_exists(sleep_enable, 'sleep_enable', bool)
+
+        # Audio conversions - try to match by track index if possible, 
+        # but since tracks vary by file, we stick to general preference if we can?
+        # Actually, saving specific track mapping is tricky. 
+        # We will save the "convert preference" boolean state for the available slots.
+        if 'audio_converts' in data:
+            saved_converts = data['audio_converts']
+            for i, var in enumerate(convert_vars):
+                if i < len(saved_converts):
+                    var.set(saved_converts[i])
+        
+        current_preset_name.set(name)
+
+    def save_current_preset():
+        name = current_preset_name.get()
+        if not name:
+            create_new_preset()
+            return
+        
+        # Gather data
+        data = {
+            'decoding_mode': decoding_mode.get(),
+            'max_processes': max_processes.get(),
+            'frame_rate': frame_rate_var.get(),
+            'output_color_mode': output_color_mode.get(),
+            'ai_upscale_enable': ai_upscale_enable.get(),
+            'resolution_choice': resolution_var.get(),
+            'fruc_enable': fruc_enable.get(),
+            'denoise_enable': nvvfx_denoise_var.get(),
+            'artifact_enable': artifact_enable.get(),
+            'rate_control_mode': rate_control_mode.get(),
+            'qvbr': qvbr.get(),
+            'cqp_i': cqp_i.get(),
+            'cqp_p': cqp_p.get(),
+            'cqp_b': cqp_b.get(),
+            'gop_len': gop_len.get(),
+            'bracket_steps': bracket_steps.get(),
+            'step_size': step_size.get(),
+            'crop_w': crop_w.get(),
+            'crop_h': crop_h.get(),
+            'crop_x': crop_x.get(),
+            'crop_y': crop_y.get(),
+            'no_crop': no_crop_var.get(),
+            'sleep_enable': sleep_enable.get(),
+            'audio_converts': [v.get() for v in convert_vars]
+        }
+        presets_dict[name] = data
+        save_presets_to_file()
+        update_preset_combobox()
+        messagebox.showinfo("Success", f"Preset '{name}' saved.")
+
+    def create_new_preset():
+        name = simpledialog.askstring("New Preset", "Enter name for new preset:")
+        if name:
+            if name in presets_dict:
+                 if not messagebox.askyesno("Overwrite", f"Preset '{name}' already exists. Overwrite?"):
+                     return
+            current_preset_name.set(name)
+            save_current_preset()
+
+    def rename_preset():
+        old_name = preset_combobox.get()
+        if not old_name or old_name not in presets_dict:
+            messagebox.showwarning("Warning", "Please select a preset to rename.")
+            return
+        
+        new_name = simpledialog.askstring("Rename Preset", f"Enter new name for '{old_name}':")
+        if new_name:
+            if new_name in presets_dict:
+                messagebox.showerror("Error", f"Preset '{new_name}' already exists.")
+                return
+            presets_dict[new_name] = presets_dict.pop(old_name)
+            current_preset_name.set(new_name)
+            save_presets_to_file()
+            update_preset_combobox()
+            preset_combobox.set(new_name)
+
+    def delete_preset():
+        name = preset_combobox.get()
+        if not name or name not in presets_dict: return
+        if messagebox.askyesno("Delete", f"Are you sure you want to delete preset '{name}'?"):
+            del presets_dict[name]
+            save_presets_to_file()
+            update_preset_combobox()
+            current_preset_name.set("")
+            preset_combobox.set("")
 
     # --- GUI Helper Functions (defined before use) ---
     def add_files(listbox):
@@ -443,6 +594,25 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     bottom_frame.columnconfigure(0, weight=1); bottom_frame.columnconfigure(1, weight=1)
 
     # --- Left Column Widgets ---
+    
+    # [NEW] Preset Frame
+    preset_frame = tk.LabelFrame(left_column, text="Presets")
+    preset_frame.pack(fill="x", pady=(0, 5))
+    
+    from tkinter import ttk
+    preset_combobox = ttk.Combobox(preset_frame, textvariable=current_preset_name, state="readonly")
+    preset_combobox.pack(fill='x', padx=5, pady=5)
+    preset_combobox.bind("<<ComboboxSelected>>", apply_preset)
+    
+    preset_btn_frame = tk.Frame(preset_frame)
+    preset_btn_frame.pack(fill='x', padx=5, pady=2)
+    tk.Button(preset_btn_frame, text="Save", command=save_current_preset).pack(side='left', fill='x', expand=True, padx=1)
+    tk.Button(preset_btn_frame, text="New", command=create_new_preset).pack(side='left', fill='x', expand=True, padx=1)
+    tk.Button(preset_btn_frame, text="Rename", command=rename_preset).pack(side='left', fill='x', expand=True, padx=1)
+    tk.Button(preset_btn_frame, text="Delete", command=delete_preset).pack(side='left', fill='x', expand=True, padx=1)
+
+    load_presets() # Load initially
+
     options_frame = tk.LabelFrame(left_column, text="Video Options")
     options_frame.pack(fill="x", pady=5)
     decode_frame = tk.LabelFrame(options_frame, text="Decoding Mode")
@@ -808,7 +978,8 @@ def generate_samples(settings):
             temp_clip = temp.name
         
         print(f"Creating temporary 10-second clip...")
-        ffmpeg_cmd = ["ffmpeg", "-hide_banner", "-y", "-ss", str(start_time), "-i", source_file, "-t", "10", "-map", "0", "-c", "copy", temp_clip]
+        # Only map video and audio streams. Skip subtitles as they cause muxing issues with .mkv temp files (e.g. mov_text).
+        ffmpeg_cmd = ["ffmpeg", "-hide_banner", "-y", "-ss", str(start_time), "-i", source_file, "-t", "10", "-map", "0:v", "-map", "0:a?", "-c", "copy", temp_clip]
         subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
         
         for task in sorted(tasks, key=lambda x: int(x.get('qvbr', x.get('cqp_i')))):
