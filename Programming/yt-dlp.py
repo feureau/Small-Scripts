@@ -1096,8 +1096,8 @@ def normalize_url(url):
     if '://' in url:
         return url
         
-    # YouTube Playlist ID: Usually 34 chars starting with PL, but can be other 2-letter prefixes.
-    if re.match(r'^[A-Z]{2}[a-zA-Z0-9_-]{16,}$', url):
+    # YouTube Playlist ID: Usually 34 chars starting with PL, but can be other 2-letter prefixes like RD (Mixes).
+    if re.match(r'^[A-Z]{2}[a-zA-Z0-9_-]{12,}$', url):
         return f"https://www.youtube.com/playlist?list={url}"
         
     # YouTube Video ID: Exactly 11 characters.
