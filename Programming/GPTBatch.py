@@ -995,14 +995,24 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             original_path = filepaths_group[0]
             
             directory = os.path.dirname(original_path)
-            ext = os.path.splitext(original_path)[1]
+            orig_base = os.path.basename(original_path)
+            orig_stem, ext = os.path.splitext(orig_base)
             
-            new_filename = f"{new_stem}{ext}"
+            method = kwargs.get('rename_method', 'full')
+            
+            if method == 'prefix':
+                base_candidate = f"{new_stem}{orig_stem}"
+            elif method == 'suffix':
+                base_candidate = f"{orig_stem}{new_stem}"
+            else:
+                base_candidate = new_stem
+
+            new_filename = f"{base_candidate}{ext}"
             new_path = os.path.join(directory, new_filename)
             
             counter = 1
             while os.path.exists(new_path) and os.path.normpath(new_path) != os.path.normpath(original_path):
-                 new_path = os.path.join(directory, f"{new_stem}_{counter}{ext}")
+                 new_path = os.path.join(directory, f"{base_candidate}_{counter}{ext}")
                  counter += 1
             
             # 3. Rename
@@ -1240,8 +1250,7 @@ class AppGUI(tk.Tk):
         
         # Rename Mode
         self.rename_mode_var = tk.BooleanVar(value=False)
-        
-        self.rename_mode_var = tk.BooleanVar(value=False)
+        self.rename_method_var = tk.StringVar(value='full')
         
         # --- NEW: Image & Format Settings ---
         self.enable_img_conversion_var = tk.BooleanVar(value=False) # Master Toggle
@@ -1362,19 +1371,26 @@ class AppGUI(tk.Tk):
         self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
         self.rename_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
+        # Rename Options
+        self.rename_opts_frame = ttk.Frame(tab_out)
+        self.rename_opts_frame.grid(row=8, column=0, columnspan=2, sticky="w", padx=(20, 0))
+        ttk.Radiobutton(self.rename_opts_frame, text="Full Rename", variable=self.rename_method_var, value="full").pack(side=tk.LEFT)
+        ttk.Radiobutton(self.rename_opts_frame, text="Prefix", variable=self.rename_method_var, value="prefix").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(self.rename_opts_frame, text="Suffix", variable=self.rename_method_var, value="suffix").pack(side=tk.LEFT)
+
         # Upload Mode Radio Buttons
-        ttk.Label(tab_out, text="Upload Mode:").grid(row=8, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(tab_out, text="Upload Mode:").grid(row=9, column=0, sticky="w", pady=(5, 0))
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=8, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        u_frame.grid(row=9, column=1, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
         ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
 
         self.stream_check = ttk.Checkbutton(tab_out, text="Stream Output to Console", variable=self.stream_var)
-        self.stream_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.stream_check.grid(row=10, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=10, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=11, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
@@ -1540,6 +1556,7 @@ class AppGUI(tk.Tk):
             set_var(self.delay_sec_var, 'delay_sec', 0)
             set_var(self.upload_mode_var, 'upload_mode', 'parallel')
             set_var(self.rename_mode_var, 'rename_mode', False)
+            set_var(self.rename_method_var, 'rename_method', 'full')
             
             self.toggle_safety() # Refresh UI state
             self.ollama_search_var.set(False)
@@ -1581,7 +1598,9 @@ class AppGUI(tk.Tk):
             'img_max_dim': self.img_max_dim_var.get(),
             'force_conversion': self.force_conversion_var.get(),
             'save_img_to_output': self.save_img_to_output_var.get(),
+            'save_img_to_output': self.save_img_to_output_var.get(),
             'rename_mode': self.rename_mode_var.get(),
+            'rename_method': self.rename_method_var.get(),
             'enable_thinking': self.thinking_var.get()
         }
 
@@ -1650,6 +1669,12 @@ class AppGUI(tk.Tk):
         self.ext_ent.config(state=state)
         self.over_check.config(state=state)
         self.group_check.config(state=state)
+
+        # Rename Options State
+        r_state = "normal" if is_rename else "disabled"
+        for child in self.rename_opts_frame.winfo_children():
+            try: child.configure(state=r_state)
+            except: pass
         
         # Force Grouping to False/1 if Rename Mode is ON
         if is_rename:
@@ -1783,6 +1808,7 @@ class AppGUI(tk.Tk):
                 'job_delay_seconds': total_delay,
                 'sequential_upload': (self.upload_mode_var.get() == 'sequential'),
                 'rename_mode': self.rename_mode_var.get(),
+                'rename_method': self.rename_method_var.get(),
                 'enable_img_conversion': self.enable_img_conversion_var.get(),
                 'temp_img_fmt': self.temp_img_fmt_var.get(),
                 'img_quality': self.img_quality_var.get(),
