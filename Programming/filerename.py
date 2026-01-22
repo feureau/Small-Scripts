@@ -123,25 +123,29 @@ python filerename.py [file_pattern] [old_string] [new_string] [options]
 import os
 import sys
 import glob
+import re
 
 def display_help():
     """Prints the help message."""
-    print("Usage: python FileRename.py [file_pattern] old_string new_string [-s]")
+    print("Usage: python FileRename.py [file_pattern] old_string new_string [-s] [-r]")
     print("\nRecursively renames files by replacing a string in their names.")
     print("The search is RECURSIVE BY DEFAULT.")
     print("\nArguments:")
     print("  file_pattern   The file pattern to match (e.g., *.txt, \"**/*.log\").")
-    print("  old_string     The string to be replaced in the filenames.")
+    print("  old_string     The string (or regex pattern) to be replaced in the filenames.")
     print("  new_string     The string to replace with. Use \"\" for an empty string.")
     print("\nOptions:")
     print("  -s, --shallow    Disables recursion and searches ONLY the current directory.")
+    print("  -r, --regex      Treats old_string as a Regular Expression.")
     print("\nExamples:")
     print("  # Recursively rename all .txt files in current folder and all subfolders")
     print("  python FileRename.py *.txt draft final")
     print("\n  # Rename .jpg files ONLY in the current folder (shallow search)")
     print("  python FileRename.py *.jpg vacation holiday -s")
+    print("\n  # Use Regex to remove a date pattern (e.g., 20240415) from filenames")
+    print("  python FileRename.py * \" - \\d{8}\" \"\" -r")
 
-def rename_files(files_to_process, old_string, new_string):
+def rename_files(files_to_process, old_string, new_string, use_regex=False):
     """
     Proposes and executes file renames after user confirmation.
     """
@@ -156,14 +160,29 @@ def rename_files(files_to_process, old_string, new_string):
 
         original_filename = os.path.basename(original_path)
         
-        if old_string in original_filename:
-            new_filename = original_filename.replace(old_string, new_string)
+        match_found = False
+        new_filename = original_filename
+
+        if use_regex:
+            try:
+                if re.search(old_string, original_filename):
+                    new_filename = re.sub(old_string, new_string, original_filename)
+                    match_found = (new_filename != original_filename)
+            except re.error as e:
+                print(f"Error in Regex pattern: {e}")
+                return
+        else:
+            if old_string in original_filename:
+                new_filename = original_filename.replace(old_string, new_string)
+                match_found = True
+
+        if match_found:
             directory = os.path.dirname(original_path)
             new_path = os.path.join(directory, new_filename)
             changes.append((original_path, new_path))
 
     if not changes:
-        print(f"\nScan complete. Found {len(files_to_process)} file(s) matching the pattern, but none contained the string: '{old_string}'.")
+        print(f"\nScan complete. Found {len(files_to_process)} file(s) matching the pattern, but none contained the string/pattern: '{old_string}'.")
         return
 
     print("\nThe following files will be renamed:")
@@ -205,6 +224,13 @@ def main():
         if '-s' in args: args.remove('-s')
         if '--shallow' in args: args.remove('--shallow')
     
+    # Regex support
+    use_regex = False
+    if '-r' in args or '--regex' in args:
+        use_regex = True
+        if '-r' in args: args.remove('-r')
+        if '--regex' in args: args.remove('--regex')
+    
     if len(args) < 3:
         print("\nError: Invalid number of arguments.")
         display_help()
@@ -218,7 +244,7 @@ def main():
     pattern = file_inputs[0]
     
     print(f"Searching for files matching pattern: '{pattern}'")
-    print(f"Replacing string: '{old_string}' -> '{new_string}'")
+    print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
     print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-s flag used)'}")
     print("---------------------------------")
     
@@ -227,7 +253,7 @@ def main():
     pathname = os.path.join('**', pattern) if recursive else pattern
     files_to_process = glob.glob(pathname, recursive=recursive)
         
-    rename_files(files_to_process, old_string, new_string)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex)
 
 if __name__ == "__main__":
     main()
