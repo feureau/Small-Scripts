@@ -1,16 +1,16 @@
 import fitz  # PyMuPDF
-
+import argparse
 import pathlib
-import os
 import sys
 
-def extract_images_from_pdfs(pdf_files):
+def extract_images_from_pdfs(pdf_files, output_dir=None):
     """
     Extracts embedded images from each PDF in the provided list
-    and saves them into dedicated subfolders relative to the PDF's location.
+    and saves them into dedicated subfolders.
 
     Args:
         pdf_files (list of pathlib.Path): List of PDF files to process.
+        output_dir (pathlib.Path, optional): Optional output directory override.
     """
     pdf_count = 0
     total_images_extracted = 0
@@ -26,10 +26,21 @@ def extract_images_from_pdfs(pdf_files):
         images_in_pdf = 0
         print(f"\n--- Processing PDF ({pdf_count}/{len(pdf_files)}): {pdf_path.name} ---")
 
-        # Create a subdirectory for the images from this PDF
-        output_folder_name = f"{pdf_path.stem}_images"
-        output_path = pdf_path.parent / output_folder_name
-        output_path.mkdir(exist_ok=True) # Create folder, ignore if already exists
+        # Determine output path logic
+        if output_dir:
+            if len(pdf_files) == 1:
+                # Single file with explicit output -> Use exactly as provided
+                output_path = output_dir
+            else:
+                # Multiple files with output root -> Create subfolder inside root
+                output_folder_name = f"{pdf_path.stem}_extract"
+                output_path = output_dir / output_folder_name
+        else:
+            # No output flag -> Create folder alongside PDF
+            output_folder_name = f"{pdf_path.stem}_extract"
+            output_path = pdf_path.parent / output_folder_name
+
+        output_path.mkdir(parents=True, exist_ok=True)
 
         try:
             # Open the PDF file
@@ -73,7 +84,7 @@ def extract_images_from_pdfs(pdf_files):
                         print(f"    - ERROR processing image {img_index + 1} (xref {xref}) on page {page_index + 1}: {img_err}")
 
             pdf_document.close()
-            print(f"  -> Extracted {images_in_pdf} image(s) to folder '{output_folder_name}'")
+            print(f"  -> Extracted {images_in_pdf} image(s) to folder '{output_path}'")
             total_images_extracted += images_in_pdf
 
         except Exception as pdf_err:
@@ -85,18 +96,36 @@ def extract_images_from_pdfs(pdf_files):
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    pdf_to_process = []
+    parser = argparse.ArgumentParser(description="Extract images from PDF files.")
+    parser.add_argument("files", nargs="*", help="PDF files to process. If empty, scans current directory.")
+    parser.add_argument("-o", "--output", help="Output directory. For single files, this is the destination folder. For multiple files, this is the root folder.")
 
-    if not args:
+    args = parser.parse_args()
+
+    pdf_to_process = []
+    
+    # Resolve output directory if provided
+    output_dir = pathlib.Path(args.output) if args.output else None
+
+    if not args.files:
         # Default behavior: scan current working directory
         cwd = pathlib.Path.cwd()
         print(f"No arguments provided. Scanning for PDF files in: {cwd}")
         pdf_to_process.extend(cwd.glob('*.pdf'))
     else:
-        for arg in args:
+        for arg in args.files:
             path = pathlib.Path(arg)
-            if path.is_file():
+            # Glob expansion support for shells that don't do it automatically (like Windows CMD)
+            # However, argparse usually receives expanded lists if the shell handles it (bash/zsh/powershell).
+            # For robustness, we check if it contains wildcards or just treat as file/dir.
+            if '*' in arg or '?' in arg:
+                 # Manually globbing if passed as string literal or from non-expanding shell
+                 # This is a bit of an edge case but good for robustness
+                 parent = pathlib.Path(arg).parent
+                 if parent.name == '': parent = pathlib.Path('.')
+                 pattern = pathlib.Path(arg).name
+                 pdf_to_process.extend(parent.glob(pattern))
+            elif path.is_file():
                 if path.suffix.lower() == '.pdf':
                     pdf_to_process.append(path)
                 else:
@@ -104,12 +133,23 @@ if __name__ == "__main__":
             elif path.is_dir():
                 print(f"Scanning directory: {path}")
                 pdf_to_process.extend(path.glob('*.pdf'))
-            else:
-                print(f"Argument not found (skipping): {arg}")
+            elif not path.exists():
+                 # Attempt to treat as glob pattern if path doesn't exist
+                 # e.g. user typed *.pdf in a shell that didn't expand it
+                 parent = path.parent
+                 if str(parent) == '.': parent = pathlib.Path.cwd()
+                 pattern = path.name
+                 found = list(parent.glob(pattern))
+                 if found:
+                     pdf_to_process.extend([p for p in found if p.suffix.lower() == '.pdf'])
+                 else:
+                     print(f"Argument not found (skipping): {arg}")
 
     if pdf_to_process:
         # Sort to ensure consistent processing order
         pdf_to_process.sort()
-        extract_images_from_pdfs(pdf_to_process)
+        # Filter duplicates just in case
+        pdf_to_process = list(dict.fromkeys(pdf_to_process))
+        extract_images_from_pdfs(pdf_to_process, output_dir)
     else:
         print("No valid PDF files found to process.")
