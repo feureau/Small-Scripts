@@ -256,20 +256,38 @@ def main():
     parser.add_argument("--sampling-factor", default=DEFAULT_SAMPLING_FACTOR, help="Chroma subsampling factor (e.g. 4:2:0)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Path to ICC color profile")
     parser.add_argument("-j", "--jobs", default=DEFAULT_JOBS, help="Number of parallel jobs (default: auto)")
+    parser.add_argument("-R", "--recursive", action="store_true", help="Recursively scan subdirectories")
     args = parser.parse_args()
 
     # Build file list
     # Filter out potential empty strings from Windows shell/registry associations
     valid_patterns = [p for p in args.patterns if p.strip()] if args.patterns else []
 
-    if valid_patterns:
-        input_files = []
-        for p in valid_patterns:
-            input_files.extend(glob.glob(p))
+    input_files = []
+    
+    if args.recursive:
+        # Recursive scanning
+        if valid_patterns:
+            for p in valid_patterns:
+                # If the user provided a pattern like "*.png", we want "**/*.png"
+                # If they already provided a recursive pattern, trust it, otherwise prepend "**/"
+                if "**" in p:
+                    input_files.extend(glob.glob(p, recursive=True))
+                else:
+                    # glob.glob("**/" + p, recursive=True) handles both current dir and subdirs
+                    input_files.extend(glob.glob(os.path.join("**", p), recursive=True))
+        else:
+            # Recursive scan for all supported extensions
+            for ext in SUPPORTED_EXTENSIONS:
+                input_files.extend(glob.glob(os.path.join("**", f"*{ext}"), recursive=True))
     else:
-        input_files = []
-        for ext in SUPPORTED_EXTENSIONS:
-            input_files.extend(glob.glob(f"*{ext}"))
+        # Standard non-recursive scanning
+        if valid_patterns:
+            for p in valid_patterns:
+                input_files.extend(glob.glob(p))
+        else:
+            for ext in SUPPORTED_EXTENSIONS:
+                input_files.extend(glob.glob(f"*{ext}"))
 
     if not input_files:
         print("No matching input files found.")
