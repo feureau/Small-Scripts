@@ -221,6 +221,8 @@ import tempfile
 import math
 from datetime import datetime
 import re
+import threading
+import copy
 
 PRESET_FILENAME = "ingestvideo.preset.json"
 
@@ -484,6 +486,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     inner_frame.columnconfigure(1, weight=1, minsize=350)
     
     # --- Tkinter Variables ---
+    # These variables now represent the *currently displaying* values.
+    # The 'job_settings' dict will store the unique state for each file.
+    
     frame_rate_var = tk.StringVar(value=frame_rate)
     decoding_mode = tk.StringVar(value="Hardware")
     output_color_mode = tk.StringVar(value="Auto (Match Source)")
@@ -497,13 +502,25 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     gop_len = tk.StringVar(value=str(GOP_LENGTH))
     max_processes = tk.StringVar(value="1")
     no_crop_var = tk.BooleanVar(value=False)
-    audio_vars, convert_vars = [], []
+    
+    # Audio vars and structure will be dynamic, but we need holders for the current view
+    audio_vars = [] 
+    convert_vars = []
+    
     crop_w, crop_h, crop_x, crop_y = (tk.StringVar(value=str(v)) for v in crop_params)
     original_crop_w, original_crop_h, original_crop_x, original_crop_y = crop_w.get(), crop_h.get(), crop_x.get(), crop_y.get()
     rate_control_mode = tk.StringVar(value="CQP")
     cqp_i, cqp_p, cqp_b = (tk.StringVar(value=v) for v in [DEFAULT_CQP_I, DEFAULT_CQP_P, DEFAULT_CQP_B])
     bracket_steps = tk.StringVar(value="2")
     step_size = tk.StringVar(value="3")
+
+    # --- Per-Job Settings Storage ---
+    # Key: Absolute File Path
+    # Value: Dict of settings
+    job_settings = {}
+    
+    # Track the currently selected file to know what to save/load
+    current_selected_file = None
     
     # --- Preset Management Variables & Functions ---
     current_preset_name = tk.StringVar(value="")
@@ -663,6 +680,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
         for f in new_files:
             if f not in listbox.get(0, 'end'):
                 listbox.insert('end', f)
+                # Initialize settings for new file with current defaults
+                # (Or we could lazily init them in load_settings)
+
 
     def delete_selected(listbox):
         selected_indices = list(listbox.curselection())
@@ -706,9 +726,170 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
                f"Max CLL: {meta.get('max_cll') or 'N/A'}\n")
         meta_text.config(state='normal'); meta_text.delete("1.0", "end"); meta_text.insert("1.0", txt); meta_text.config(state='disabled')
 
+    def save_settings_for_file(filepath):
+        if not filepath: return
+        
+        # Capture current Audio State
+        # We need to store the *choices* (booleans) relative to the specific tracks of this file.
+        # Since audio_vars are rebuilt dynamically, we store them as a list of dicts or just the bools.
+        # But wait, different files have different tracks.
+        # Simpler approach: Store the list of selected track indices/languages? 
+        # Actually, since we rebuild the UI for each file, 'audio_vars' corresponds to the CURRENT file's tracks.
+        current_audio_state = []
+        # We need to know which tracks are currently on screen. 
+        # The 'audio_vars' list is populated by rebuild_audio_ui.
+        for i, var in enumerate(audio_vars):
+            c_var = convert_vars[i]
+            # specific track info is hard to get back from just the vars without the source info.
+            # But we can just store the boolean arrays. When we load, we apply them index-wise.
+            current_audio_state.append({
+                "selected": var.get(),
+                "convert": c_var.get()
+            })
+
+        job_settings[filepath] = {
+            "decoding_mode": decoding_mode.get(),
+            "frame_rate": frame_rate_var.get(),
+            "output_color_mode": output_color_mode.get(),
+            "ai_upscale_enable": ai_upscale_enable.get(),
+            "resolution_var": resolution_var.get(),
+            "fruc_enable": fruc_enable.get(),
+            "nvvfx_denoise_var": nvvfx_denoise_var.get(),
+            "artifact_enable": artifact_enable.get(),
+            "rate_control_mode": rate_control_mode.get(),
+            "qvbr": qvbr.get(),
+            "cqp_i": cqp_i.get(),
+            "cqp_p": cqp_p.get(),
+            "cqp_b": cqp_b.get(),
+            "gop_len": gop_len.get(),
+            "bracket_steps": bracket_steps.get(),
+            "step_size": step_size.get(),
+            "crop_w": crop_w.get(),
+            "crop_h": crop_h.get(),
+            "crop_x": crop_x.get(),
+            "crop_y": crop_y.get(),
+            "no_crop_var": no_crop_var.get(),
+            "audio_state": current_audio_state
+        }
+
+    def rebuild_audio_ui(filepath):
+        # Clear existing
+        for widget in audio_frame.winfo_children():
+            if widget != btn_frame and widget != audio_status_lbl: # Preserve static frames
+                widget.destroy()
+        
+        audio_vars.clear()
+        convert_vars.clear()
+        
+        # Get tracks
+        try:
+             # Ideally we cache this info so we don't re-probe every click
+             if 'audio_info' not in job_settings.get(filepath, {}):
+                 # If not in settings, maybe we haven't probed it yet?
+                 # For the VERY FIRST file, we have 'audio_streams' passed in.
+                 # For others, we might need to probe.
+                 if filepath == file_list[0] and audio_streams:
+                     tracks = audio_streams
+                 else:
+                     tracks = run_ffprobe_for_audio_streams(filepath)
+             else:
+                 tracks = job_settings[filepath].get('audio_info')
+                 
+             # Store for future
+             if filepath not in job_settings: job_settings[filepath] = {}
+             job_settings[filepath]['audio_info'] = tracks
+             
+        except Exception as e:
+            tk.Label(audio_frame, text=f"Error reading audio: {e}", fg="red").pack()
+            return
+
+        if not tracks:
+             tk.Label(audio_frame, text="No audio tracks found.").pack(padx=5, pady=5)
+             return
+
+        # Load saved state if exists
+        saved_state = job_settings.get(filepath, {}).get('audio_state', [])
+        
+        for i, s in enumerate(tracks):
+            f = tk.Frame(audio_frame); f.pack(fill='x', padx=5, pady=2)
+            lbl = f"Track {s['track_number']}: {s.get('codec_name','N/A')} ({s.get('tags',{}).get('language','N/A')}, {s.get('channels',0)}-ch)"
+            
+            # Default logic: Enable if Eng/Und, else False. 
+            # Or if saved state exists, use that.
+            if i < len(saved_state):
+                is_sel = saved_state[i]['selected']
+                is_conv = saved_state[i]['convert']
+            else:
+                is_sel = (s.get('tags',{}).get('language') in ['eng', 'und', None])
+                is_conv = (s.get('codec_name') != 'ac3')
+
+            var = tk.BooleanVar(value=is_sel); audio_vars.append(var)
+            tk.Checkbutton(f, text=lbl, variable=var).pack(side='left')
+            
+            c_var = tk.BooleanVar(value=is_conv); convert_vars.append(c_var)
+            tk.Checkbutton(f, text="Convert to AC3", variable=c_var).pack(side='right')
+
+    def load_settings_for_file(filepath):
+        nonlocal current_selected_file
+        
+        # 1. Save current (if any)
+        if current_selected_file and current_selected_file != filepath:
+            save_settings_for_file(current_selected_file)
+            
+        current_selected_file = filepath
+        
+        # 2. Defaults if new
+        if filepath not in job_settings:
+            # Initialize with defaults or values from first analysis
+            # To allow "Analyse All" to work before clicking, we might have pre-populated partial settings
+            # So use .setdefault or update existing
+             job_settings.setdefault(filepath, {})
+             
+             # If completely empty (no "Analyse All" run yet), populate with global defaults/current GUI values?
+             # Better: Use the initial values passed to launch_gui for defaults.
+             # But wait, the GUI vars currently hold the values of the PREVIOUS file.
+             # We should probably reset to a "Clean Default" or just copy the previous file's settings (Stickiness).
+             # Stickiness is usually preferred in batch tools.
+             pass 
+
+        s = job_settings[filepath]
+        
+        # Helper to set var safely
+        def set_v(var, key): 
+            if key in s: var.set(s[key])
+            
+        set_v(decoding_mode, "decoding_mode")
+        set_v(frame_rate_var, "frame_rate")
+        set_v(output_color_mode, "output_color_mode")
+        set_v(ai_upscale_enable, "ai_upscale_enable")
+        set_v(resolution_var, "resolution_var")
+        set_v(fruc_enable, "fruc_enable")
+        set_v(nvvfx_denoise_var, "nvvfx_denoise_var")
+        set_v(artifact_enable, "artifact_enable")
+        set_v(rate_control_mode, "rate_control_mode")
+        set_v(qvbr, "qvbr")
+        set_v(cqp_i, "cqp_i")
+        set_v(cqp_p, "cqp_p")
+        set_v(cqp_b, "cqp_b")
+        set_v(gop_len, "gop_len")
+        set_v(bracket_steps, "bracket_steps")
+        set_v(step_size, "step_size")
+        set_v(crop_w, "crop_w")
+        set_v(crop_h, "crop_h")
+        set_v(crop_x, "crop_x")
+        set_v(crop_y, "crop_y")
+        set_v(no_crop_var, "no_crop_var")
+        
+        # Rebuild Audio
+        rebuild_audio_ui(filepath)
+        
+        # Update Metadata Display
+        update_metadata_display(filepath)
+
     def on_file_select(event):
         if file_listbox.curselection():
-            update_metadata_display(file_listbox.get(file_listbox.curselection()[0]))
+            selection = file_listbox.get(file_listbox.curselection()[0])
+            load_settings_for_file(selection)
     
     # --- Top Frame: File List ---
     file_frame = tk.LabelFrame(inner_frame, text="Input Files")
@@ -724,6 +905,47 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     tk.Button(file_controls, text="Move Up", command=lambda: move_up(file_listbox)).pack(fill='x', pady=2)
     tk.Button(file_controls, text="Move Down", command=lambda: move_down(file_listbox)).pack(fill='x', pady=2)
     tk.Button(file_controls, text="Delete Selected", command=lambda: delete_selected(file_listbox)).pack(fill='x', pady=2)
+    
+    # [NEW] Analyse All Button
+    def run_analyse_all():
+        files = file_listbox.get(0, 'end')
+        if not files: return
+        
+        def _worker():
+            total = len(files)
+            print(f"\n--- Starting Batch Analysis for {total} files ---")
+            for i, fp in enumerate(files):
+                print(f"[{i+1}/{total}] Analyzing: {os.path.basename(fp)}")
+                
+                # Get resolution and format info
+                try:
+                    raw_meta = get_ffprobe_metadata(fp)
+                    info = extract_video_info(raw_meta)
+                    w, h = info["width"], info["height"]
+                    if not w or not h: continue
+                    
+                    # Store basic info
+                    if fp not in job_settings: job_settings[fp] = {}
+                    
+                    # Detect Crop
+                    cw, ch, cx, cy = get_crop_parameters(fp, w, h, "24" if not info["is_hdr"] else "128")
+                    job_settings[fp]["crop_w"] = cw
+                    job_settings[fp]["crop_h"] = ch
+                    job_settings[fp]["crop_x"] = cx
+                    job_settings[fp]["crop_y"] = cy
+                    
+                except Exception as e:
+                    print(f"Error analyzing {fp}: {e}")
+            
+            print("\n--- Batch Analysis Complete. Please check individual files. ---")
+            # Refresh current view if needed
+            if current_selected_file:
+                root.after(0, lambda: load_settings_for_file(current_selected_file))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    tk.Button(file_controls, text="Analyse All", command=run_analyse_all, bg="#e1f5fe").pack(fill='x', pady=(10, 2))
+
 
     # --- Column Frames ---
     left_column = tk.Frame(inner_frame)
@@ -833,23 +1055,48 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     x_entry = tk.Entry(crop_frame, textvariable=crop_x); x_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
     tk.Label(crop_frame, text="Y Offset:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
     y_entry = tk.Entry(crop_frame, textvariable=crop_y); y_entry.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
+    
+    # [NEW] Analyse Selected Button
+    def run_analyse_current():
+        if not current_selected_file: return
+        
+        def _worker():
+            print(f"\nAnalyzing current file: {os.path.basename(current_selected_file)}")
+            try:
+                raw_meta = get_ffprobe_metadata(current_selected_file)
+                info = extract_video_info(raw_meta)
+                w, h = info["width"], info["height"]
+                if w and h:
+                    cw, ch, cx, cy = get_crop_parameters(current_selected_file, w, h, "24" if not info["is_hdr"] else "128")
+                    
+                    # Update variable on main thread
+                    def _update():
+                        if current_selected_file: # Ensure selection hasn't changed
+                             crop_w.set(cw); crop_h.set(ch); crop_x.set(cx); crop_y.set(cy)
+                             print("GUI updated with new crop parameters.")
+                    root.after(0, _update)
+            except Exception as e:
+                print(f"Error: {e}")
+                
+        threading.Thread(target=_worker, daemon=True).start()
+
+    tk.Button(crop_frame, text="Analyse Crop", command=run_analyse_current, bg="#e1f5fe").grid(row=0, column=2, rowspan=4, padx=5, pady=5, sticky="ns")
     tk.Checkbutton(crop_frame, text="No Crop", variable=no_crop_var).grid(row=4, column=0, columnspan=2, pady=5, sticky="w", padx=5)
     audio_frame = tk.LabelFrame(right_column, text="Audio Tracks")
     audio_frame.pack(fill="x", pady=5)
+    # Status/Warning Label
+    audio_status_lbl = tk.Label(audio_frame, text="", fg="gray")
+    audio_status_lbl.pack(side='top')
+    
     btn_frame = tk.Frame(audio_frame); btn_frame.pack(fill='x', padx=5, pady=5)
     tk.Button(btn_frame, text="Select All", command=lambda: [v.set(True) for v in audio_vars]).pack(side='left', padx=2)
     tk.Button(btn_frame, text="Clear All", command=lambda: [v.set(False) for v in audio_vars]).pack(side='left', padx=2)
     tk.Button(btn_frame, text="Copy All", command=lambda: [v.set(False) for v in convert_vars]).pack(side='left', padx=2)
     tk.Button(btn_frame, text="Convert All", command=lambda: [v.set(True) for v in convert_vars]).pack(side='left', padx=2)
-    if audio_streams:
-        for s in audio_streams:
-            f = tk.Frame(audio_frame); f.pack(fill='x', padx=5, pady=2)
-            lbl = f"Track {s['track_number']}: {s.get('codec_name','N/A')} ({s.get('tags',{}).get('language','N/A')}, {s.get('channels',0)}-ch)"
-            var = tk.BooleanVar(value=(s.get('tags',{}).get('language') == 'eng')); audio_vars.append(var)
-            tk.Checkbutton(f, text=lbl, variable=var).pack(side='left')
-            c_var = tk.BooleanVar(value=(s.get('codec_name') != 'ac3')); convert_vars.append(c_var)
-            tk.Checkbutton(f, text="Convert to AC3", variable=c_var).pack(side='right')
-    else: tk.Label(audio_frame, text="No audio tracks found.").pack(padx=5, pady=5)
+    
+    # We don't populate audio initially here because load_settings_for_file will do it.
+    # But we need to make sure the first file is loaded at startup.
+
 
     # --- Bottom Frame and Bindings ---
     tk.Checkbutton(bottom_frame, text="Put Computer to Sleep on Completion", variable=sleep_enable).grid(row=0, column=0, columnspan=2, pady=5, sticky="w")
@@ -857,7 +1104,20 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     tk.Button(bottom_frame, text="Start Processing", command=lambda: gather_and_run(start_processing)).grid(row=1, column=1, sticky="ew", padx=(2,0), pady=2)
     
     file_listbox.bind("<<ListboxSelect>>", on_file_select)
-    if file_list: file_listbox.select_set(0); on_file_select(None)
+    
+    # Initialize First File properly
+    if file_list: 
+        file_listbox.select_set(0)
+        # Pre-seed the first file settings with the arguments passed to launch_gui to avoid losing initial detection
+        # (Since we are deleting the initial population code)
+        job_settings[file_list[0]] = {
+             "frame_rate": frame_rate,
+             "crop_w": crop_params[0], "crop_h": crop_params[1], "crop_x": crop_params[2], "crop_y": crop_params[3],
+             'audio_info': audio_streams # Initial audio streams
+        }
+        # Trigger load
+        load_settings_for_file(file_list[0])
+
 
     def update_color_ui(*args):
         mode = output_color_mode.get()
@@ -923,34 +1183,137 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     def gather_and_run(action_function):
         files = list(file_listbox.get(0, 'end'))
         if not files: print("ERROR: No video files selected."); return
-        tracks = [dict(s, convert_to_ac3=convert_vars[i].get()) for i, s in enumerate(audio_streams) if audio_vars[i].get()]
-        try:
-            w, h, x, y = (int(v.get()) for v in [crop_w, crop_h, crop_x, crop_y])
-            w -= w % 2; h -= h % 2; x -= x % 2; y -= y % 2
-            if any(v < 0 for v in [w,h,x,y]) or (x+w > input_width) or (y+h > input_height): raise ValueError
-        except ValueError: print("ERROR: Invalid crop parameters."); return
         
-        settings = {
-            "files": files, "decode_mode": decoding_mode.get(),
-            "output_color_mode": output_color_mode.get(), "ai_upscale": ai_upscale_enable.get(),
-            "is_source_sdr": is_source_sdr,
-            "resolution_choice": resolution_var.get(), "fruc_enable": fruc_enable.get(),
-            "denoise_enable": nvvfx_denoise_var.get(), "artifact_enable": artifact_enable.get(),
-            "rate_control_mode": rate_control_mode.get(), "qvbr": qvbr.get(),
-            "cqp_i": cqp_i.get(), "cqp_p": cqp_p.get(), "cqp_b": cqp_b.get(),
-            "gop_len": gop_len.get(), "max_processes": max_processes.get(),
-            "crop_params": {"crop_w":w, "crop_h":h, "crop_x":x, "crop_y":y},
-            "audio_tracks": tracks, "sleep_after_processing": sleep_enable.get(),
-            "bracket_steps": bracket_steps.get(), "step_size": step_size.get(),
-            "frame_rate": frame_rate_var.get()
-        }
-        action_function(settings)
+        # Save current state before gathering
+        if current_selected_file: save_settings_for_file(current_selected_file)
         
-    def start_processing(settings):
+        final_batch_settings = []
+        
+        for fp in files:
+            # 1. Get Settings for this file
+            # If never visited, we need to init defaults OR run a quick probe if settings are missing?
+            # Ideally, we should at least check if settings exist. 
+            # If "Analyse All" wasn't run and file wasn't clicked, it might be empty.
+            if fp not in job_settings:
+                 # Minimal Init (Probe resolution at least?)
+                 pass # For now, we assume user clicked or defaults are acceptable. 
+                      # But wait, defaults will be missing.
+                      # We need a 'merge_with_defaults' logic.
+            
+            s = job_settings.get(fp, {})
+            
+            # Merge with CURRENT GUI values as fallback? No, fallback to a "global default"
+            # But the 'default' is basically what the variables were initialized with.
+            # Let's create a Helper to safely get value or default.
+            def get_s(key, default): return s.get(key, default)
+            
+            # If audio_info is missing (never clicked), we might need to probe it NOW?
+            # For batch processing, we can do lazy probing inside the worker, 
+            # BUT we need to know the 'audio_tracks' selection.
+            # If the user never saw the file, we can assume "Default Selection" (Eng/Und).
+            
+            # Construct the settings object for this specific file
+            # We must use the 's' dict, NOT the Tkinter variables (which are only for the *visible* file)
+            
+            # Audio Tracks construction
+            # We need the track List (audio_info) and the Selection State (audio_state)
+            tracks_info = s.get('audio_info')
+            if not tracks_info:
+                 print(f"Probing metadata for {os.path.basename(fp)}...")
+                 try: tracks_info = run_ffprobe_for_audio_streams(fp)
+                 except: tracks_info = []
+            
+            audio_state = s.get('audio_state', [])
+            final_tracks = []
+            if tracks_info:
+                for i, track in enumerate(tracks_info):
+                    # Determine selection
+                    if i < len(audio_state):
+                         sel = audio_state[i]['selected']
+                         conv = audio_state[i]['convert']
+                    else:
+                         # Default Logic
+                         sel = (track.get('tags',{}).get('language') in ['eng', 'und', None])
+                         conv = (track.get('codec_name') != 'ac3')
+                    
+                    if sel:
+                        t = track.copy()
+                        t['convert_to_ac3'] = conv
+                        final_tracks.append(t)
+            
+            # Crop
+            try:
+                # Fallback to 0 if missing
+                cw = int(get_s('crop_w', 0) if not get_s('no_crop_var', False) else input_width) # input_width is risky here if different file
+                # If file diff, input_width is wrong. We need specific file width. 
+                # But if we haven't probed, we don't know it.
+                # Assuming 'No Crop' means full width/height. 
+                
+                ch = int(get_s('crop_h', 0))
+                cx = int(get_s('crop_x', 0))
+                cy = int(get_s('crop_y', 0))
+                
+                # Sanity: Ensure even numbers
+                cw -= cw % 2; ch -= ch % 2; cx -= cx % 2; cy -= cy % 2
+            except: cw,ch,cx,cy = 0,0,0,0
+
+            file_setting = {
+                "file_path": fp, # [NEW] Store path
+                "decode_mode": get_s("decoding_mode", "Hardware"),
+                "output_color_mode": get_s("output_color_mode", "Auto (Match Source)"),
+                "ai_upscale": get_s("ai_upscale_enable", False),
+                "is_source_sdr": get_s("is_source_sdr", True), # Wait, we need to KNOW if this specific file is SDR.
+                # Is is_source_sdr stored? No. We need to probe or store it.
+                # We can store 'is_source_sdr' in job_settings too.
+                
+                "resolution_choice": get_s("resolution_var", "No Resize"),
+                "fruc_enable": get_s("fruc_enable", False),
+                "denoise_enable": get_s("nvvfx_denoise_var", False),
+                "artifact_enable": get_s("artifact_enable", False),
+                "rate_control_mode": get_s("rate_control_mode", "CQP"),
+                "qvbr": get_s("qvbr", default_qvbr),
+                "cqp_i": get_s("cqp_i", DEFAULT_CQP_I),
+                "cqp_p": get_s("cqp_p", DEFAULT_CQP_P),
+                "cqp_b": get_s("cqp_b", DEFAULT_CQP_B),
+                "gop_len": get_s("gop_len", GOP_LENGTH),
+                "max_processes": max_processes.get(), # Global setting, keeps using the GUI var
+                "crop_params": {"crop_w":cw, "crop_h":ch, "crop_x":cx, "crop_y":cy},
+                "audio_tracks": final_tracks,
+                "sleep_after_processing": sleep_enable.get(), # Global
+                "bracket_steps": get_s("bracket_steps", "2"),
+                "step_size": get_s("step_size", "3"),
+                "frame_rate": get_s("frame_rate", "")
+            }
+            
+            # Color Mode Logic Check/Probe
+            # If we don't have 'is_source_sdr' in settings, update it
+            # (We only have a global 'is_source_sdr' passed to launch_gui which was for the FIRST file)
+            # We really should store it per file.
+            # Let's add a quick probe if missing.
+            if 'is_source_sdr' not in s:
+                 # Probe color info
+                 try: 
+                     meta = get_video_color_info(fp)
+                     file_setting['is_source_sdr'] = not meta.get('is_hdr', False)
+                 except: pass
+            else:
+                 file_setting['is_source_sdr'] = s['is_source_sdr']
+
+            final_batch_settings.append(file_setting)
+            
+        action_function(final_batch_settings)
+
+        
+    def start_processing(batch_settings_list):
         root.destroy()
         print("\nSettings collected. Starting processing...")
-        process_batch(settings["files"], settings)
-        if settings.get("sleep_after_processing"):
+        # Since process_batch expects (files, settings), but now we have individual settings...
+        # We need to update process_batch to handle a LIST of settings objects.
+        process_batch(batch_settings_list) 
+        
+        # Check sleep from the first setting (or last)
+        if batch_settings_list and batch_settings_list[0].get("sleep_after_processing"):
+
             print("Putting the computer to sleep...")
             cmd = {"Windows": "rundll32.exe powrprof.dll,SetSuspendState 0,1,0", "Linux": "systemctl suspend", "Darwin": "pmset sleepnow"}.get(platform.system())
             if cmd: os.system(cmd)
@@ -1071,8 +1434,12 @@ def execute_nvencc(input_file, output_file, settings):
         print(error_msg)
         return False, quoted_cmd, error_msg
 
-def generate_samples(settings):
-    source_file = settings["files"][0]
+def generate_samples(settings_list):
+    # Use the first file's settings for sample generation
+    if not settings_list: return
+    settings = settings_list[0]
+    
+    source_file = settings["file_path"]
     base_name = os.path.splitext(os.path.basename(source_file))[0]
     output_dir = os.path.join(os.path.dirname(source_file), OUTPUT_SUBDIR)
     os.makedirs(output_dir, exist_ok=True)
@@ -1158,7 +1525,8 @@ def generate_samples(settings):
     
     print("\n--- Sample Generation Complete ---")
 
-def process_video(file_path, settings):
+def process_video(settings):
+    file_path = settings["file_path"]
     output_dir = os.path.join(os.path.dirname(file_path), OUTPUT_SUBDIR)
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -1196,7 +1564,7 @@ def process_video(file_path, settings):
         log.write("II. USER SETTINGS\n")
         log.write("="*70 + "\n")
         log_settings = settings.copy()
-        log_settings.pop('files', None) # Don't need to list all files in every log
+        # log_settings.pop('files', None) # No longer needed as we don't have 'files' list
         log.write(json.dumps(log_settings, indent=4))
         log.write("\n\n")
 
@@ -1206,15 +1574,18 @@ def process_video(file_path, settings):
         log.write(f"Command:\n{command_str}\n\n")
         log.write(f"Console Output:\n{console_out}\n")
 
-def process_wrapper(args):
-    process_video(*args)
+def process_wrapper(settings):
+    process_video(settings)
 
-def process_batch(video_files, settings):
+def process_batch(settings_list):
+    if not settings_list: return
+    
+    # Use global max_processes from the first settings object (assuming consistent global config)
     pool_size = 1
-    try: pool_size = int(settings.get("max_processes", "1"))
+    try: pool_size = int(settings_list[0].get("max_processes", "1"))
     except ValueError: pass
         
-    tasks = [(vf, settings) for vf in video_files]
+    tasks = settings_list
     if pool_size > 1:
         print(f"Using multiprocessing with {pool_size} processes...")
         with Pool(pool_size) as p: p.map(process_wrapper, tasks)
