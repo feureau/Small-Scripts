@@ -204,7 +204,17 @@ def print_report():
 
     print("="*60)
 
-def upload_worker(identifier, file_data, metadata=None, position=0):
+
+try:
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+except ImportError:
+    pass # Managed in main check
+
+# ... (Previous imports)
+
+def upload_worker(identifier, file_data, metadata=None, position=0, session=None):
     remote_key, local_path = file_data
     
     if shutdown_event.is_set():
@@ -220,50 +230,112 @@ def upload_worker(identifier, file_data, metadata=None, position=0):
     # leave=False cleans up the bar line when done
     with tqdm(total=file_size, unit='B', unit_scale=True, desc=display_name, 
               position=position, leave=False, dynamic_ncols=True) as bar:
-        try:
-            wrapped_file = ProgressWrapper(local_path, bar)
-            files_arg = {remote_key: wrapped_file}
-            
-            r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=5)
-            
-            wrapped_file.close()
+        
+        # RETRY LOOP for Rate Limits
+        max_retries = 10
+        attempt = 0
+        backoff_time = 30 # Start with 30s wait for rate limits
+        
+        while attempt < max_retries:
+            wrapped_file = None
+            try:
+                wrapped_file = ProgressWrapper(local_path, bar)
+                files_arg = {remote_key: wrapped_file}
+                
+                r = None
+                # Use the passed session if available to recycle connections
+                if session:
+                    # We must use the Item-level API to pass the session
+                    # 'session' here is expected to be an ArchiveSession
+                    item = get_item(identifier, archive_session=session)
+                    r = item.upload(files=files_arg, metadata=metadata, verbose=False, retries=3)
+                else:
+                    # Fallback to default global upload
+                    r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=3)
+                
+                wrapped_file.close()
 
-            if shutdown_event.is_set():
-                record_result('cancelled', remote_key)
-                return (False, "Cancelled")
+                # CRITICAL LOOPHOLE FIX: Explicitly close responses to free connection pool slots immediately
+                if r:
+                    for resp in r:
+                        resp.close()
 
-            if r and r[0].status_code == 200:
-                record_result('success', remote_key)
-                return (True, remote_key)
-            else:
+                if shutdown_event.is_set():
+                    record_result('cancelled', remote_key)
+                    return (False, "Cancelled")
+
+                if r and r[0].status_code == 200:
+                    record_result('success', remote_key)
+                    return (True, remote_key)
+                
+                # Check for rate limiting in status code (if 429 or 503 wasn't handled by custom adapter)
+                if r and r[0].status_code in [429, 503, 509]:
+                     tqdm.write(f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s...")
+                     time.sleep(backoff_time)
+                     backoff_time = min(backoff_time * 1.5, 300) # Cap at 5 mins
+                     attempt += 1
+                     bar.reset() # Reset progress bar for retry
+                     continue
+
                 code = r[0].status_code if r else "Unknown"
                 record_result('failed', f"{remote_key} (Status {code})")
                 return (False, f"Status {code}")
                 
-        except Exception as e:
-            if shutdown_event.is_set():
-                record_result('cancelled', remote_key)
-                return (False, "Cancelled")
-            
-            record_result('failed', f"{remote_key} ({str(e)})")
-            return (False, str(e))
+            except Exception as e:
+                # Ensure file is closed on exception
+                if wrapped_file: 
+                    try: wrapped_file.close()
+                    except: pass
+                
+                if shutdown_event.is_set():
+                    record_result('cancelled', remote_key)
+                    return (False, "Cancelled")
+                
+                error_str = str(e).lower()
+                # Check specifically for the bucket queue limit or generic rate requests
+                if "bucket_tasks_queued" in error_str or "reduce your request rate" in error_str or "read timed out" in error_str:
+                    tqdm.write(f"Rate Limit/Timeout hit for {display_name}: {e}. Pausing {backoff_time}s...")
+                    time.sleep(backoff_time)
+                    backoff_time = min(backoff_time * 1.5, 300)
+                    attempt += 1
+                    bar.reset()
+                    continue
+                
+                # Real error
+                tqdm.write(f"Error uploading {remote_key}: {e}") # Print to console properly with tqdm
+                record_result('failed', f"{remote_key} ({str(e)})")
+                return (False, str(e))
+        
+        return (False, "Max Retries Exceeded (Rate Limit)")
+
+
+
+
 
 def main():
     # --- ARGUMENT PARSING ---
     parser = argparse.ArgumentParser(description="Archive.org Smart Uploader & Syncer")
     parser.add_argument("folder", nargs="?", help="Path to local folder")
     parser.add_argument("identifier", nargs="?", help="Unique Archive.org identifier")
-    parser.add_argument("-t", "--threads", type=int, default=5, help="Number of parallel upload threads (default: 5)")
+    parser.add_argument("-t", "--threads", type=int, default=5, help="Number of parallel upload/delete threads (default: 5)")
+    parser.add_argument("-s", "--sync", action="store_true", help="Sync mode (Upload/Update only)")
+    parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
+    parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")
     args = parser.parse_args()
 
     max_workers = args.threads
 
     print(f"--- Archive.org Smart Uploader (iaupload v6.0) ---")
     print(f"--- Threads: {max_workers} ---")
+    if args.sync:
+        print("--- Mode: SYNC (Uploads) ---")
+    if args.orphan_deletion:
+        print("--- Mode: DELETE (Orphan Removal Enabled) ---")
     
     # 0. Auth
     try:
-        if not get_session().access_key:
+        session = get_session()
+        if not session.access_key:
             print("Error: Not logged in. Run 'ia configure'.")
             sys.exit(1)
     except:
@@ -299,11 +371,10 @@ def main():
         is_new_item = False
 
         if item.exists:
-            # Only ask update question if interactive args were not fully provided 
-            # OR just always ask because metadata updates are rare? 
-            # Decision: Always ask, but default to 'n'.
-            if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                metadata = collect_metadata(identifier)
+            # Only ask update question if -m flag is provided
+            if args.metadata:
+                if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
+                    metadata = collect_metadata(identifier)
         else:
             print(f"  > New item detected.")
             is_new_item = True
@@ -315,25 +386,68 @@ def main():
         print("="*30)
         
         script_name = Path(sys.argv[0]).name
-        all_local_files = [p for p in folder_path.rglob('*') if p.is_file() and p.name != script_name]
         
-        remote_map = {}
+        # 3a. Index Local Files
+        print("Indexing local files...")
+        local_file_map = {} # normalized_path -> Path obj
+        for p in folder_path.rglob('*'):
+            if p.is_file() and p.name != script_name:
+                rel_path = p.relative_to(folder_path).as_posix()
+                norm = normalize_path(rel_path)
+                local_file_map[norm] = {'path': p, 'rel_path': rel_path}
+
+        # 3b. Index Remote Files
+        remote_map = {} # normalized_path -> md5
+        remote_content_map = {} # (filename, md5) -> set(normalized_paths)
+        remote_pure_md5_map = {} # md5 -> set(normalized_paths)
+        total_remote_files = 0
+        total_remote_originals = 0
+        
         if item.exists:
             print("Fetching remote signatures...")
+            total_remote_files = len(item.files)
             for f in item.files:
-                if 'md5' in f:
-                    remote_map[normalize_path(f['name'])] = f['md5']
+                if 'name' in f and f['name'] != script_name:
+                    if f['source'] == 'original': # Only consider original files
+                        total_remote_originals += 1
+                        norm_path = normalize_path(f['name'])
+                        f_md5 = f.get('md5')
+                        
+                        remote_map[norm_path] = f_md5
+                        
+                        # Populate content map for smart matching
+                        if f_md5:
+                            f_name = os.path.basename(norm_path)
+                            key = (f_name, f_md5)
+                            if key not in remote_content_map:
+                                remote_content_map[key] = set()
+                            remote_content_map[key].add(norm_path)
 
+                            # Populate pure md5 map for loose smart matching (different identifier/name)
+                            if f_md5 not in remote_pure_md5_map:
+                                remote_pure_md5_map[f_md5] = set()
+                            remote_pure_md5_map[f_md5].add(norm_path)
+
+        # 3c. Comparison
         files_to_upload = [] 
+        orphaned_files = [] # List of remote keys to delete
+        accounted_for_remotes = set() # Remote paths that are "kept" due to smart match
         
-        print(f"Scanning {len(all_local_files)} local files...")
+        matched_count = 0
+        moved_count = 0
+        smart_count = 0
+        upload_new_count = 0
+        upload_update_count = 0
         
-        with tqdm(total=len(all_local_files), desc="Verifying", unit="file", dynamic_ncols=True) as scan_bar:
-            for local_file in all_local_files:
+        # Detect Uploads
+        print(f"Scanning {len(local_file_map)} local files against {total_remote_originals} remote originals...")
+        
+        with tqdm(total=len(local_file_map), desc="Verifying", unit="file", dynamic_ncols=True) as scan_bar:
+            for norm_name, info in local_file_map.items():
                 if shutdown_event.is_set(): break
                 
-                rel_path = local_file.relative_to(folder_path).as_posix()
-                norm_name = normalize_path(rel_path)
+                local_file = info['path']
+                rel_path = info['rel_path']
                 
                 disp = rel_path if len(rel_path) < 30 else "..." + rel_path[-27:]
                 scan_bar.set_description(f"Check: {disp}")
@@ -342,9 +456,45 @@ def main():
                 status_msg = ""
                 
                 if norm_name not in remote_map:
-                    should_upload = True
-                    status_msg = f"[NEW]    {rel_path}"
+                    # Path doesn't exist. Check for Smart Match (if NOT strict mode)
+                    is_smart_match = False
+                    
+                    # Strict mode = -s OR -o. If either is set, we strictly enforce structure (re-upload).
+                    if not args.sync and not args.orphan_deletion:
+                        local_md5 = calculate_md5(local_file)
+                        if local_md5:
+                            f_name = os.path.basename(norm_name)
+                            key = (f_name, local_md5)
+                            
+                            # 1. MOVED Check (Same Name, Same Content)
+                            if key in remote_content_map:
+                                matches = remote_content_map[key]
+                                match_path = next(iter(matches))
+                                
+                                is_smart_match = True
+                                status_msg = f"[MOVED]   Found at {match_path} (Skipping)"
+                                accounted_for_remotes.add(match_path)
+                                moved_count += 1
+                            
+                            # 2. SMART Check (Different Name, Same Content)
+                            elif local_md5 in remote_pure_md5_map:
+                                matches = remote_pure_md5_map[local_md5]
+                                match_path = next(iter(matches))
+
+                                is_smart_match = True
+                                status_msg = f"[SMART]   Found at {match_path} (Skipping)"
+                                accounted_for_remotes.add(match_path)
+                                smart_count += 1
+
+                    if not is_smart_match:
+                        should_upload = True
+                        status_msg = f"[NEW]    {rel_path}"
+                        upload_new_count += 1
+                    else:
+                        tqdm.write(status_msg)
+
                 else:
+                    # Check MD5
                     local_md5 = calculate_md5(local_file)
                     if not local_md5: break 
                         
@@ -352,6 +502,9 @@ def main():
                     if local_md5 != remote_md5:
                         should_upload = True
                         status_msg = f"[UPDATE] {rel_path}"
+                        upload_update_count += 1
+                    else:
+                        matched_count += 1
                 
                 if should_upload:
                     files_to_upload.append((rel_path, local_file))
@@ -360,71 +513,188 @@ def main():
                 scan_bar.update(1)
             
             scan_bar.set_description("Scan Complete")
-            scan_bar.refresh()
+
+        # Detect Orphans
+        for r_norm, r_md5 in remote_map.items():
+            if r_norm not in local_file_map:
+                if r_norm not in accounted_for_remotes:
+                     pass
+        
+        # Re-pass for orphans to get correct casing key
+        if item.exists:
+            for f in item.files:
+                 if f['source'] == 'original' and f['name'] != script_name:
+                     norm = normalize_path(f['name'])
+                     
+                     if norm in local_file_map:
+                         continue 
+                     if norm in accounted_for_remotes:
+                         continue 
+                         
+                     orphaned_files.append(f['name'])
 
         if shutdown_event.is_set():
             print("\nScan Cancelled.")
             print_report()
             sys.exit(0)
 
-        count = len(files_to_upload)
+        # 4. Confirm Actions
+        upload_count = len(files_to_upload)
+        orphan_count = len(orphaned_files)
+        total_local = len(local_file_map)
         
-        if count == 0:
+        print("\n" + "="*40)
+        print("SUMMARY")
+        print("="*40)
+        print(f"Total Local Files:       {total_local}")
+        print(f"Total Remote Originals:  {total_remote_originals} (of {total_remote_files} total items)")
+        print("-" * 40)
+        print(f"Matched (Exact):         {matched_count}")
+        print(f"Matched (Moved):         {moved_count}")
+        print(f"Matched (Smart):         {smart_count}")
+        print(f"To Upload (New):         {upload_new_count}")
+        print(f"To Upload (Update):      {upload_update_count}")
+        print(f"Orphans (To Delete):     {orphan_count}")
+        print("="*40)
+
+        files_to_delete = []
+
+        if orphan_count > 0:
+            if args.orphan_deletion:
+                print(f"\n[DELETE] Auto-selecting {orphan_count} files for deletion.")
+                files_to_delete = orphaned_files
+            else:
+                print("\n[!] Orphaned files found on remote (not in local folder).")
+                print("    Use -o / --orphan-deletion to remove them.")
+
+        if upload_count == 0 and len(files_to_delete) == 0:
             if metadata:
                 print("\nUpdating metadata only...")
                 item.modify_metadata(metadata)
                 print("Metadata updated.")
                 sys.exit(0)
-            print("\nAll files match perfectly. Nothing to do.")
+            print("\nSync complete. No changes needed.")
             sys.exit(0)
 
-        print(f"\nQueued {count} files for upload. Starting immediately...")
-        print("\n" * 2)
-
-        # 4. Upload Phase
-        start_index = 0
-        main_bar = tqdm(total=count, desc="Total Uploads", position=0, unit="file", dynamic_ncols=True)
-
-        if is_new_item:
-            first_file = files_to_upload[0]
-            success, msg = upload_worker(identifier, first_file, metadata, position=1)
-            main_bar.update(1)
-            if not success:
-                main_bar.close()
-                print(f"\nCRITICAL ERROR on creation: {msg}")
-                sys.exit(1)
-            start_index = 1
-            metadata = None
-
-        remaining_files = files_to_upload[start_index:]
+        if upload_count > 0:
+            print(f"\nQueued {upload_count} files for upload...")
+        if len(files_to_delete) > 0:
+            print(f"Queued {len(files_to_delete)} files for DELETION...")
         
-        if remaining_files:
-            # Create slots equal to thread count
-            slot_queue = queue.Queue()
-            for i in range(1, max_workers + 1):
-                slot_queue.put(i)
+        # 5. Execution Phase
+        print("\n" * 1)
+        
+        # --- UPLOADS ---
+        if upload_count > 0:
+            # OPTIMIZATION: Sort by size (Smallest First)
+            files_to_upload.sort(key=lambda x: os.path.getsize(x[1]))
 
-            def worker_wrapper(f_data):
-                slot = slot_queue.get() 
+            # OPTIMIZATION: Configure Persistent Session (Connection Pooling)
+            # Use the official get_session() so we have an ArchiveSession compatible with get_item()
+            custom_session = None
+            try:
+                import requests
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+                
+                # Get a proper ArchiveSession
+                custom_session = get_session()
+                
+                # Configure Retry and Pooling
+                retry_strategy = Retry(
+                    total=5,
+                    backoff_factor=1,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["HEAD", "GET", "PUT", "POST", "DELETE", "OPTIONS", "TRACE"]
+                )
+                
+                # Pool size must handle all threads + extra for overhead
+                adapter = HTTPAdapter(pool_connections=max_workers+5, pool_maxsize=max_workers+5, max_retries=retry_strategy)
+                
+                # Helper to mount adapter to ArchiveSession which might behave differently than requests.Session
+                if hasattr(custom_session, 'mount_http_adapter'):
+                    # Newer IA library support
+                    custom_session.mount_http_adapter("https://", adapter)
+                    custom_session.mount_http_adapter("http://", adapter)
+                else:
+                    # Fallback: hope it inherits from Session or has .mount
+                    custom_session.mount("https://", adapter)
+                    custom_session.mount("http://", adapter)
+                
+            except Exception as e:
+                print(f"Warning: Could not configure connection pool: {e}")
+                # Fallback to standard session if mounting fails
+                if not custom_session:
+                     custom_session = get_session()
+
+            start_index = 0
+            main_bar = tqdm(total=upload_count, desc="Uploading", position=0, unit="file", dynamic_ncols=True)
+
+            if is_new_item:
+                # Upload the first (smallest) file to initialize the item
+                first_file = files_to_upload[0]
+                success, msg = upload_worker(identifier, first_file, metadata, position=1, session=custom_session)
+                main_bar.update(1)
+                if not success:
+                    main_bar.close()
+                    print(f"\nCRITICAL ERROR on creation: {msg}")
+                    sys.exit(1)
+                start_index = 1
+                metadata = None
+
+            remaining_files = files_to_upload[start_index:]
+            
+            if remaining_files:
+                slot_queue = queue.Queue()
+                for i in range(1, max_workers + 1):
+                    slot_queue.put(i)
+
+                def worker_wrapper(f_data):
+                    slot = slot_queue.get() 
+                    try:
+                        return upload_worker(identifier, f_data, None, position=slot, session=custom_session)
+                    finally:
+                        slot_queue.put(slot)
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_file = {
+                        executor.submit(worker_wrapper, fdata): fdata 
+                        for fdata in remaining_files
+                    }
+                    
+                    for future in as_completed(future_to_file):
+                        if shutdown_event.is_set():
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
+                        main_bar.update(1)
+            
+            main_bar.close()
+
+
+
+        # --- DELETIONS ---
+        if len(files_to_delete) > 0 and not shutdown_event.is_set():
+            print("\nStarting Deletions...")
+            # Deletes are fast but we can thread them too
+            
+            del_bar = tqdm(total=len(files_to_delete), desc="Deleting", position=0, unit="file", dynamic_ncols=True)
+            
+            def delete_worker(fname):
+                if shutdown_event.is_set(): return
                 try:
-                    return upload_worker(identifier, f_data, None, position=slot)
-                finally:
-                    slot_queue.put(slot)
+                    # item.delete_file is synchronous
+                    item.delete_file(fname)
+                    # We might want to record success??
+                except Exception as e:
+                    tqdm.write(f"Failed to delete {fname}: {e}")
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_file = {
-                    executor.submit(worker_wrapper, fdata): fdata 
-                    for fdata in remaining_files
-                }
-                
-                for future in as_completed(future_to_file):
-                    if shutdown_event.is_set():
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        break
-                    main_bar.update(1)
+                futures = [executor.submit(delete_worker, f) for f in files_to_delete]
+                for f in as_completed(futures):
+                    del_bar.update(1)
+            
+            del_bar.close()
 
-        main_bar.close()
-        
         # Ensure enough newline space based on thread count
         print("\n" * (max_workers + 1))
         
@@ -438,11 +708,11 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n!!! KEYBOARD INTERRUPT DETECTED !!!")
-        print("Stopping threads... Please wait a moment...")
+        print("Stopping threads... (Forcing Exit)")
         shutdown_event.set()
         time.sleep(1)
         print_report()
-        sys.exit(0)
+        os._exit(1)
 
 if __name__ == "__main__":
     main()
