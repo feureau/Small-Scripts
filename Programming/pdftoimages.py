@@ -9,7 +9,7 @@ from multiprocessing import cpu_count
 from tqdm import tqdm
 
 # Define the subfolder name for output image files
-OUTPUT_FOLDER = "converted_images"
+# OUTPUT_FOLDER = "converted_images"  <-- Removed
 
 def get_pdf_page_count(pdf_file):
     """Returns the number of pages in a PDF file using pdfinfo."""
@@ -41,17 +41,13 @@ def convert_single_page(args):
     except subprocess.CalledProcessError as e:
         return False, f"Error converting page {page} of {pdf_file}: {e.stderr.decode() if e.stderr else str(e)}"
 
-def convert_pdf_to_images(pdf_pattern, pdf_flag, ext):
+def convert_pdf_to_images(pdf_pattern, pdf_flag, ext, user_output_folder=None):
     """
     Converts each page of matching PDF files to an individual image.
     Uses pdftoppm with the provided format flag (e.g., '-png' or '-jpeg').
-    The output image files are saved in the OUTPUT_FOLDER with names like:
-    <basename>_page-<pagenumber>.<ext>
     """
     cwd = os.getcwd()
-    output_dir = os.path.join(cwd, OUTPUT_FOLDER)
-    os.makedirs(output_dir, exist_ok=True)
-
+    
     pdf_files = glob.glob(pdf_pattern)
     if not pdf_files:
         print("No PDF files found matching:", pdf_pattern)
@@ -70,6 +66,17 @@ def convert_pdf_to_images(pdf_pattern, pdf_flag, ext):
             print(f"Could not determine page count for {pdf_file}. Skipping.")
             continue
         
+        # Determine output directory
+        if user_output_folder:
+            # Use the user-provided folder exactly as is
+            output_dir = user_output_folder
+        else:
+            # Default behavior: {filename}_images
+            output_dir = f"{base_name}_images"
+            
+        output_dir = os.path.join(cwd, output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
         output_prefix = os.path.join(output_dir, f"{base_name}_page")
         for page in range(1, num_pages + 1):
             total_tasks.append((pdf_file, page, pdf_flag, output_prefix, ext))
@@ -95,6 +102,7 @@ if __name__ == "__main__":
                 "    python pdftoimages.py '*.pdf' --jpg")
     )
     parser.add_argument("pdf_pattern", help="Pattern to match PDF files (e.g., '*.pdf').")
+    parser.add_argument("-o", "--output", help="Specify output directory (files inside will not have '_images' suffix if this is used).")
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--jpg", action="store_true", help="Output images in JPEG format.")
     group.add_argument("--png", action="store_true", help="Output images in PNG format (default).")
@@ -108,4 +116,4 @@ if __name__ == "__main__":
         pdf_flag = "png"   # pdftoppm flag for PNG
         ext = "png"
 
-    convert_pdf_to_images(args.pdf_pattern, pdf_flag, ext)
+    convert_pdf_to_images(args.pdf_pattern, pdf_flag, ext, args.output)
