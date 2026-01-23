@@ -210,7 +210,6 @@ CROP_DETECT_INTERVAL_S = 300
 import os
 import sys
 import subprocess
-import cv2
 import platform
 import json
 import tkinter as tk
@@ -221,106 +220,248 @@ import glob
 import tempfile
 import math
 from datetime import datetime
+import re
 
 PRESET_FILENAME = "ingestvideo.preset.json"
 
 # ---------------------------------------------------------------------
 # Step 1: ffprobe-based metadata extraction
 # ---------------------------------------------------------------------
-def get_video_color_info(video_file):
-    cmd = ["ffprobe", "-v", "error", "-show_streams", "-of", "json", video_file]
-    try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-        data = json.loads(output)
-        for s in data.get("streams", []):
-            if s.get("codec_type") == "video":
-                color_info = {k: s.get(k) for k in ["color_range", "color_primaries", "color_transfer", "color_space"]}
-                color_info["mastering_display_metadata"] = None
-                color_info["max_cll"] = None
-                # Check for HDR based on transfer characteristics
-                is_hdr = "smpte2084" in (s.get("color_transfer") or "") or "arib-std-b67" in (s.get("color_transfer") or "")
-                color_info["is_hdr"] = is_hdr
-                for side_data in s.get("side_data_list", []):
-                    if side_data.get("side_data_type") == "Mastering display metadata":
-                        color_info["mastering_display_metadata"] = side_data
-                    elif side_data.get("side_data_type") == "Content light level metadata":
-                        max_c, max_a = side_data.get("max_content"), side_data.get("max_average")
-                        if max_c or max_a: color_info["max_cll"] = f"{max_c},{max_a}"
-                return color_info
-    except (subprocess.CalledProcessError, json.JSONDecodeError): pass
-    return {k: None for k in ["color_range", "color_primaries", "color_transfer", "color_space", "mastering_display_metadata", "max_cll", "is_hdr"]}
 
-def run_ffprobe_for_audio_streams(video_file):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,codec_name,channels:stream_tags=language", "-of", "json", video_file]
+def get_ffprobe_metadata(video_file):
+    """
+    Retrieves all necessary metadata in a single FFprobe call to minimize overhead.
+    Returns a dictionary containing raw streams, format info, and specific parsed values.
+    """
+    cmd = [
+        "ffprobe", "-v", "error", "-show_format", "-show_streams", "-show_chapters",
+        "-of", "json", video_file
+    ]
     try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-        streams = json.loads(output).get("streams", [])
-        for i, s in enumerate(streams, 1): s['track_number'] = i
-        return streams
-    except (subprocess.CalledProcessError, json.JSONDecodeError): return []
+        # Separate stdout and stderr to prevent warnings from corrupting JSON output
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+        stdout, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            # If ffprobe failed completely (non-zero exit), log it.
+            # However, sometimes it returns 0 even with warnings.
+            if not stdout: 
+                 print(f"ERROR: ffprobe failed. Output: {stderr}")
+                 return {}
+
+        # Attempt to find the start of the JSON object in case some stdout pollution remains
+        json_start = stdout.find('{')
+        if json_start != -1:
+            stdout = stdout[json_start:]
+            
+        return json.loads(stdout)
+
+    except FileNotFoundError:
+        print("ERROR: 'ffprobe' not found. Please ensure FFmpeg is installed and in your PATH.")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to parse ffprobe output as JSON: {e}")
+        # Only print first few lines of invalid output to avoid console flooding
+        print(f"Invalid Output Start: {stdout[:200] if 'stdout' in locals() else 'N/A'}...")
+        return {}
+    except Exception as e:
+        print(f"ERROR: Unexpected error in metadata extraction: {e}")
+        return {}
+
+def extract_video_info(meta_data):
+    """Parses the raw JSON metadata to extract useful video information."""
+    info = {
+        "width": None, "height": None, "duration": None, "frame_rate": None,
+        "is_hdr": False, "color_info": {}, "audio_streams": [], "video_stream_count": 0
+    }
+    
+    # 1. Format Info (Duration)
+    fmt = meta_data.get("format", {})
+    try: info["duration"] = float(fmt.get("duration", 0))
+    except (ValueError, TypeError): info["duration"] = None
+
+    # 2. Stream Info
+    for stream in meta_data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            info["video_stream_count"] += 1
+            # Only process the first video stream for primary attributes
+            if info["video_stream_count"] == 1:
+                info["width"] = int(stream.get("width", 0))
+                info["height"] = int(stream.get("height", 0))
+                
+                # Frame Rate
+                r_fps = stream.get("r_frame_rate", "")
+                if "/" in r_fps:
+                    try:
+                        n, d = map(int, r_fps.split('/'))
+                        if d > 0: info["frame_rate"] = r_fps
+                    except ValueError: pass
+                
+                # Color Info
+                c_info = {k: stream.get(k) for k in ["color_range", "color_primaries", "color_transfer", "color_space"]}
+                c_info["mastering_display_metadata"] = None
+                c_info["max_cll"] = None
+                
+                # HDR Detection
+                tr = (stream.get("color_transfer") or "").lower()
+                is_hdr = "smpte2084" in tr or "arib-std-b67" in tr
+                
+                # Side Data
+                for sd in stream.get("side_data_list", []):
+                    if sd.get("side_data_type") == "Mastering display metadata":
+                        c_info["mastering_display_metadata"] = sd
+                    elif sd.get("side_data_type") == "Content light level metadata":
+                        max_c, max_a = sd.get("max_content"), sd.get("max_average")
+                        if max_c or max_a: c_info["max_cll"] = f"{max_c},{max_a}"
+                
+                info["is_hdr"] = is_hdr
+                info["color_info"] = c_info
+
+        elif stream.get("codec_type") == "audio":
+            idx = stream.get("index")
+            tags = stream.get("tags", {})
+            info["audio_streams"].append({
+                "index": idx,
+                "codec_name": stream.get("codec_name"),
+                "channels": stream.get("channels"),
+                "tags": tags,
+                "language": tags.get("language", "und"),
+                "track_number": len(info["audio_streams"]) + 1 
+            })
+            
+    return info
+
+# --- Legacy Compatibility Wrappers (using the minimized overhead approach if possible, or fallback) ---
+
+def get_video_color_info(video_file):
+    """Legacy wrapper for GUI compatibility, using the new unified metadata call."""
+    raw = get_ffprobe_metadata(video_file)
+    info = extract_video_info(raw)
+    # Merge is_hdr into color_info to match old signature expected by GUI
+    color_ret = info.get("color_info", {})
+    color_ret["is_hdr"] = info.get("is_hdr", False)
+    return color_ret
+
+# We keep run_ffprobe_for_audio_streams just in case, though the GUI usually takes the list now. 
+# If the GUI calls it dynamically (not seen in trace but good for safety):
+def run_ffprobe_for_audio_streams(video_file):
+    raw = get_ffprobe_metadata(video_file)
+    return extract_video_info(raw).get("audio_streams", [])
 
 def get_video_resolution(video_file):
-    cap = cv2.VideoCapture(video_file)
-    if not cap.isOpened(): return None, None
-    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    return height, width
+    """
+    Retrieves video resolution using the robust metadata extraction logic.
+    Replaces the previous CSV-based approach which could fail on complex file names or metadata.
+    """
+    raw = get_ffprobe_metadata(video_file)
+    info = extract_video_info(raw)
+    return info.get("height"), info.get("width")
 
 def get_video_duration(video_file):
-    cap = cv2.VideoCapture(video_file)
-    if not cap.isOpened(): return None
-    fps, frame_count = cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    cap.release()
-    return (frame_count / fps) if fps and frame_count else None
-
-def get_video_frame_rate(video_file):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", video_file]
-    try:
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace').strip()
-        if '/' in output or output.isdigit():
-            return output
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
-        pass
-    return None
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_file]
+    try: 
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+        out, err = p.communicate()
+        return float(out.strip())
+    except Exception: return None
 
 # ---------------------------------------------------------------------
 # Step 2: Automatic Crop Detection
 # ---------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Step 2: Automatic Crop Detection (Parallelized)
+# ---------------------------------------------------------------------
+
+def _crop_worker(args):
+    """Worker function: Extract short clip to temp file -> Analyze -> Delete."""
+    start_time, video_file, limit_value = args
+    
+    # Create a unique temp filename for this worker/sample
+    # Use .nut container with rawvideo to preserve exact pixel data (especially for 10-bit HDR)
+    temp_clip = os.path.join(tempfile.gettempdir(), f"ingest_sample_{os.getpid()}_{int(start_time*100)}.nut")
+    
+    crop_str = None
+    try:
+        # Step 1: Extract Short Clip (6 frames)
+        # -c:v rawvideo preserves the source bit depth (crucial for HDR crop detection)
+        # -an (no audio)
+        extract_cmd = ["ffmpeg", "-hide_banner", "-ss", str(start_time), "-i", video_file, "-vframes", "6", "-an", "-c:v", "rawvideo", "-f", "nut", "-y", temp_clip]
+        subprocess.run(extract_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=20, check=True)
+        
+        # Step 2: Analyze Clip
+        if os.path.exists(temp_clip):
+            analyze_cmd = ["ffmpeg", "-hide_banner", "-i", temp_clip, "-vf", f"cropdetect={limit_value}:2:0", "-f", "null", "-"]
+            res = subprocess.run(analyze_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=10, text=True, encoding='utf-8', errors='replace')
+            
+            for line in res.stderr.splitlines():
+                if 'crop=' in line:
+                    # DEBUG: Print the raw line seen
+                    print(f"DEBUG Worker_{os.getpid()}: {line.strip()}")
+                    crop_str = line.split('crop=')[-1].strip()
+                    
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        print(f"DEBUG Worker_{os.getpid()} Error: {e}")
+    finally:
+        # Step 3: Cleanup
+        if os.path.exists(temp_clip):
+            try: os.remove(temp_clip)
+            except OSError: pass
+            
+    return crop_str
+
 def get_crop_parameters(video_file, input_width, input_height, limit_value):
-    print("Detecting optimal crop parameters throughout the video...")
+    print("Detecting optimal crop parameters (Parallel)...")
     duration = get_video_duration(video_file)
     if not duration or duration < 1:
         print("Video too short for crop detection.")
         return input_width, input_height, 0, 0
+    
     num_samples = max(CROP_DETECT_SAMPLES, min(72, int(duration // CROP_DETECT_INTERVAL_S)))
     start_offset = min(300, duration * 0.05)
     interval = (duration - start_offset) / num_samples
-    crop_values = []
+    
+    # Generate tasks
+    tasks = []
     for i in range(num_samples):
         start_time = start_offset + i * interval
-        if start_time >= duration: continue
-        print(f"Analyzing frame at {int(start_time)}s ({i+1}/{num_samples})...")
-        cmd = ["ffmpeg", "-hide_banner", "-ss", str(int(start_time)), "-i", video_file, "-vframes", "3", "-vf", f"cropdetect={limit_value}:2:0", "-f", "null", "-"]
-        try:
-            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace')
-            for line in proc.stderr:
-                if 'crop=' in line:
-                    crop_str = line.split('crop=')[-1].strip()
-                    try:
-                        w, h, x, y = [int(v) for v in crop_str.split(':')]
-                        print(f"  -> Detected: width={w}, height={h}, x={x}, y={y}")
-                        crop_values.append(crop_str)
-                    except ValueError:
-                        print(f"  -> Could not parse crop string: {crop_str}")
-            proc.wait()
-        except Exception as e: print(f"Error during cropdetect: {e}")
+        if start_time < duration:
+            tasks.append((round(start_time, 2), video_file, limit_value))
+            
+    print(f"Sampling {len(tasks)} points across the video...")
+    
+    crop_values = []
+    pool_size = min(len(tasks), 8, os.cpu_count() or 4)
+    
+    try:
+        # Use starmap_async or map_async to allow KeyboardInterrupt to be caught
+        # (Standard map() can block signals on some platforms)
+        with Pool(pool_size) as p:
+            result_obj = p.map_async(_crop_worker, tasks)
+            # Wait for result with a timeout loop to allow signal handling
+            results = result_obj.get(timeout=999999) 
+            
+        for res in results:
+            if res:
+                try:
+                    w, h, x, y = [int(v) for v in res.split(':')]
+                    crop_values.append(res)
+                except ValueError: pass
+                
+    except KeyboardInterrupt:
+        print("\nCrop detection aborted by user.")
+        # Re-raise to be caught by main handler
+        raise
+
     if crop_values:
         try:
-            w, h, x, y = [int(v) for v in Counter(crop_values).most_common(1)[0][0].split(':')]
-            print(f"\nDetected optimal crop parameters: width={w}, height={h}, x={x}, y={y}")
+            # Find the most common crop
+            most_common = Counter(crop_values).most_common(1)[0][0]
+            w, h, x, y = [int(v) for v in most_common.split(':')]
+            print(f"Detected optimal crop parameters: width={w}, height={h}, x={x}, y={y}")
             return w, h, x, y
         except ValueError: pass
-    print("No crop parameters found. Using full frame.")
+        
+    print("No crop parameters found or full frame detected. Using full frame.")
     return input_width, input_height, 0, 0
 
 # ---------------------------------------------------------------------
@@ -987,7 +1128,7 @@ def generate_samples(settings):
             sample_settings.update(task)
             output_file = os.path.join(output_dir, f"{base_name}_Sample_{task['name']}.mp4")
             
-            success, _, _ = execute_nvencc(temp_clip, output_file, sample_settings)
+            success, _, console_out = execute_nvencc(temp_clip, output_file, sample_settings)
 
             if success and os.path.exists(output_file):
                 sample_size = os.path.getsize(output_file)
@@ -1005,6 +1146,7 @@ def generate_samples(settings):
 
             else:
                 print(f"\nFailed to create sample: {os.path.basename(output_file)}")
+                print(f"Error Details: {console_out}")
 
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         err_out = e.stderr.decode(errors='replace') if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
@@ -1034,6 +1176,8 @@ def process_video(file_path, settings):
     final_size = format_bytes(os.path.getsize(output_file)) if success and os.path.exists(output_file) else "N/A"
     
     print(f"\n{status}: Processed {os.path.basename(file_path)} -> {os.path.basename(output_file)}")
+    if not success:
+        print(f"Error Details: {console_out}")
     
     with open(log_file, "w", encoding='utf-8') as log:
         log.write(f"NVEncC AV1 Batch Processor Log (Version: {SCRIPT_VERSION})\n")
@@ -1078,41 +1222,63 @@ def process_batch(video_files, settings):
         for task in tasks: process_wrapper(task)
 
 if __name__ == "__main__":
-    files = [f for arg in sys.argv[1:] for f in glob.glob(arg)]
-    if not files:
+    # Support for Windows multiprocessing
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    file_queue = [f for arg in sys.argv[1:] for f in glob.glob(arg)]
+    if not file_queue:
         print("Usage: Drop video files onto this script or run from command line with file paths/wildcards.")
         os.system("pause")
         sys.exit()
 
-    first_file = files[0]
-    h, w = get_video_resolution(first_file)
-    if h is None: print(f"Error: Could not get resolution for {first_file}. Exiting."); sys.exit()
+    try:
+        first_file = file_queue[0]
+        print(f"Analyzing first file: {os.path.basename(first_file)}...")
+        
+        # Single-pass metadata extraction
+        raw_meta = get_ffprobe_metadata(first_file)
+        info = extract_video_info(raw_meta)
+        
+        w, h = info["width"], info["height"]
+        if w is None or h is None:
+            print(f"Error: Could not get resolution for {first_file}. Exiting.")
+            sys.exit()
 
-    frame_rate = get_video_frame_rate(first_file)
-    if frame_rate is None:
-        print("WARNING: Could not automatically detect frame rate. Defaulting to 24000/1001. Please verify in the GUI.")
-        frame_rate = "24000/1001"
-    else:
-        print(f"Detected source frame rate: {frame_rate}")
+        frame_rate = info["frame_rate"]
+        if frame_rate is None:
+            print("WARNING: Could not automatically detect frame rate. Defaulting to 24000/1001. Please verify in the GUI.")
+            frame_rate = "24000/1001"
+        else:
+            print(f"Detected source frame rate: {frame_rate}")
 
-    color_info = get_video_color_info(first_file)
-    is_sdr = color_info.get("is_hdr") == False
-    source_type_str = "SDR" if is_sdr else "HDR"
-    print(f"Detected source type: {source_type_str}")
+        is_sdr = not info["is_hdr"]
+        source_type_str = "SDR" if is_sdr else "HDR"
+        print(f"Detected source type: {source_type_str}")
+        
+        crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, w, h, "24" if is_sdr else "128")
+        
+        qvbr = DEFAULT_QVBR_8K if h >= 4320 else DEFAULT_QVBR_4K if h >= 2160 else DEFAULT_QVBR_1080P
+
+        launch_gui(
+            file_list=file_queue,
+            crop_params=(crop_w, crop_h, crop_x, crop_y),
+            audio_streams=info["audio_streams"],
+            default_qvbr=qvbr,
+            is_source_sdr=is_sdr,
+            input_width=w,
+            input_height=h,
+            frame_rate=frame_rate
+        )
+        print("\nProcessing Complete.")
+        
+    except KeyboardInterrupt:
+        print("\nScript interrupted by user. Exiting...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\nCRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        os.system("pause")
     
-    crop_w, crop_h, crop_x, crop_y = get_crop_parameters(first_file, w, h, "24" if is_sdr else "128")
-    
-    qvbr = DEFAULT_QVBR_8K if h >= 4320 else DEFAULT_QVBR_4K if h >= 2160 else DEFAULT_QVBR_1080P
-
-    launch_gui(
-        file_list=files,
-        crop_params=(crop_w, crop_h, crop_x, crop_y),
-        audio_streams=run_ffprobe_for_audio_streams(first_file),
-        default_qvbr=qvbr,
-        is_source_sdr=is_sdr,
-        input_width=w,
-        input_height=h,
-        frame_rate=frame_rate
-    )
-    print("\nProcessing Complete.")
     os.system("pause")
