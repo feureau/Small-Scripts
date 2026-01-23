@@ -5,6 +5,8 @@ import sys
 import glob
 import logging
 from pathlib import Path
+from PIL import Image
+import numpy as np
 
 # Silence verbose EasyOCR logs
 logging.getLogger('easyocr').setLevel(logging.ERROR)
@@ -56,12 +58,17 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
         
         try:
             full_text = ""
+            
+            # Load image with PIL to support more formats (including complex TIFFs)
+            # Convert to RGB to ensure consistency for EasyOCR
+            with Image.open(p) as img:
+                img_input = np.array(img.convert('RGB'))
 
             # --- MODE 1: RAW LINES (Opt-in via --lines) ---
             # Good for receipts, lists, and strict 'gibberish' filtering
             if use_lines_mode:
                 # detail=1 returns [box, text, confidence]
-                result = reader.readtext(str(p), detail=1, paragraph=False)
+                result = reader.readtext(img_input, detail=1, paragraph=False)
                 
                 valid_lines = []
                 for (box, text, conf) in result:
@@ -74,7 +81,7 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
             # Note: EasyOCR's paragraph mode handles merging internally, 
             # so individual line confidence scores are not available for filtering.
             else:
-                result = reader.readtext(str(p), detail=1, paragraph=True)
+                result = reader.readtext(img_input, detail=1, paragraph=True)
                 # result format is [[box, text], [box, text]]
                 text_blocks = []
                 for (box, text) in result:
