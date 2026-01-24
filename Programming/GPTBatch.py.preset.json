@@ -362,10 +362,10 @@
         "rename_mode": false
     },
     "Transcribe - Qwen": {
-        "prompt": "Transcribe. Give me only the transcription formatted and cleaned up for markdown. No commentary.",
+        "prompt": "Your Task:\nYour task is to transcribe the text from the following image. The goal is to produce a clean, readable, and structurally rich document using precise Markdown formatting. You will act as both a transcriber and a document formatter.\nPrimary Directive: Content and Flow\nReconstruct Paragraphs: This is the most important rule. Ignore the original line breaks from the image. Combine lines of text to form complete, flowing paragraphs.\nJoin Hyphenated Words: If a word is split with a hyphen at the end of a line, reconstruct it into a single word.\nIdentify True Paragraph Breaks: Apply paragraph breaks only where they exist in the original text, typically indicated by indentation or significant vertical spacing between text blocks.\nDetailed Markdown Formatting Instructions:\nYou must scan the source text for the following structural and stylistic elements and apply the corresponding Markdown syntax.\nHeadings:\nIdentify the main title of the document and format it as a Heading 1 (#).\nIdentify major section titles and format them as a Heading 2 (##).\nIdentify subsection titles and format them as a Heading 3 (###). Use your judgment for deeper-level headings (####).\n\n\nEmphasis:\nFor text that is italicized in the source, use single asterisks: *text*.\nFor text that is bold in the source, use double asterisks: **text**.\nFor text that is both bold and italicized, use triple asterisks: ***text***.\n\n\nLists:\nUnordered Lists: If you find a bulleted list (using symbols like \u2022, -, or *), transcribe it as a Markdown unordered list using hyphens (-).\nOrdered Lists: If you find a numbered list (e.g., 1., 2., a., b.), transcribe it as a Markdown ordered list (1., 2., 3.).\nNested Lists: Pay close attention to indentation to correctly represent nested list items.\n\n\nBlockquotes:\nIf a section of text is indented or visually set apart as a quotation, format it as a blockquote by prefixing each line with > .\n\n\nHorizontal Rules:\nIf the original document uses a distinct line or a series of characters (like *** or ---) to visually separate sections of text, represent this with a Markdown horizontal rule (---).\n\n\nStrikethrough:\nFor any text that has a line through it, use tildes to format it as strikethrough: ~~text~~.\n\n\nContent Cleanup Rules:\nExclude Extraneous Elements: Strictly omit all the followings with no exception: page numbers, running heads, headers, footers, and any handwritten or printed marginalia.\nCorrect Obvious Errors: Silently fix any clear spelling or grammatical errors found in the source text.\nFinal Output Requirements:\nThe output must be only the transcribed text formatted in pure Markdown.\nDo not include any introductory phrases, explanations, notes, analysis, or commentary in your response. Begin directly with the transcribed content.\nIf there is no text present in the image to transcribe, output a blank text, don\u2019t write anything, leave it empty.",
         "engine": "ollama",
-        "model": "qwen3-vl:4b",
-        "output_folder": "qwen4b",
+        "model": "qwen3-vl:8b-thinking-q8_0",
+        "output_folder": "qwen8b",
         "output_suffix": "",
         "output_extension": "md",
         "overwrite_original": false,
@@ -392,6 +392,7 @@
         "force_conversion": false,
         "save_img_to_output": false,
         "rename_mode": false,
+        "rename_method": "full",
         "enable_thinking": false
     },
     "Rename File - Text in image": {
