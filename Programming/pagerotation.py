@@ -95,6 +95,7 @@ def get_osd(image):
 
 def process_image(src_path, dirs, args, jpegtran_exe):
     filename = os.path.basename(src_path)
+    processed_path = os.path.join(dirs['processed'], filename)
     
     # 1. Read Image
     image = cv2.imread(src_path)
@@ -108,6 +109,7 @@ def process_image(src_path, dirs, args, jpegtran_exe):
         log("SKIP", filename, "OSD failed (No text?) -> Moving to 'no_text'")
         if not args.overwrite:
             cv2.imwrite(os.path.join(dirs['no_text'], filename), image)
+            shutil.move(src_path, processed_path)
         return
 
     angle = res["rotate"]
@@ -165,12 +167,14 @@ def process_image(src_path, dirs, args, jpegtran_exe):
         dest_path = os.path.join(dirs['low_conf'], filename)
         if not args.overwrite:
             cv2.imwrite(dest_path, image)
+            shutil.move(src_path, processed_path)
         return
 
     # 5. Execute Rotation
     if final_angle == 0:
         if not args.overwrite and src_path != dest_path:
             shutil.copy2(src_path, dest_path)
+            shutil.move(src_path, processed_path)
     else:
         # Try Lossless first
         success = False
@@ -188,6 +192,10 @@ def process_image(src_path, dirs, args, jpegtran_exe):
             
             rotated = imutils.rotate_bound(image, final_angle)
             cv2.imwrite(dest_path, rotated)
+    
+    # Move original to processed folder
+    if not args.overwrite and os.path.exists(src_path):
+        shutil.move(src_path, processed_path)
 
 def find_jpegtran():
     """Finds jpegtran in PATH or local directory"""
@@ -248,14 +256,17 @@ def main():
     dirs = {
         'out': out_root,
         'no_text': os.path.join(out_root, "no_text"),
-        'low_conf': os.path.join(out_root, "confidence_low")
+        'low_conf': os.path.join(out_root, "confidence_low"),
+        'processed': os.path.join(base_dir, "processed")
     }
 
     if not args.overwrite:
         ensure_dir(dirs['out'])
         ensure_dir(dirs['no_text'])
         ensure_dir(dirs['low_conf'])
+        ensure_dir(dirs['processed'])
         print(f"Output: {dirs['out']}")
+        print(f"Processed originals: {dirs['processed']}")
 
     # 3. Run
     # (Note: KeyboardInterrupt is now handled by the signal_handler above)
