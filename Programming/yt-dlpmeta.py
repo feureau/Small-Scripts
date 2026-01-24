@@ -63,7 +63,7 @@ Output
 Arguments Reference
 -------------------
 - `-D, --deep`      (Default) Deep Mode: Full metadata & comments for every video.
-- `-F, --fast`      Fast Mode: Quick scrape of video list to CSV.
+- `-q, --quick`     Quick Mode: Quick scrape of video list to CSV.
 - `-S, --single`    Force Single-Video treatment for any URL.
 - `-s, --sub`       Download subtitle files (.srt/.vtt).
 - `-H, --heatmap`   Download heatmap data.
@@ -495,7 +495,7 @@ def save_list_to_json(video_entries, filename):
 # ==========================================
 # Core Processing Function
 # ==========================================
-def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None, force_single=False, fast_mode=False, sleep_seconds=DEFAULT_SLEEP):
+def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None, force_single=False, quick_mode=False, sleep_seconds=DEFAULT_SLEEP):
     """
     Main logic to handle the URL.
     """
@@ -534,8 +534,8 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
     # Detect likely single video URLs (YouTube + TikTok + others)
     likely_single_url = ("watch?v=" in url or "youtu.be/" in url or "shorts/" in url or "tiktok.com" in url) and ("list=" not in url)
     
-    # NEW DEFAULT: Every URL gets Deep Mode + Comments + Condensed unless --fast (-F) is used.
-    if not fast_mode:
+    # NEW DEFAULT: Every URL gets Deep Mode + Comments + Condensed unless --quick (-q) is used.
+    if not quick_mode:
         # Respect defaults but leave True if user already passed True via flags
         if not fetch_full_metadata: 
              fetch_full_metadata = DEFAULT_DEEP_MODE
@@ -553,13 +553,13 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
         else:
             print("Channel/Playlist detected: Fetching rich metadata for each video (Condensed Output).")
     else:
-        # FAST MODE requested (-F)
-        # We ensure it stays fast by turning off the deep defaults
+        # QUICK MODE requested (-q)
+        # We ensure it stays quick by turning off the deep defaults
         fetch_full_metadata = False
         fetch_comments = False
         if condensed_mode is None:
              condensed_mode = False
-        print("FAST Mode Requested: Rapidly scraping video list.")
+        print("QUICK Mode Requested: Rapidly scraping video list.")
     
     if force_single:
          # If user explicitly forced single mode via -S
@@ -874,7 +874,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YouTube Channel video list or Single Video Metadata.")
     parser.add_argument("url", help="URL of channel/playlist/video.")
     parser.add_argument("-f", "--full", action="store_true", help="DEEP Mode: Fetch FULL metadata & comments (Now Default).")
-    parser.add_argument("-F", "--fast", action="store_true", help="FAST Mode: Quick scrape to CSV.")
+    parser.add_argument("-q", "--quick", action="store_true", help="QUICK Mode: Quick scrape to CSV.")
     parser.add_argument("-S", "--single", action="store_true", help="Force SINGLE video treatment for any URL.")
     parser.add_argument("-c", "--comment", action="store_true", help="Download comments (Auto-enabled for single videos).")
     parser.add_argument("-s", "--sub", action="store_true", help="Download subtitles as separate files and include in metadata.")
@@ -921,7 +921,7 @@ if __name__ == "__main__":
                 for index, url in enumerate(urls, 1):
                     print(f"\n--- Processing URL {index}/{total_urls}: {url} ---")
                     try:
-                        process_url(url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.fast, sleep_seconds=args.sleep)
+                        process_url(url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.quick, sleep_seconds=args.sleep)
                     except Exception as e:
                         print(f"Error processing {url}: {e}")
                         # Continue to next URL in batch
@@ -930,7 +930,7 @@ if __name__ == "__main__":
                 sys.exit(1)
         else:
             # Standard Single URL Mode
-            process_url(args.url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.fast, sleep_seconds=args.sleep)
+            process_url(args.url, args.full, args.comment, args.sub, args.heatmap, out_fmt, is_condensed, args.single, args.quick, sleep_seconds=args.sleep)
 
     except KeyboardInterrupt:
         print("\n\n[!] Script cancelled by user (Ctrl+C). Exiting gracefully.")
