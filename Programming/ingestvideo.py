@@ -116,19 +116,29 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 ---------------------------------------------------------------------------------------------------
  V. CHANGE HISTORY
 ---------------------------------------------------------------------------------------------------
-- **v5.3 (Current - Feature & Fix Update):**
-    - **Feature:** Implemented a user-editable frame rate field in the GUI. The script now
+- **v5.5 (Current - Multi-Select Parameter Propagation):**
+    - **Feature:** When multiple files are selected in the job list, parameter changes now apply
+      to ALL selected files simultaneously. This enables efficient batch configuration.
+    - **Feature:** When NO files are selected, parameter changes apply to all files in the list
+      EXCEPT those that have been manually customized (marked as "custom" files).
+    - **Feature:** Added "Select All" and "Deselect All" buttons below the job list for quick
+      selection management.
+    - **Feature:** Added visual hint in the GUI explaining the multi-select behavior.
+    - Updated documentation to reflect all changes.
+
+- **v5.4:**
+    - Implemented a user-editable frame rate field in the GUI. The script now
       populates this field with the auto-detected value, but allows the user to override it.
       This makes handling of VFR sources or mis-detected files more robust. The frame rate
       detection now gracefully fails to a user-visible default instead of a hardcoded value.
-    - **Bug Fix:** Corrected sample generation logic to ensure samples are accurate previews.
+    - Corrected sample generation logic to ensure samples are accurate previews.
       Samples are now created with the **exact same crop and audio settings** as a full encode,
       resolving a major logical flaw.
-    - **Bug Fix:** Defined the missing GUI helper functions (`add_files`, `delete_selected`, `move_up`,
+    - Defined the missing GUI helper functions (`add_files`, `delete_selected`, `move_up`,
       `move_down`), fixing the `NameError` exceptions that occurred in the GUI.
     - Updated documentation to reflect all changes.
 
-- **v5.2 (Bugfix):**
+- **v5.3:**
     - Removed explicit `--profile main` flag from the NVEncC command.
     - **Reason:** A bug was discovered in the user's pre-release NVEncC v9.03 executable where
       explicitly setting this flag incorrectly forced 10-bit HDR video into an 8-bit conversion
@@ -178,7 +188,7 @@ HDR (HDR10, Dolby Vision) and can effectively handle challenging content such as
 #                                  USER-CONFIGURABLE VARIABLES
 # =================================================================================================
 # --- General Settings ---
-SCRIPT_VERSION = "5.4"
+SCRIPT_VERSION = "5.5"
 NVENC_EXECUTABLE = "NVEncC64"
 OUTPUT_SUBDIR = "processed_videos"
 
@@ -519,8 +529,14 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     # Value: Dict of settings
     job_settings = {}
     
+    # Track files that have been manually customized (shouldn't be auto-updated)
+    custom_files = set()
+    
     # Track the currently selected file to know what to save/load
     current_selected_file = None
+    
+    # Flag to prevent recursive trace callbacks while loading settings
+    _loading_settings = False
     
     # --- Preset Management Variables & Functions ---
     current_preset_name = tk.StringVar(value="")
@@ -830,7 +846,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
             tk.Checkbutton(f, text="Convert to AC3", variable=c_var).pack(side='right')
 
     def load_settings_for_file(filepath):
-        nonlocal current_selected_file
+        nonlocal current_selected_file, _loading_settings
         
         # 1. Save current (if any)
         if current_selected_file and current_selected_file != filepath:
@@ -852,6 +868,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
              # Stickiness is usually preferred in batch tools.
              pass 
 
+        _loading_settings = True  # Prevent trace callbacks from firing during load
         s = job_settings[filepath]
         
         # Helper to set var safely
@@ -885,17 +902,68 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
         
         # Update Metadata Display
         update_metadata_display(filepath)
+        
+        _loading_settings = False  # Re-enable trace callbacks
 
     def on_file_select(event):
-        if file_listbox.curselection():
-            selection = file_listbox.get(file_listbox.curselection()[0])
+        sel = file_listbox.curselection()
+        if sel:
+            # Load settings for the first selected file only (for display)
+            selection = file_listbox.get(sel[0])
             load_settings_for_file(selection)
+    
+    def select_all_files():
+        """Select all files in the listbox."""
+        file_listbox.select_set(0, 'end')
+        if file_listbox.size() > 0:
+            load_settings_for_file(file_listbox.get(0))
+    
+    def deselect_all_files():
+        """Deselect all files in the listbox."""
+        file_listbox.selection_clear(0, 'end')
+    
+    def get_target_files_for_update(param_name):
+        """
+        Returns the list of files that should receive a parameter update.
+        - If files are selected: return those selected files
+        - If nothing selected: return all files that don't have custom values for this param
+        """
+        selected_indices = file_listbox.curselection()
+        if selected_indices:
+            # Return all selected files
+            return [file_listbox.get(i) for i in selected_indices]
+        else:
+            # Return all files that are NOT marked as custom
+            all_files = list(file_listbox.get(0, 'end'))
+            return [f for f in all_files if f not in custom_files]
+    
+    def mark_as_custom(filepath):
+        """Mark a file as having custom settings."""
+        if filepath:
+            custom_files.add(filepath)
+    
+    def apply_to_targets(param_name, value):
+        """
+        Apply a parameter value to all target files.
+        This is called by trace callbacks when a parameter changes.
+        """
+        if _loading_settings:
+            return
+        
+        targets = get_target_files_for_update(param_name)
+        for fp in targets:
+            if fp not in job_settings:
+                job_settings[fp] = {}
+            job_settings[fp][param_name] = value
+            # Mark the current selected file as custom if user manually changed something
+            if fp == current_selected_file:
+                mark_as_custom(fp)
     
     # --- Top Frame: File List ---
     file_frame = tk.LabelFrame(inner_frame, text="Input Files")
     file_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
     file_frame.columnconfigure(0, weight=1)
-    file_listbox = tk.Listbox(file_frame, height=6, selectmode='extended')
+    file_listbox = tk.Listbox(file_frame, height=6, selectmode='extended', exportselection=False)
     file_listbox.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
     for f in file_list: file_listbox.insert('end', f)
     file_controls = tk.Frame(file_frame)
@@ -905,6 +973,14 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     tk.Button(file_controls, text="Move Up", command=lambda: move_up(file_listbox)).pack(fill='x', pady=2)
     tk.Button(file_controls, text="Move Down", command=lambda: move_down(file_listbox)).pack(fill='x', pady=2)
     tk.Button(file_controls, text="Delete Selected", command=lambda: delete_selected(file_listbox)).pack(fill='x', pady=2)
+    
+    # Selection control buttons frame under the listbox
+    selection_frame = tk.Frame(file_frame)
+    selection_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+    tk.Button(selection_frame, text="Select All", command=select_all_files, width=12).pack(side='left', padx=2)
+    tk.Button(selection_frame, text="Deselect All", command=deselect_all_files, width=12).pack(side='left', padx=2)
+    # Info label about multi-select behavior
+    tk.Label(selection_frame, text="Tip: When multiple files are selected, parameter changes apply to all selected.", fg="gray").pack(side='left', padx=10)
     
     # [NEW] Analyse All Button
     def run_analyse_all():
@@ -1151,6 +1227,39 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
         gop_frame.pack(anchor='w', pady=5, padx=5)
         bracket_frame.pack(anchor='w', pady=5, padx=5)
     rate_control_mode.trace_add("write", update_rate_control_ui); update_rate_control_ui()
+
+    # --- Multi-Select Parameter Propagation Traces ---
+    # These traces propagate parameter changes to all selected files (or all non-custom files if none selected)
+    def create_param_trace(var, param_name):
+        """Create a trace callback for a parameter variable."""
+        def trace_cb(*args):
+            if not _loading_settings:
+                apply_to_targets(param_name, var.get())
+        return trace_cb
+    
+    # Add traces for all major parameters
+    decoding_mode.trace_add("write", create_param_trace(decoding_mode, "decoding_mode"))
+    frame_rate_var.trace_add("write", create_param_trace(frame_rate_var, "frame_rate"))
+    output_color_mode.trace_add("write", create_param_trace(output_color_mode, "output_color_mode"))
+    ai_upscale_enable.trace_add("write", create_param_trace(ai_upscale_enable, "ai_upscale_enable"))
+    resolution_var.trace_add("write", create_param_trace(resolution_var, "resolution_var"))
+    fruc_enable.trace_add("write", create_param_trace(fruc_enable, "fruc_enable"))
+    nvvfx_denoise_var.trace_add("write", create_param_trace(nvvfx_denoise_var, "nvvfx_denoise_var"))
+    artifact_enable.trace_add("write", create_param_trace(artifact_enable, "artifact_enable"))
+    rate_control_mode.trace_add("write", create_param_trace(rate_control_mode, "rate_control_mode"))
+    qvbr.trace_add("write", create_param_trace(qvbr, "qvbr"))
+    cqp_i.trace_add("write", create_param_trace(cqp_i, "cqp_i"))
+    cqp_p.trace_add("write", create_param_trace(cqp_p, "cqp_p"))
+    cqp_b.trace_add("write", create_param_trace(cqp_b, "cqp_b"))
+    gop_len.trace_add("write", create_param_trace(gop_len, "gop_len"))
+    bracket_steps.trace_add("write", create_param_trace(bracket_steps, "bracket_steps"))
+    step_size.trace_add("write", create_param_trace(step_size, "step_size"))
+    crop_w.trace_add("write", create_param_trace(crop_w, "crop_w"))
+    crop_h.trace_add("write", create_param_trace(crop_h, "crop_h"))
+    crop_x.trace_add("write", create_param_trace(crop_x, "crop_x"))
+    crop_y.trace_add("write", create_param_trace(crop_y, "crop_y"))
+    no_crop_var.trace_add("write", create_param_trace(no_crop_var, "no_crop_var"))
+    sleep_enable.trace_add("write", create_param_trace(sleep_enable, "sleep_enable"))
 
     _is_updating_cqp = False
     def _update_cqp_ratios(*args, source_var):
