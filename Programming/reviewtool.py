@@ -2,7 +2,7 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageTk
 
 # ==========================================
@@ -46,11 +46,15 @@ class TranscriptionReviewer:
         self.image_ref = None 
         self.original_image = None
         
+        self.all_versions = set(["Default"])
+        self.current_version_var = tk.StringVar(value="Default")
+
         # UI Setup
         self._setup_ui()
         
         # Load Files
         self._find_files_fuzzy()
+        self._update_version_dropdown()
         
         if self.pairs:
             self.load_pair(0)
@@ -122,6 +126,14 @@ class TranscriptionReviewer:
         style_btn(self.btn_next)
         self.btn_next.pack(side=tk.LEFT)
         
+        # Version Selection
+        self.lbl_version = tk.Label(self.control_frame, text="Version:", fg=COLORS["fg"], bg=COLORS["bg"], font=("Segoe UI", 9))
+        self.lbl_version.pack(side=tk.LEFT, padx=(20, 5))
+        
+        self.combo_version = ttk.Combobox(self.control_frame, textvariable=self.current_version_var, state="readonly", width=15)
+        self.combo_version.pack(side=tk.LEFT)
+        self.combo_version.bind("<<ComboboxSelected>>", lambda e: self.load_pair(self.current_index))
+
         self.lbl_filename = tk.Label(self.control_frame, text="", fg=COLORS["highlight"], bg=COLORS["bg"], font=("Segoe UI", 9))
         self.lbl_filename.pack(side=tk.LEFT, padx=20)
 
@@ -142,52 +154,107 @@ class TranscriptionReviewer:
             self.paned_window.sash_place(0, window_width // 2, 0)
 
     def _find_files_fuzzy(self):
-        files = os.listdir(self.working_dir)
-        images = sorted([f for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS])
-        text_files = sorted([f for f in files if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS])
+        try:
+            files_in_root = os.listdir(self.working_dir)
+        except Exception as e:
+            print(f"Error reading directory: {e}")
+            return
+
+        images = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS])
+        text_files_root = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS])
+        
+        # Find subdirectories
+        subdirs = [d for d in files_in_root if os.path.isdir(os.path.join(self.working_dir, d))]
         
         for img_file in images:
             img_basename = os.path.splitext(img_file)[0]
+            versions = {}
+            
+            # 1. Look for Default (Root)
             match = None
-            if f"{img_basename}.txt" in text_files:
+            if f"{img_basename}.txt" in text_files_root:
                 match = f"{img_basename}.txt"
             else:
-                candidates = [t for t in text_files if t.startswith(img_basename)]
+                candidates = [t for t in text_files_root if t.startswith(img_basename)]
                 if candidates: match = candidates[0]
             
             if match:
-                self.pairs.append((os.path.join(self.working_dir, img_file), os.path.join(self.working_dir, match)))
-        print(f"Found {len(self.pairs)} pairs.")
+                versions["Default"] = os.path.join(self.working_dir, match)
+
+            # 2. Look in Subdirectories
+            for subdir in subdirs:
+                subdir_path = os.path.join(self.working_dir, subdir)
+                try:
+                    subdir_files = os.listdir(subdir_path)
+                    # Check for exact name match first
+                    if f"{img_basename}.txt" in subdir_files:
+                         versions[subdir] = os.path.join(subdir_path, f"{img_basename}.txt")
+                    else:
+                        # Fuzzy match in subdir? Maybe overkill, but consistent
+                        candidates = [t for t in subdir_files if t.startswith(img_basename) and os.path.splitext(t)[1].lower() in TEXT_EXTENSIONS]
+                        if candidates:
+                             versions[subdir] = os.path.join(subdir_path, candidates[0])
+                except Exception:
+                    continue
+
+            if versions:
+                self.pairs.append((os.path.join(self.working_dir, img_file), versions))
+                self.all_versions.update(versions.keys())
+        
+        print(f"Found {len(self.pairs)} pairs with versions: {self.all_versions}")
+
+    def _update_version_dropdown(self):
+        sorted_versions = sorted(list(self.all_versions))
+        if "Default" in sorted_versions:
+            # Move Default to top
+            sorted_versions.remove("Default")
+            sorted_versions.insert(0, "Default")
+        
+        self.combo_version['values'] = sorted_versions
+        if sorted_versions:
+            if self.current_version_var.get() not in sorted_versions:
+                self.current_version_var.set(sorted_versions[0])
+        else:
+            self.current_version_var.set("")
 
     def load_pair(self, index):
         if not (0 <= index < len(self.pairs)): return
         self.current_index = index
-        img_path, txt_path = self.pairs[index]
+        img_path, versions = self.pairs[index]
         
+        selected_ver = self.current_version_var.get()
+        txt_path = versions.get(selected_ver)
+
         self.root.title(f"Reviewing: {os.path.basename(img_path)}")
         self.lbl_status.config(text=f"{index + 1} / {len(self.pairs)}")
-        self.lbl_filename.config(text=os.path.basename(txt_path))
         
-        try:
-            print(f"Loading text file: {txt_path}")
-            with open(txt_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                
-            print(f"Content length: {len(content)}")
-            print(f"Snippet: {content[:100]!r}")
-            
-            if not content:
-                content = "[File is empty]"
+        if txt_path:
+            self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
+            try:
+                print(f"Loading text file: {txt_path}")
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    
+                if not content:
+                    content = "[File is empty]"
 
-            self.text_editor.delete('1.0', tk.END)
-            self.text_editor.insert('1.0', content)
-            
-            # FOCUS TEXT EDITOR
-            self.text_editor.focus_set()
-            
-        except Exception as e:
-            self.text_editor.delete('1.0', tk.END)
-            self.text_editor.insert('1.0', f"Error: {e}")
+                self.text_editor.delete('1.0', tk.END)
+                self.text_editor.insert('1.0', content)
+                self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
+                
+                # FOCUS TEXT EDITOR
+                self.text_editor.focus_set()
+                
+            except Exception as e:
+                self.text_editor.delete('1.0', tk.END)
+                self.text_editor.insert('1.0', f"Error: {e}")
+        else:
+             self.lbl_filename.config(text=f"{selected_ver}: (Not Found)")
+             self.text_editor.delete('1.0', tk.END)
+             self.text_editor.insert('1.0', f"[No text file found for version '{selected_ver}' for this image]")
+             # Could disable editing here if desired
+             # self.text_editor.config(state=tk.DISABLED, bg="#333333")
+
 
         try:
             self.original_image = Image.open(img_path)
@@ -215,7 +282,14 @@ class TranscriptionReviewer:
 
     def save_current_text(self):
         if not self.pairs: return
-        _, txt_path = self.pairs[self.current_index]
+        _, versions = self.pairs[self.current_index]
+        selected_ver = self.current_version_var.get()
+        txt_path = versions.get(selected_ver)
+        
+        if not txt_path:
+            messagebox.showerror("Save Error", f"No file exists for version '{selected_ver}' to save to.")
+            return
+
         content = self.text_editor.get('1.0', 'end-1c')
         try:
             with open(txt_path, 'w', encoding='utf-8') as f: f.write(content)
