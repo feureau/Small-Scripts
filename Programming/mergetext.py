@@ -242,6 +242,17 @@ if __name__ == "__main__":
         print(f"No file patterns specified. Using default plaintext extensions:")
         print(f"  {', '.join(DEFAULT_PLAINTEXT_EXTENSIONS)}\n")
 
+    # Heuristic: If -o wasn't used, and we have multiple patterns, and the last pattern
+    # doesn't look like a glob AND doesn't exist as a file, treat it as output.
+    # This supports usage like: mergetext.py *.md output.md
+    if args.output == f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}" and len(args.file_patterns) >= 2:
+        last_arg = args.file_patterns[-1]
+        is_glob = any(char in last_arg for char in "*?[]")
+        if not is_glob and not os.path.exists(last_arg):
+            print(f"ℹ️  Implicit output detected: '{last_arg}' (treating as output file)")
+            args.output = last_arg
+            args.file_patterns.pop()
+
     merge_text_files(
         file_patterns=args.file_patterns,
         output_filename=args.output,
