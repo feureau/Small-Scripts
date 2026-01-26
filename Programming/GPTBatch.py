@@ -100,6 +100,12 @@ import tkinter.simpledialog
 import tkinter.simpledialog
 
 try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_AVAILABLE = True
+except ImportError:
+    DND_AVAILABLE = False
+
+try:
     from PIL import Image
     PIL_AVAILABLE = True
 except ImportError:
@@ -188,19 +194,20 @@ class InputFileSanitizer:
     Inside a 'gptbatch_temp' subfolder within the SAME DIRECTORY as the original file.
     This ensures better locality and avoids cross-drive issues.
     """
-    def __init__(self, filepaths, target_fmt="PNG", quality=100, max_dim=0, force_convert=False, **kwargs):
+    def __init__(self, filepaths, target_fmt="PNG", quality=100, max_dim=0, force_convert=False, enable_conversion=False, cancellation_event=None, **kwargs):
         self.filepaths = filepaths
         self.batch_id = uuid.uuid4().hex[:8]
-        self.temp_dirs_created = set() # Track all created temp dirs for cleanup
-        self.mapping = {} # { original_path: safe_path }
+        self.temp_dirs = set() # Track all created temp dirs for cleanup
+        self.file_map = {} # { original_path: safe_path }
         self.created_files = []
+        self.cancellation_event = cancellation_event
         
         # Image Processing Settings
         self.target_fmt = target_fmt.upper()
         self.quality = quality
         self.max_dim = max_dim
         self.force_convert = force_convert
-        self.enable_conversion = kwargs.get('enable_conversion', False)
+        self.enable_conversion = enable_conversion # Use the explicit param, not kwargs.get
         
         # Extensions mapping for target format
         self.fmt_ext_map = {'PNG': '.png', 'JPEG': '.jpg', 'WEBP': '.webp'}
@@ -208,9 +215,12 @@ class InputFileSanitizer:
 
     def __enter__(self):
         for original_path in self.filepaths:
+            if self.cancellation_event and self.cancellation_event.is_set():
+                raise CancellationError("Processing cancelled during file sanitization.")
+            
             if not os.path.exists(original_path):
                 console_log(f"Skipping sanitization for missing file: {original_path}", "WARN")
-                self.mapping[original_path] = original_path 
+                self.file_map[original_path] = original_path 
                 continue
 
             try:
@@ -238,7 +248,7 @@ class InputFileSanitizer:
                 if should_convert:
                     # ENSURE DIRECTORY EXISTS (Fix for FileNotFoundError)
                     os.makedirs(local_batch_dir, exist_ok=True)
-                    self.temp_dirs_created.add(local_temp_base)
+                    self.temp_dirs.add(local_temp_base)
 
                     safe_name = f"safe_{file_hash}{self.target_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
@@ -272,7 +282,7 @@ class InputFileSanitizer:
                         
                         console_log(f"Processed image: {os.path.basename(original_path)} -> {self.target_fmt} ({self.target_ext})", "INFO")
                         
-                        self.mapping[original_path] = safe_path
+                        self.file_map[original_path] = safe_path
                         self.created_files.append(safe_path)
 
                     except Exception as e:
@@ -282,34 +292,34 @@ class InputFileSanitizer:
                         safe_path = os.path.join(local_batch_dir, safe_name)
                         shutil.copy2(original_path, safe_path)
                         
-                        self.mapping[original_path] = safe_path
+                        self.file_map[original_path] = safe_path
                         self.created_files.append(safe_path)
 
                 else:
                     # Standard Move/Copy
                     # ENSURE DIRECTORY EXISTS
                     os.makedirs(local_batch_dir, exist_ok=True)
-                    self.temp_dirs_created.add(local_temp_base)
+                    self.temp_dirs.add(local_temp_base)
                     
                     safe_name = f"safe_{file_hash}{orig_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
                     
                     shutil.copy2(original_path, safe_path)
                     
-                    self.mapping[original_path] = safe_path
+                    self.file_map[original_path] = safe_path
                     self.created_files.append(safe_path)
 
             except Exception as e:
                 console_log(f"Failed to sanitize file {original_path}: {e}", "WARN")
-                self.mapping[original_path] = original_path
+                self.file_map[original_path] = original_path
 
-        return self.mapping
+        return self.file_map
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Cleanup: Remove the specific batch directories created
         for original_path in self.filepaths:
-             if original_path in self.mapping:
-                 safe_path = self.mapping[original_path]
+             if original_path in self.file_map:
+                 safe_path = self.file_map[original_path]
                  # If we created a safe file, it's inside a batch dir we want to remove
                  # safe_path = .../gptbatch_temp_safe/batch_ID/safe_file.ext
                  try:
@@ -319,7 +329,7 @@ class InputFileSanitizer:
                  except Exception: pass
         
         # Optional: Try to remove the parent 'gptbatch_temp_safe' if empty
-        for temp_base in self.temp_dirs_created:
+        for temp_base in self.temp_dirs:
             try:
                 if os.path.exists(temp_base) and not os.listdir(temp_base):
                     os.rmdir(temp_base)
@@ -341,6 +351,7 @@ def cleanup_stale_temp_files():
 
 class QuotaExhaustedError(Exception): pass
 class FatalProcessingError(Exception): pass
+class CancellationError(Exception): pass
 last_request_time = None
 
 def console_log(msg, type="INFO"):
@@ -441,7 +452,7 @@ def upload_image_file(path, client, retries=3, display_name=None):
     console_log(f"❌ [UPLOAD FAILED] {path}: {last_error}", "ERROR")
     return None, False
 
-def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=False):
+def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=False, cancellation_event=None):
     """
     image_paths_map: dict { safe_path: display_name } or list of paths (if list, display_name=basename)
     """
@@ -464,6 +475,8 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
     if sequential:
         files_list = []
         for i, (path, name) in enumerate(items):
+             if cancellation_event and cancellation_event.is_set():
+                 raise CancellationError("Processing cancelled during sequential upload.")
              file_obj, was_cached = upload_image_file(path, client, display_name=name)
              if file_obj:
                  files_list.append(file_obj)
@@ -474,6 +487,9 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {executor.submit(upload_image_file, p, client, display_name=n): i for i, (p, n) in enumerate(items)}
             for future in as_completed(future_to_index):
+                if cancellation_event and cancellation_event.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise CancellationError("Processing cancelled during parallel upload.")
                 index = future_to_index[future]
                 try:
                     file_obj, was_cached = future.result()
@@ -584,7 +600,7 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
         return sanitize_api_response(response_text)
     return response_text
 
-def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google_file_objects=None, stream_output=False, safety_settings=None, **kwargs):
+def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google_file_objects=None, stream_output=False, safety_settings=None, cancellation_event=None, **kwargs):
     global last_request_time
     if not api_key: return "Error: Google API Key not configured."
     try:
@@ -623,14 +639,17 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
         )
 
         if stream_output:
+            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before generation.")
             response = client.models.generate_content_stream(model=model_name, contents=contents, config=config)
         else:
+            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before generation.")
             response = client.models.generate_content(model=model_name, contents=contents, config=config)
         
         if stream_output:
             full_text = ""
             print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
             for chunk in response:
+                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during streaming.")
                 try:
                     # Handle Thinking Content (if present)
                     if hasattr(chunk, 'candidates') and chunk.candidates:
@@ -690,7 +709,7 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
     except FatalProcessingError: raise 
     except Exception as e: raise e
 
-def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, stream_output=False, **kwargs):
+def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, stream_output=False, cancellation_event=None, **kwargs):
     try:
         message = {'role': 'user', 'content': prompt_text}
         if images_data_list:
@@ -701,7 +720,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
         tools_list = [ollama.web_search] if enable_web_search else []
 
         if stream_output:
-            print(f"\n--- [STREAM] Ollama ({model_name}) ---\n", end="", flush=True)
+            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before Ollama generation.")
             stream = ollama.chat(
                 model=model_name,
                 messages=[message],
@@ -711,6 +730,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
             full_text = ""
             thinking_active = False
             for chunk in stream:
+                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during Ollama streaming.")
                 part = chunk['message']['content']
                 
                 # Simple Thinking Tag Handling
@@ -741,6 +761,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
             print("\n---------------------------------------\n", flush=True)
             return full_text
         else:
+            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before Ollama generation.")
             response = ollama.chat(
                 model=model_name,
                 messages=[message],
@@ -750,7 +771,7 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
     except Exception as e:
         return f"Error: Ollama API: {str(e)}"
 
-def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_output=False, **kwargs):
+def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_output=False, cancellation_event=None, **kwargs):
     headers = {"Content-Type": "application/json"}
     if images_data_list:
         message_content = [{"type": "text", "text": prompt_text}]
@@ -779,6 +800,7 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
             full_text = ""
             thinking_active = False
             for line in response.iter_lines():
+                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during LMStudio streaming.")
                 if line:
                     decoded_line = line.decode('utf-8').strip()
                     if decoded_line.startswith("data: "):
@@ -848,7 +870,7 @@ def copy_failed_file(filepath):
         shutil.copy2(filepath, os.path.join(failed_dir, os.path.basename(filepath)))
     except Exception: pass
 
-def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, **kwargs):
+def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, cancellation_event=None, **kwargs):
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
     log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name}
@@ -900,7 +922,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             quality=kwargs.get('img_quality', 100),
             max_dim=kwargs.get('img_max_dim', 0),
             force_convert=kwargs.get('force_conversion', False),
-            enable_conversion=kwargs.get('enable_img_conversion', False)
+            enable_conversion=kwargs.get('enable_img_conversion', False),
+            cancellation_event=cancellation_event
         ) as file_map:
             
             # 1. Handle Images
@@ -913,7 +936,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                     sequential_upload = kwargs.get('sequential_upload', False)
                     # Prepare map: { safe_path: original_basename } for display names
                     upload_map = {file_map[f]: os.path.basename(f) for f in image_files}
-                    google_file_objects = upload_images_parallel(upload_map, client, sequential=sequential_upload)
+                    google_file_objects = upload_images_parallel(upload_map, client, sequential=sequential_upload, cancellation_event=cancellation_event)
                 
                 # Logic for other engines OR for Saving Processed Images (Universal)
                 for img_path in image_files:
@@ -978,7 +1001,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 safety_settings=kwargs.get('safety_settings'),
                 enable_web_search=kwargs.get('enable_web_search', False),
                 enable_thinking=kwargs.get('enable_thinking', False),
-                clean_markdown=kwargs.get('clean_markdown', True) # Pass clean setting
+                clean_markdown=kwargs.get('clean_markdown', True), # Pass clean setting
+                cancellation_event=cancellation_event
             )
         
         if response and str(response).strip().startswith("Error"): 
@@ -1078,6 +1102,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         
         # Check for Quota/429 errors to prevent writing them to file
         error_str = str(e).lower()
+        if isinstance(e, CancellationError): raise
         if isinstance(e, QuotaExhaustedError) or \
            "quota exhausted" in error_str or \
            "429" in error_str or \
@@ -1192,7 +1217,7 @@ class ModelSelectionDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-class AppGUI(tk.Tk):
+class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
         self.title("Multimodal AI Batch Processor v25.6 (Gemini Files API Supported)")
@@ -1304,6 +1329,10 @@ class AppGUI(tk.Tk):
         file_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
         self.file_listbox = tk.Listbox(file_frame, listvariable=self.files_var, selectmode=tk.EXTENDED, height=6)
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        if DND_AVAILABLE:
+            self.file_listbox.drop_target_register(DND_FILES)
+            self.file_listbox.dnd_bind('<<Drop>>', self.handle_drop)
         sb = ttk.Scrollbar(file_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
         sb.pack(side=tk.LEFT, fill=tk.Y); self.file_listbox.config(yscrollcommand=sb.set)
         
@@ -1312,6 +1341,8 @@ class AppGUI(tk.Tk):
         ttk.Button(btn_f, text="Add", command=self.add_files).pack(fill=tk.X, pady=2)
         ttk.Button(btn_f, text="Remove", command=self.remove_files).pack(fill=tk.X, pady=2)
         ttk.Button(btn_f, text="Clear", command=self.clear_files).pack(fill=tk.X, pady=2)
+        ttk.Button(btn_f, text="Exp List", command=self.export_files_list).pack(fill=tk.X, pady=2)
+        ttk.Button(btn_f, text="Ld List", command=self.load_files_list).pack(fill=tk.X, pady=2)
 
         prompt_frame = ttk.LabelFrame(left_frame, text="2. System Prompt", padding=5)
         prompt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -1469,6 +1500,8 @@ class AppGUI(tk.Tk):
         self.start_btn = ttk.Button(btn_area, text="START PROCESSING", command=self.start_processing, style="Accent.TButton"); self.start_btn.pack(side=tk.RIGHT, padx=5, ipadx=10)
         self.pause_btn = ttk.Button(btn_area, text="Pause", command=self.toggle_pause, state="disabled"); self.pause_btn.pack(side=tk.RIGHT, padx=5)
         self.clear_btn = ttk.Button(btn_area, text="Clear", command=self.clear_queue); self.clear_btn.pack(side=tk.RIGHT, padx=5)
+        self.btn_export = ttk.Button(btn_area, text="Export Jobs", command=self.export_job_list); self.btn_export.pack(side=tk.LEFT, padx=2)
+        self.btn_load = ttk.Button(btn_area, text="Load Jobs", command=self.load_job_list); self.btn_load.pack(side=tk.LEFT, padx=2)
         self.btn_requeue = ttk.Button(btn_area, text="Retry Failed", command=self.requeue_failed); self.btn_requeue.pack(side=tk.RIGHT, padx=5)
         self.btn_undo = ttk.Button(btn_area, text="Undo Rename", command=self.undo_rename); self.btn_undo.pack(side=tk.RIGHT, padx=5)
         ttk.Style().configure("Accent.TButton", font=('Helvetica', 10, 'bold'), foreground="black")
@@ -1717,7 +1750,31 @@ class AppGUI(tk.Tk):
     def add_files(self):
         f = filedialog.askopenfilenames(parent=self, filetypes=[("Supported", " ".join(f"*{e}" for e in SUPPORTED_IMAGE_EXTENSIONS + ['.*']))])
         if f:
-            cur = list(self.files_var.get()); new = [os.path.normpath(x) for x in f if os.path.normpath(x) not in cur]
+            self._add_filepaths_to_list(f)
+
+    def handle_drop(self, event):
+        # Handle drag-and-drop files
+        files = self.tk.splitlist(event.data)
+        if files:
+            self._add_filepaths_to_list(files)
+
+    def _add_filepaths_to_list(self, filepaths):
+        cur = list(self.files_var.get())
+        new = []
+        for f in filepaths:
+            p = os.path.normpath(f)
+            if os.path.isfile(p) and p not in cur:
+                new.append(p)
+            elif os.path.isdir(p):
+                # Optionally handle directories by scanning them
+                for ext in AUTO_LOAD_EXTENSIONS:
+                    found = glob.glob(os.path.join(p, f"**/*{ext}"), recursive=True)
+                    for find_f in found:
+                        norm_f = os.path.normpath(find_f)
+                        if norm_f not in cur and norm_f not in new:
+                            new.append(norm_f)
+                            
+        if new:
             self.files_var.set(tuple(sorted(cur + new, key=natural_sort_key)))
 
     def remove_files(self):
@@ -1728,6 +1785,55 @@ class AppGUI(tk.Tk):
             self.files_var.set(tuple(l))
 
     def clear_files(self): self.files_var.set([])
+
+    def export_files_list(self):
+        files = list(self.files_var.get())
+        if not files:
+            tkinter.messagebox.showinfo("Export", "File list is empty.")
+            return
+
+        initial_dir = os.path.dirname(files[0])
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            initialdir=initial_dir,
+            title="Export File List",
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(files, f, indent=4)
+            console_log(f"Exported {len(files)} file paths to {file_path}", "SUCCESS")
+        except Exception as e:
+            console_log(f"Failed to export file list: {e}", "ERROR")
+            tkinter.messagebox.showerror("Export Error", str(e))
+
+    def load_files_list(self):
+        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        file_path = filedialog.askopenfilename(
+            parent=self,
+            initialdir=initial_dir,
+            title="Load File List",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                loaded_files = json.load(f)
+            
+            if not isinstance(loaded_files, list):
+                raise ValueError("JSON file must contain a list of file paths.")
+            
+            self._add_filepaths_to_list(loaded_files)
+            console_log(f"Loaded file list from {file_path}", "SUCCESS")
+        except Exception as e:
+            console_log(f"Failed to load file list: {e}", "ERROR")
+            tkinter.messagebox.showerror("Load Error", str(e))
     def browse_out(self):
         d = filedialog.askdirectory(parent=self)
         if d: self.output_dir_var.set(d)
@@ -1962,7 +2068,101 @@ class AppGUI(tk.Tk):
             self.worker_thread = threading.Thread(target=self._worker, daemon=True)
             self.worker_thread.start()
             self.start_btn.config(state="disabled"); self.pause_btn.config(state="normal", text="Pause")
-            self.clear_btn.config(text="Stop"); self.btn_add_sel.config(state="disabled"); self.btn_add_all.config(state="disabled")
+            self.clear_btn.config(text="Stop")
+
+    def export_job_list(self):
+        if not self.job_registry:
+            tkinter.messagebox.showinfo("Export", "Job queue is empty.")
+            return
+
+        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            initialdir=initial_dir,
+            title="Export Job List",
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if not file_path:
+            return
+
+        try:
+            export_data = {}
+            for jid, job in self.job_registry.items():
+                job_copy = job.copy()
+                # Handle Google Safety Settings (types.SafetySetting objects)
+                if 'safety_settings' in job_copy and job_copy['safety_settings']:
+                    if isinstance(job_copy['safety_settings'], list):
+                        new_settings = []
+                        for s in job_copy['safety_settings']:
+                            if hasattr(s, 'category'): # types.SafetySetting
+                                new_settings.append({'category': str(s.category), 'threshold': str(s.threshold)})
+                            else:
+                                new_settings.append(s)
+                        job_copy['safety_settings'] = new_settings
+                
+                # result_metadata is used to store mutable state like rename history
+                # We should ensure it's serializable if not empty
+                if 'result_metadata' in job_copy:
+                    # It's usually a dict of strings/bools, so it should be fine.
+                    pass
+
+                export_data[str(jid)] = job_copy
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=4)
+            console_log(f"Exported {len(export_data)} jobs to {file_path}", "SUCCESS")
+        except Exception as e:
+            console_log(f"Failed to export jobs: {e}", "ERROR")
+            tkinter.messagebox.showerror("Export Error", str(e))
+
+    def load_job_list(self):
+        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        file_path = filedialog.askopenfilename(
+            parent=self,
+            initialdir=initial_dir,
+            title="Load Job List",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                loaded_data = json.load(f)
+            
+            count = 0
+            for _, job in loaded_data.items():
+                # Reconstruct SafetySetting for Google
+                if job.get('engine') == 'google' and job.get('safety_settings'):
+                    reconstructed = []
+                    for s in job['safety_settings']:
+                        if isinstance(s, dict) and 'category' in s:
+                            reconstructed.append(types.SafetySetting(category=s['category'], threshold=s['threshold']))
+                        else:
+                            reconstructed.append(s)
+                    job['safety_settings'] = reconstructed
+                
+                # Assign new ID to avoid collisions
+                self.job_id_counter += 1
+                new_id = self.job_id_counter
+                job['job_id'] = new_id
+                
+                self.job_registry[new_id] = job
+                self.job_queue.put(job)
+                
+                self.tree.insert('', tk.END, iid=new_id, values=(
+                    new_id, 
+                    generate_group_base_name(job['filepaths_group']), 
+                    'Pending', 
+                    job['model_name']
+                ))
+                count += 1
+            
+            console_log(f"Loaded {count} jobs from {file_path}", "SUCCESS")
+        except Exception as e:
+            console_log(f"Failed to load jobs: {e}", "ERROR")
+            tkinter.messagebox.showerror("Load Error", str(e))
 
     def toggle_pause(self):
         if self.processing_paused.is_set(): self.processing_paused.clear(); self.pause_btn.config(text="Pause")
@@ -2067,11 +2267,15 @@ class AppGUI(tk.Tk):
                 attempt += 1
                 if self.processing_cancelled.is_set(): break
                 try:
-                    err = process_file_group(**params)
+                    err = process_file_group(**params, cancellation_event=self.processing_cancelled)
                     if not err:
                         self.result_queue.put({'job_id': jid, 'status': 'Completed'})
                         break
                     else: raise Exception(err)
+                except CancellationError:
+                    console_log(f"⏹️ Job {jid} Cancelled.", "WARN")
+                    self.result_queue.put({'job_id': jid, 'status': 'Cancelled'})
+                    break
                 except Exception as e:
                     if isinstance(e, FatalProcessingError) or "Fatal:" in str(e):
                         console_log(f"❌ Job {jid} Failed: {e}", "ERROR")
