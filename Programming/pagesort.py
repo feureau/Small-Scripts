@@ -36,10 +36,12 @@ MORPH_KERNEL_TEXT_CONNECT = (25, 5)
 
 # Filters for valid text "lines".
 # A contour must meet ALL these criteria to be counted as a text line.
-TEXT_MIN_WIDTH = 30          # Minimum width in pixels
-TEXT_MIN_HEIGHT = 8          # Minimum height in pixels
-TEXT_MIN_ASPECT_RATIO = 2.5  # Width / Height (Lines must be wide)
-TEXT_MIN_AREA = 150          # Minimum blob area
+# Values are RELATIVE to image size to support various resolutions.
+FACTOR_TEXT_MIN_WIDTH = 0.025        # 2.5% of Image Width (Increased from 1.5%)
+FACTOR_TEXT_MIN_HEIGHT = 0.006       # 0.6% of Image Height (Increased from 0.3%)
+TEXT_MIN_ASPECT_RATIO = 2.5          # Width / Height (Lines must be wide)
+# Area factor roughly corresponds to a box of (min_w * min_h) * 0.8
+FACTOR_TEXT_MIN_AREA_SCALE = 0.8     
 
 # --- 3. IMAGE DETECTION ---
 # Canny Edge Detection thresholds.
@@ -57,6 +59,10 @@ IMAGE_CONTOUR_MIN_AREA = 100
 TH_BLANK_TEXT_MAX = 3
 TH_BLANK_IMAGE_MAX = 5000
 
+# BLANK Check (Standard Deviation)
+# If image std-dev is below this, it is considered BLANK (ignores noise/texture).
+TH_BLANK_STD_MAX = 10.0
+
 # STRONG PAGE Check
 # Page is TEXT if Text Lines > X (Overrides image check)
 TH_PAGE_TEXT_MIN = 20
@@ -73,13 +79,31 @@ import shutil
 import argparse
 import cv2
 import numpy as np
+import sys
+from PIL import Image
 
-def classify_page_content(image_path, verbose=True):
+# Metadata tags we might care about
+META_TAGS = ['dpi', 'format', 'mode']
+
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+def classify_page_content(image_path, params, verbose=True):
     """
     Analyzes an image to determine if it contains Text, Images, or is Blank.
     
     Returns:
-        str: 'pages', 'images', or 'blank'
+        dict: classification metrics and results
     """
     try:
         # Read image safely (handle unicode paths)
@@ -89,11 +113,27 @@ def classify_page_content(image_path, verbose=True):
 
         if img is None:
             if verbose: print(f"    - Warning: Could not decode {os.path.basename(image_path)}")
-            return 'error'
+            return None
 
         # 1. Preprocessing
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
+        # Optional StdDev Check
+        std_val = 0.0
+        if params.get('std_threshold') is not None:
+            (mean, std) = cv2.meanStdDev(gray)
+            std_val = std[0][0]
+            
+            if std_val < params['std_threshold']:
+                if verbose: print(f"      -> METRICS: StdDev={std_val:.2f} < {params['std_threshold']} (Fast Blank)")
+                return {
+                    'has_text': False,
+                    'has_image': False,
+                    'text_lines': 0,
+                    'image_area': 0,
+                    'std': std_val
+                }
+
         # Denoise
         kernel_noise = cv2.getStructuringElement(cv2.MORPH_RECT, MORPH_KERNEL_NOISE)
         denoised = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel_noise)
@@ -120,7 +160,27 @@ def classify_page_content(image_path, verbose=True):
         text_lines_found = 0
         total_text_area = 0
         
-        if verbose: print(f"    [Diagnostics] Analyzing: {os.path.basename(image_path)}")
+        # Calculate Thresholds
+        h_img, w_img = img.shape[:2]
+        
+        if params.get('width_px') and params.get('height_px'):
+            thresh_min_w = params['width_px']
+            thresh_min_h = params['height_px']
+            mode_desc = "Fixed Pixels"
+        else:
+            thresh_min_w = int(w_img * params['width_pct'])
+            thresh_min_h = int(h_img * params['height_pct'])
+            mode_desc = f"Dynamic ({params['width_pct']*100:.2f}%W, {params['height_pct']*100:.2f}%H)"
+
+        thresh_min_area = int(thresh_min_w * thresh_min_h * FACTOR_TEXT_MIN_AREA_SCALE)
+        
+        # Safety clamp to avoid 0
+        thresh_min_w = max(thresh_min_w, 5)
+        thresh_min_h = max(thresh_min_h, 2)
+        thresh_min_area = max(thresh_min_area, 10)
+
+        if verbose: 
+            print(f"      -> Text Detection ({mode_desc}): W>{thresh_min_w}px, H>{thresh_min_h}px, Area>{thresh_min_area}px")
 
         for c in cnts_text:
             (x, y, w, h) = cv2.boundingRect(c)
@@ -131,10 +191,10 @@ def classify_page_content(image_path, verbose=True):
             area = cv2.contourArea(c)
             
             # Text Filter
-            if (w > TEXT_MIN_WIDTH and 
-                h > TEXT_MIN_HEIGHT and 
+            if (w > thresh_min_w and 
+                h > thresh_min_h and 
                 aspect_ratio > TEXT_MIN_ASPECT_RATIO and 
-                area > TEXT_MIN_AREA):
+                area > thresh_min_area):
                 text_lines_found += 1
                 total_text_area += area
         
@@ -166,29 +226,31 @@ def classify_page_content(image_path, verbose=True):
         # DECISION LOGIC
         # ----------------------------------------------------------------------
         
-        # 1. BLANK CHECK
-        if text_lines_found < TH_BLANK_TEXT_MAX and image_content_area < TH_BLANK_IMAGE_MAX:
-            if verbose: print(f"      -> RESULT: Blank (Text < {TH_BLANK_TEXT_MAX} AND Image < {TH_BLANK_IMAGE_MAX})")
-            return 'blank'
-
-        # 2. STRONG TEXT CHECK
-        if text_lines_found > TH_PAGE_TEXT_MIN:
-             if verbose: print(f"      -> RESULT: Pages (Strong Text: {text_lines_found} > {TH_PAGE_TEXT_MIN})")
-             return 'pages'
-
-        # 3. AMBIGUOUS ZONE (Text is between thresholds)
-        if image_content_area > TH_IMAGE_AREA_HIGH:
-            if verbose: print(f"      -> RESULT: Images (Ambiguous Text, High Image Content: {image_content_area} > {TH_IMAGE_AREA_HIGH})")
-            return 'images'
+        # ----------------------------------------------------------------------
+        # DECISION LOGIC
+        # ----------------------------------------------------------------------
         
-        if verbose: print(f"      -> RESULT: Pages (Ambiguous Text, Low Image Content: {image_content_area} <= {TH_IMAGE_AREA_HIGH})")
-        return 'pages'
+        has_text = text_lines_found >= TH_BLANK_TEXT_MAX
+        has_image = image_content_area >= TH_BLANK_IMAGE_MAX
+        
+        result = {
+            'has_text': has_text,
+            'has_image': has_image,
+            'text_lines': text_lines_found,
+            'image_area': image_content_area,
+            'std': std_val
+        }
+
+        if verbose:
+            print(f"      -> METRICS: Text={has_text} ({text_lines_found}), Image={has_image} ({image_content_area}), StdDev={std_val:.2f}")
+
+        return result
 
     except Exception as e:
         print(f"    - Error analyzing {os.path.basename(image_path)}: {e}")
-        return 'error'
+        return None
 
-def process_images(target_dir, verbose=True):
+def process_images(target_dir, params, verbose=True):
     image_extensions = ('*.png', '*.jpg', '*.jpeg', '*.tif', '*.tiff', '*.bmp')
     image_files = []
 
@@ -197,10 +259,22 @@ def process_images(target_dir, verbose=True):
     
     if verbose:
         print("--- CURRENT CONFIGURATION ---")
+        if params.get('width_px'):
+            print(f"  MODE               = Fixed Thresholds")
+            print(f"  Width Requirement  = {params['width_px']} px")
+            print(f"  Height Requirement = {params['height_px']} px")
+        else:
+            print(f"  MODE               = Dynamic Thresholds")
+            print(f"  Width Factor       = {params['width_pct']*100:.2f}%")
+            print(f"  Height Factor      = {params['height_pct']*100:.2f}%")
+        
+        if params.get('std_threshold'):
+            print(f"  StdDev Blank Check = Enabled (Threshold: {params['std_threshold']})")
+        else:
+            print(f"  StdDev Blank Check = Disabled")
+            
         print(f"  TH_BLANK_TEXT_MAX  = {TH_BLANK_TEXT_MAX}")
         print(f"  TH_BLANK_IMAGE_MAX = {TH_BLANK_IMAGE_MAX}")
-        print(f"  TH_PAGE_TEXT_MIN   = {TH_PAGE_TEXT_MIN}")
-        print(f"  TH_IMAGE_AREA_HIGH = {TH_IMAGE_AREA_HIGH}")
         print("-" * 30 + "\n")
 
     for ext in image_extensions:
@@ -213,7 +287,7 @@ def process_images(target_dir, verbose=True):
     print(f"Found {len(image_files)} images.\n")
 
     # Stats
-    stats = {'pages': 0, 'images': 0, 'blank': 0, 'error': 0, 'skipped': 0}
+    stats = {'pages': 0, 'images': 0, 'blank': 0, 'both': 0, 'error': 0, 'skipped': 0}
 
     # Setup Sorted Folders
     sorted_root = os.path.join(abs_target, 'sorted') 
@@ -234,47 +308,124 @@ def process_images(target_dir, verbose=True):
 
         if verbose:
             print("-" * 40)
+            print(f"    [Diagnostics] Analyzing: {os.path.basename(image_path)}")
+            # Detailed Metadata Extraction
+            try:
+                with Image.open(image_path) as pil_img:
+                    w, h = pil_img.size
+                    fmt = pil_img.format
+                    mode = pil_img.mode
+                    dpi = pil_img.info.get('dpi', ("Unknown", "Unknown"))
+                    print(f"      -> Metadata: {fmt} {mode}, {w}x{h} ({ (w*h)/1e6:.1f} MP), DPI: {dpi}")
+            except Exception as e:
+                print(f"      -> Metadata: Error reading metadata ({e})")
         else:
             print(f"Processing: {os.path.basename(image_path)}")
         
-        category = classify_page_content(image_path, verbose=verbose)
+        analysis = classify_page_content(image_path, params, verbose=verbose)
         
-        if category in dirs:
-            dest_dir = dirs[category]
-            try:
-                shutil.move(image_path, dest_dir)
-                if not verbose:
-                    print(f"    -> Moved to: sorted/{os.path.basename(dest_dir)}")
-                else:
-                    print(f"      -> Action: Moved to sorted/{os.path.basename(dest_dir)}")
-                stats[category] += 1
-            except Exception as e:
-                print(f"    -> Error moving file: {e}")
-                stats['error'] += 1
-        else:
-            if not verbose: print("    -> Skipped (Error or Unknown)")
-            stats['skipped'] += 1
+        if analysis is None:
+            stats['error'] += 1
+            continue
+
+        has_text = analysis['has_text']
+        has_image = analysis['has_image']
+
+        try:
+            # Logic:
+            # 1. Blank
+            # 2. Both (Copy to Image, Move to Text)
+            # 3. Image Only (Move to Image)
+            # 4. Text Only (Move to Pages)
+
+            if not has_text and not has_image:
+                # BLANK
+                dest = dirs['blank']
+                shutil.move(image_path, dest)
+                if verbose: print(f"      -> Action: Moved to sorted/blanks")
+                stats['blank'] += 1
+
+            elif has_text and has_image:
+                # BOTH
+                # 1. Copy to Images
+                shutil.copy2(image_path, dirs['images'])
+                if verbose: print(f"      -> Action: Copied to sorted/images")
+                
+                # 2. Move to Pages
+                shutil.move(image_path, dirs['pages'])
+                if verbose: print(f"      -> Action: Moved to sorted/pages")
+                stats['both'] += 1
+
+            elif has_image:
+                # IMAGE ONLY
+                dest = dirs['images']
+                shutil.move(image_path, dest)
+                if verbose: print(f"      -> Action: Moved to sorted/images")
+                stats['images'] += 1
+
+            elif has_text:
+                # TEXT ONLY
+                dest = dirs['pages']
+                shutil.move(image_path, dest)
+                if verbose: print(f"      -> Action: Moved to sorted/pages")
+                stats['pages'] += 1
+
+        except Exception as e:
+            print(f"    -> Error processing file: {e}")
+            stats['error'] += 1
         
         if not verbose: print("")
 
     print("="*30)
     print("Sorting Complete Check 'sorted/' folder.")
-    print(f"  Pages  : {stats['pages']}")
-    print(f"  Images : {stats['images']}")
-    print(f"  Blanks : {stats['blank']}")
+    print(f"  Pages (Text Only) : {stats['pages']}")
+    print(f"  Images (Img Only) : {stats['images']}")
+    print(f"  Both (Split)      : {stats['both']}")
+    print(f"  Blanks            : {stats['blank']}")
     print("="*30)
 
 def main():
     parser = argparse.ArgumentParser(description="Sorts scanned pages into Pages (Text), Images, and Blanks.")
     parser.add_argument('target_directory', nargs='?', default=os.getcwd(), help="Directory to process")
     parser.add_argument('-q', '--quiet', action='store_true', help="Disable verbose diagnostic output")
+    parser.add_argument('-r', '--report', action='store_true', help="Save console output to pagesort_report.txt")
+    
+    # New Configurable Parameters
+    parser.add_argument('--std', type=float, nargs='?', const=10.0, default=None, 
+                        help="Enable StdDev blank check. Optional: set custom threshold (default: 10.0)")
+    parser.add_argument('--wp', '--width-pct', type=float, default=0.012, 
+                        help="Text detection width percentage (default: 0.012 / 1.2%%)")
+    parser.add_argument('--hp', '--height-pct', type=float, default=0.002, 
+                        help="Text detection height percentage (default: 0.002 / 0.2%%)")
+    parser.add_argument('--wx', '--width-px', type=int, help="Override width with fixed pixels")
+    parser.add_argument('--hx', '--height-px', type=int, help="Override height with fixed pixels")
+    
     args = parser.parse_args()
 
     if not os.path.isdir(args.target_directory):
         print("Invalid directory.")
         return
 
-    process_images(args.target_directory, verbose=not args.quiet)
+    # Package params for clean passing
+    params = {
+        'std_threshold': args.std,
+        'width_pct': args.wp,
+        'height_pct': args.hp,
+        'width_px': args.wx,
+        'height_px': args.hx
+    }
+
+    if args.report:
+        report_path = os.path.join(args.target_directory, 'pagesort_report.txt')
+        sys.stdout = Logger(report_path)
+        print(f"--- REPORT STARTED: {report_path} ---")
+
+    try:
+        process_images(args.target_directory, params, verbose=not args.quiet)
+    finally:
+        # Restore stdout just in case, though script is ending
+        if args.report:
+            sys.stdout = sys.__stdout__
 
 if __name__ == "__main__":
     main()
