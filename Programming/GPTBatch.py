@@ -406,6 +406,28 @@ def hash_file(path, chunk_size=1024 * 1024):
             h.update(chunk)
     return h.hexdigest()
 
+def find_unique(folder, base, extension):
+    """
+    Finds a unique filename in the given folder by appending a counter if necessary.
+    """
+    counter = 1
+    filename = f"{base}{extension}"
+    full_path = os.path.join(folder, filename)
+    while os.path.exists(full_path):
+        filename = f"{base}_{counter}{extension}"
+        full_path = os.path.join(folder, filename)
+        counter += 1
+    return full_path
+
+def determine_unique_output_paths(base_name, suffix, out_folder, log_folder, ext=RAW_OUTPUT_FILE_EXTENSION):
+    """
+    Determines unique output paths for raw response and log files.
+    """
+    out_base = f"{base_name}{suffix}"
+    raw_path = find_unique(out_folder, out_base, ext)
+    log_path = find_unique(log_folder, out_base, LOG_FILE_EXTENSION) if log_folder else None
+    return raw_path, log_path
+
 # --- GEMINI FILES API UPLOADER (Cached & Robust) ---
 def upload_image_file(path, client, retries=3, display_name=None):
 
@@ -835,32 +857,22 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
         else:
             return response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
 
+
     except requests.exceptions.HTTPError as e:
         if 'response' in locals() and response is not None:
              print(f"LM Studio Error Details: {response.text}")
         raise e
 
-def determine_unique_output_paths(base_name, suffix, out_folder, log_folder, output_extension=RAW_OUTPUT_FILE_EXTENSION):
-    out_base = f"{base_name}{suffix}"
-    def find_unique(folder, base, ext):
-        path = os.path.join(folder, f"{base}{ext}")
-        if not os.path.exists(path): return path
-        i = 1
-        while True:
-            path = os.path.join(folder, f"{base} ({i}){ext}")
-            if not os.path.exists(path): return path
-            i += 1
-    return find_unique(out_folder, out_base, output_extension), find_unique(log_folder, out_base, LOG_FILE_EXTENSION)
-
-def save_output_files(api_response, log_data, raw_path, log_path):
+def save_output_files(api_response, log_data, raw_path, log_path=None):
     try:
         with open(raw_path, 'w', encoding='utf-8') as f: f.write(api_response or "[Empty Response]")
-        with open(log_path, 'w', encoding='utf-8') as f:
-            f.write("="*20 + " Processing Log " + "="*20 + "\n")
-            for k, v in log_data.items():
-                if isinstance(v, datetime.datetime): v = v.strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{k}: {v}\n")
-            f.write("="*50 + "\n")
+        if log_path:
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write("="*20 + " Processing Log " + "="*20 + "\n")
+                for k, v in log_data.items():
+                    if isinstance(v, datetime.datetime): v = v.strftime("%Y-%m-%d %H:%M:%S")
+                    f.write(f"{k}: {v}\n")
+                f.write("="*50 + "\n")
     except Exception as e: console_log(f"Error saving files: {e}", "ERROR")
 
 def copy_failed_file(filepath):
@@ -881,18 +893,21 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
          if os.path.exists(fp) and os.path.getsize(fp) == 0:
              raise FatalProcessingError(f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}")
 
+    save_log = kwargs.get('save_log', False)
+
     source_dir = os.path.dirname(filepaths_group[0])
     if not source_dir: source_dir = "."
 
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
-        log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME)
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME) if save_log else None
+        if log_dir: os.makedirs(log_dir, exist_ok=True)
         _, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), log_dir, log_dir)
     else:
         out_folder = kwargs.get('output_folder') or source_dir
-        log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME)
-        os.makedirs(out_folder, exist_ok=True); os.makedirs(log_folder, exist_ok=True)
+        log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME) if save_log else None
+        os.makedirs(out_folder, exist_ok=True)
+        if log_folder: os.makedirs(log_folder, exist_ok=True)
         requested_ext = kwargs.get('output_extension', '').strip()
         ext = ('.' + requested_ext.lstrip('.')) if requested_ext else RAW_OUTPUT_FILE_EXTENSION
         raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
@@ -1220,7 +1235,7 @@ class ModelSelectionDialog(tk.Toplevel):
 class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v25.6 (Gemini Files API Supported)")
+        self.title("Multimodal AI Batch Processor v25.8 (Gemini Files API Supported)")
         self.geometry("1400x800")
         self.minsize(1100, 700)
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -1259,6 +1274,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.validate_json_var = tk.BooleanVar(value=False)
         self.validate_keys_var = tk.BooleanVar(value=False) # New schema validation var (v25.6)
         self.clean_markdown_var = tk.BooleanVar(value=True) # Default On
+        self.save_log_var = tk.BooleanVar(value=False) # Default Off
         self.enable_safety_var = tk.BooleanVar(value=False)
         self.safety_map = {'Off': 'BLOCK_NONE', 'High Only': 'BLOCK_ONLY_HIGH', 'Med+': 'BLOCK_MEDIUM_AND_ABOVE'}
         self.harassment_var = tk.StringVar(value='Off')
@@ -1350,8 +1366,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.prompt_text.pack(fill=tk.BOTH, expand=True)
         self.prompt_text.insert(tk.INSERT, USER_PROMPT_TEMPLATE)
 
-        settings_frame = ttk.LabelFrame(left_frame, text="3. Configuration", padding=5)
-        settings_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        # --- COLUMN 2 (CENTER): CONFIGURATION ---
+        mid_frame = ttk.Frame(main_pane)
+        main_pane.add(mid_frame, weight=1)
+
+        settings_frame = ttk.LabelFrame(mid_frame, text="3. Configuration", padding=5)
+        settings_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.notebook = ttk.Notebook(settings_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
@@ -1397,31 +1417,34 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # New Checkbox for Schema Validation (v25.6)
         self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
         self.json_keys_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
+
+        self.save_log_check = ttk.Checkbutton(tab_out, text="Save Processing Logs", variable=self.save_log_var)
+        self.save_log_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         # Rename Mode
         self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
-        self.rename_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.rename_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Rename Options
         self.rename_opts_frame = ttk.Frame(tab_out)
-        self.rename_opts_frame.grid(row=8, column=0, columnspan=2, sticky="w", padx=(20, 0))
+        self.rename_opts_frame.grid(row=9, column=0, columnspan=2, sticky="w", padx=(20, 0))
         ttk.Radiobutton(self.rename_opts_frame, text="Full Rename", variable=self.rename_method_var, value="full").pack(side=tk.LEFT)
         ttk.Radiobutton(self.rename_opts_frame, text="Prefix", variable=self.rename_method_var, value="prefix").pack(side=tk.LEFT, padx=10)
         ttk.Radiobutton(self.rename_opts_frame, text="Suffix", variable=self.rename_method_var, value="suffix").pack(side=tk.LEFT)
 
         # Upload Mode Radio Buttons
-        ttk.Label(tab_out, text="Upload Mode:").grid(row=9, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(tab_out, text="Upload Mode:").grid(row=10, column=0, sticky="w", pady=(5, 0))
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=9, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        u_frame.grid(row=10, column=1, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
         ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
 
         self.stream_check = ttk.Checkbutton(tab_out, text="Stream Output to Console", variable=self.stream_var)
-        self.stream_check.grid(row=10, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.stream_check.grid(row=11, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=11, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=12, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
@@ -1484,6 +1507,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             c = ttk.Combobox(safe_grid, textvariable=var, values=list(self.safety_map.keys()), state="disabled", width=12)
             c.grid(row=i, column=1, sticky="ew", padx=5); self.safety_widgets.extend([l, c])
 
+        # --- COLUMN 3 (RIGHT): QUEUE & STATUS ---
         right_frame = ttk.Frame(main_pane); main_pane.add(right_frame, weight=2)
         q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5); q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.tree = ttk.Treeview(q_frame, columns=('id', 'name', 'status', 'model'), show='headings')
@@ -1583,6 +1607,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.validate_json_var, 'validate_json', False)
             set_var(self.validate_keys_var, 'validate_json_keys', False)
             set_var(self.clean_markdown_var, 'clean_markdown', True)
+            set_var(self.save_log_var, 'save_log', True)
             
             # Delay & Mode
             set_var(self.delay_min_var, 'delay_min', 0)
@@ -1615,6 +1640,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             'validate_json': self.validate_json_var.get(),
             'validate_json_keys': self.validate_keys_var.get(), # Save new setting
             'clean_markdown': self.clean_markdown_var.get(),
+            'save_log': self.save_log_var.get(),
             'delay_min': self.delay_min_var.get(),
             'delay_sec': self.delay_sec_var.get(),
             'upload_mode': self.upload_mode_var.get(),
@@ -1911,6 +1937,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 'validate_json': self.validate_json_var.get(),
                 'validate_json_keys': self.validate_keys_var.get(), # Pass new setting
                 'clean_markdown': self.clean_markdown_var.get(),
+                'save_log': self.save_log_var.get(),
                 'job_delay_seconds': total_delay,
                 'sequential_upload': (self.upload_mode_var.get() == 'sequential'),
                 'rename_mode': self.rename_mode_var.get(),
