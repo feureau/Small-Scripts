@@ -69,6 +69,7 @@ import sys
 import subprocess
 import json
 import traceback
+import shutil
 from shutil import which
 
 try:
@@ -345,6 +346,48 @@ def extract_subtitles(video_path, mode="hybrid"):
         if bitmap_subs:
             _package_bitmap_subs(video_path, bitmap_subs, basename)
 
+def move_original_file(file_path):
+    """
+    Moves the original file to a subfolder named after its extension.
+    Example: video.mkv -> mkv/video.mkv
+    """
+    if not os.path.isfile(file_path):
+        return
+
+    dir_path = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    _, ext = os.path.splitext(filename)
+    
+    # Normalize extension for folder name
+    ext_folder = ext.lstrip('.').lower()
+    if not ext_folder:
+        ext_folder = "no_extension"
+    
+    # Check if we're already in a folder named after the extension
+    parent_folder = os.path.basename(dir_path)
+    if parent_folder.lower() == ext_folder:
+        print(f"  File already in '{ext_folder}' folder. Skipping move.")
+        return
+
+    target_dir = os.path.join(dir_path, ext_folder)
+    os.makedirs(target_dir, exist_ok=True)
+    
+    target_path = os.path.join(target_dir, filename)
+    
+    # Handle filename collisions
+    if os.path.exists(target_path):
+        base, extension = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(os.path.join(target_dir, f"{base}_{counter}{extension}")):
+            counter += 1
+        target_path = os.path.join(target_dir, f"{base}_{counter}{extension}")
+
+    print(f"  Moving original file: {file_path} -> {target_path}")
+    try:
+        shutil.move(file_path, target_path)
+    except Exception as e:
+        print(f"  Error moving file: {e}")
+
 # ---------------------------------------------------------------------------
 # Main Control Flow
 # ---------------------------------------------------------------------------
@@ -402,6 +445,7 @@ def main():
         if converted:
             print("  Conversion done.")
         extract_subtitles(file_path, mode=args.format)
+        move_original_file(file_path)
 
     print("\nAll processing complete.")
 
