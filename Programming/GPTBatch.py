@@ -672,24 +672,28 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
             print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
             for chunk in response:
                 if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during streaming.")
-                try:
-                    # Handle Thinking Content (if present)
-                    if hasattr(chunk, 'candidates') and chunk.candidates:
-                        for part in chunk.candidates[0].content.parts:
-                            # part.thought is a boolean indicating this is thinking content
-                            # The actual thought text is in part.text
-                            if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
-                                # Print thought in gray (ANSI 90m)
-                                print(f"\033[90m{part.text}\033[0m", end="", flush=True)
-                except Exception: pass
-
-                # Get the regular text output
-                try:
-                    text_part = chunk.text
-                    if text_part:
-                        print(text_part, end="", flush=True)
-                        full_text += text_part
-                except Exception: pass
+                
+                # Each chunk can have multiple parts
+                if hasattr(chunk, 'candidates') and chunk.candidates:
+                    for part in chunk.candidates[0].content.parts:
+                        # 1. Handle Thinking Content (dedicated attribute)
+                        if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                            # Print thought in gray (ANSI 90m)
+                            print(f"\033[90m{part.text}\033[0m", end="", flush=True)
+                        
+                        # 2. Handle Regular Text (can also contain <think> tags from some models)
+                        elif hasattr(part, 'text') and part.text:
+                            text_part = part.text
+                            # Fallback: check if the text itself contains <think> tags 
+                            # (Some models might not use the dedicated 'thought' part yet)
+                            if "<think>" in text_part or "</think>" in text_part:
+                                # Simple colorization for tags within a text part
+                                colored_text = text_part.replace("<think>", "\033[90m<think>").replace("</think>", "</think>\033[0m")
+                                print(colored_text, end="", flush=True)
+                            else:
+                                print(text_part, end="", flush=True)
+                            
+                            full_text += text_part
             print("\n----------------------------------------------\n", flush=True)
             return full_text
         else:
@@ -832,9 +836,10 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
                             chunk_json = json.loads(json_str)
                             content = chunk_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
                             if content:
+                                full_text += content
                                 to_print = content
                                 
-                                # Thinking Logic (Duplicated for now, could be helper)
+                                # Thinking Logic
                                 if "<think>" in to_print:
                                     thinking_active = True
                                     to_print = to_print.replace("<think>", "\033[90m<think>")
@@ -850,7 +855,6 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
                                     thinking_active = False
 
                                 print(to_print, end="", flush=True)
-                                full_text += content
                         except json.JSONDecodeError: pass
             print("\n-----------------------------------------\n", flush=True)
             return full_text
@@ -1439,8 +1443,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
         ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
 
-        self.stream_check = ttk.Checkbutton(tab_out, text="Stream Output to Console", variable=self.stream_var)
-        self.stream_check.grid(row=11, column=0, columnspan=2, sticky="w", pady=(5, 0))
+
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
