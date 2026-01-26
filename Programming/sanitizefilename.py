@@ -31,15 +31,37 @@ import re
 import glob
 import shutil
 import argparse
+import unicodedata
+import sys
 
-# regex to match any character that is NOT A-Z, a-z, 0-9 or space
-INVALID_CHARS = re.compile(r"[^A-Za-z0-9 ]+")
+# Ensure stdout can handle unicode or fallback gracefully
+def safe_print(msg: str):
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        # Fallback for environments (like some Windows CMD) that might crash on unicode
+        print(msg.encode(sys.stdout.encoding, errors='replace').decode(sys.stdout.encoding))
+
+# Regex for non-alphanumeric characters
+NON_ALPHANUMERIC = re.compile(r"[^A-Za-z0-9]+")
 
 def sanitize_name(name: str) -> str:
     """
-    Remove any invalid characters from `name`.
+    Sanitize filename part:
+    1. Normalize Unicode (decomposes accented chars/fancy fonts).
+    2. Filter out marks (accents).
+    3. Replace non-alphanumeric with spaces.
+    4. PascalCase words.
     """
-    return INVALID_CHARS.sub("", name)
+    # Normalize NFKD to decompose characters (e.g., 'í' -> 'i' + accent tag)
+    normalized = unicodedata.normalize('NFKD', name)
+    # Filter out marks (accents) but keep base characters
+    no_marks = "".join(c for c in normalized if not unicodedata.combining(c))
+    # Filter out everything except A-Z, a-z, 0-9 by replacing with spaces
+    spaced = NON_ALPHANUMERIC.sub(" ", no_marks)
+    # Split, capitalize each word, and join
+    tokens = spaced.strip().split()
+    return "".join(token.capitalize() for token in tokens)
 
 
 def process(patterns: list[str], execute: bool, output_dir_abs: str | None) -> None:
@@ -91,8 +113,7 @@ def process(patterns: list[str], execute: bool, output_dir_abs: str | None) -> N
 
             if sanitized_name_part == name_part:
                 # Filename part is already sanitized according to the rule.
-                # Original script behavior: print "No change required" and do nothing further for this file.
-                print(f"No change required for name of '{src_path_relative}' (already sanitized).")
+                safe_print(f"No change required for name of '{src_path_relative}' (already sanitized).")
                 continue # Go to the next file
             
             # If we reach here, sanitized_name_part is different from name_part,
@@ -134,14 +155,14 @@ def process(patterns: list[str], execute: bool, output_dir_abs: str | None) -> N
                     # Append counter to find a unique name.
                     if counter == 1: # Only print notice on the first collision detection for this file
                          notice_prefix = "[DRY-RUN] " if not execute else ""
-                         print(f"{notice_prefix}Notice: Proposed name '{os.path.basename(final_dst_path)}' for '{src_path_relative}' (to be {action_verb.lower()}) already exists and is a different file. Attempting to find a unique name.")
+                         safe_print(f"{notice_prefix}Notice: Proposed name '{os.path.basename(final_dst_path)}' for '{src_path_relative}' (to be {action_verb.lower()}) already exists and is a different file. Attempting to find a unique name.")
 
                     unique_suffixed_name_part = f"{current_base_name_for_dest} ({counter})"
                     final_new_filename_for_print = unique_suffixed_name_part + ext # Update for print
                     final_dst_path = os.path.join(target_operation_dir, final_new_filename_for_print)
                     counter += 1
                     if counter > 100: # Safety break
-                        print(f"Error: Could not find a unique name for '{src_path_relative}' (sanitized base: '{current_base_name_for_dest}') after 100 attempts in directory '{target_operation_dir}'. Skipping this file.")
+                        safe_print(f"Error: Could not find a unique name for '{src_path_relative}' (sanitized base: '{current_base_name_for_dest}') after 100 attempts in directory '{target_operation_dir}'. Skipping this file.")
                         final_dst_path = None # Signal failure
                         break
             
@@ -157,13 +178,13 @@ def process(patterns: list[str], execute: bool, output_dir_abs: str | None) -> N
             # check at the top should prevent operations on already-clean names.
             try:
                 if output_dir_abs and os.path.exists(final_dst_path) and os.path.samefile(abs_src_path, final_dst_path):
-                    print(f"{prefix}Skipping {action_verb.lower()}: source '{src_path_relative}' and destination '{final_dst_path}' are the same file, and name did not require change for this target.")
+                    safe_print(f"{prefix}Skipping {action_verb.lower()}: source '{src_path_relative}' and destination '{final_dst_path}' are the same file, and name did not require change for this target.")
                     continue
             except FileNotFoundError: 
                 pass 
 
 
-            print(f"{prefix}{action_verb}: '{src_path_relative}' -> '{final_dst_path}'")
+            safe_print(f"{prefix}{action_verb}: '{src_path_relative}' -> '{final_dst_path}'")
 
             if execute:
                 try:
@@ -176,15 +197,15 @@ def process(patterns: list[str], execute: bool, output_dir_abs: str | None) -> N
                         # The collision logic handles cases where final_dst_path is a *different* existing file.
                         # If it's a case-only rename of the *same* file, is_self_rename_case_change allowed it.
                         if abs_src_path == final_dst_path: # Truly identical string paths (e.g. no change after all logic)
-                            print(f"Note: Source and destination path for rename are identical ('{src_path_relative}'). No effective action taken.")
+                            safe_print(f"Note: Source and destination path for rename are identical ('{src_path_relative}'). No effective action taken.")
                         else:
                             os.rename(abs_src_path, final_dst_path)
                 except FileExistsError as e:
                     # This should be rare given the collision handling loop, but can happen in race conditions
                     # or if os.path.exists behaves unexpectedly with os.rename.
-                    print(f"Error: File still existed at destination '{final_dst_path}' during {action_verb.lower()} operation for '{src_path_relative}'. Skipping. Original error: {e}")
+                    safe_print(f"Error: File still existed at destination '{final_dst_path}' during {action_verb.lower()} operation for '{src_path_relative}'. Skipping. Original error: {e}")
                 except Exception as e:
-                    print(f"Error performing {action_verb.lower()} on '{src_path_relative}' to '{final_dst_path}': {e}")
+                    safe_print(f"Error performing {action_verb.lower()} on '{src_path_relative}' to '{final_dst_path}': {e}")
 
 
 def main():
