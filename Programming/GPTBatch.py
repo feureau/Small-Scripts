@@ -588,16 +588,20 @@ def sanitize_api_response(text):
     """
     Cleans markdown code fences from the start and end of the string.
     Works for ```json, ```xml, ```markdown, or just ```.
+    Handles partial fences (start only or end only).
     """
     if not text: return ""
     text = text.strip()
-    # Matches starting ``` (optional language) ... content ... ending ```
-    # re.DOTALL allows matching across newlines
-    pattern = re.compile(r"^```(?:\w+)?\s*(.*?)\s*```$", re.DOTALL)
-    match = pattern.search(text)
-    if match:
-        return match.group(1).strip()
-    return text
+    
+    # Remove leading fence line (e.g., ```json\n)
+    # This matches ``` followed by optional word characters and optional whitespace
+    text = re.sub(r"^```\w*\s*", "", text, count=1)
+    
+    # Remove trailing fence (e.g., \n```)
+    # This matches optional whitespace followed by ``` at the end of the string
+    text = re.sub(r"\s*```$", "", text, count=1)
+    
+    return text.strip()
 
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     clean_output = kwargs.get('clean_markdown', True)
