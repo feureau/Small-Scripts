@@ -17,7 +17,7 @@ Key Features:
 4. Verbose Logging: Details every operation (move, rename, delete, skip) in the console.
 5. Directory Cleanup: Deletes subdirectories after they have been emptied.
 6. Selective Flattening: Optionally flatten only specified folders.
-7. Folder Prefixing: Optionally prefix filenames with their folder name.
+7. Folder Prefixing: Optionally prefix filenames with their immediate parent folder name using an underscore.
 
 Usage:
 ------
@@ -25,7 +25,7 @@ Run the script from the directory you wish to flatten.
 $ python flattenfiles.py [--prefix-folder | -p] [--folders | -f FOLDER [FOLDER ...]]
 
 Optional arguments:
-- -p, --prefix-folder: Prefix filenames with their folder name.
+- -p, --prefix-folder: Prefix filenames with their immediate parent folder name using an underscore.
 - -f, --folders: Only flatten the specified folder names (multiple allowed).
 """
 import os
@@ -55,7 +55,7 @@ def safe_move(src, dst):
 def flatten_directory_tree(root_dir, prefix=False, folders=None):
     """
     Moves all files from subdirectories into the root directory.
-    If prefix is True, prepends the folder name to the filename.
+    If prefix is True, prepends the immediate parent folder name to the filename with an underscore.
     If folders is provided, only flattens directories whose basename is in folders.
     Deletes empty subdirectories after moving files.
     """
@@ -64,9 +64,9 @@ def flatten_directory_tree(root_dir, prefix=False, folders=None):
             continue
         for filename in filenames:
             src_path = os.path.join(dirpath, filename)
-            if prefix:
+            if prefix and dirpath != root_dir:
                 folder_name = os.path.basename(dirpath)
-                new_filename = f"{folder_name} - {filename}"
+                new_filename = f"{folder_name}_{filename}"
             else:
                 new_filename = filename
             dest_path = os.path.join(root_dir, new_filename)
@@ -110,7 +110,7 @@ def flatten_directory_tree(root_dir, prefix=False, folders=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Flatten directory tree with optional folder prefixing and selection.")
-    parser.add_argument('-p', '--prefix-folder', action='store_true', help="Prefix filenames with their folder name.")
+    parser.add_argument('-p', '--prefix-folder', action='store_true', help="Prefix filenames with their immediate parent folder name using an underscore.")
     parser.add_argument('-f', '--folders', nargs='+', help="Only flatten the specified folder names (multiple allowed).")
     args, unknown = parser.parse_known_args()
 
