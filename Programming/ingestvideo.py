@@ -1003,6 +1003,10 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
                     # Store basic info
                     if fp not in job_settings: job_settings[fp] = {}
                     
+                    # Store frame rate and color info
+                    job_settings[fp]["frame_rate"] = info.get("frame_rate") or "24000/1001"
+                    job_settings[fp]["is_source_sdr"] = not info.get("is_hdr", False)
+
                     # Detect Crop
                     cw, ch, cx, cy = get_crop_parameters(fp, w, h, "24" if not info["is_hdr"] else "128")
                     job_settings[fp]["crop_w"] = cw
@@ -1181,17 +1185,31 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     
     file_listbox.bind("<<ListboxSelect>>", on_file_select)
     
-    # Initialize First File properly
-    if file_list: 
+    # Initialize All Files properly at startup
+    if file_list:
+        print("Initializing job settings for batch...")
+        for fp in file_list:
+            if fp not in job_settings:
+                # Use current detected baseline as default for all files
+                job_settings[fp] = {
+                    "frame_rate": frame_rate,
+                    "crop_w": crop_w.get(), "crop_h": crop_h.get(), "crop_x": crop_x.get(), "crop_y": crop_y.get(),
+                    "is_source_sdr": is_sdr,
+                    "decoding_mode": decoding_mode.get(),
+                    "output_color_mode": output_color_mode.get(),
+                    "ai_upscale_enable": ai_upscale_enable.get(),
+                    "resolution_var": resolution_var.get(),
+                    "rate_control_mode": rate_control_mode.get(),
+                    "qvbr": qvbr.get(), 
+                    "cqp_i": cqp_i.get(), "cqp_p": cqp_p.get(), "cqp_b": cqp_b.get(),
+                    "gop_len": gop_len.get(),
+                    "bracket_steps": bracket_steps.get(),
+                    "step_size": step_size.get(),
+                    "no_crop_var": no_crop_var.get()
+                }
+
         file_listbox.select_set(0)
-        # Pre-seed the first file settings with the arguments passed to launch_gui to avoid losing initial detection
-        # (Since we are deleting the initial population code)
-        job_settings[file_list[0]] = {
-             "frame_rate": frame_rate,
-             "crop_w": crop_params[0], "crop_h": crop_params[1], "crop_x": crop_params[2], "crop_y": crop_params[3],
-             'audio_info': audio_streams # Initial audio streams
-        }
-        # Trigger load
+        # Trigger load for first file
         load_settings_for_file(file_list[0])
 
 
@@ -1389,9 +1407,9 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
                 "crop_params": {"crop_w":cw, "crop_h":ch, "crop_x":cx, "crop_y":cy},
                 "audio_tracks": final_tracks,
                 "sleep_after_processing": sleep_enable.get(), # Global
-                "bracket_steps": get_s("bracket_steps", "2"),
-                "step_size": get_s("step_size", "3"),
-                "frame_rate": get_s("frame_rate", "")
+                "bracket_steps": get_s("bracket_steps", bracket_steps.get()),
+                "step_size": get_s("step_size", step_size.get()),
+                "frame_rate": get_s("frame_rate", frame_rate_var.get() or frame_rate)
             }
             
             # Color Mode Logic Check/Probe
@@ -1483,7 +1501,7 @@ def execute_nvencc(input_file, output_file, settings):
     else: # Target is SDR
         command.extend(["--colormatrix", "bt709", "--colorprim", "bt709", "--transfer", "bt709"])
 
-    if not settings["fruc_enable"] and "frame_rate" in settings:
+    if not settings["fruc_enable"] and settings.get("frame_rate"):
         command.extend(["--fps", settings["frame_rate"]])
 
     crop = settings["crop_params"]
@@ -1706,9 +1724,38 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     
-    file_queue = [f for arg in sys.argv[1:] for f in glob.glob(arg)]
+    args = sys.argv[1:]
+    file_queue = []
+    
+    if args:
+        # User provided specific files or wildcards
+        file_queue = [f for arg in args for f in glob.glob(arg)]
+    else:
+        # No arguments: auto-scan current working directory recursively
+        print("No files provided. Scanning current working directory for supported video files (recursive)...")
+        SUPPORTED_EXTENSIONS = ["*.mkv", "*.mp4", "*.mov", "*.avi", "*.ts", "*.m2ts"]
+        
+        found_files = []
+        for ext in SUPPORTED_EXTENSIONS:
+            # Use **/*.ext with recursive=True to find files in subdirectories
+            found_files.extend(glob.glob(f"**/{ext}", recursive=True))
+        
+        # Filter out files in the output subdirectory to avoid re-processing
+        # Also ensure we only take absolute paths or properly normalized paths
+        for f in found_files:
+            abs_path = os.path.abspath(f)
+            # Check if OUTPUT_SUBDIR is in the path. 
+            # We want to exclude if 'processed_videos' is any part of the directory structure.
+            path_parts = abs_path.split(os.sep)
+            if OUTPUT_SUBDIR not in path_parts:
+                file_queue.append(abs_path)
+        
+        if file_queue:
+            print(f"Found {len(file_queue)} video file(s).")
+    
     if not file_queue:
         print("Usage: Drop video files onto this script or run from command line with file paths/wildcards.")
+        print("Alternatively, run without arguments in a directory containing video files to process them all.")
         os.system("pause")
         sys.exit()
 
