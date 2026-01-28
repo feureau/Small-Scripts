@@ -518,16 +518,43 @@ def main():
             print("Usage: python PGStoSRT.py <pattern>")
             sys.exit(1)
 
+        # Get all arguments after the script name
+        # On some Windows shells, non-breaking spaces or weird characters might be present
         patterns = sys.argv[1:]
         files = []
+        
+        cwd = os.getcwd()
+        
         for p in patterns:
-            files.extend(glob.glob(p))
+            # Clean up the pattern (remove leading/trailing whitespace which can happen in some shells)
+            p = p.strip()
+            if not p:
+                continue
+                
+            matched = glob.glob(p)
+            
+            # If glob fails, but the pattern is just '*' or '*.extension', 
+            # let's try a more manual approach as a fallback.
+            if not matched and ('*' in p or '?' in p):
+                import fnmatch
+                try:
+                    all_files = os.listdir('.')
+                    matched = [f for f in all_files if fnmatch.fnmatch(f, p)]
+                except Exception:
+                    pass
+                    
+            files.extend(matched)
+        
+        # Remove duplicates and sort
         files = sorted(list(set(files)))
         
         if not files:
-            print("No files found matching the pattern.")
+            print(f"\n[ERROR] No files found matching the pattern(s): {patterns}")
+            print(f"Current Directory: {cwd}")
+            print(f"Files in directory: {os.listdir(cwd)[:10]} ... (total {len(os.listdir(cwd))} files)")
             sys.exit(1)
             
+        print(f"\n[INFO] Found {len(files)} file(s) to process.")
         for f in files:
             process_file(f)
             
