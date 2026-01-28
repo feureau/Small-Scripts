@@ -249,6 +249,32 @@ DEFAULT_SHADOW_OFFSET_X = "2"                       # Shadow horizontal offset (
 DEFAULT_SHADOW_OFFSET_Y = "4"                       # Shadow vertical offset (pixels). Default: 4, Range: -50 to 50
 DEFAULT_SHADOW_BLUR = "5"                           # Shadow blur radius (pixels). Default: 5, Range: 0 to 20
 
+# Title Burn defaults
+DEFAULT_TITLE_BURN_ENABLED = False                  # Enable title burning. Default: False
+DEFAULT_TITLE_JSON_SUFFIX = ""                      # JSON file suffix (e.g., "-yt", "-instagram"). Default: blank
+DEFAULT_TITLE_OVERRIDE_TEXT = ""                    # Manual title text override. Default: blank
+DEFAULT_TITLE_START_TIME = "00:00:00.00"            # Title start time. Default: 00:00:00.00
+DEFAULT_TITLE_END_TIME = "00:00:03.00"              # Title end time. Default: 00:00:03.00 (3 seconds)
+DEFAULT_TITLE_FONT = "HelveticaNeueLT Std Blk"      # Title font family. Default: HelveticaNeueLT Std Blk
+DEFAULT_TITLE_FONT_SIZE = "48"                      # Title font size. Default: 48
+DEFAULT_TITLE_BOLD = True                           # Title bold style. Default: True
+DEFAULT_TITLE_ITALIC = False                        # Title italic style. Default: False
+DEFAULT_TITLE_UNDERLINE = False                     # Title underline style. Default: False
+DEFAULT_TITLE_ALIGNMENT = "top"                     # Title alignment. Default: top, Options: top, middle, bottom
+DEFAULT_TITLE_MARGIN_V = "50"                       # Title vertical margin. Default: 50
+DEFAULT_TITLE_MARGIN_L = "50"                       # Title left margin. Default: 50
+DEFAULT_TITLE_MARGIN_R = "50"                       # Title right margin. Default: 50
+DEFAULT_TITLE_FILL_COLOR = "#FFFFFF"                # Title fill color. Default: #FFFFFF (white)
+DEFAULT_TITLE_FILL_ALPHA = 0                        # Title fill transparency. Default: 0 (opaque)
+DEFAULT_TITLE_OUTLINE_COLOR = "#000000"             # Title outline color. Default: #000000 (black)
+DEFAULT_TITLE_OUTLINE_ALPHA = 0                     # Title outline transparency. Default: 0 (opaque)
+DEFAULT_TITLE_OUTLINE_WIDTH = "3"                   # Title outline width. Default: 3
+DEFAULT_TITLE_SHADOW_COLOR = "#000000"              # Title shadow color. Default: #000000 (black)
+DEFAULT_TITLE_SHADOW_ALPHA = 128                    # Title shadow transparency. Default: 128
+DEFAULT_TITLE_SHADOW_OFFSET_X = "2"                 # Title shadow X offset. Default: 2
+DEFAULT_TITLE_SHADOW_OFFSET_Y = "3"                 # Title shadow Y offset. Default: 3
+DEFAULT_TITLE_SHADOW_BLUR = "4"                     # Title shadow blur. Default: 4
+
 DEBUG_MODE = False
 
 # --- Global State for Graceful Exit ---
@@ -437,6 +463,56 @@ def get_char_width(char):
     # East Asian Widths: F (Fullwidth), W (Wide), A (Ambiguous - treat as Wide)
     w = unicodedata.east_asian_width(char)
     return 2 if w in ('F', 'W', 'A') else 1
+
+def sanitize_title(raw_title):
+    """
+    Remove emojis and hashtags from a title string.
+    Returns the cleaned title text.
+    """
+    # Remove hashtags and everything after them (split on # preceded by optional space)
+    title = re.split(r'\s*#', raw_title)[0]
+    # Remove emojis (unicode ranges for common emoji blocks)
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map
+        u"\U0001F1E0-\U0001F1FF"  # flags
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        u"\U0001F900-\U0001F9FF"  # supplemental symbols
+        u"\U0001FA00-\U0001FA6F"  # chess symbols
+        u"\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+        u"\U00002600-\U000026FF"  # misc symbols
+        u"\U00002300-\U000023FF"  # misc technical
+        "]+", flags=re.UNICODE)
+    title = emoji_pattern.sub('', title)
+    return title.strip()
+
+def find_title_json_file(video_path, subtitle_path, json_suffix):
+    """
+    Find the associated JSON file containing the title.
+    Looks for: {subtitle_basename}{json_suffix}.txt
+    Returns: (json_path, sanitized_title) or (None, None)
+    """
+    if not subtitle_path or subtitle_path.startswith("embedded:"):
+        return None, None
+    if not json_suffix:
+        return None, None
+    
+    srt_basename = os.path.splitext(subtitle_path)[0]
+    json_path = f"{srt_basename}{json_suffix}.txt"
+    
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            raw_title = data.get('title', '')
+            if raw_title:
+                return json_path, sanitize_title(raw_title)
+        except Exception as e:
+            debug_print(f"Failed to parse JSON title file {json_path}: {e}")
+            return None, None
+    return None, None
 
 def smart_wrap_text(text, limit):
     """
@@ -765,6 +841,122 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
 
+def create_title_ass_file(title_text, options, target_res=None):
+    """
+    Creates a temporary ASS file containing a single title entry.
+    Uses title-specific styling options (title_font, title_font_size, etc.)
+    Returns path to temp ASS file.
+    """
+    global CURRENT_TEMP_FILE
+    
+    # Determine PlayRes from target_res or default to 1920x1080
+    play_res_x, play_res_y = target_res if target_res else (1920, 1080)
+    
+    # Get title-specific styling options
+    font_name = options.get('title_font', DEFAULT_TITLE_FONT)
+    font_size = options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE)
+    bold_flag = "-1" if options.get('title_bold', DEFAULT_TITLE_BOLD) else "0"
+    italic_flag = "-1" if options.get('title_italic', DEFAULT_TITLE_ITALIC) else "0"
+    underline_flag = "-1" if options.get('title_underline', DEFAULT_TITLE_UNDERLINE) else "0"
+    margin_v = options.get('title_margin_v', DEFAULT_TITLE_MARGIN_V)
+    margin_l = options.get('title_margin_l', DEFAULT_TITLE_MARGIN_L)
+    margin_r = options.get('title_margin_r', DEFAULT_TITLE_MARGIN_R)
+    align_map = {"top": 8, "middle": 5, "bottom": 2}
+    alignment = align_map.get(options.get('title_alignment', 'top'), 8)
+    
+    fill_color_hex = options.get('title_fill_color', DEFAULT_TITLE_FILL_COLOR)
+    fill_alpha_val = options.get('title_fill_alpha', DEFAULT_TITLE_FILL_ALPHA)
+    outline_color_hex = options.get('title_outline_color', DEFAULT_TITLE_OUTLINE_COLOR)
+    outline_alpha_val = options.get('title_outline_alpha', DEFAULT_TITLE_OUTLINE_ALPHA)
+    outline_width = float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH))
+    shadow_color_hex = options.get('title_shadow_color', DEFAULT_TITLE_SHADOW_COLOR)
+    shadow_alpha_val = options.get('title_shadow_alpha', DEFAULT_TITLE_SHADOW_ALPHA)
+    shadow_offset_y = float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y))
+    
+    # Get timing
+    start_time = options.get('title_start_time', DEFAULT_TITLE_START_TIME)
+    end_time = options.get('title_end_time', DEFAULT_TITLE_END_TIME)
+    
+    # Convert times to ASS format (h:mm:ss.cc)
+    def time_to_ass(time_str):
+        # Input format: HH:MM:SS.cc or H:MM:SS.cc
+        parts = time_str.split(':')
+        if len(parts) == 3:
+            h = int(parts[0])
+            m = int(parts[1])
+            s_parts = parts[2].split('.')
+            s = int(s_parts[0])
+            cs = int(s_parts[1][:2]) if len(s_parts) > 1 else 0
+            return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+        return "0:00:00.00"
+    
+    start_ass = time_to_ass(start_time)
+    end_ass = time_to_ass(end_time)
+    
+    # Build style
+    style_title = (
+        f"Style: Title,{font_name},{font_size},"
+        f"{hex_to_libass_color(fill_color_hex)},"
+        "&HFF000000,"
+        f"{hex_to_libass_color(outline_color_hex)},"
+        f"{hex_to_libass_color(shadow_color_hex)},"
+        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
+        f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
+    )
+    
+    header = f"""[Script Info]
+Title: Title Burn Overlay
+ScriptType: v4.00+
+WrapStyle: 0
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+{style_title}
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    
+    # Calculate position based on alignment
+    try:
+        m_v_offset = float(margin_v)
+        m_l = float(margin_l)
+        m_r = float(margin_r)
+    except (ValueError, TypeError):
+        m_v_offset, m_l, m_r = 50.0, 50.0, 50.0
+    
+    # Calculate horizontal center
+    cx = (m_l + (play_res_x - m_r)) / 2
+    
+    align_mode = options.get("title_alignment", "top")
+    if align_mode == "top":
+        cy = m_v_offset
+        pos_override = fr"{{\an8\pos({cx:.1f},{cy:.1f})}}"
+    elif align_mode == "middle":
+        cy = (play_res_y / 2) + m_v_offset
+        pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
+    else:  # bottom
+        cy = play_res_y - m_v_offset
+        pos_override = fr"{{\an2\pos({cx:.1f},{cy:.1f})}}"
+    
+    # Escape special characters in title
+    title_escaped = title_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+    
+    # Build dialogue line
+    dialogue = f"Dialogue: 0,{start_ass},{end_ass},Title,,0,0,0,,{pos_override}{title_escaped}"
+    
+    full_ass_content = header + dialogue
+    filename = f"vid_temp_title_{int(time.time() * 1000)}.ass"
+    filepath = os.path.join(os.getcwd(), filename)
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(full_ass_content)
+        debug_print(f"Created temporary title file: {filepath}")
+        return filename
+    except Exception as e:
+        print(f"[ERROR] Could not create temporary title ASS file: {e}")
+        return None
+
 def get_video_info(file_path):
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,r_frame_rate,height,width,color_transfer,color_primaries,codec_name,codec_tag_string", "-of", "json", file_path]
     try:
@@ -893,6 +1085,31 @@ def get_job_hash(job_options):
         str(job_options.get('use_sharpening', False)),
         job_options.get('sharpening_algo', ''),
         job_options.get('sharpening_strength', ''),
+        # Title Burn options for unique hashing
+        str(job_options.get('title_burn_enabled', False)),
+        job_options.get('title_json_suffix', ''),
+        job_options.get('title_override_text', ''),
+        job_options.get('title_start_time', ''),
+        job_options.get('title_end_time', ''),
+        job_options.get('title_font', ''),
+        job_options.get('title_font_size', ''),
+        str(job_options.get('title_bold', False)),
+        str(job_options.get('title_italic', False)),
+        str(job_options.get('title_underline', False)),
+        job_options.get('title_alignment', ''),
+        job_options.get('title_margin_v', ''),
+        job_options.get('title_margin_l', ''),
+        job_options.get('title_margin_r', ''),
+        job_options.get('title_fill_color', ''),
+        str(job_options.get('title_fill_alpha', 0)),
+        job_options.get('title_outline_color', ''),
+        str(job_options.get('title_outline_alpha', 0)),
+        job_options.get('title_outline_width', ''),
+        job_options.get('title_shadow_color', ''),
+        str(job_options.get('title_shadow_alpha', 0)),
+        job_options.get('title_shadow_offset_x', ''),
+        job_options.get('title_shadow_offset_y', ''),
+        job_options.get('title_shadow_blur', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
@@ -1315,6 +1532,44 @@ class VideoProcessorApp:
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
 
+        # Title Burn Variables
+        self.title_burn_var = tk.BooleanVar(value=DEFAULT_TITLE_BURN_ENABLED)
+        self.title_json_suffix_var = tk.StringVar(value=DEFAULT_TITLE_JSON_SUFFIX)
+        self.title_json_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('title_json_suffix'))
+        self.title_override_var = tk.StringVar(value=DEFAULT_TITLE_OVERRIDE_TEXT)
+        self.title_override_var.trace_add('write', lambda *args: self._update_selected_jobs('title_override_text'))
+        self.title_start_time_var = tk.StringVar(value=DEFAULT_TITLE_START_TIME)
+        self.title_start_time_var.trace_add('write', lambda *args: self._update_selected_jobs('title_start_time'))
+        self.title_end_time_var = tk.StringVar(value=DEFAULT_TITLE_END_TIME)
+        self.title_end_time_var.trace_add('write', lambda *args: self._update_selected_jobs('title_end_time'))
+        self.title_font_var = tk.StringVar(value=DEFAULT_TITLE_FONT)
+        self.title_font_size_var = tk.StringVar(value=DEFAULT_TITLE_FONT_SIZE)
+        self.title_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('title_font_size'))
+        self.title_bold_var = tk.BooleanVar(value=DEFAULT_TITLE_BOLD)
+        self.title_italic_var = tk.BooleanVar(value=DEFAULT_TITLE_ITALIC)
+        self.title_underline_var = tk.BooleanVar(value=DEFAULT_TITLE_UNDERLINE)
+        self.title_alignment_var = tk.StringVar(value=DEFAULT_TITLE_ALIGNMENT)
+        self.title_margin_v_var = tk.StringVar(value=DEFAULT_TITLE_MARGIN_V)
+        self.title_margin_v_var.trace_add('write', lambda *args: self._update_selected_jobs('title_margin_v'))
+        self.title_margin_l_var = tk.StringVar(value=DEFAULT_TITLE_MARGIN_L)
+        self.title_margin_l_var.trace_add('write', lambda *args: self._update_selected_jobs('title_margin_l'))
+        self.title_margin_r_var = tk.StringVar(value=DEFAULT_TITLE_MARGIN_R)
+        self.title_margin_r_var.trace_add('write', lambda *args: self._update_selected_jobs('title_margin_r'))
+        self.title_fill_color_var = tk.StringVar(value=DEFAULT_TITLE_FILL_COLOR)
+        self.title_fill_alpha_var = tk.IntVar(value=DEFAULT_TITLE_FILL_ALPHA)
+        self.title_outline_color_var = tk.StringVar(value=DEFAULT_TITLE_OUTLINE_COLOR)
+        self.title_outline_alpha_var = tk.IntVar(value=DEFAULT_TITLE_OUTLINE_ALPHA)
+        self.title_outline_width_var = tk.StringVar(value=DEFAULT_TITLE_OUTLINE_WIDTH)
+        self.title_outline_width_var.trace_add('write', lambda *args: self._update_selected_jobs('title_outline_width'))
+        self.title_shadow_color_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_COLOR)
+        self.title_shadow_alpha_var = tk.IntVar(value=DEFAULT_TITLE_SHADOW_ALPHA)
+        self.title_shadow_offset_x_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_OFFSET_X)
+        self.title_shadow_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_offset_x'))
+        self.title_shadow_offset_y_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_OFFSET_Y)
+        self.title_shadow_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_offset_y'))
+        self.title_shadow_blur_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_BLUR)
+        self.title_shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_blur'))
+
         self.use_sharpening_var = tk.BooleanVar(value=DEFAULT_USE_SHARPENING)
         self.sharpening_algo_var = tk.StringVar(value=DEFAULT_SHARPENING_ALGO)
         self.sharpening_strength_var = tk.StringVar(value=DEFAULT_SHARPENING_STRENGTH)
@@ -1372,18 +1627,21 @@ class VideoProcessorApp:
         video_tab = ttk.Frame(settings_notebook, padding=10)
         audio_tab = ttk.Frame(settings_notebook, padding=10)
         loudness_tab = ttk.Frame(settings_notebook, padding=10)
+        title_tab = ttk.Frame(settings_notebook, padding=10)
         subtitle_tab = ttk.Frame(settings_notebook, padding=10)
         encoder_tab = ttk.Frame(settings_notebook, padding=10)
 
         settings_notebook.add(video_tab, text="Video")
         settings_notebook.add(audio_tab, text="Audio")
         settings_notebook.add(loudness_tab, text="Loudness")
+        settings_notebook.add(title_tab, text="Title")
         settings_notebook.add(subtitle_tab, text="Subtitles")
         settings_notebook.add(encoder_tab, text="Encoder")
 
         self.setup_video_tab(video_tab)
         self.setup_audio_tab(audio_tab)
         self.setup_loudness_tab(loudness_tab)
+        self.setup_title_tab(title_tab)
         self.setup_subtitle_tab(subtitle_tab)
         self.setup_encoder_tab(encoder_tab)
     
@@ -1930,6 +2188,119 @@ class VideoProcessorApp:
         self.audio_cb_passthrough = ttk.Checkbutton(tracks_group, text="Passthrough (Copy Original Audio)", variable=self.audio_passthrough_var, command=self._update_audio_options_ui)
         self.audio_cb_passthrough.pack(anchor="w")
 
+    def setup_title_tab(self, parent):
+        # Enable Title Burn checkbox
+        action_frame = ttk.Frame(parent)
+        action_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Checkbutton(action_frame, text="Enable Title Burning", variable=self.title_burn_var, command=lambda: self._update_selected_jobs("title_burn_enabled")).pack(side=tk.LEFT)
+
+        # Source Settings
+        source_group = ttk.LabelFrame(parent, text="Title Source", padding=10)
+        source_group.pack(fill=tk.X, pady=5)
+        
+        suffix_frame = ttk.Frame(source_group); suffix_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(suffix_frame, text="JSON Suffix:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(suffix_frame, textvariable=self.title_json_suffix_var, width=15).pack(side=tk.LEFT)
+        ttk.Label(suffix_frame, text="(e.g., -yt, -instagram, -tiktok)").pack(side=tk.LEFT, padx=(10, 0))
+        
+        override_frame = ttk.Frame(source_group); override_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(override_frame, text="Title Override:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(override_frame, textvariable=self.title_override_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ToolTip(override_frame, "If set, this text is used instead of extracting from JSON file")
+
+        # Timing Settings
+        timing_group = ttk.LabelFrame(parent, text="Display Timing", padding=10)
+        timing_group.pack(fill=tk.X, pady=5)
+        timing_frame = ttk.Frame(timing_group); timing_frame.pack(fill=tk.X)
+        ttk.Label(timing_frame, text="Start Time:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(timing_frame, textvariable=self.title_start_time_var, width=12).pack(side=tk.LEFT)
+        ttk.Label(timing_frame, text="End Time:").pack(side=tk.LEFT, padx=(15, 5))
+        ttk.Entry(timing_frame, textvariable=self.title_end_time_var, width=12).pack(side=tk.LEFT)
+        ttk.Label(timing_frame, text="(Format: HH:MM:SS.cc)").pack(side=tk.LEFT, padx=(15, 0))
+
+        # Styling
+        main_style_group = ttk.LabelFrame(parent, text="Title Styling", padding=10)
+        main_style_group.pack(fill=tk.BOTH, expand=True)
+
+        # General Style
+        general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
+        general_style_frame.pack(fill=tk.X, pady=5)
+        font_frame = ttk.Frame(general_style_frame); font_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
+        self.title_font_combo = ttk.Combobox(font_frame, textvariable=self.title_font_var, width=25)
+        self.title_font_combo.pack(side=tk.LEFT, padx=5)
+        self.title_font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("title_font"))
+        # Populate fonts after the combo is created
+        self.root.after(100, self._populate_title_fonts)
+        ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(font_frame, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
+        
+        style_frame = ttk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(style_frame, text="Bold", variable=self.title_bold_var, command=lambda: self._update_selected_jobs("title_bold")).pack(side=tk.LEFT)
+        ttk.Checkbutton(style_frame, text="Italic", variable=self.title_italic_var, command=lambda: self._update_selected_jobs("title_italic")).pack(side=tk.LEFT, padx=15)
+        ttk.Checkbutton(style_frame, text="Underline", variable=self.title_underline_var, command=lambda: self._update_selected_jobs("title_underline")).pack(side=tk.LEFT)
+        
+        align_frame = ttk.Frame(general_style_frame); align_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(align_frame, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Radiobutton(align_frame, text="Top", variable=self.title_alignment_var, value="top", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
+        ttk.Radiobutton(align_frame, text="Mid", variable=self.title_alignment_var, value="middle", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(align_frame, text="Bot", variable=self.title_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
+        ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(align_frame, textvariable=self.title_margin_v_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(align_frame, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(align_frame, textvariable=self.title_margin_l_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(align_frame, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(align_frame, textvariable=self.title_margin_r_var, width=5).pack(side=tk.LEFT)
+
+        # Color Panes
+        fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
+        fill_pane.pack(fill=tk.X, pady=2, padx=2)
+        outline_pane = CollapsiblePane(main_style_group, "Outline Properties")
+        outline_pane.pack(fill=tk.X, pady=2, padx=2)
+        shadow_pane = CollapsiblePane(main_style_group, "Shadow Properties")
+        shadow_pane.pack(fill=tk.X, pady=2, padx=2)
+
+        # Fill
+        fill_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(fill_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.title_fill_swatch = tk.Label(fill_pane.container, text="    ", bg=self.title_fill_color_var.get(), relief="sunken"); self.title_fill_swatch.grid(row=0, column=1)
+        ttk.Button(fill_pane.container, text="..", command=lambda: self.choose_color(self.title_fill_color_var, self.title_fill_swatch, "title_fill_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(fill_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10,5))
+        ttk.Scale(fill_pane.container, from_=0, to=255, variable=self.title_fill_alpha_var, orient=tk.HORIZONTAL, command=lambda v: self._update_selected_jobs("title_fill_alpha")).grid(row=0, column=4, sticky="ew")
+
+        # Outline
+        outline_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.title_outline_swatch = tk.Label(outline_pane.container, text="    ", bg=self.title_outline_color_var.get(), relief="sunken"); self.title_outline_swatch.grid(row=0, column=1)
+        ttk.Button(outline_pane.container, text="..", command=lambda: self.choose_color(self.title_outline_color_var, self.title_outline_swatch, "title_outline_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(outline_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10,5))
+        ttk.Scale(outline_pane.container, from_=0, to=255, variable=self.title_outline_alpha_var, orient=tk.HORIZONTAL, command=lambda v: self._update_selected_jobs("title_outline_alpha")).grid(row=0, column=4, sticky="ew")
+        ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", padx=(0,5), pady=(5,0))
+        ttk.Entry(outline_pane.container, textvariable=self.title_outline_width_var, width=5).grid(row=1, column=1, pady=(5,0))
+
+        # Shadow
+        shadow_pane.container.columnconfigure(3, weight=1)
+        ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.title_shadow_swatch = tk.Label(shadow_pane.container, text="    ", bg=self.title_shadow_color_var.get(), relief="sunken"); self.title_shadow_swatch.grid(row=0, column=1)
+        ttk.Button(shadow_pane.container, text="..", command=lambda: self.choose_color(self.title_shadow_color_var, self.title_shadow_swatch, "title_shadow_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(shadow_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10,5))
+        ttk.Scale(shadow_pane.container, from_=0, to=255, variable=self.title_shadow_alpha_var, orient=tk.HORIZONTAL, command=lambda v: self._update_selected_jobs("title_shadow_alpha")).grid(row=0, column=4, sticky="ew")
+        ttk.Label(shadow_pane.container, text="Offset X:").grid(row=1, column=0, sticky="w", padx=(0,5), pady=(5,0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_x_var, width=5).grid(row=1, column=1, pady=(5,0))
+        ttk.Label(shadow_pane.container, text="Offset Y:").grid(row=1, column=2, sticky="w", padx=(10,5), pady=(5,0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_y_var, width=5).grid(row=1, column=3, pady=(5,0), sticky="w")
+        ttk.Label(shadow_pane.container, text="Blur:").grid(row=2, column=0, sticky="w", padx=(0,5), pady=(5,0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_blur_var, width=5).grid(row=2, column=1, pady=(5,0))
+
+    def _populate_title_fonts(self):
+        """Populate title font combo with available fonts."""
+        try:
+            import tkinter.font as tkFont
+            fonts = sorted(set(tkFont.families()))
+            self.title_font_combo['values'] = fonts
+        except Exception:
+            pass
+
     def setup_subtitle_tab(self, parent):
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, pady=(0, 10))
@@ -2284,6 +2655,31 @@ class VideoProcessorApp:
             "nvenc_bframes": self.nvenc_bframes_var.get(),
             "nvenc_b_ref_mode": self.nvenc_b_ref_mode_var.get(),
             "output_suffix_override": self.output_suffix_override_var.get(),
+            # Title Burn options
+            "title_burn_enabled": self.title_burn_var.get(),
+            "title_json_suffix": self.title_json_suffix_var.get(),
+            "title_override_text": self.title_override_var.get(),
+            "title_start_time": self.title_start_time_var.get(),
+            "title_end_time": self.title_end_time_var.get(),
+            "title_font": self.title_font_var.get(),
+            "title_font_size": self.title_font_size_var.get(),
+            "title_bold": self.title_bold_var.get(),
+            "title_italic": self.title_italic_var.get(),
+            "title_underline": self.title_underline_var.get(),
+            "title_alignment": self.title_alignment_var.get(),
+            "title_margin_v": self.title_margin_v_var.get(),
+            "title_margin_l": self.title_margin_l_var.get(),
+            "title_margin_r": self.title_margin_r_var.get(),
+            "title_fill_color": self.title_fill_color_var.get(),
+            "title_fill_alpha": self.title_fill_alpha_var.get(),
+            "title_outline_color": self.title_outline_color_var.get(),
+            "title_outline_alpha": self.title_outline_alpha_var.get(),
+            "title_outline_width": self.title_outline_width_var.get(),
+            "title_shadow_color": self.title_shadow_color_var.get(),
+            "title_shadow_alpha": self.title_shadow_alpha_var.get(),
+            "title_shadow_offset_x": self.title_shadow_offset_x_var.get(),
+            "title_shadow_offset_y": self.title_shadow_offset_y_var.get(),
+            "title_shadow_blur": self.title_shadow_blur_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -2805,7 +3201,37 @@ class VideoProcessorApp:
         self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
         self.max_duration_var.set(options.get("max_duration", str(DEFAULT_MAX_DURATION)))
 
+        # Title Burn options
+        self.title_burn_var.set(options.get("title_burn_enabled", DEFAULT_TITLE_BURN_ENABLED))
+        self.title_json_suffix_var.set(options.get("title_json_suffix", DEFAULT_TITLE_JSON_SUFFIX))
+        self.title_override_var.set(options.get("title_override_text", DEFAULT_TITLE_OVERRIDE_TEXT))
+        self.title_start_time_var.set(options.get("title_start_time", DEFAULT_TITLE_START_TIME))
+        self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
+        self.title_font_var.set(options.get("title_font", DEFAULT_TITLE_FONT))
+        self.title_font_size_var.set(options.get("title_font_size", DEFAULT_TITLE_FONT_SIZE))
+        self.title_bold_var.set(options.get("title_bold", DEFAULT_TITLE_BOLD))
+        self.title_italic_var.set(options.get("title_italic", DEFAULT_TITLE_ITALIC))
+        self.title_underline_var.set(options.get("title_underline", DEFAULT_TITLE_UNDERLINE))
+        self.title_alignment_var.set(options.get("title_alignment", DEFAULT_TITLE_ALIGNMENT))
+        self.title_margin_v_var.set(options.get("title_margin_v", DEFAULT_TITLE_MARGIN_V))
+        self.title_margin_l_var.set(options.get("title_margin_l", DEFAULT_TITLE_MARGIN_L))
+        self.title_margin_r_var.set(options.get("title_margin_r", DEFAULT_TITLE_MARGIN_R))
+        self.title_fill_color_var.set(options.get("title_fill_color", DEFAULT_TITLE_FILL_COLOR))
+        self.title_fill_alpha_var.set(options.get("title_fill_alpha", DEFAULT_TITLE_FILL_ALPHA))
+        self.title_outline_color_var.set(options.get("title_outline_color", DEFAULT_TITLE_OUTLINE_COLOR))
+        self.title_outline_alpha_var.set(options.get("title_outline_alpha", DEFAULT_TITLE_OUTLINE_ALPHA))
+        self.title_outline_width_var.set(options.get("title_outline_width", DEFAULT_TITLE_OUTLINE_WIDTH))
+        self.title_shadow_color_var.set(options.get("title_shadow_color", DEFAULT_TITLE_SHADOW_COLOR))
+        self.title_shadow_alpha_var.set(options.get("title_shadow_alpha", DEFAULT_TITLE_SHADOW_ALPHA))
+        self.title_shadow_offset_x_var.set(options.get("title_shadow_offset_x", DEFAULT_TITLE_SHADOW_OFFSET_X))
+        self.title_shadow_offset_y_var.set(options.get("title_shadow_offset_y", DEFAULT_TITLE_SHADOW_OFFSET_Y))
+        self.title_shadow_blur_var.set(options.get("title_shadow_blur", DEFAULT_TITLE_SHADOW_BLUR))
+
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
+        # Update title swatches if they exist
+        if hasattr(self, 'title_fill_swatch'): self.title_fill_swatch.config(bg=self.title_fill_color_var.get())
+        if hasattr(self, 'title_outline_swatch'): self.title_outline_swatch.config(bg=self.title_outline_color_var.get())
+        if hasattr(self, 'title_shadow_swatch'): self.title_shadow_swatch.config(bg=self.title_shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
 
     def duplicate_selected_jobs(self):
@@ -3046,7 +3472,51 @@ class VideoProcessorApp:
                     ass_burn_path = create_temporary_ass_file(subtitle_source_file, options, target_res=(sub_target_w, sub_target_h))
                     if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
             
-            cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options)
+            # --- Title Burn ASS Creation ---
+            title_ass_path = None
+            if options.get("title_burn_enabled"):
+                # Calculate target resolution if not already done
+                if 'sub_target_w' not in locals():
+                    res_key = options.get('resolution')
+                    sub_target_w, sub_target_h = 1920, 1080
+                    if orientation == "vertical":
+                        width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+                        sub_target_w = width_map.get(res_key, 1080)
+                        try:
+                            num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
+                            sub_target_h = int(sub_target_w * den / num)
+                        except: sub_target_h = 1920
+                    elif orientation == "original":
+                        info = get_video_info(job['video_path'])
+                        sub_target_w, sub_target_h = info['width'], info['height']
+                    else:
+                        width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
+                        sub_target_w = width_map.get(res_key, 1920)
+                        try:
+                            num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
+                            sub_target_h = int(sub_target_w * den / num)
+                        except: sub_target_h = 1080
+                
+                # Get title text - priority: override > JSON
+                title_text = options.get("title_override_text", "").strip()
+                if not title_text:
+                    # Try to find from JSON file
+                    _, title_text = find_title_json_file(
+                        job['video_path'],
+                        job.get('subtitle_path'),
+                        options.get('title_json_suffix', '')
+                    )
+                
+                if title_text:
+                    title_ass_path = create_title_ass_file(title_text, options, target_res=(sub_target_w, sub_target_h))
+                    if title_ass_path:
+                        print(f"[INFO] Title burn: '{title_text[:50]}...' " if len(title_text) > 50 else f"[INFO] Title burn: '{title_text}'")
+                    else:
+                        print("[WARN] Failed to create title ASS file.")
+                else:
+                    print("[WARN] Title burn enabled but no title text found (check JSON suffix or use override).")
+            
+            cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
             duration = get_file_duration(job['video_path'])
             max_dur = float(options.get('max_duration', 0))
             if max_dur > 0: duration = min(duration, max_dur)
@@ -3062,8 +3532,12 @@ class VideoProcessorApp:
         finally:
             if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE): os.remove(CURRENT_TEMP_FILE); CURRENT_TEMP_FILE = None
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
+            # Clean up title ASS file
+            if title_ass_path and os.path.exists(title_ass_path): 
+                try: os.remove(title_ass_path)
+                except: pass
 
-    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None):
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None):
         options = options or job['options']
         file_path = job['video_path']
         info = get_video_info(file_path)
@@ -3126,6 +3600,9 @@ class VideoProcessorApp:
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
                 cpu_chain.append(f"subtitles=filename='{safe_ass}'")
+            if title_ass_path:
+                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
+                cpu_chain.append(f"subtitles=filename='{safe_title_ass}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
             video_fc_parts = [
                 "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
@@ -3227,6 +3704,9 @@ class VideoProcessorApp:
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
                 cpu_filters.append(f"subtitles=filename='{safe_ass}'")
+            if title_ass_path:
+                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
+                cpu_filters.append(f"subtitles=filename='{safe_title_ass}'")
             if cpu_filters:
                 # One single trip to CPU for all the heavy lifting
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
