@@ -94,6 +94,8 @@ import re
 import glob
 import time
 import random
+import shutil
+import subprocess
 from datetime import datetime
 
 # ==========================================
@@ -104,6 +106,29 @@ DEFAULT_DEEP_MODE = True  # Default to fetching rich metadata & comments
 DEFAULT_COMMENTS = True   # Default to downloading comments
 DEFAULT_CONDENSED = True  # Default to cleaned metadata output
 DEFAULT_SUB_FETCH = False # Default to NOT downloading .srt files unless -s is used
+
+# ==========================================
+# Helper Function: Check for JS Runtime
+# ==========================================
+def check_js_runtime():
+    """
+    Checks if a supported JavaScript runtime (node, deno, bun, qjs) is available.
+    Prints a warning if none are found.
+    """
+    runtimes = ['node', 'deno', 'bun', 'qjs']
+    found = False
+    for rt in runtimes:
+        if shutil.which(rt):
+            found = True
+            break
+    
+    if not found:
+        print("\n" + "="*80)
+        print("WARNING: No JavaScript runtime found (Node.js, Deno, Bun, or QuickJS).")
+        print("YouTube extraction may be limited and some formats may be missing.")
+        print("Recommendation: Install Node.js (https://nodejs.org/) or Deno (https://deno.land/).")
+        print("="*80 + "\n")
+    return found
 
 # ==========================================
 # Helper Function: Condense Metadata
@@ -894,6 +919,9 @@ if __name__ == "__main__":
     parser.add_argument("-z", "--sleep", type=int, default=DEFAULT_SLEEP, help=f"Seconds to sleep between video extractions (Default: {DEFAULT_SLEEP}).")
 
     args = parser.parse_args()
+    
+    # Check for JS Runtime (Required by yt-dlp for SABR)
+    check_js_runtime()
     
     # Determine Output Format Preference
     out_fmt = 'csv' # Default fallback
