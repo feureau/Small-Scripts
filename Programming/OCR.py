@@ -11,6 +11,20 @@ import numpy as np
 # Silence verbose EasyOCR logs
 logging.getLogger('easyocr').setLevel(logging.ERROR)
 
+def get_unique_path(base_path):
+    """Returns base_path if it doesn't exist, otherwise appends ' 1', ' 2', etc."""
+    if not base_path.exists():
+        return base_path
+    
+    parent = base_path.parent
+    name = base_path.name
+    counter = 1
+    while True:
+        target = parent / f"{name} {counter}"
+        if not target.exists():
+            return target
+        counter += 1
+
 def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_mode=False):
     print("Loading EasyOCR model... (this may take a moment)")
     
@@ -28,12 +42,15 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
         print(f"Error loading EasyOCR: {e}")
         sys.exit(1)
 
-    # Setup Output
+    # Setup Output Path Logic
+    # We determine the final path per parent folder to support incremental naming
     if output_folder:
-        out_path = Path(output_folder)
-        out_path.mkdir(parents=True, exist_ok=True)
+        global_out_path = get_unique_path(Path(output_folder))
+        global_out_path.mkdir(parents=True, exist_ok=True)
     else:
-        out_path = Path.cwd()
+        global_out_path = None
+    
+    folder_cache = {}
 
     # Expand Wildcards
     files_to_process = []
@@ -55,6 +72,17 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
             continue
 
         print(f"Processing: {p.name}...", end='\r')
+        
+        # Determine output path
+        if global_out_path:
+            current_out_path = global_out_path
+        else:
+            parent_dir = p.parent
+            if parent_dir not in folder_cache:
+                unique_path = get_unique_path(parent_dir / "OCR")
+                unique_path.mkdir(parents=True, exist_ok=True)
+                folder_cache[parent_dir] = unique_path
+            current_out_path = folder_cache[parent_dir]
         
         try:
             full_text = ""
@@ -89,7 +117,7 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
                 full_text = "\n\n".join(text_blocks)
 
             # Save
-            output_file = out_path / f"{p.stem}.txt"
+            output_file = current_out_path / f"{p.stem}.txt"
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(full_text)
                 
