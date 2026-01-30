@@ -140,11 +140,47 @@ def convert_to_subtitle_free_video(input_file, output_extension):
         print(f"Skipping identical paths: {input_file}")
         return None
 
+    dest_dir = os.path.dirname(output_file)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+
     print(f"Converting: {input_file} -> {output_file}")
+
+    # Probe audio streams to prioritize English
+    audio_streams = _probe_audio_streams(input_file)
+    
+    # Sort: 'eng' or 'en' first, then others
+    def audio_sort_key(s):
+        tags = s.get('tags', {})
+        lang = ""
+        for k, v in tags.items():
+            if k.lower() == 'language':
+                lang = v.lower()
+                break
+        # Prioritize English (eng or en)
+        return 0 if lang in ('eng', 'en') else 1
+
+    sorted_audio = sorted(audio_streams, key=audio_sort_key)
+    
+    audio_maps = []
+    dispositions = []
+    for i, s in enumerate(sorted_audio):
+        audio_maps.extend(["-map", f"0:{s['index']}"])
+        # Set first audio track (a:0 in output) as default, others not
+        if i == 0:
+            dispositions.extend(["-disposition:a:0", "default"])
+        else:
+            dispositions.extend([f"-disposition:a:{i}", "0"])
+    
+    # If no audio streams found by probe, fallback to mapping all audio
+    if not audio_maps:
+        audio_maps = ["-map", "0:a?"]
+
     command = [
         "ffmpeg", "-hide_banner",
         "-i", input_file,
-        "-map", "0:v?", "-map", "0:a?",
+        "-map", "0:v?", 
+    ] + audio_maps + dispositions + [
         "-c:v", "copy", "-c:a", "copy",
         "-sn", "-map_metadata", "0", "-map_chapters", "0",
         "-strict", "experimental", "-y", output_file
@@ -170,6 +206,30 @@ def convert_to_subtitle_free_video(input_file, output_extension):
             except Exception:
                 pass
         return None
+
+
+def _probe_audio_streams(video_path):
+    """Probe audio streams via ffprobe (returns list of stream dicts)."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_streams",
+        "-show_entries", "stream=index,codec_name,tags",
+        "-of", "json", video_path
+    ]
+    proc = run_command(cmd, capture_output=True)
+    if proc is None:
+        print(f"  FFprobe failed to start for {video_path}")
+        return []
+    if proc.returncode != 0:
+        print(f"  FFprobe returned non-zero for {video_path} (rc={proc.returncode})")
+        return []
+
+    try:
+        data = json.loads(proc.stdout or "{}")
+        return data.get("streams", []) or []
+    except Exception:
+        print(f"  Failed to parse audio streams for {video_path}")
+        return []
 
 # ---------------------------------------------------------------------------
 # Embedded Subtitle Extraction Module
