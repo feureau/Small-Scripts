@@ -14,11 +14,11 @@
 # This script automatically identifies the content of scanned pages and sorts
 # them into three categories:
 #
-#   1. Pages  : Contain text (main book content).
-#   2. Images : Contain illustrations, photos, or diagrams (no body text).
+#   1. Text   : Contain text (main book content).
+#   2. Images : Contain illustrations, photos, or diagrams (no text).
 #   3. Blanks : Contain neither (just noise, paper texture, or dust).
 #
-# Files are moved into a `sorted/` subdirectory with `pages`, `images`, and `blank` folders.
+# Files are moved into a `sorted/` subdirectory with `text`, `images`, and `blanks` folders.
 #
 # ==============================================================================
 # --- CONFIGURATION / PARAMETERS ---
@@ -56,20 +56,18 @@ IMAGE_CONTOUR_MIN_AREA = 100
 
 # BLANK Check
 # Page is BLANK if Text Lines < X  AND  Image Content < Y
-TH_BLANK_TEXT_MAX = 3
+TH_BLANK_TEXT_MAX = 1   # Lowered to 1 to catch minimal text (e.g. Page 5)
 TH_BLANK_IMAGE_MAX = 5000
 
 # BLANK Check (Standard Deviation)
 # If image std-dev is below this, it is considered BLANK (ignores noise/texture).
 TH_BLANK_STD_MAX = 10.0
 
-# STRONG PAGE Check
-# Page is TEXT if Text Lines > X (Overrides image check)
-TH_PAGE_TEXT_MIN = 20
-
-# AMBIGUOUS RESOLUTION (Text is between 3 and 20 lines)
-# If Image Content > X -> IMAGE. Otherwise -> PAGE.
-TH_IMAGE_AREA_HIGH = 120000
+# STRONG TEXT/IMAGE categorization
+# If text is very strong, it's likely a TEXT page even with icons.
+# If image is very strong, a few text lines are likely just captions or noise.
+TH_TEXT_STRONG_MIN = 20
+TH_IMAGE_STRONG_MIN = 120000
 
 # ==============================================================================
 
@@ -319,14 +317,14 @@ def process_images(target_dir, params, verbose=True):
     print(f"Found {len(image_files)} images.\n")
 
     # Stats
-    stats = {"pages": 0, "images": 0, "blank": 0, "both": 0, "error": 0, "skipped": 0}
+    stats = {"text": 0, "images": 0, "blanks": 0, "both": 0, "error": 0, "skipped": 0}
 
     # Setup Sorted Folders
     sorted_root = os.path.join(abs_target, "sorted")
     dirs = {
-        "pages": os.path.join(sorted_root, "pages"),
+        "text": os.path.join(sorted_root, "text"),
         "images": os.path.join(sorted_root, "images"),
-        "blank": os.path.join(sorted_root, "blanks"),
+        "blanks": os.path.join(sorted_root, "blanks"),
     }
 
     # Create them if they don't exist
@@ -374,24 +372,47 @@ def process_images(target_dir, params, verbose=True):
 
             if not has_text and not has_image:
                 # BLANK
-                dest = dirs["blank"]
+                dest = dirs["blanks"]
                 shutil.move(image_path, dest)
                 if verbose:
                     print(f"      -> Action: Moved to sorted/blanks")
-                stats["blank"] += 1
+                stats["blanks"] += 1
 
             elif has_text and has_image:
-                # BOTH
-                # 1. Copy to Images
-                shutil.copy2(image_path, dirs["images"])
-                if verbose:
-                    print(f"      -> Action: Copied to sorted/images")
+                # BOTH (Initially detected)
+                # Refine based on strengths
+                if (
+                    analysis["text_lines"] < TH_TEXT_STRONG_MIN
+                    and analysis["image_area"] > TH_IMAGE_STRONG_MIN
+                ):
+                    # Likely just captions or noise on a full image
+                    dest = dirs["images"]
+                    shutil.move(image_path, dest)
+                    if verbose:
+                        print(f"      -> Action: Moved to sorted/images (Image Strong)")
+                    stats["images"] += 1
+                elif (
+                    analysis["text_lines"] >= TH_TEXT_STRONG_MIN
+                    and analysis["image_area"] < TH_IMAGE_STRONG_MIN / 2
+                ):
+                    # Likely just small icons or stray marks on a text page
+                    dest = dirs["text"]
+                    shutil.move(image_path, dest)
+                    if verbose:
+                        print(f"      -> Action: Moved to sorted/text (Text Strong)")
+                    stats["text"] += 1
+                else:
+                    # TRUE BOTH
+                    # 1. Copy to Images
+                    shutil.copy2(image_path, dirs["images"])
+                    if verbose:
+                        print(f"      -> Action: Copied to sorted/images")
 
-                # 2. Move to Pages
-                shutil.move(image_path, dirs["pages"])
-                if verbose:
-                    print(f"      -> Action: Moved to sorted/pages")
-                stats["both"] += 1
+                    # 2. Move to Text
+                    shutil.move(image_path, dirs["text"])
+                    if verbose:
+                        print(f"      -> Action: Moved to sorted/text")
+                    stats["both"] += 1
 
             elif has_image:
                 # IMAGE ONLY
@@ -403,11 +424,11 @@ def process_images(target_dir, params, verbose=True):
 
             elif has_text:
                 # TEXT ONLY
-                dest = dirs["pages"]
+                dest = dirs["text"]
                 shutil.move(image_path, dest)
                 if verbose:
-                    print(f"      -> Action: Moved to sorted/pages")
-                stats["pages"] += 1
+                    print(f"      -> Action: Moved to sorted/text")
+                stats["text"] += 1
 
         except Exception as e:
             print(f"    -> Error processing file: {e}")
@@ -418,16 +439,16 @@ def process_images(target_dir, params, verbose=True):
 
     print("=" * 30)
     print("Sorting Complete Check 'sorted/' folder.")
-    print(f"  Pages (Text Only) : {stats['pages']}")
-    print(f"  Images (Img Only) : {stats['images']}")
+    print(f"  Text Only         : {stats['text']}")
+    print(f"  Images Only       : {stats['images']}")
     print(f"  Both (Split)      : {stats['both']}")
-    print(f"  Blanks            : {stats['blank']}")
+    print(f"  Blanks            : {stats['blanks']}")
     print("=" * 30)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Sorts scanned pages into Pages (Text), Images, and Blanks."
+        description="Sorts scanned pages into Text, Images, and Blanks."
     )
     parser.add_argument(
         "target_directory", nargs="?", default=os.getcwd(), help="Directory to process"
@@ -455,15 +476,15 @@ def main():
         "--wp",
         "--width-pct",
         type=float,
-        default=0.012,
-        help="Text detection width percentage (default: 0.012 / 1.2%%)",
+        default=0.015,
+        help="Text detection width percentage (default: 0.015 / 1.5%%)",
     )
     parser.add_argument(
         "--hp",
         "--height-pct",
         type=float,
-        default=0.002,
-        help="Text detection height percentage (default: 0.002 / 0.2%%)",
+        default=0.005,
+        help="Text detection height percentage (default: 0.005 / 0.5%%)",
     )
     parser.add_argument(
         "--wx", "--width-px", type=int, help="Override width with fixed pixels"
