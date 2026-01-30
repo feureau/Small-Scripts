@@ -137,6 +137,7 @@ def display_help():
     print("\nOptions:")
     print("  -s, --shallow    Disables recursion and searches ONLY the current directory.")
     print("  -r, --regex      Treats old_string as a Regular Expression.")
+    print("  -p, --prefix     Prepends a string to the filenames.")
     print("\nExamples:")
     print("  # Recursively rename all .txt files in current folder and all subfolders")
     print("  python FileRename.py *.txt draft final")
@@ -144,8 +145,10 @@ def display_help():
     print("  python FileRename.py *.jpg vacation holiday -s")
     print("\n  # Use Regex to remove a date pattern (e.g., 20240415) from filenames")
     print("  python FileRename.py * \" - \\d{8}\" \"\" -r")
+    print("\n  # Add a prefix to all .jpg files")
+    print("  python FileRename.py *.jpg --prefix \"Trip_2023_\"")
 
-def rename_files(files_to_process, old_string, new_string, use_regex=False):
+def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None):
     """
     Proposes and executes file renames after user confirmation.
     """
@@ -159,22 +162,27 @@ def rename_files(files_to_process, old_string, new_string, use_regex=False):
             continue
 
         original_filename = os.path.basename(original_path)
+        new_filename = original_filename
         
         match_found = False
-        new_filename = original_filename
 
-        if use_regex:
-            try:
-                if re.search(old_string, original_filename):
-                    new_filename = re.sub(old_string, new_string, original_filename)
-                    match_found = (new_filename != original_filename)
-            except re.error as e:
-                print(f"Error in Regex pattern: {e}")
-                return
-        else:
-            if old_string in original_filename:
-                new_filename = original_filename.replace(old_string, new_string)
-                match_found = True
+        if old_string is not None and new_string is not None:
+            if use_regex:
+                try:
+                    if re.search(old_string, original_filename):
+                        new_filename = re.sub(old_string, new_string, original_filename)
+                        match_found = (new_filename != original_filename)
+                except re.error as e:
+                    print(f"Error in Regex pattern: {e}")
+                    return
+            else:
+                if old_string in original_filename:
+                    new_filename = original_filename.replace(old_string, new_string)
+                    match_found = True
+
+        if prefix:
+            new_filename = prefix + new_filename
+            match_found = True
 
         if match_found:
             directory = os.path.dirname(original_path)
@@ -231,20 +239,41 @@ def main():
         if '-r' in args: args.remove('-r')
         if '--regex' in args: args.remove('--regex')
     
-    if len(args) < 3:
+    # Prefix support
+    prefix = None
+    if '-p' in args or '--prefix' in args:
+        try:
+            idx = args.index('-p') if '-p' in args else args.index('--prefix')
+            prefix = args[idx + 1]
+            # Remove flag and value
+            args.pop(idx + 1)
+            args.pop(idx)
+        except (IndexError, ValueError):
+            print("\nError: --prefix requires a value.")
+            sys.exit(1)
+    
+    if len(args) < 1 or (not prefix and len(args) < 3):
         print("\nError: Invalid number of arguments.")
         display_help()
         sys.exit(1)
 
-    new_string = args.pop()
-    old_string = args.pop()
+    new_string = None
+    old_string = None
+    
+    if len(args) >= 3:
+        new_string = args.pop()
+        old_string = args.pop()
+    
     file_inputs = args
     
     # If the user enters `*.txt`, the shell might expand it. We'll just use the first item as the pattern.
     pattern = file_inputs[0]
     
     print(f"Searching for files matching pattern: '{pattern}'")
-    print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
+    if old_string is not None:
+        print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
+    if prefix:
+        print(f"Adding prefix: '{prefix}'")
     print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-s flag used)'}")
     print("---------------------------------")
     
@@ -253,7 +282,7 @@ def main():
     pathname = os.path.join('**', pattern) if recursive else pattern
     files_to_process = glob.glob(pathname, recursive=recursive)
         
-    rename_files(files_to_process, old_string, new_string, use_regex=use_regex)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix)
 
 if __name__ == "__main__":
     main()
