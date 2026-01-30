@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.8
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.9
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -10,6 +10,7 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 - **🌐 Multi-Engine Support**: Native integration with Google Gemini (via Files API), Ollama, and LM Studio.
 - **🖼️ Multimodal Power**: Batch upload images and documents for analysis, OCR, or creative tasks.
 - **📦 Intelligent Grouping**: Process files individually or group them (e.g., 3 images per prompt) to save tokens and context.
+- **✂️ Text Chunking**: Automatically split massive text files into manageable pieces for AI processing and piece them back together.
 - **🔄 Upload Modes**: 
   - **Parallel**: High-speed multi-threaded uploads (internal ordering preserved).
   - **Sequential**: Strict one-by-one uploading for reliable logging and order.
@@ -34,9 +35,15 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
+### v25.9
+- ✅ **FEATURE**: Added "Text Chunking" option to AI Engine tab. Handles massive text by splitting into token-based chunks and reassembling the AI output.
+- ✅ **FEATURE**: Added "Force Cutoff" option to chunking. Ensures chunks end at sentence boundaries (.!?) for cleaner processing without overlap.
+- ✅ **IMPROVEMENT**: Default chunk overlap set to 0.
+
 ### v25.8
 - ✅ **BUGFIX**: Defensive natural sorting for image/text files to ensure sequential filename order.
 - ✅ **IMPROVEMENT**: Added DEBUG ORDER trace logging at file split, upload, and API submission points.
+
 
 ### v25.7
 - ✅ **FEATURE**: Added "Upload Mode" (Parallel/Sequential) radio buttons.
@@ -113,6 +120,7 @@ except ImportError:
     print("⚠️ Pillow (PIL) not found. Image conversions (e.g. .tif -> .png) will be disabled.")
 
 import ollama 
+import tiktoken
 
 # --- OPTIONAL: JSON REPAIR ---
 try:
@@ -890,6 +898,111 @@ def copy_failed_file(filepath):
         shutil.copy2(filepath, os.path.join(failed_dir, os.path.basename(filepath)))
     except Exception: pass
 
+def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
+    """
+    Splits text into chunks of max_tokens with optional overlap.
+    Uses tiktoken for precise tokenization.
+    If force_cutoff is True, attempts to end chunks at sentence boundaries (. ! ?)
+    """
+    if not text: return []
+    
+    # Sentence terminators for backtracking
+    terminators = ('.', '!', '?', '\n')
+
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    except Exception as e:
+        console_log(f"Error getting tiktoken encoding: {e}. Falling back to character-based splitting.", "WARN")
+        # Fallback: ~4 chars per token
+        chars_per_token = 4
+        chunk_size_chars = max_tokens * chars_per_token
+        overlap_chars = overlap * chars_per_token
+        
+        chunks = []
+        current_pos = 0
+        while current_pos < len(text):
+            end_pos = min(current_pos + chunk_size_chars, len(text))
+            chunk_content = text[current_pos:end_pos]
+            
+            if force_cutoff and end_pos < len(text):
+                last_t_idx = -1
+                for t in terminators:
+                    found = chunk_content.rfind(t)
+                    if found > last_t_idx: last_t_idx = found
+                
+                if last_t_idx != -1:
+                    actual_end = current_pos + last_t_idx + 1
+                    chunk_content = text[current_pos:actual_end]
+                    end_pos = actual_end
+            
+            chunks.append(chunk_content)
+            
+            # Advancement logic
+            if force_cutoff:
+                # If we're forcing cutoff, we don't really support 'overlap' in the traditional sense
+                # normally, but let's respect the user's wish if they set it.
+                # If they set overlap 0, start exactly at end_pos.
+                current_pos = end_pos - overlap_chars
+            else:
+                current_pos = end_pos - overlap_chars
+            
+            # Safety break to avoid infinite loop
+            if current_pos >= len(text) or (current_pos <= 0 and len(chunks) > 0 and len(text) > 0):
+                if current_pos < len(text) and len(chunks) > 0:
+                   # This should only happen if overlap >= chunk_size
+                   current_pos = end_pos
+                else: break
+            if len(chunks) > 5000: break # Safety limit
+
+        return chunks
+
+    # --- TIKTOKEN LOGIC ---
+    tokens = encoding.encode(text)
+    if len(tokens) <= max_tokens:
+        return [text]
+
+    chunks = []
+    current_token_idx = 0
+    
+    while current_token_idx < len(tokens):
+        # 1. Get raw candidate end
+        end_token_idx = min(current_token_idx + max_tokens, len(tokens))
+        chunk_tokens = tokens[current_token_idx:end_token_idx]
+        decoded_text = encoding.decode(chunk_tokens)
+        
+        # 2. Handle Force Cutoff
+        if force_cutoff and end_token_idx < len(tokens):
+            last_t_idx = -1
+            for t in terminators:
+                found = decoded_text.rfind(t)
+                if found > last_t_idx: last_t_idx = found
+            
+            if last_t_idx != -1:
+                # Truncate string to terminator
+                truncated_text = decoded_text[:last_t_idx + 1]
+                # Re-encode to find the EXACT token count for this visual cut
+                truncated_tokens = encoding.encode(truncated_text)
+                
+                if len(truncated_tokens) > 0:
+                    decoded_text = truncated_text
+                    end_token_idx = current_token_idx + len(truncated_tokens)
+
+        chunks.append(decoded_text)
+        
+        # 3. Advance. 
+        # For disjoint chunks (overlap=0), new start should be exactly current end.
+        current_token_idx = end_token_idx - overlap
+        
+        # Safety checks
+        if current_token_idx >= len(tokens): break
+        if current_token_idx < 0: current_token_idx = 0
+        if len(chunks) > 5000: break
+            
+    return chunks
+
+
+
+
 def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, cancellation_event=None, **kwargs):
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
@@ -1006,27 +1119,57 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 prompt_parts.append(f"\n{content}\n")
             
             
-            full_prompt = user_prompt + "".join(prompt_parts)
-            log_data['prompt_sent'] = full_prompt
+            file_content_all = "".join(prompt_parts)
             
-            # DEBUG: Verify what's being passed to the API
-            console_log(f"DEBUG process_file_group: google_file_objects has {len(google_file_objects) if google_file_objects else 0} items before API call", "INFO")
+            if kwargs.get('enable_chunking', False):
+                max_tok = kwargs.get('chunk_size', 4000)
+                overlap = kwargs.get('chunk_overlap', 200)
+                force_cut = kwargs.get('force_cutoff', False)
+                chunks = chunk_text(file_content_all, max_tok, overlap, force_cutoff=force_cut)
+            else:
+                chunks = [file_content_all]
+
+                
+            log_data['prompt_sent'] = user_prompt + file_content_all
+            if len(chunks) > 1:
+                log_data['chunk_count'] = len(chunks)
             
-            response = call_generative_ai_api(
-                engine, 
-                full_prompt, 
-                api_key, 
-                model_name,
-                client=client,
-                images_data_list=images_data_legacy, # For Ollama/LMStudio
-                google_file_objects=google_file_objects, # For Gemini
-                stream_output=kwargs['stream_output'], 
-                safety_settings=kwargs.get('safety_settings'),
-                enable_web_search=kwargs.get('enable_web_search', False),
-                enable_thinking=kwargs.get('enable_thinking', False),
-                clean_markdown=kwargs.get('clean_markdown', True), # Pass clean setting
-                cancellation_event=cancellation_event
-            )
+            # --- API CALL LOOP ---
+            chunk_responses = []
+            for idx, chunk_content in enumerate(chunks):
+                if cancellation_event and cancellation_event.is_set():
+                    raise CancellationError("Processing cancelled during chunked processing.")
+
+                if len(chunks) > 1:
+                    console_log(f"Processing chunk {idx+1}/{len(chunks)} for {base_name}...", "INFO")
+                
+                full_chunk_prompt = user_prompt + chunk_content
+                
+                resp = call_generative_ai_api(
+                    engine, 
+                    full_chunk_prompt, 
+                    api_key, 
+                    model_name,
+                    client=client,
+                    images_data_list=images_data_legacy, 
+                    google_file_objects=google_file_objects, 
+                    stream_output=kwargs.get('stream_output', False), 
+                    safety_settings=kwargs.get('safety_settings'),
+                    enable_web_search=kwargs.get('enable_web_search', False),
+                    enable_thinking=kwargs.get('enable_thinking', False),
+                    clean_markdown=kwargs.get('clean_markdown', True),
+                    cancellation_event=cancellation_event
+                )
+                
+                if resp and str(resp).strip().startswith("Error"):
+                    # For chunks, we might want to fail the whole group or just this chunk?
+                    # Usually if one chunk fails, the reassembled output is broken.
+                    raise Exception(resp)
+                
+                chunk_responses.append(resp or "")
+
+            response = "\n".join(chunk_responses)
+
         
         if response and str(response).strip().startswith("Error"): 
             raise Exception(response)
@@ -1243,8 +1386,9 @@ class ModelSelectionDialog(tk.Toplevel):
 class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v25.8 (Gemini Files API Supported)")
+        self.title("Multimodal AI Batch Processor v25.9 (Gemini Files API Supported)")
         self.geometry("1400x800")
+
         self.minsize(1100, 700)
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
         
@@ -1308,6 +1452,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.img_max_dim_var = tk.IntVar(value=0)
         self.force_conversion_var = tk.BooleanVar(value=False)
         self.save_img_to_output_var = tk.BooleanVar(value=False)
+        
+        # --- NEW: Text Chunking ---
+        self.enable_chunking_var = tk.BooleanVar(value=False)
+        self.chunk_size_var = tk.IntVar(value=4000)
+        self.enable_overlap_var = tk.BooleanVar(value=False) # Default Off
+        self.chunk_overlap_var = tk.IntVar(value=0) # Default to 0
+        self.force_cutoff_var = tk.BooleanVar(value=True) # Default On as requested
+
 
         self.create_widgets()
         self.refresh_presets_combo()
@@ -1394,9 +1546,33 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Checkbutton(tab_ai, text="Enable Thinking (Gemini)", variable=self.thinking_var).grid(row=3, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var).grid(row=4, column=0, columnspan=2, sticky="w")
         
+        # --- Chunking Frame ---
+        chunk_f = ttk.LabelFrame(tab_ai, text="Text Chunking (Process very long text in parts)", padding=5)
+        chunk_f.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(15, 0))
+        
+        ttk.Checkbutton(chunk_f, text="Enable Text Chunking", variable=self.enable_chunking_var, command=self.toggle_chunking).grid(row=0, column=0, columnspan=2, sticky="w")
+        
+        grid_c = ttk.Frame(chunk_f)
+        grid_c.grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=5)
+        
+        ttk.Label(grid_c, text="Max Tokens per Chunk:").grid(row=0, column=0, sticky="w")
+        self.chunk_size_spin = ttk.Spinbox(grid_c, from_=100, to=1000000, textvariable=self.chunk_size_var, width=10)
+        self.chunk_size_spin.grid(row=0, column=1, sticky="w", padx=5)
+        
+        self.overlap_check = ttk.Checkbutton(grid_c, text="Enable Overlap:", variable=self.enable_overlap_var, command=self.toggle_chunking)
+        self.overlap_check.grid(row=1, column=0, sticky="w", pady=(5,0))
+        self.chunk_overlap_spin = ttk.Spinbox(grid_c, from_=0, to=10000, textvariable=self.chunk_overlap_var, width=10)
+        self.chunk_overlap_spin.grid(row=1, column=1, sticky="w", padx=5, pady=(5,0))
+        
+        self.force_cut_check = ttk.Checkbutton(chunk_f, text="Force Cutoff (End at sentence boundary .!?)", variable=self.force_cutoff_var)
+        self.force_cut_check.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(5,0))
+        
+        self.toggle_chunking() # Init state
+
         self.ollama_search_var = tk.BooleanVar(value=False)
         self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
         self.ollama_search_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(5,0))
+
 
         tab_out = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_out, text="Output & Batch")
         ttk.Label(tab_out, text="Folder:").grid(row=0, column=0, sticky="w")
@@ -1564,6 +1740,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         for child in self.img_settings_frame.winfo_children():
             recursive_set_state(child, state)
 
+    def toggle_chunking(self):
+        chunk_enabled = self.enable_chunking_var.get()
+        state = 'normal' if chunk_enabled else 'disabled'
+        self.chunk_size_spin.config(state=state)
+        self.force_cut_check.config(state=state)
+        self.overlap_check.config(state=state)
+        
+        # Overlap spinbox is only active if BOTH chunking and overlap are enabled
+        overlap_active = chunk_enabled and self.enable_overlap_var.get()
+        self.chunk_overlap_spin.config(state='normal' if overlap_active else 'disabled')
+
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
@@ -1599,6 +1786,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.sexually_explicit_var, 'safety_sexually_explicit', 'Off')
             set_var(self.dangerous_content_var, 'safety_dangerous_content', 'Off')
             
+            # Text Chunking
+            set_var(self.enable_chunking_var, 'enable_chunking', False)
+            set_var(self.chunk_size_var, 'chunk_size', 4000)
+            set_var(self.enable_overlap_var, 'enable_overlap', False)
+            set_var(self.chunk_overlap_var, 'chunk_overlap', 0)
+            set_var(self.force_cutoff_var, 'force_cutoff', True)
+            
             # Image Settings
             set_var(self.enable_img_conversion_var, 'enable_img_conversion', False)
             set_var(self.temp_img_fmt_var, 'temp_img_fmt', 'PNG')
@@ -1631,6 +1825,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             
             self.toggle_overwrite()
             self.toggle_grouping()
+            self.toggle_chunking()
+
 
     def get_current_settings_dict(self):
         return {
@@ -1667,8 +1863,16 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             'save_img_to_output': self.save_img_to_output_var.get(),
             'rename_mode': self.rename_mode_var.get(),
             'rename_method': self.rename_method_var.get(),
-            'enable_thinking': self.thinking_var.get()
+            'enable_thinking': self.thinking_var.get(),
+            'enable_chunking': self.enable_chunking_var.get(),
+            'chunk_size': self.chunk_size_var.get(),
+            'enable_overlap': self.enable_overlap_var.get(),
+            'chunk_overlap': self.chunk_overlap_var.get(),
+            'force_cutoff': self.force_cutoff_var.get()
         }
+
+
+
 
     def save_current_preset(self):
         name = self.preset_var.get()
@@ -1955,8 +2159,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 'img_max_dim': self.img_max_dim_var.get(),
                 'force_conversion': self.force_conversion_var.get(),
                 'save_img_to_output': self.save_img_to_output_var.get(),
+                'enable_chunking': self.enable_chunking_var.get(),
+                'chunk_size': self.chunk_size_var.get(),
+                'chunk_overlap': self.chunk_overlap_var.get() if self.enable_overlap_var.get() else 0,
+                'force_cutoff': self.force_cutoff_var.get(),
                 'result_metadata': {} # Mutable container for returning data
             }
+
+
+
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
             self.tree.insert('', tk.END, iid=jid, values=(jid, generate_group_base_name(batch), 'Pending', mod))
