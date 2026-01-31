@@ -2080,9 +2080,10 @@ class VideoProcessorApp:
         loudness_group.pack(fill=tk.X, pady=(0, 5))
 
         # Loudness War Checkbox
-        ttk.Checkbutton(loudness_group, text="Enable Compression & Limiting (acompressor + alimiter)", 
+        self.loudness_war_checkbox = ttk.Checkbutton(loudness_group, text="Enable Compression & Limiting (acompressor + alimiter)", 
                         variable=self.use_loudness_war_var, 
-                        command=self._toggle_audio_norm_options).pack(anchor="w")
+                        command=self._toggle_audio_norm_options)
+        self.loudness_war_checkbox.pack(anchor="w")
 
         self.lw_frame = ttk.Frame(loudness_group)
         self.lw_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
@@ -2115,8 +2116,9 @@ class VideoProcessorApp:
         self.limit_limit_entry.grid(row=1, column=5, sticky="w", padx=5)
         
         # Dynamic Normalization Checkbox
-        ttk.Checkbutton(loudness_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
-                        command=self._toggle_audio_norm_options).pack(anchor="w", pady=(5, 0))
+        self.dyn_norm_checkbox = ttk.Checkbutton(loudness_group, text="Dynamic Normalization (dynaudnorm)", variable=self.use_dynaudnorm_var, 
+                        command=self._toggle_audio_norm_options)
+        self.dyn_norm_checkbox.pack(anchor="w", pady=(5, 0))
         
         self.dyn_norm_frame = ttk.Frame(loudness_group)
         self.dyn_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
@@ -2135,8 +2137,9 @@ class VideoProcessorApp:
         self.dyn_max_gain_entry.grid(row=1, column=3, sticky="w", padx=5)
 
         # EBU R128 Normalization Checkbox
-        ttk.Checkbutton(loudness_group, text="EBU R128 Normalization (loudnorm)", variable=self.normalize_audio_var, 
-                        command=self._toggle_audio_norm_options).pack(anchor="w", pady=(5, 0))
+        self.audio_norm_checkbox = ttk.Checkbutton(loudness_group, text="EBU R128 Normalization (loudnorm)", variable=self.normalize_audio_var, 
+                        command=self._toggle_audio_norm_options)
+        self.audio_norm_checkbox.pack(anchor="w", pady=(5, 0))
 
         self.audio_norm_frame = ttk.Frame(loudness_group)
         self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
@@ -2155,9 +2158,10 @@ class VideoProcessorApp:
         self.true_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
 
         # Loudness Measurement Checkbox
-        ttk.Checkbutton(loudness_group, text="Measure Output Loudness (Save JSON metadata)", 
+        self.measure_loudness_checkbox = ttk.Checkbutton(loudness_group, text="Measure Output Loudness (Save JSON metadata)", 
                         variable=self.measure_loudness_var, 
-                        command=lambda: self._update_selected_jobs("measure_loudness")).pack(anchor="w", pady=(5, 0))
+                        command=lambda: self._update_selected_jobs("measure_loudness"))
+        self.measure_loudness_checkbox.pack(anchor="w", pady=(5, 0))
 
     def setup_audio_tab(self, parent):
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
@@ -2527,15 +2531,20 @@ class VideoProcessorApp:
         self._update_selected_jobs("aspect_mode")
 
     def _toggle_audio_norm_options(self):
-        state_ln = "normal" if self.normalize_audio_var.get() else "disabled"
+        is_passthrough = self.audio_passthrough_var.get()
+        
+        # If Passthrough is enabled, FORCE DISABLE all loudness controls
+        # regardless of their individual checkbox states.
+        
+        state_ln = "normal" if self.normalize_audio_var.get() and not is_passthrough else "disabled"
         for widget in [self.loudness_target_entry, self.loudness_range_entry, self.true_peak_entry]:
             widget.config(state=state_ln)
         
-        state_dyn = "normal" if self.use_dynaudnorm_var.get() else "disabled"
+        state_dyn = "normal" if self.use_dynaudnorm_var.get() and not is_passthrough else "disabled"
         for widget in [self.dyn_frame_len_entry, self.dyn_gauss_win_entry, self.dyn_peak_entry, self.dyn_max_gain_entry]:
             widget.config(state=state_dyn)
             
-        state_lw = "normal" if self.use_loudness_war_var.get() else "disabled"
+        state_lw = "normal" if self.use_loudness_war_var.get() and not is_passthrough else "disabled"
         for widget in [self.comp_threshold_entry, self.comp_ratio_entry, self.comp_makeup_entry, 
                        self.comp_attack_entry, self.comp_release_entry, self.limit_limit_entry]:
             widget.config(state=state_lw)
@@ -2552,8 +2561,22 @@ class VideoProcessorApp:
             self.audio_stereo_sofalizer_var.set(False)
             self.audio_surround_51_var.set(False)
             proc_state = "disabled"
+            
+            # Disable Loudness Controls
+            if hasattr(self, 'loudness_war_checkbox'): self.loudness_war_checkbox.config(state="disabled")
+            if hasattr(self, 'dyn_norm_checkbox'): self.dyn_norm_checkbox.config(state="disabled")
+            if hasattr(self, 'audio_norm_checkbox'): self.audio_norm_checkbox.config(state="disabled")
+            if hasattr(self, 'measure_loudness_checkbox'): self.measure_loudness_checkbox.config(state="disabled")
         else:
             proc_state = "normal"
+            # Re-enable Loudness Controls
+            if hasattr(self, 'loudness_war_checkbox'): self.loudness_war_checkbox.config(state="normal")
+            if hasattr(self, 'dyn_norm_checkbox'): self.dyn_norm_checkbox.config(state="normal")
+            if hasattr(self, 'audio_norm_checkbox'): self.audio_norm_checkbox.config(state="normal")
+            if hasattr(self, 'measure_loudness_checkbox'): self.measure_loudness_checkbox.config(state="normal")
+        
+        # Update sub-widgets for loudness
+        self._toggle_audio_norm_options()
         
         for cb in [self.audio_cb_mono, self.audio_cb_stereo, self.audio_cb_sofa, self.audio_cb_surround]:
             cb.config(state=proc_state)
