@@ -883,6 +883,7 @@ def save_output_files(api_response, log_data, raw_path, log_path=None):
     try:
         with open(raw_path, 'w', encoding='utf-8') as f: f.write(api_response or "[Empty Response]")
         if log_path:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write("="*20 + " Processing Log " + "="*20 + "\n")
                 for k, v in log_data.items():
@@ -1022,13 +1023,13 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
         log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME) if save_log else None
-        if log_dir: os.makedirs(log_dir, exist_ok=True)
+
         _, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), log_dir, log_dir)
     else:
         out_folder = kwargs.get('output_folder') or source_dir
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME) if save_log else None
         os.makedirs(out_folder, exist_ok=True)
-        if log_folder: os.makedirs(log_folder, exist_ok=True)
+
         requested_ext = kwargs.get('output_extension', '').strip()
         ext = ('.' + requested_ext.lstrip('.')) if requested_ext else RAW_OUTPUT_FILE_EXTENSION
         raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
@@ -1699,6 +1700,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.tree.heading('status', text='Status'); self.tree.column('status', width=100)
         self.tree.heading('model', text='Model'); self.tree.column('model', width=120)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        if DND_AVAILABLE:
+            self.tree.drop_target_register(DND_FILES)
+            self.tree.dnd_bind('<<Drop>>', self.handle_job_drop)
         sc = ttk.Scrollbar(q_frame, orient=tk.VERTICAL, command=self.tree.yview); sc.pack(side=tk.RIGHT, fill=tk.Y); self.tree.config(yscrollcommand=sc.set)
 
         btn_area = ttk.Frame(right_frame, padding=10); btn_area.pack(side=tk.BOTTOM, fill=tk.X)
@@ -1989,6 +1993,27 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if f:
             self._add_filepaths_to_list(f)
 
+    def handle_job_drop(self, event):
+        # Handle drag-and-drop files into Job Queue (Add to list + Add Job)
+        files = self.tk.splitlist(event.data)
+        if not files: return
+        
+        processed_files = []
+        for f in files:
+             p = os.path.normpath(f)
+             if os.path.isfile(p):
+                 processed_files.append(p)
+             elif os.path.isdir(p):
+                for ext in AUTO_LOAD_EXTENSIONS:
+                    found = glob.glob(os.path.join(p, f"**/*{ext}"), recursive=True)
+                    processed_files.extend([os.path.normpath(x) for x in found])
+        
+        processed_files = sorted(list(set(processed_files)), key=natural_sort_key)
+        
+        if processed_files:
+            self._add_filepaths_to_list(processed_files) # Ensure they are in input list
+            self.add_to_queue(files_override=processed_files) # Create Job safely
+
     def handle_drop(self, event):
         # Handle drag-and-drop files
         files = self.tk.splitlist(event.data)
@@ -2075,8 +2100,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         d = filedialog.askdirectory(parent=self)
         if d: self.output_dir_var.set(d)
 
-    def add_to_queue(self, only_selected=False):
-        if only_selected:
+    def add_to_queue(self, only_selected=False, files_override=None):
+        if files_override:
+            files = files_override
+        elif only_selected:
             indices = self.file_listbox.curselection(); all_files = self.files_var.get(); files = [all_files[i] for i in indices]
             if not files: tkinter.messagebox.showwarning("Selection", "No files selected."); return
         else:
