@@ -113,22 +113,27 @@ DEFAULT_SUB_FETCH = False # Default to NOT downloading .srt files unless -s is u
 def check_js_runtime():
     """
     Checks if a supported JavaScript runtime (node, deno, bun, qjs) is available.
+    Returns (runtime_name, runtime_path) if found, else None.
     Prints a warning if none are found.
     """
     runtimes = ['node', 'deno', 'bun', 'qjs']
-    found = False
+    found_info = None
+    
     for rt in runtimes:
-        if shutil.which(rt):
-            found = True
+        path = shutil.which(rt)
+        if path:
+            found_info = (rt, path)
+            print(f"[INFO] Found JavaScript runtime: {rt}")
             break
     
-    if not found:
+    if not found_info:
         print("\n" + "="*80)
         print("WARNING: No JavaScript runtime found (Node.js, Deno, Bun, or QuickJS).")
         print("YouTube extraction may be limited and some formats may be missing.")
         print("Recommendation: Install Node.js (https://nodejs.org/) or Deno (https://deno.land/).")
         print("="*80 + "\n")
-    return found
+        
+    return found_info
 
 # ==========================================
 # Helper Function: Condense Metadata
@@ -520,7 +525,7 @@ def save_list_to_json(video_entries, filename):
 # ==========================================
 # Core Processing Function
 # ==========================================
-def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None, force_single=False, quick_mode=False, sleep_seconds=DEFAULT_SLEEP):
+def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=False, fetch_heatmap=False, output_format=None, condensed_mode=None, force_single=False, quick_mode=False, sleep_seconds=DEFAULT_SLEEP, js_runtime=None):
     """
     Main logic to handle the URL.
     """
@@ -631,6 +636,14 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
     # Mode Announcement logic
     # We'll announce based on what we find AFTER extraction for more accuracy.
 
+    # Add JS Runtime if detected
+    if js_runtime:
+        # js_runtime is (name, path) tuple
+        rt_name, rt_path = js_runtime
+        ydl_opts['js_runtimes'] = {
+            rt_name: {'executable': rt_path}
+        }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # 1. Extract Info
@@ -664,7 +677,7 @@ def process_url(url, fetch_full_metadata=False, fetch_comments=False, fetch_sub=
             else:
                 mode_str = "DEEP (Full Metadata)" if fetch_full_metadata else "FAST (List Only)"
                 print(f"Channel/Playlist Detected. Processing in {mode_str} mode.")
-                handle_channel_or_playlist(info_dict, fetch_full_metadata, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode, sleep_seconds=sleep_seconds)
+                handle_channel_or_playlist(info_dict, fetch_full_metadata, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode, sleep_seconds=sleep_seconds, js_runtime=js_runtime)
 
     except Exception as e:
         print(f"\nAn error occurred: {e}")
@@ -708,7 +721,7 @@ def handle_single_video(info_dict, use_condensed=False, fetch_sub=False, fetch_h
 # ==========================================
 # Channel/Playlist Handler
 # ==========================================
-def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP):
+def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_sub, fetch_heatmap, output_format, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP, js_runtime=None):
     """
     Handles processing for a channel or playlist.
     """
@@ -778,7 +791,7 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
             print(f"\nAdditive Resource Extraction (-s/-H) triggered for {len(video_entries)} videos...")
             if output_dir:
                 print(f"Individual files (subtitles/metadata) will be saved in: {output_dir}")
-            extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds)
+            extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds, js_runtime=js_runtime)
         
         return
 
@@ -787,12 +800,12 @@ def handle_channel_or_playlist(info_dict, is_deep_mode, fetch_comments, fetch_su
     # ============================
     # Files are saved inside the output_dir folder created above
     print("Starting metadata extraction for all videos...")
-    extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds)
+    extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=output_dir, condensed_mode=condensed_mode, sleep_seconds=sleep_seconds, js_runtime=js_runtime)
 
 # ==========================================
 # Helper Function: Deep Resource Extraction
 # ==========================================
-def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=None, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP):
+def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_comments, output_dir=None, condensed_mode=None, sleep_seconds=DEFAULT_SLEEP, js_runtime=None):
     """
     Iterates through video entries to fetch subtitles, heatmaps, or full metadata.
     """
@@ -815,6 +828,12 @@ def extract_deep_resources(video_entries, fetch_sub, fetch_heatmap, fetch_commen
         video_ydl_opts['skip_download'] = True
         
     count = 0
+    if js_runtime:
+        rt_name, rt_path = js_runtime
+        video_ydl_opts['js_runtimes'] = {
+            rt_name: {'executable': rt_path}
+        }
+        
     with yt_dlp.YoutubeDL(video_ydl_opts) as v_ydl:
         for index, entry in enumerate(video_entries, start=1):
             video_url = entry.get('url')
@@ -921,7 +940,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Check for JS Runtime (Required by yt-dlp for SABR)
-    check_js_runtime()
+    js_runtime = check_js_runtime()
     
     # Determine Output Format Preference
     out_fmt = 'csv' # Default fallback
