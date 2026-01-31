@@ -46,8 +46,8 @@ class TranscriptionReviewer:
         self.image_ref = None 
         self.original_image = None
         
-        self.all_versions = set(["Default"])
-        self.current_version_var = tk.StringVar(value="Default")
+        self.all_versions = set()
+        self.current_version_var = tk.StringVar()
 
         # UI Setup
         self._setup_ui()
@@ -142,6 +142,11 @@ class TranscriptionReviewer:
         self.btn_save.config(bg="#2e5e2e") 
         self.btn_save.pack(side=tk.RIGHT)
 
+        self.btn_refresh = tk.Button(self.control_frame, text="Refresh", command=self.refresh_data)
+        style_btn(self.btn_refresh)
+        self.btn_refresh.config(bg="#4a4a4a")
+        self.btn_refresh.pack(side=tk.RIGHT, padx=10)
+
         # Bindings
         self.root.bind('<Control-s>', lambda e: self.save_current_text())
         self.root.bind('<Prior>', lambda e: self.prev_pair()) 
@@ -201,6 +206,9 @@ class TranscriptionReviewer:
                 self.pairs.append((os.path.join(self.working_dir, img_file), versions))
                 self.all_versions.update(versions.keys())
         
+        if "Default" not in self.all_versions and self.all_versions:
+            print("No Default version found. Versions available:", self.all_versions)
+
         print(f"Found {len(self.pairs)} pairs with versions: {self.all_versions}")
 
     def _update_version_dropdown(self):
@@ -307,6 +315,31 @@ class TranscriptionReviewer:
     def prev_pair(self):
         self.save_current_text() 
         if self.current_index > 0: self.load_pair(self.current_index - 1)
+
+    def refresh_data(self):
+        """Re-scans the directories for text versions and reloads the current pair."""
+        old_index = self.current_index
+        old_version = self.current_version_var.get()
+        
+        self.pairs = []
+        self.all_versions = set()
+        
+        self._find_files_fuzzy()
+        self._update_version_dropdown()
+        
+        if old_version in self.all_versions:
+            self.current_version_var.set(old_version)
+            
+        if self.pairs:
+            # Try to stay on the same image index
+            new_index = min(old_index, len(self.pairs) - 1)
+            self.load_pair(new_index)
+            
+            orig_bg = self.btn_refresh.cget("background")
+            self.btn_refresh.config(bg=COLORS["highlight"], text="Refreshed!")
+            self.root.after(800, lambda: self.btn_refresh.config(bg=orig_bg, text="Refresh"))
+        else:
+            messagebox.showinfo("No Files", f"No matching pairs found in:\n{self.working_dir}")
 
 if __name__ == "__main__":
     target_dir = os.getcwd()
