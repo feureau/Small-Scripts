@@ -12,66 +12,277 @@ except ImportError:
     sys.exit(1)
 
 # --- CONFIGURATION ---
-OLLAMA_API_TAGS = "http://localhost:11434/api/tags"
-OLLAMA_API_CHAT = "http://localhost:11434/api/chat"
-CHUNK_SIZE = 250  # Batches of 250 files to balance context and speed
+OLLAMA_API_BASE = "http://localhost:11434"
+LM_STUDIO_API_BASE = "http://localhost:1234/v1"
+CHUNK_SIZE = 100  # Reduced to fit within standard model context limits (e.g. 8k tokens)
 MISC_FOLDER = "misc"
 
-def get_available_models():
-    try:
-        response = requests.get(OLLAMA_API_TAGS)
-        response.raise_for_status()
-        return [m['name'] for m in response.json()['models']]
-    except:
-        print("\n[ERROR] Could not connect to Ollama. Ensure 'ollama serve' is running.")
-        sys.exit(1)
+import argparse
 
-def get_ai_grouping_for_chunk(model, filenames):
-    """Sends a specific batch of filenames to the AI."""
+def repair_json(s):
+    """Attempts to fix truncated/malformed JSON from AI output."""
+    s = s.strip()
+    # Remove markdown code blocks if present
+    s = re.sub(r'```json\s*|\s*```', '', s).strip()
+    
+    # Simple fix for unterminated strings if they end with a backslash or just cut off
+    if s.count('"') % 2 != 0: s += '"'
+    
+    # Try to close open braces/brackets
+    depth_braces = s.count('{') - s.count('}')
+    if depth_braces > 0: s += '}' * depth_braces
+    
+    depth_brackets = s.count('[') - s.count(']')
+    if depth_brackets > 0: s += ']' * depth_brackets
+    
+    return s
+
+def get_model_context_window(model_name, provider):
+    """Estimates or fetches the context window size for a model."""
+    default_ctx = 4096 # Safe default
+    
+    if provider == "Ollama":
+        try:
+            resp = requests.post(f"{OLLAMA_API_BASE}/api/show", json={"name": model_name}, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                # 1. Check explicit parameters
+                params = data.get('parameters', '')
+                if 'num_ctx' in params:
+                    match = re.search(r'num_ctx\s+(\d+)', params)
+                    if match: return int(match.group(1))
+                
+                # 3. Heuristics for "Cloud" / Large models that might default to 2048 in API but are actually larger
+                # If we got 2048 (default) or nothing, let's look at the name.
+                found_ctx = 2048
+                if 'num_ctx' in params:
+                    match = re.search(r'num_ctx\s+(\d+)', params)
+                    if match: found_ctx = int(match.group(1))
+
+                # If it's the default 2048, checking if it's a known large model to boost it
+                if found_ctx == 2048:
+                    lower_name = model_name.lower()
+                    if ':cloud' in lower_name: return 128000 # Assume cloud tags are massive
+                    if 'deepseek' in lower_name: return 32768
+                    if 'qwen' in lower_name: return 32768
+                    if 'glm-4' in lower_name: return 32768
+                    if 'mistral-large' in lower_name: return 32768
+                
+                return found_ctx
+        except: pass
+        
+    elif provider == "LM_Studio":
+        # Heuristics based on name
+        lower_name = model_name.lower()
+        if '128k' in lower_name: return 128000
+        if '32k' in lower_name: return 32000
+        if '16k' in lower_name: return 16000
+        if '8k' in lower_name: return 8192
+        if '4k' in lower_name: return 4096
+        
+    return default_ctx
+
+def calculate_safe_chunk_size(context_window):
+    """Calculates a safe file batch size based on context window."""
+    # Reserve for system prompt (approx 500) + JSON structure overhead + Output buffer (approx 1000)
+    reserved = 1500
+    available = context_window - reserved
+    if available < 500: available = 500 # Floor
+    
+    # Approx tokens per filename (conservatively 15-20 tokens for long timestamps/paths)
+    tokens_per_file = 20 
+    
+    return max(10, int(available / tokens_per_file))
+
+def get_available_models():
+    models = []
+    # Try Ollama
+    try:
+        resp = requests.get(f"{OLLAMA_API_BASE}/api/tags", timeout=2)
+        if resp.status_code == 200:
+            for m in resp.json().get('models', []):
+                models.append({'name': m['name'], 'provider': 'Ollama'})
+    except: pass
+
+    # Try LM Studio (OpenAI-compatible)
+    try:
+        resp = requests.get(f"{LM_STUDIO_API_BASE}/models", timeout=2)
+        if resp.status_code == 200:
+            for m in resp.json().get('data', []):
+                models.append({'name': m['id'], 'provider': 'LM_Studio'})
+    except: pass
+
+    if not models:
+        print("\n[ERROR] No models found. Ensure Ollama (11434) or LM Studio (1234) is running.")
+        sys.exit(1)
+    return models
+
+def get_ai_grouping_for_chunk(model_info, filenames):
+    """Sends a specific batch of filenames to the AI and streams the response."""
+    model = model_info['name']
+    provider = model_info['provider']
+    
     prompt = f"""
-    You are a professional File Librarian. Analyze these raw filenames and create a grouping map.
+    You are a professional File Librarian. Analyze these filenames and create a grouping map.
     
     FILENAMES:
-    {json.dumps(filenames)}
+    {json.dumps(filenames, indent=2)}
 
     INSTRUCTIONS:
-    1. Identify 'Series' or 'Project' titles. 
-    2. Group abbreviations with their clear full-name counterparts (e.g., 'TT' with 'The Training', 'AH' with 'Anibody Home').
-    3. If multiple files share a distinct name (like 'Upcoming-Descent'), create a folder for them.
-    4. Ignore leading numbers, 'unused', 'misc_', or duplicate names like 'Found_Found'.
-    5. VERY IMPORTANT: If a file is an individual/singular item and does not belong to a series of 2 or more files, map it to the folder "misc".
+    1. PRIMARY GOAL: Identify distinct categories based on semantic patterns, file prefixes, or sources (e.g., 'PXL' for Pixel Photos, 'Screenshot' for screenshots, 'Shopee' for shopping, 'TikTok' for videos).
+    2. FALLBACK (TYPE-BASED): If filenames are vague strings or timestamps (e.g., '000ed587...', '17683547...'), group them by their file type/extension.
+    3. NAMING CONVENTIONS:
+        - DO NOT use words like 'vague', 'random', 'misc', 'other', or 'generic' in folder names.
+        - GOOD NAMES: 'Unlabeled_Photos', 'MP4_Videos', 'Timestamped_JPEG_Files', 'Camera_Roll_Archive'.
+        - BAD NAMES: 'vague_files', 'miscellaneous_audio', 'random_mp4s'.
+    4. Group 'Series' or 'Project' titles (e.g., matching common strings like 'Upcoming-Descent').
+    5. Ignore leading numbers, 'unused', 'misc_', or duplicate names.
+    6. VERY IMPORTANT: If a file is an individual/singular item and does not belong to a group of 2 or more files, map it to the folder "misc".
     
     OUTPUT:
     Return ONLY a valid JSON object. 
-    Key = Folder Name
-    Value = List of strings/keywords found in the filenames that belong in that folder.
+    Key = Professional, Descriptive Folder Name
+    Value = List of strings/keywords/extensions found in the filenames that belong in that folder.
     """
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.1}
-    }
+    if provider == "Ollama":
+        url = f"{OLLAMA_API_BASE}/api/chat"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "format": "json", "stream": True, "options": {"temperature": 0.1}
+        }
+    else: # LM Studio / OpenAI
+        url = f"{LM_STUDIO_API_BASE}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "stream": True # Streaming is key for LM Studio / OpenAI
+        }
 
+    full_content = ""
     try:
-        response = requests.post(OLLAMA_API_CHAT, json=payload)
-        content = response.json()['message']['content']
-        content = re.sub(r'```json\s*|\s*```', '', content).strip()
-        return json.loads(content)
+        response = requests.post(url, json=payload, stream=True)
+        response.raise_for_status()
+        
+        print(f"\n--- AI RESPONSE ({model}) ---")
+        for line in response.iter_lines():
+            if not line: continue
+            
+            chunk_content = ""
+            if provider == "Ollama":
+                data = json.loads(line)
+                chunk_content = data.get('message', {}).get('content', '')
+            else: # LM Studio / OpenAI
+                decoded_line = line.decode('utf-8').strip()
+                if not decoded_line: continue
+                
+                if decoded_line.startswith('data:'):
+                    json_str = decoded_line[5:].strip()
+                    if json_str == '[DONE]': break
+                    try:
+                        data = json.loads(json_str)
+                        chunk_content = data.get('choices', [{}])[0].get('delta', {}).get('content', '')
+                    except: pass
+                else:
+                    # Debug: Print lines that don't start with data: to see if we're missing something
+                    # print(f"[DEBUG RAW]: {decoded_line}")
+                    pass
+            
+            if chunk_content:
+                print(chunk_content, end='', flush=True)
+                full_content += chunk_content
+        print("\n" + "-" * 40 + "\n")
+
+        # Fallback: If streaming returned nothing (maybe model doesn't support it?), try non-streaming
+        if not full_content and provider != "Ollama":
+            print("Streaming yielded no content. Retrying with non-streaming request...")
+            payload['stream'] = False
+            try:
+                response = requests.post(url, json=payload, timeout=300) 
+                response.raise_for_status()
+                data = response.json()
+                full_content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                print(f"{full_content}\n" + "-" * 40 + "\n")
+            except requests.exceptions.HTTPError as http_err:
+                print(f"Fallback Request Failed: {http_err}")
+                if hasattr(response, 'text') and response.text:
+                   error_text = response.text
+                   print(f"Server Error Detail: {error_text}")
+                   
+                   # Friendly Error Explanations
+                   if "n_ctx" in error_text or "context length" in error_text.lower():
+                       print("\n" + "!" * 50)
+                       print(" [TIP] CONTEXT LIMIT EXCEEDED")
+                       print(" The batch of filenames is too large for this model's memory.")
+                       print(f" -> ACTION: Edit the script and lower 'CHUNK_SIZE' (currently {CHUNK_SIZE}).")
+                       print("!" * 50 + "\n")
+                return {}
+            except Exception as e:
+                print(f"Fallback Exception: {e}")
+                return {}
+
+        if not full_content:
+            print(f"Warning: Empty response from {provider}. The model might have output nothing or the stream format is unexpected.")
+            return {}
+            
+        try:
+            return json.loads(repair_json(full_content))
+        except Exception as json_e:
+            print(f"JSON Parse Failed: {json_e}")
+            # Try a slightly more aggressive repair if the first one failed
+            try:
+                # If it's really messy, the AI might have started with some text. 
+                # Find the first { and last }
+                start = full_content.find('{')
+                end = full_content.rfind('}')
+                if start != -1 and end != -1:
+                    return json.loads(repair_json(full_content[start:end+1]))
+            except: pass
+            return {}
     except Exception as e:
-        print(f"Batch Analysis Failed: {e}")
+        print(f"Batch Analysis Failed ({provider}): {e}")
+        # Note: 'response.text' would crash here because streaming consumed the context.
+        # We use the full_content we already accumulated instead.
+        if full_content:
+            print(f"Content Received so far: {full_content[:300]}...")
         return {}
 
 def main():
+    parser = argparse.ArgumentParser(description="Organize files using AI.")
+    parser.add_argument("-c", "--chunk-size", type=int, help="Manually set the number of files per batch (overrides auto-detection).")
+    args = parser.parse_args()
+
     cur_dir = os.getcwd()
     script_name = os.path.basename(__file__)
     
     models = get_available_models()
-    print("\n--- Available Ollama Models ---")
-    for i, m in enumerate(models): print(f"{i + 1}. {m}")
-    model = models[int(input("\nSelect model number: ")) - 1]
+    print("\n--- Available AI Models ---")
+    for i, m in enumerate(models): 
+        print(f"{i + 1}. {m['name']} ({m['provider']})")
+    
+    # Simple input loop robust to non-integers
+    while True:
+        try:
+            choice_str = input("\nSelect model number: ")
+            choice = int(choice_str) - 1
+            if 0 <= choice < len(models):
+                selected_model = models[choice]
+                break
+        except ValueError: pass
+        print("Invalid selection.")
+
+    # Determine Chunk Size
+    if args.chunk_size:
+        chunk_size = args.chunk_size
+        print(f"\n[Config] Manual Chunk Size: {chunk_size}")
+    else:
+        print("\n[Config] Detecting optimal batch size...")
+        ctx = get_model_context_window(selected_model['name'], selected_model['provider'])
+        chunk_size = calculate_safe_chunk_size(ctx)
+        print(f" > Model Context: ~{ctx} tokens")
+        print(f" > Auto-Calculated Batch Size: {chunk_size} files")
 
     # Get and SORT all files to keep series together
     all_files = [f for f in os.listdir(cur_dir) if os.path.isfile(os.path.join(cur_dir, f))]
@@ -83,12 +294,12 @@ def main():
 
     # 1. AI Analysis Phase
     master_mapping = defaultdict(set)
-    chunks = [all_files[i:i + CHUNK_SIZE] for i in range(0, len(all_files), CHUNK_SIZE)]
+    chunks = [all_files[i:i + chunk_size] for i in range(0, len(all_files), chunk_size)]
     
-    print(f"\n[AI] Analyzing {len(all_files)} files in {len(chunks)} batches...")
+    print(f"\n[AI] Analyzing {len(all_files)} files in {len(chunks)} batches using {selected_model['name']}...")
     for idx, chunk in enumerate(chunks):
         print(f" > Analyzing Batch {idx + 1}/{len(chunks)}...")
-        chunk_map = get_ai_grouping_for_chunk(model, chunk)
+        chunk_map = get_ai_grouping_for_chunk(selected_model, chunk)
         
         for folder, keywords in chunk_map.items():
             # Standardize: Find existing key with different case to prevent "The Rescue" vs "the rescue"
@@ -154,4 +365,11 @@ def main():
     print(f"\nDone! Organized {count} files.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n[Exiting...] Operation cancelled by user.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] {e}")
+        sys.exit(1)
