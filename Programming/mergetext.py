@@ -111,6 +111,52 @@ def get_numerical_sort_key(filename):
             for text in re.split(r'(\d+)', filename)]
 
 
+def process_footnotes(content, global_state):
+    """
+    Detects, re-indexes, and collects Markdown-style footnotes.
+    global_state: dict with 'footnotes' (list) and 'next_id' (int)
+    """
+    local_mapping = {}
+    
+    # Pattern for footnote definitions: [^id]: content
+    # Supports multi-line definitions if subsequent lines are indented.
+    def_pattern = re.compile(r'^\[\^([^\]]+)\]:\s*(.*(?:\n {1,4}.*)*)', re.MULTILINE)
+    
+    # Collect definitions and map to new global IDs
+    def collect_def(match):
+        orig_id = match.group(1)
+        orig_content = match.group(2).strip()
+        if orig_id not in local_mapping:
+            new_id = str(global_state['next_id'])
+            global_state['next_id'] += 1
+            local_mapping[orig_id] = new_id
+            global_state['footnotes'].append(f"[^{new_id}]: {orig_content}")
+        return ""
+
+    # 1. Remove definitions from text and collect them
+    processed_content = def_pattern.sub(collect_def, content)
+    
+    # 2. If no footnotes found, return original content
+    if not local_mapping:
+        return content, False
+
+    # 3. Replace references in text using the local mapping
+    ref_pattern = re.compile(r'\[\^([^\]]+)\](?!=:)')
+    
+    def replace_ref(match):
+        orig_id = match.group(1)
+        if orig_id in local_mapping:
+            return f"[^{local_mapping[orig_id]}]"
+        return match.group(0)
+
+    processed_content = ref_pattern.sub(replace_ref, processed_content)
+    
+    # Cleanup trailing whitespace left by removed definitions
+    processed_content = processed_content.rstrip()
+    
+    return processed_content, True
+
+
 def sanitize_api_response(text):
     """Removes Markdown code fences from the start and end of a string."""
     if not text:
@@ -122,7 +168,7 @@ def sanitize_api_response(text):
     return text.strip()
 
 
-def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_linebreaks=False, remove_strings=True, add_markers=False, recursive=False):
+def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_linebreaks=False, remove_strings=True, add_markers=False, recursive=False, **kwargs):
     """Merges all text files matching the given patterns into a single output file."""
     try:
         all_files = set()
@@ -172,6 +218,9 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
             print(f"  - {f}")
         print(f"Output file will be: {output_filename}\n")
 
+        global_footnote_state = {'footnotes': [], 'next_id': 1}
+        any_footnotes = False
+
         with open(output_filename, 'w', encoding='utf-8') as outfile:
             for filename in files_to_merge:
                 try:
@@ -185,6 +234,7 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
                             # De-hyphenate words split across lines
                             while True:
                                 original_content = content
+                                # Use a more robust pattern for hyphenation at line breaks
                                 content = re.sub(r'(\w)-\n(\w?)', r'\1\2', content, flags=re.MULTILINE)
                                 if content == original_content:
                                     break
@@ -192,6 +242,12 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
                             # Reflow paragraphs
                             content = re.sub(r'\n{2,}', '\n\n', content)
                             content = re.sub(r'(?<!\n)\n(?!\n)', ' ', content)
+
+                        # Handle footnotes if not explicitly disabled
+                        if kwargs.get('merge_footnotes', True):
+                            content, found = process_footnotes(content, global_footnote_state)
+                            if found:
+                                any_footnotes = True
 
                         if add_markers:
                             base_name = os.path.basename(filename)
@@ -213,6 +269,12 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
                 except Exception as e:
                     print(f"  ⚠ Error reading file: {filename} - {e}")
 
+            # Append consolidated footnotes
+            if any_footnotes:
+                outfile.write("\n\n## Footnotes\n\n")
+                outfile.write("\n".join(global_footnote_state['footnotes']))
+                outfile.write("\n")
+
         print(f"\n✅ Successfully merged files into: {output_filename}")
 
     except Exception as e:
@@ -233,6 +295,7 @@ if __name__ == "__main__":
     parser.add_argument("-strip", "--strip", action="store_true", help="Strip linebreaks within paragraphs and join hyphenated words.")
     parser.add_argument("--no-remove-strings", action="store_false", dest="remove_strings", default=True, help="Disable markdown fence removal.")
     parser.add_argument("-m", "--markers", action="store_true", help="Add start and end markers for each merged file's content.")
+    parser.add_argument("--no-merge-footnotes", action="store_false", dest="merge_footnotes", default=True, help="Disable automatic footnote re-indexing and consolidation.")
 
     args = parser.parse_args()
 
@@ -260,5 +323,6 @@ if __name__ == "__main__":
         strip_linebreaks=args.strip,
         remove_strings=args.remove_strings,
         add_markers=args.markers,
-        recursive=args.recursive
+        recursive=args.recursive,
+        merge_footnotes=args.merge_footnotes
     )
