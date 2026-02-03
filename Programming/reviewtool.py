@@ -4,6 +4,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageTk
+import re
 
 # ==========================================
 # CONFIGURATION
@@ -11,6 +12,10 @@ from PIL import Image, ImageTk
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif'}
 TEXT_EXTENSIONS = {'.txt', '.md', '.srt', '.log', '.json', '.xml', '.csv', '.ini', '.cfg', '.yaml', '.yml', '.rst', '.html', '.htm'}
+
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', s)]
 
 # Dark Mode Palette
 COLORS = {
@@ -45,9 +50,18 @@ class TranscriptionReviewer:
         self.current_index = 0
         self.image_ref = None 
         self.original_image = None
+        self.current_txt_path = None
         
         self.all_versions = set()
         self.current_version_var = tk.StringVar()
+
+        # UI State
+        self.zoom_factor = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
+        self.text_font_size = 13
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
 
         # UI Setup
         self._setup_ui()
@@ -83,8 +97,9 @@ class TranscriptionReviewer:
         self.image_frame = tk.Frame(self.paned_window, bg=COLORS["panel_bg"])
         self.paned_window.add(self.image_frame, stretch="always")
         
-        self.image_label = tk.Label(self.image_frame, bg=COLORS["panel_bg"])
-        self.image_label.pack(fill=tk.BOTH, expand=True)
+        self.image_canvas = tk.Canvas(self.image_frame, bg=COLORS["panel_bg"], highlightthickness=0)
+        self.image_canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas_image_id = None
         
         # 3. Right Side: Text Editor
         self.text_frame = tk.Frame(self.paned_window, bg=COLORS["panel_bg"])
@@ -149,9 +164,26 @@ class TranscriptionReviewer:
 
         # Bindings
         self.root.bind('<Control-s>', lambda e: self.save_current_text())
-        self.root.bind('<Prior>', lambda e: self.prev_pair()) 
-        self.root.bind('<Next>', lambda e: self.next_pair())
+        self.root.bind('<Prior>', lambda e: self.prev_pair(jump_set=False)) 
+        self.root.bind('<Next>', lambda e: self.next_pair(jump_set=False))
+        self.root.bind('<Shift-Prior>', lambda e: self.prev_pair(jump_set=True))
+        self.root.bind('<Shift-Next>', lambda e: self.next_pair(jump_set=True))
+
+        # IMPORTANT: Bind to text_editor and return "break" to suppress default scrolling
+        self.text_editor.bind('<Prior>', lambda e: self.prev_pair(jump_set=False) or "break")
+        self.text_editor.bind('<Next>', lambda e: self.next_pair(jump_set=False) or "break")
+        self.text_editor.bind('<Shift-Prior>', lambda e: self.prev_pair(jump_set=True) or "break")
+        self.text_editor.bind('<Shift-Next>', lambda e: self.next_pair(jump_set=True) or "break")
+
         self.image_frame.bind('<Configure>', self._resize_image_event)
+        
+        # Zoom and Pan Bindings for Image
+        self.image_canvas.bind('<Control-MouseWheel>', self._on_image_zoom)
+        self.image_canvas.bind('<Button-3>', self._on_pan_start)
+        self.image_canvas.bind('<B3-Motion>', self._on_pan_drag)
+        
+        # Zoom for Text
+        self.text_editor.bind('<Control-MouseWheel>', self._on_text_zoom)
 
     def _force_50_split(self):
         window_width = self.paned_window.winfo_width()
@@ -165,54 +197,72 @@ class TranscriptionReviewer:
             print(f"Error reading directory: {e}")
             return
 
-        images = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS])
-        text_files_root = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS])
+        images = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS], key=natural_sort_key)
         
         # Find subdirectories
         subdirs = [d for d in files_in_root if os.path.isdir(os.path.join(self.working_dir, d))]
         
+        # Pre-scan all text files in root and subdirs for range patterns
+        def scan_text_files(directory):
+            try:
+                txts = [f for f in os.listdir(directory) if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS]
+                return txts
+            except:
+                return []
+
+        root_text_files = scan_text_files(self.working_dir)
+        subdir_texts = {sd: scan_text_files(os.path.join(self.working_dir, sd)) for sd in subdirs}
+
+        range_pattern = re.compile(r'page-(\d+)_to_page-(\d+)', re.IGNORECASE)
+
+        def get_matching_texts(img_name, txt_list):
+            img_basename = os.path.splitext(img_name)[0]
+            # Try to get a number from the image name
+            img_num_match = re.search(r'(\d+)', img_name)
+            img_num = int(img_num_match.group(1)) if img_num_match else None
+            
+            matches = []
+            for txt in txt_list:
+                txt_basename = os.path.splitext(txt)[0]
+                # 1. Exact or prefix match
+                if txt_basename == img_basename or txt_basename.startswith(img_basename):
+                    matches.append(txt)
+                    continue
+                
+                # 2. Range match
+                range_match = range_pattern.search(txt_basename)
+                if range_match and img_num is not None:
+                    start, end = int(range_match.group(1)), int(range_match.group(2))
+                    if start <= img_num <= end:
+                        matches.append(txt)
+            return matches
+
         for img_file in images:
-            img_basename = os.path.splitext(img_file)[0]
             versions = {}
             
-            # 1. Look for Default (Root)
-            match = None
-            if f"{img_basename}.txt" in text_files_root:
-                match = f"{img_basename}.txt"
-            else:
-                candidates = [t for t in text_files_root if t.startswith(img_basename)]
-                if candidates: match = candidates[0]
-            
-            if match:
-                versions["Default"] = os.path.join(self.working_dir, match)
+            # 1. Look for matches in Root
+            matches = get_matching_texts(img_file, root_text_files)
+            if matches:
+                # If multiple matches (rare), pick the first one as "Default"
+                versions["Default"] = os.path.join(self.working_dir, matches[0])
 
             # 2. Look in Subdirectories
             for subdir in subdirs:
-                subdir_path = os.path.join(self.working_dir, subdir)
-                try:
-                    subdir_files = os.listdir(subdir_path)
-                    # Check for exact name match first
-                    if f"{img_basename}.txt" in subdir_files:
-                         versions[subdir] = os.path.join(subdir_path, f"{img_basename}.txt")
-                    else:
-                        # Fuzzy match in subdir? Maybe overkill, but consistent
-                        candidates = [t for t in subdir_files if t.startswith(img_basename) and os.path.splitext(t)[1].lower() in TEXT_EXTENSIONS]
-                        if candidates:
-                             versions[subdir] = os.path.join(subdir_path, candidates[0])
-                except Exception:
-                    continue
+                matches = get_matching_texts(img_file, subdir_texts[subdir])
+                if matches:
+                    # Handle multiple versions in same subdir if needed (e.g. _1, _2)
+                    for i, m in enumerate(matches):
+                        ver_name = subdir if i == 0 else f"{subdir}_{i}"
+                        versions[ver_name] = os.path.join(self.working_dir, subdir, m)
 
-            if versions:
-                self.pairs.append((os.path.join(self.working_dir, img_file), versions))
-                self.all_versions.update(versions.keys())
+            # ALWAYS add the image, even if versions is empty
+            self.pairs.append((os.path.join(self.working_dir, img_file), versions))
+            self.all_versions.update(versions.keys())
         
-        if "Default" not in self.all_versions and self.all_versions:
-            print("No Default version found. Versions available:", self.all_versions)
-
-        print(f"Found {len(self.pairs)} pairs with versions: {self.all_versions}")
+        print(f"Found {len(self.pairs)} images with versions: {self.all_versions}")
 
     def _update_version_dropdown(self):
-        sorted_versions = sorted(list(self.all_versions))
+        sorted_versions = sorted(list(self.all_versions), key=natural_sort_key)
         if "Default" in sorted_versions:
             # Move Default to top
             sorted_versions.remove("Default")
@@ -238,55 +288,131 @@ class TranscriptionReviewer:
         
         if txt_path:
             self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
-            try:
-                print(f"Loading text file: {txt_path}")
-                with open(txt_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    
-                if not content:
-                    content = "[File is empty]"
+            # Only reload if the text file has changed
+            if txt_path != self.current_txt_path:
+                try:
+                    print(f"Loading text file: {txt_path}")
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        
+                    if not content:
+                        content = "[File is empty]"
 
-                self.text_editor.delete('1.0', tk.END)
-                self.text_editor.insert('1.0', content)
-                self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
-                
-                # FOCUS TEXT EDITOR
-                self.text_editor.focus_set()
-                
-            except Exception as e:
-                self.text_editor.delete('1.0', tk.END)
-                self.text_editor.insert('1.0', f"Error: {e}")
+                    self.text_editor.delete('1.0', tk.END)
+                    self.text_editor.insert('1.0', content)
+                    self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
+                    
+                    # FOCUS TEXT EDITOR
+                    self.text_editor.focus_set()
+                    self.current_txt_path = txt_path
+                    
+                except Exception as e:
+                    self.text_editor.delete('1.0', tk.END)
+                    self.text_editor.insert('1.0', f"Error: {e}")
+                    self.current_txt_path = None
         else:
              self.lbl_filename.config(text=f"{selected_ver}: (Not Found)")
              self.text_editor.delete('1.0', tk.END)
              self.text_editor.insert('1.0', f"[No text file found for version '{selected_ver}' for this image]")
-             # Could disable editing here if desired
-             # self.text_editor.config(state=tk.DISABLED, bg="#333333")
+             self.current_txt_path = None
 
 
         try:
             self.original_image = Image.open(img_path)
-            self._display_image()
+            self._display_image(reset_view=True)
         except: pass
 
-    def _display_image(self):
+    def _display_image(self, reset_view=False):
         if self.original_image is None: return
+        
         frame_width = self.image_frame.winfo_width()
         frame_height = self.image_frame.winfo_height()
-        
-        if frame_width < 10: return
+        if frame_width < 10 or frame_height < 10: return
 
         img_w, img_h = self.original_image.size
-        ratio = min(frame_width/img_w, frame_height/img_h)
-        new_w = int(img_w * ratio)
-        new_h = int(img_h * ratio)
         
-        resized = self.original_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        self.image_ref = ImageTk.PhotoImage(resized)
-        self.image_label.config(image=self.image_ref)
+        if reset_view:
+            # Fit to screen
+            ratio = min(frame_width/img_w, frame_height/img_h)
+            self.zoom_factor = ratio
+            self.pan_x = (frame_width - img_w * self.zoom_factor) / 2
+            self.pan_y = (frame_height - img_h * self.zoom_factor) / 2
+
+        new_w = max(1, int(img_w * self.zoom_factor))
+        new_h = max(1, int(img_h * self.zoom_factor))
+        
+        try:
+            # Avoid excessive resizing for very small changes if needed, 
+            # but usually LANCZOS is fine for interactive if not too huge.
+            resized = self.original_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            self.image_ref = ImageTk.PhotoImage(resized)
+            
+            if self.canvas_image_id:
+                self.image_canvas.delete(self.canvas_image_id)
+            
+            self.canvas_image_id = self.image_canvas.create_image(
+                self.pan_x, self.pan_y, anchor=tk.NW, image=self.image_ref
+            )
+        except Exception as e:
+            print(f"Error rendering image: {e}")
 
     def _resize_image_event(self, event):
+        # When container is resized (e.g. window resize or sash move)
+        # We only want to reset view if we haven't zoomed/panned yet? 
+        # Actually, let's just keep current zoom/pan but maybe re-center if it's the first load.
+        # For now, let's just re-display.
         self._display_image()
+
+    def _on_image_zoom(self, event):
+        if self.original_image is None: return
+        
+        # Zoom in/out factor
+        scale = 1.1 if event.delta > 0 else 0.9
+        
+        # Mouse position relative to canvas
+        mx = self.image_canvas.canvasx(event.x)
+        my = self.image_canvas.canvasy(event.y)
+        
+        # Update zoom factor
+        old_zoom = self.zoom_factor
+        self.zoom_factor *= scale
+        
+        # Cap zoom
+        self.zoom_factor = max(0.01, min(self.zoom_factor, 50.0))
+        
+        # Real scale used (might have been capped)
+        actual_scale = self.zoom_factor / old_zoom
+        
+        # Adjust pan to zoom towards mouse cursor
+        self.pan_x = mx - (mx - self.pan_x) * actual_scale
+        self.pan_y = my - (my - self.pan_y) * actual_scale
+        
+        self._display_image()
+
+    def _on_pan_start(self, event):
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+
+    def _on_pan_drag(self, event):
+        dx = event.x - self.last_mouse_x
+        dy = event.y - self.last_mouse_y
+        
+        self.pan_x += dx
+        self.pan_y += dy
+        
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+        
+        self._display_image()
+
+    def _on_text_zoom(self, event):
+        if event.delta > 0:
+            self.text_font_size += 1
+        else:
+            self.text_font_size = max(6, self.text_font_size - 1)
+            
+        self.text_editor.configure(font=("Consolas", self.text_font_size))
+        return "break" # Prevent double processing if any
 
     def save_current_text(self):
         if not self.pairs: return
@@ -307,14 +433,61 @@ class TranscriptionReviewer:
         except Exception as e:
             messagebox.showerror("Save Error", f"{e}")
 
-    def next_pair(self):
+    def next_pair(self, jump_set=False):
         self.save_current_text() 
-        if self.current_index < len(self.pairs) - 1: self.load_pair(self.current_index + 1)
-        else: messagebox.showinfo("Done", "End of list.")
+        if self.current_index >= len(self.pairs) - 1:
+            messagebox.showinfo("Done", "End of list.")
+            return
 
-    def prev_pair(self):
+        if not jump_set:
+            self.load_pair(self.current_index + 1)
+        else:
+            # Jump to the next image that has a different text file version (or none)
+            current_ver = self.current_version_var.get()
+            current_txt = self.pairs[self.current_index][1].get(current_ver)
+            
+            new_index = self.current_index + 1
+            while new_index < len(self.pairs):
+                next_txt = self.pairs[new_index][1].get(current_ver)
+                if next_txt != current_txt:
+                    break
+                new_index += 1
+            
+            if new_index < len(self.pairs):
+                self.load_pair(new_index)
+            else:
+                messagebox.showinfo("Done", "End of list (no more sets).")
+
+    def prev_pair(self, jump_set=False):
         self.save_current_text() 
-        if self.current_index > 0: self.load_pair(self.current_index - 1)
+        if self.current_index <= 0: return
+
+        if not jump_set:
+            self.load_pair(self.current_index - 1)
+        else:
+            # Jump to the previous image that has a different text file version (or none)
+            current_ver = self.current_version_var.get()
+            current_txt = self.pairs[self.current_index][1].get(current_ver)
+            
+            new_index = self.current_index - 1
+            # First, find the start of the current set (if we are in the middle)
+            while new_index >= 0:
+                if self.pairs[new_index][1].get(current_ver) != current_txt:
+                    break
+                new_index -= 1
+            
+            # Now new_index is the last item of the PREVIOUS set, or -1
+            # If we want to jump to the START of the previous set:
+            if new_index >= 0:
+                prev_txt = self.pairs[new_index][1].get(current_ver)
+                # Walk back to the start of that set
+                while new_index > 0:
+                    if self.pairs[new_index - 1][1].get(current_ver) != prev_txt:
+                        break
+                    new_index -= 1
+                self.load_pair(new_index)
+            else:
+                self.load_pair(0) # Already at the first set
 
     def refresh_data(self):
         """Re-scans the directories for text versions and reloads the current pair."""
