@@ -1,16 +1,16 @@
 """###############################################################################
 Image Conversion Script - GIMP/XCF/RAW/JPG Batch Converter
 -------------------------------------------------------------------------------
-Version: 2.1.0 (2025-12-31)
+Version: 2.2.0 (2026-02-03)
 
 PURPOSE:
     This script batch-converts images of many types (including GIMP 3 `.xcf` files)
-    into `.jpg` files, using ImageMagick 7's `magick` CLI tool.
+    into `.jpg` (or other formats) files, using ImageMagick 7's `magick` CLI tool.
 
     It is designed to:
         • Handle GIMP `.xcf` files by automatically flattening with a white background.
         • Convert PSD, PSB, PNG with alpha, PDF, SVG, RAW, HDR, and more.
-        • Output results to a dedicated `jpg/` subfolder, leaving originals untouched.
+        • Output results to a dedicated subfolder based on the target format.
         • Allow quality, density, interlacing, profile stripping, resizing, etc.
         • Parallelize processing using a Mission Control Dashboard for real-time status.
 
@@ -24,18 +24,19 @@ DEPENDENCIES:
     ▸ Delegates for RAW (dcraw/libraw) if RAW support is needed.
 
 USAGE:
-    python convert_to_jpg.py [-q 85] [-d 300] [-i plane] [-s] [-r 1920x1080] \
-                             [-j 4] [--profile sRGB.icc] [pattern] [target]
+    python magick.py [-q 85] [-d 300] [-i plane] [-s] [-r 1920x1080] \
+                     [-j 1] [-t auto] [-f jpg] [pattern]
 
 ARGUMENTS:
     pattern: optional glob pattern (defaults to all supported image types)
-    target: optional target format extension (default: jpg)
-    -q / --quality: JPEG quality (1–100)
+    -f / --format: output format extension (default: jpg). Also positional.
+    -t / --threads: ImageMagick internal threads per process (default: auto)
+    -j / --jobs: Number of parallel jobs/files (default: 1, use 'auto' for all cores)
+    -q / --quality: Output quality (1–100)
     -d / --density: Density for vector formats (PDF/SVG)
     -i / --interlace: Interlace mode (none, line, plane, partition)
     -s / --strip: Strip metadata (EXIF, profiles)
     -r / --resize: Resize to WxH or percentage (e.g. 50%)
-    -j / --jobs: Number of parallel jobs (default: auto, uses all cores)
     --sampling-factor: e.g. 4:2:0
     --profile: Path to ICC color profile to apply
 
@@ -48,11 +49,17 @@ SUPPORTED INPUT FORMATS:
 
 WHY WE USE `magick input output` INSTEAD OF `mogrify`:
     • `mogrify` overwrites originals — not safe for destructive batch jobs.
-    • This approach lets us control per-file output path (to `jpg/` folder).
+    • This approach lets us control per-file output path (to target subfolder).
     • Ensures flattening works per file (needed for XCF/PSD with transparency).
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-02-03 (v2.2.0):
+    ▸ Renamed `-t` to `-f / --format` for target format.
+    ▸ Added `-t / --threads` to control ImageMagick's internal threading limit.
+    ▸ Set `DEFAULT_JOBS = 1` and `DEFAULT_THREADS = "auto"` as new defaults.
+    ▸ Added `-limit thread` to the `magick` command construction.
+
 2025-12-31 (v2.1.0):
     ▸ Added parallel processing using `ProcessPoolExecutor`.
     ▸ Implemented "Mission Control Dashboard" for real-time, flicker-free status tracking.
@@ -89,9 +96,10 @@ DEFAULT_STRIP = False
 DEFAULT_RESIZE = None          # e.g. "1920x1080" or "50%"
 DEFAULT_SAMPLING_FACTOR = "4:2:0"
 DEFAULT_PROFILE = None         # Path to ICC profile
-DEFAULT_JOBS = "auto"          # "auto" uses all cores, or specify integer
+DEFAULT_JOBS = 1               # "auto" or integer. Sequential (1) or parallel processing.
+DEFAULT_THREADS = "auto"      # "auto" or integer. IM internal threads per process.
 DEFAULT_BACKGROUND = "white"   # Safe for transparency/GIMP/PSD
-DEFAULT_TARGET_FORMAT = "jpg"  # Default output format
+DEFAULT_FORMAT = "jpg"         # Default output format
 
 # Supported input formats removed from here and moved to GLOBAL CONFIGURATION
 # ==========================================
@@ -256,18 +264,19 @@ def main():
     parser.add_argument("-r", "--resize", default=DEFAULT_RESIZE, help="Resize geometry (e.g. 1920x1080, 50%%)")
     parser.add_argument("--sampling-factor", default=DEFAULT_SAMPLING_FACTOR, help="Chroma subsampling factor (e.g. 4:2:0)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Path to ICC color profile")
-    parser.add_argument("-j", "--jobs", default=DEFAULT_JOBS, help="Number of parallel jobs (default: auto)")
+    parser.add_argument("-j", "--jobs", default=DEFAULT_JOBS, help="Number of parallel jobs (default: 1, use 'auto' for all cores)")
     parser.add_argument("-R", "--recursive", action="store_true", help="Recursively scan subdirectories")
-    parser.add_argument("-t", "--target", default=None, help="Target format extension (e.g., png, webp, tiff). Can also be specified as last positional argument.")
+    parser.add_argument("-f", "--format", default=None, help="Output format extension (e.g., png, webp, tiff). Can also be specified as last positional argument (default: jpg).")
+    parser.add_argument("-t", "--threads", default=DEFAULT_THREADS, help="Number of ImageMagick internal threads per process (default: auto)")
     args = parser.parse_args()
 
     # Determine target format: check if last positional arg looks like a format extension
-    target_format = DEFAULT_TARGET_FORMAT
+    target_format = DEFAULT_FORMAT
     valid_patterns = []
     
-    if args.target:
-        # Explicit -t/--target flag takes priority
-        target_format = args.target.lstrip('.').lower()
+    if args.format:
+        # Explicit -f/--format flag takes priority
+        target_format = args.format.lstrip('.').lower()
         valid_patterns = [p for p in args.patterns if p.strip()] if args.patterns else []
     elif args.patterns:
         # Check if last argument looks like a target format (no glob chars, no path separators, short string)
@@ -351,6 +360,10 @@ def main():
             output_file = os.path.join(output_folder_path, f"{base_name}.{target_format}")
 
             magick_command = ["magick", input_file]
+
+            # Apply thread limit if not auto
+            if str(args.threads).lower() != "auto":
+                magick_command.extend(["-limit", "thread", str(args.threads)])
 
             if args.quality is not None:
                 magick_command.extend(["-quality", str(args.quality)])
