@@ -60,6 +60,8 @@ import queue
 import threading
 import time
 import argparse
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from internetarchive import upload, get_session, get_item
@@ -137,13 +139,13 @@ def print_requirements():
 
 def get_input(prompt_text, required=False, default=None, valid_options=None):
     while True:
-        display = f"{prompt_text} [{default}]: " if default else f"{prompt_text}: "
+        display = f"{prompt_text} [{default}]: " if default is not None else f"{prompt_text}: "
         try:
             val = input(display).strip()
         except KeyboardInterrupt:
             sys.exit(1) 
             
-        if not val and default: return default
+        if not val and default is not None: return default
         if required and not val:
             print("  Error: Required.")
             continue
@@ -152,16 +154,36 @@ def get_input(prompt_text, required=False, default=None, valid_options=None):
             continue
         return val
 
-def collect_metadata(default_title):
+def collect_metadata(default_title, prefills=None):
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
+    print("Title: Human-readable name shown on the item page; keep it clear and descriptive.")
+    print("Mediatype: One of the allowed categories; choose the closest match for the content.")
+    print("Creator: Person, group, or organization responsible (optional).")
+    print("Description: Short summary of the item contents and context (optional).")
+    print("Tags: Comma-separated keywords for search and discovery (optional).")
+    if prefills:
+        print("Found metadata.xml: fields are prefilled where available. Press Enter to keep defaults.")
     
-    title = get_input("Title", required=True, default=default_title)
-    mediatype = get_input("Mediatype", required=True, valid_options=['data', 'image', 'audio', 'texts', 'movies', 'software'])
+    title_default = prefills.get("title") if prefills else None
+    if not title_default:
+        title_default = default_title
+    title = get_input("Title", required=True, default=title_default)
+
+    mediatype_default = prefills.get("mediatype") if prefills else None
+    mediatype = get_input(
+        "Mediatype (data|image|audio|texts|movies|software)",
+        required=True,
+        default=mediatype_default,
+        valid_options=['data', 'image', 'audio', 'texts', 'movies', 'software']
+    )
     
-    creator = get_input("Creator", required=False)
-    description = get_input("Description", required=False)
-    tags_input = get_input("Tags (comma sep)", required=False)
+    creator_default = prefills.get("creator") if prefills else None
+    description_default = prefills.get("description") if prefills else None
+    tags_default = prefills.get("tags") if prefills else None
+    creator = get_input("Creator", required=False, default=creator_default)
+    description = get_input("Description", required=False, default=description_default)
+    tags_input = get_input("Tags (comma sep)", required=False, default=tags_default)
     subjects = [t.strip() for t in tags_input.split(',')] if tags_input else []
 
     metadata = {'title': title, 'mediatype': mediatype}
@@ -169,6 +191,62 @@ def collect_metadata(default_title):
     if description: metadata['description'] = description
     if subjects: metadata['subject'] = subjects
     return metadata
+
+def _xml_text(node):
+    if node is None:
+        return None
+    text = (node.text or "").strip()
+    return text if text else None
+
+def load_metadata_xml(folder_path):
+    xml_path = folder_path / "metadata.xml"
+    if not xml_path.exists():
+        return None
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+    except Exception:
+        return None
+
+    def find_text(tag_names):
+        for name in tag_names:
+            node = root.find(f".//{name}")
+            txt = _xml_text(node)
+            if txt:
+                return txt
+        return None
+
+    title = find_text(["title", "Title"])
+    mediatype = find_text(["mediatype", "Mediatype"])
+    creator = find_text(["creator", "Creator"])
+    description = find_text(["description", "Description"])
+
+    # subjects/tags: support repeated <subject> or <tag> nodes
+    subjects = [(_xml_text(n) or "") for n in root.findall(".//subject")]
+    subjects += [(_xml_text(n) or "") for n in root.findall(".//tag")]
+    subjects = [s for s in subjects if s]
+    tags = ", ".join(subjects) if subjects else None
+
+    prefills = {}
+    if title: prefills["title"] = title
+    if mediatype: prefills["mediatype"] = mediatype
+    if creator: prefills["creator"] = creator
+    if description: prefills["description"] = description
+    if tags: prefills["tags"] = tags
+
+    return prefills or None
+
+def sanitize_identifier(raw_identifier):
+    # Normalize to ASCII, replace spaces with underscores, and strip invalid chars
+    import unicodedata
+    norm = unicodedata.normalize("NFKD", raw_identifier)
+    ascii_only = norm.encode("ascii", "ignore").decode("ascii")
+    cleaned = ascii_only.replace(" ", "_")
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch in "._-")
+    cleaned = cleaned.strip("._-")
+    if len(cleaned) < 5:
+        return cleaned
+    return cleaned[:100]
 
 def record_result(category, name):
     with results_lock:
@@ -362,6 +440,17 @@ def main():
                 if " " not in identifier and identifier.isascii(): break
                 print("Error: Invalid identifier.")
 
+        # Sanitize identifier to ensure IA-accepted bucket name
+        sanitized_identifier = sanitize_identifier(identifier)
+        if sanitized_identifier != identifier:
+            print(f"Sanitized identifier: {sanitized_identifier}")
+            identifier = sanitized_identifier
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{4,100}", identifier):
+            print("Error: Identifier is still invalid after sanitization.")
+            print("Please provide a valid identifier matching: ^[A-Za-z0-9][A-Za-z0-9_.-]{4,100}$")
+            sys.exit(1)
+
         folder_path = Path(folder_path_str)
 
         # 2. Remote Check
@@ -369,16 +458,17 @@ def main():
         item = get_item(identifier)
         metadata = {}
         is_new_item = False
+        xml_prefills = load_metadata_xml(folder_path)
 
         if item.exists:
             # Only ask update question if -m flag is provided
             if args.metadata:
                 if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                    metadata = collect_metadata(identifier)
+                    metadata = collect_metadata(identifier, prefills=xml_prefills)
         else:
             print(f"  > New item detected.")
             is_new_item = True
-            metadata = collect_metadata(identifier)
+            metadata = collect_metadata(identifier, prefills=xml_prefills)
 
         # 3. MD5 Scanning Phase
         print("\n" + "="*30)
