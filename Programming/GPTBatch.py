@@ -806,6 +806,9 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
                 tools=tools_list, 
             )
             return response['message']['content']
+    except ollama.ResponseError as e:
+        status = getattr(e, 'status_code', 'Unknown Status')
+        return f"Error: Ollama API: {e.error} (Status Code: {status})"
     except Exception as e:
         return f"Error: Ollama API: {str(e)}"
 
@@ -2555,10 +2558,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         self.result_queue.put({'job_id': jid, 'status': f"Fail: {err_msg}"})
                         break
 
+                    err_str = str(e)
                     is_quota = (isinstance(e, QuotaExhaustedError) or 
-                                "Quota exhausted" in str(e) or 
-                                "429" in str(e) or 
-                                "Open WebUI: Server Connection Error" in str(e))
+                                "Quota exhausted" in err_str or 
+                                "429" in err_str or 
+                                "503" in err_str or
+                                "Service Temporarily Unavailable" in err_str or
+                                "Open WebUI: Server Connection Error" in err_str)
                     if is_quota:
                         console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
                         self.result_queue.put({'job_id': jid, 'status': 'Waiting for User...'})
@@ -2589,7 +2595,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         else:
                             console_log("User cancelled model switch. Retrying normally...", "WARN")
 
-                    console_log(f"Job {jid} Error: {e}", "ERROR")
+                    console_log(f"Job {jid} Error (Attempt {attempt}/{MAX_RETRIES}): {e}", "ERROR")
                     if attempt < MAX_RETRIES:
                         wait_time = 60 if is_quota else 5
                         self.result_queue.put({'job_id': jid, 'status': f"Retrying ({attempt})"})
