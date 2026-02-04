@@ -127,17 +127,22 @@ import re
 
 def display_help():
     """Prints the help message."""
-    print("Usage: python FileRename.py [file_pattern] old_string new_string [-s] [-r]")
-    print("\nRecursively renames files by replacing a string in their names.")
+    print("Usage: python FileRename.py [file_pattern] [old_string] [new_string] [options]")
+    print("\nRecursively renames files by replacing a string in their names or reordering them.")
     print("The search is RECURSIVE BY DEFAULT.")
     print("\nArguments:")
     print("  file_pattern   The file pattern to match (e.g., *.txt, \"**/*.log\").")
-    print("  old_string     The string (or regex pattern) to be replaced in the filenames.")
-    print("  new_string     The string to replace with. Use \"\" for an empty string.")
+    print("  old_string     The string (or regex pattern) to be replaced. (Optional if using --order)")
+    print("  new_string     The string to replace with. (Optional if using --order)")
     print("\nOptions:")
     print("  -s, --shallow    Disables recursion and searches ONLY the current directory.")
     print("  -r, --regex      Treats old_string as a Regular Expression.")
     print("  -p, --prefix     Prepends a string to the filenames.")
+    print("  -o, --order      Apply a sequence/ordering (e.g., 'reverse' or 'r').")
+    print("\nExamples:")
+    # ... (existing examples)
+    print("  # Reverse the numbering of all .jpg files")
+    print("  python FileRename.py *.jpg --order reverse")
     print("\nExamples:")
     print("  # Recursively rename all .txt files in current folder and all subfolders")
     print("  python FileRename.py *.txt draft final")
@@ -148,7 +153,7 @@ def display_help():
     print("\n  # Add a prefix to all .jpg files")
     print("  python FileRename.py *.jpg --prefix \"Trip_2023_\"")
 
-def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None):
+def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, order=None):
     """
     Proposes and executes file renames after user confirmation.
     """
@@ -157,37 +162,59 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
         return
 
     changes = []
-    for original_path in files_to_process:
-        if not os.path.isfile(original_path):
-            continue
 
-        original_filename = os.path.basename(original_path)
-        new_filename = original_filename
+    if order in ('reverse', 'r'):
+        # Group files by directory
+        dirs = {}
+        for f in files_to_process:
+            d = os.path.dirname(f)
+            if d not in dirs:
+                dirs[d] = []
+            dirs[d].append(f)
         
-        match_found = False
+        for d, dir_files in dirs.items():
+            # Sort files in this directory lexicographically
+            dir_files.sort()
+            basenames = [os.path.basename(f) for f in dir_files]
+            reversed_basenames = basenames[::-1]
+            
+            for i, original_path in enumerate(dir_files):
+                new_filename = reversed_basenames[i]
+                if new_filename != os.path.basename(original_path):
+                    new_path = os.path.join(d, new_filename)
+                    changes.append((original_path, new_path))
+    else:
+        for original_path in files_to_process:
+            if not os.path.isfile(original_path):
+                continue
 
-        if old_string is not None and new_string is not None:
-            if use_regex:
-                try:
-                    if re.search(old_string, original_filename):
-                        new_filename = re.sub(old_string, new_string, original_filename)
-                        match_found = (new_filename != original_filename)
-                except re.error as e:
-                    print(f"Error in Regex pattern: {e}")
-                    return
-            else:
-                if old_string in original_filename:
-                    new_filename = original_filename.replace(old_string, new_string)
-                    match_found = True
+            original_filename = os.path.basename(original_path)
+            new_filename = original_filename
+            
+            match_found = False
 
-        if prefix:
-            new_filename = prefix + new_filename
-            match_found = True
+            if old_string is not None and new_string is not None:
+                if use_regex:
+                    try:
+                        if re.search(old_string, original_filename):
+                            new_filename = re.sub(old_string, new_string, original_filename)
+                            match_found = (new_filename != original_filename)
+                    except re.error as e:
+                        print(f"Error in Regex pattern: {e}")
+                        return
+                else:
+                    if old_string in original_filename:
+                        new_filename = original_filename.replace(old_string, new_string)
+                        match_found = True
 
-        if match_found:
-            directory = os.path.dirname(original_path)
-            new_path = os.path.join(directory, new_filename)
-            changes.append((original_path, new_path))
+            if prefix:
+                new_filename = prefix + new_filename
+                match_found = True
+
+            if match_found:
+                directory = os.path.dirname(original_path)
+                new_path = os.path.join(directory, new_filename)
+                changes.append((original_path, new_path))
 
     if not changes:
         print(f"\nScan complete. Found {len(files_to_process)} file(s) matching the pattern, but none contained the string/pattern: '{old_string}'.")
@@ -205,12 +232,32 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
 
     if confirm.lower() in ('y', 'yes'):
         print("\nRenaming files...")
-        for original, new in changes:
-            try:
-                os.rename(original, new)
-                print(f'  Renamed: "{original}"')
-            except OSError as e:
-                print(f"  Error renaming {original}: {e}")
+        
+        # To avoid collisions during order/sequence changes, we use a two-step rename
+        if order:
+            temp_changes = []
+            for original, new in changes:
+                temp_path = original + ".tmp_rename"
+                try:
+                    os.rename(original, temp_path)
+                    temp_changes.append((temp_path, new))
+                    print(f'  Pre-renamed: "{original}" -> "{temp_path}"')
+                except OSError as e:
+                    print(f"  Error pre-renaming {original}: {e}")
+            
+            for temp_path, new in temp_changes:
+                try:
+                    os.rename(temp_path, new)
+                    print(f'  Final renamed: "{new}"')
+                except OSError as e:
+                    print(f"  Error final renaming {temp_path} to {new}: {e}")
+        else:
+            for original, new in changes:
+                try:
+                    os.rename(original, new)
+                    print(f'  Renamed: "{original}"')
+                except OSError as e:
+                    print(f"  Error renaming {original}: {e}")
         print("\nOperation complete.")
     else:
         print("\nOperation cancelled. No files were changed.")
@@ -238,6 +285,18 @@ def main():
         use_regex = True
         if '-r' in args: args.remove('-r')
         if '--regex' in args: args.remove('--regex')
+
+    # Order support
+    order = None
+    if '-o' in args or '--order' in args:
+        try:
+            idx = args.index('-o') if '-o' in args else args.index('--order')
+            order = args[idx + 1]
+            args.pop(idx + 1)
+            args.pop(idx)
+        except (IndexError, ValueError):
+            print("\nError: --order requires a value (e.g., 'reverse').")
+            sys.exit(1)
     
     # Prefix support
     prefix = None
@@ -252,7 +311,7 @@ def main():
             print("\nError: --prefix requires a value.")
             sys.exit(1)
     
-    if len(args) < 1 or (not prefix and len(args) < 3):
+    if len(args) < 1 or (not prefix and not order and len(args) < 3):
         print("\nError: Invalid number of arguments.")
         display_help()
         sys.exit(1)
@@ -274,6 +333,8 @@ def main():
         print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
     if prefix:
         print(f"Adding prefix: '{prefix}'")
+    if order:
+        print(f"Applying order: '{order}'")
     print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-s flag used)'}")
     print("---------------------------------")
     
@@ -281,8 +342,9 @@ def main():
     # The '**/' prefix is what enables glob to search subdirectories.
     pathname = os.path.join('**', pattern) if recursive else pattern
     files_to_process = glob.glob(pathname, recursive=recursive)
+    files_to_process = [f for f in files_to_process if os.path.isfile(f)] # Filter out directories
         
-    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, order=order)
 
 if __name__ == "__main__":
     main()
