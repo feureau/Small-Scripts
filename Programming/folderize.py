@@ -3,6 +3,7 @@ import shutil
 import json
 import sys
 import re
+import subprocess
 from collections import defaultdict
 
 try:
@@ -16,6 +17,7 @@ OLLAMA_API_BASE = "http://localhost:11434"
 LM_STUDIO_API_BASE = "http://localhost:1234/v1"
 CHUNK_SIZE = 100  # Reduced to fit within standard model context limits (e.g. 8k tokens)
 MISC_FOLDER = "misc"
+MAX_METADATA_CHARS = 800  # Per-file metadata summary cap to keep prompts compact
 
 import argparse
 
@@ -85,14 +87,110 @@ def get_model_context_window(model_name, provider):
 def calculate_safe_chunk_size(context_window):
     """Calculates a safe file batch size based on context window."""
     # Reserve for system prompt (approx 500) + JSON structure overhead + Output buffer (approx 1000)
-    reserved = 1500
+    reserved = 2000
     available = context_window - reserved
     if available < 500: available = 500 # Floor
     
     # Approx tokens per filename (conservatively 15-20 tokens for long timestamps/paths)
-    tokens_per_file = 20 
+    # With metadata, we assume ~60 tokens per file
+    tokens_per_file = 60
     
     return max(10, int(available / tokens_per_file))
+
+def tool_exists(name):
+    return shutil.which(name) is not None
+
+def run_json_command(cmd):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout.strip()) if result.stdout else None
+    except Exception:
+        return None
+
+def normalize_metadata_dict(d):
+    """Flattens common metadata fields into a compact dict with consistent keys."""
+    if not d: return {}
+
+    def pick(src, keys):
+        for k in keys:
+            for kk in src.keys():
+                if kk.lower() == k.lower():
+                    v = src.get(kk)
+                    if v not in (None, "", []): return v
+        return None
+
+    out = {}
+    out["title"] = pick(d, ["TrackName", "Track name", "Title"])
+    out["album"] = pick(d, ["Album"])
+    out["track"] = pick(d, ["Track", "TrackPosition", "TrackNumber", "Track name/Position"])
+    out["artist"] = pick(d, ["Performer", "Artist", "AlbumArtist", "Author"])
+    out["genre"] = pick(d, ["Genre"])
+    out["year"] = pick(d, ["RecordedDate", "Year", "Date", "DateCreated", "OriginalReleaseDate"])
+    out["comment"] = pick(d, ["Comment"])
+    out["format"] = pick(d, ["Format", "FormatName", "FileType"])
+    out["duration"] = pick(d, ["Duration", "DurationString"])
+    out["bitrate"] = pick(d, ["OverallBitRate", "BitRate"])
+    out["cover"] = pick(d, ["Cover", "CoverType", "CoverMime", "Picture", "PictureMimeType"])
+    out["source_tool"] = pick(d, ["_source_tool"])
+
+    # Remove empties
+    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+
+def summarize_metadata(meta):
+    if not meta: return ""
+    # Keep it compact and stable for the AI prompt
+    parts = []
+    for k in ["title", "album", "track", "artist", "genre", "year", "format", "duration", "bitrate", "cover", "comment", "source_tool"]:
+        if k in meta:
+            parts.append(f"{k}={meta[k]}")
+    s = "; ".join(parts)
+    if len(s) > MAX_METADATA_CHARS:
+        s = s[:MAX_METADATA_CHARS] + "..."
+    return s
+
+def get_metadata_for_file(path):
+    """Try mediainfo, exiftool, then ffprobe. Returns compact metadata dict."""
+    # 1) mediainfo (best match to sample output)
+    if tool_exists("mediainfo"):
+        data = run_json_command(["mediainfo", "--Output=JSON", path])
+        try:
+            tracks = data.get("media", {}).get("track", [])
+            general = next((t for t in tracks if t.get("@type") == "General"), None)
+            if general:
+                general["_source_tool"] = "mediainfo"
+                return normalize_metadata_dict(general)
+        except Exception:
+            pass
+
+    # 2) exiftool
+    if tool_exists("exiftool"):
+        data = run_json_command(["exiftool", "-json", path])
+        try:
+            if isinstance(data, list) and data:
+                d0 = data[0]
+                d0["_source_tool"] = "exiftool"
+                return normalize_metadata_dict(d0)
+        except Exception:
+            pass
+
+    # 3) ffprobe
+    if tool_exists("ffprobe"):
+        data = run_json_command([
+            "ffprobe", "-v", "error", "-print_format", "json",
+            "-show_format", "-show_streams", path
+        ])
+        try:
+            tags = data.get("format", {}).get("tags", {})
+            tags["_source_tool"] = "ffprobe"
+            # add a few top-level format fields for extra context
+            tags["Format"] = data.get("format", {}).get("format_name")
+            tags["Duration"] = data.get("format", {}).get("duration")
+            tags["OverallBitRate"] = data.get("format", {}).get("bit_rate")
+            return normalize_metadata_dict(tags)
+        except Exception:
+            pass
+
+    return {}
 
 def get_available_models():
     models = []
@@ -117,7 +215,7 @@ def get_available_models():
         sys.exit(1)
     return models
 
-def get_ai_grouping_for_chunk(model_info, filenames):
+def get_ai_grouping_for_chunk(model_info, file_infos, verbose=False, raw=False):
     """Sends a specific batch of filenames to the AI and streams the response."""
     model = model_info['name']
     provider = model_info['provider']
@@ -125,12 +223,13 @@ def get_ai_grouping_for_chunk(model_info, filenames):
     prompt = f"""
     You are a professional File Librarian. Analyze these filenames and create a grouping map.
     
-    FILENAMES:
-    {json.dumps(filenames, indent=2)}
+    FILES (filename + metadata):
+    {json.dumps(file_infos, indent=2)}
 
     INSTRUCTIONS:
     1. PRIMARY GOAL: Identify distinct categories based on semantic patterns, file prefixes, or sources (e.g., 'PXL' for Pixel Photos, 'Screenshot' for screenshots, 'Shopee' for shopping, 'TikTok' for videos).
     2. FALLBACK (TYPE-BASED): If filenames are vague strings or timestamps (e.g., '000ed587...', '17683547...'), group them by their file type/extension.
+    3. USE METADATA: When available, use metadata fields like album, title, artist/performer, genre, year, and format to group files into meaningful folders (e.g., Album, Artist, Year).
     3. NAMING CONVENTIONS:
         - DO NOT use words like 'vague', 'random', 'misc', 'other', or 'generic' in folder names.
         - GOOD NAMES: 'Unlabeled_Photos', 'MP4_Videos', 'Timestamped_JPEG_Files', 'Camera_Roll_Archive'.
@@ -161,7 +260,17 @@ def get_ai_grouping_for_chunk(model_info, filenames):
             "stream": True # Streaming is key for LM Studio / OpenAI
         }
 
+    if verbose:
+        print("\n--- DEBUG: FILE INFOS SENT TO AI ---")
+        print(json.dumps(file_infos, indent=2))
+        print("\n--- DEBUG: FULL PROMPT ---")
+        print(prompt)
+        print("\n--- DEBUG: REQUEST PAYLOAD (METADATA) ---")
+        print(json.dumps(payload, indent=2))
+
     full_content = ""
+    thinking_content = ""
+    printed_thinking_header = False
     try:
         response = requests.post(url, json=payload, stream=True)
         response.raise_for_status()
@@ -172,8 +281,22 @@ def get_ai_grouping_for_chunk(model_info, filenames):
             
             chunk_content = ""
             if provider == "Ollama":
+                if raw:
+                    try:
+                        print(f"[DEBUG RAW LINE] {line.decode('utf-8', errors='ignore')}")
+                    except Exception:
+                        print(f"[DEBUG RAW LINE] {line}")
                 data = json.loads(line)
                 chunk_content = data.get('message', {}).get('content', '')
+                chunk_thinking = data.get('message', {}).get('thinking', '')
+                if chunk_thinking:
+                    thinking_content += chunk_thinking
+                    if verbose:
+                        # GUI-like: print a single header, then stream thinking text on its own line(s)
+                        if not printed_thinking_header:
+                            print("\nTHINKING:\n", end='')
+                            printed_thinking_header = True
+                        print(chunk_thinking, end='', flush=True)
             else: # LM Studio / OpenAI
                 decoded_line = line.decode('utf-8').strip()
                 if not decoded_line: continue
@@ -187,10 +310,13 @@ def get_ai_grouping_for_chunk(model_info, filenames):
                     except: pass
                 else:
                     # Debug: Print lines that don't start with data: to see if we're missing something
-                    # print(f"[DEBUG RAW]: {decoded_line}")
-                    pass
+                    if raw:
+                        print(f"[DEBUG RAW]: {decoded_line}")
             
             if chunk_content:
+                if verbose and printed_thinking_header:
+                    # Ensure final content starts after thinking block
+                    print("\n\nFINAL:\n", end='')
                 print(chunk_content, end='', flush=True)
                 full_content += chunk_content
         print("\n" + "-" * 40 + "\n")
@@ -225,6 +351,12 @@ def get_ai_grouping_for_chunk(model_info, filenames):
 
         if not full_content:
             print(f"Warning: Empty response from {provider}. The model might have output nothing or the stream format is unexpected.")
+            if verbose and hasattr(response, "text") and response.text:
+                print("\n--- DEBUG: EMPTY RESPONSE TEXT ---")
+                print(response.text)
+            if thinking_content:
+                print("\n--- DEBUG: MODEL THINKING (OLLAMA) ---")
+                print(thinking_content)
             return {}
             
         try:
@@ -252,6 +384,9 @@ def get_ai_grouping_for_chunk(model_info, filenames):
 def main():
     parser = argparse.ArgumentParser(description="Organize files using AI.")
     parser.add_argument("-c", "--chunk-size", type=int, help="Manually set the number of files per batch (overrides auto-detection).")
+    parser.add_argument("--no-metadata", action="store_true", help="Disable metadata extraction for prompts.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print verbose debug output (prompts, payloads, metadata).")
+    parser.add_argument("--raw-stream", action="store_true", help="Print raw streaming lines from the model (very noisy).")
     args = parser.parse_args()
 
     cur_dir = os.getcwd()
@@ -299,7 +434,16 @@ def main():
     print(f"\n[AI] Analyzing {len(all_files)} files in {len(chunks)} batches using {selected_model['name']}...")
     for idx, chunk in enumerate(chunks):
         print(f" > Analyzing Batch {idx + 1}/{len(chunks)}...")
-        chunk_map = get_ai_grouping_for_chunk(selected_model, chunk)
+        file_infos = []
+        for f in chunk:
+            info = {"filename": f}
+            if not args.no_metadata:
+                meta = get_metadata_for_file(os.path.join(cur_dir, f))
+                if meta:
+                    info["metadata"] = summarize_metadata(meta)
+            file_infos.append(info)
+
+        chunk_map = get_ai_grouping_for_chunk(selected_model, file_infos, verbose=args.verbose, raw=args.raw_stream)
         
         for folder, keywords in chunk_map.items():
             # Standardize: Find existing key with different case to prevent "The Rescue" vs "the rescue"
@@ -318,13 +462,24 @@ def main():
     # Sort folders by length (longest first) to ensure "The Training" matches before "Training"
     sorted_folder_names = sorted(master_mapping.keys(), key=len, reverse=True)
 
+    # Build lookup of metadata summaries for assignment matching
+    metadata_cache = {}
+    if not args.no_metadata:
+        for f in all_files:
+            meta = get_metadata_for_file(os.path.join(cur_dir, f))
+            if meta:
+                metadata_cache[f] = summarize_metadata(meta)
+
     for f in all_files:
         assigned = False
+        haystack = f.lower()
+        if f in metadata_cache:
+            haystack = f"{haystack} {metadata_cache[f].lower()}"
         for folder in sorted_folder_names:
             if folder.lower() == MISC_FOLDER: continue
             
             keywords = master_mapping[folder]
-            if any(k.lower() in f.lower() for k in keywords if len(k) > 1):
+            if any(k.lower() in haystack for k in keywords if len(k) > 1):
                 folder_assignments[folder].append(f)
                 assigned = True
                 break
