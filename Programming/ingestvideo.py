@@ -1729,7 +1729,12 @@ if __name__ == "__main__":
     
     if args:
         # User provided specific files or wildcards
-        file_queue = [f for arg in args for f in glob.glob(arg)]
+        # Prefer literal paths (handles names with [] or other glob chars), fall back to glob for patterns.
+        for arg in args:
+            if os.path.isfile(arg):
+                file_queue.append(arg)
+            else:
+                file_queue.extend(glob.glob(arg))
     else:
         # No arguments: auto-scan current working directory recursively
         print("No files provided. Scanning current working directory for supported video files (recursive)...")
