@@ -1,13 +1,14 @@
 {
     "Horizontal Clean": {
         "options": {
-            "resolution": "4k",
+            "resolution": "2160p",
             "upscale_algo": "bicubic",
             "output_format": "sdr",
+            "video_codec": "h264",
             "fruc": false,
             "fruc_fps": "60",
             "generate_log": false,
-            "orientation": "horizontal",
+            "orientation": "original",
             "aspect_mode": "crop",
             "video_offset_x": "0",
             "video_offset_y": "0",
@@ -20,7 +21,7 @@
             "vertical_aspect": "4:5",
             "burn_subtitles": false,
             "override_bitrate": false,
-            "manual_bitrate": "45000",
+            "manual_bitrate": "68000",
             "use_dynaudnorm": false,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
