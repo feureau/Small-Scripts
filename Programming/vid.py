@@ -68,6 +68,10 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.9 - Codec Selection & Validation (2026-02-05)
+    • FEATURE: Added explicit codec dropdown (H.264/HEVC/AV1) in the Encoder tab.
+    • FEATURE: Codec list is linked to SDR/HDR output format (HDR requires HEVC/AV1).
+    • UX: Warns before H.264 + 4320p encodes, with an option to continue anyway.
 v8.8 - Subtitle & Workflow Improvements (2025-12-29)
     • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
                differently (Width 1 vs 2), fixing premature wrapping for English
@@ -148,6 +152,7 @@ DEFAULT_SOFA_PATH = ""                              # Path to SOFA file for bina
 DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default: 2160p (4k)
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
 DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
+DEFAULT_VIDEO_CODEC = "h264"                        # Output codec. Default: h264, Options: h264, hevc, av1
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
@@ -336,7 +341,7 @@ def check_ffmpeg_capabilities():
         capabilities['cuda'] = "cuda" in result.stdout.lower()
         cmd = [FFMPEG_CMD, "-encoders"]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        capabilities['nvenc'] = any(x in result.stdout.lower() for x in ['h264_nvenc', 'hevc_nvenc'])
+        capabilities['nvenc'] = any(x in result.stdout.lower() for x in ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'])
         cmd = [FFMPEG_CMD, "-filters"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         capabilities['filters'] = all(x in result.stdout.lower() for x in ['loudnorm', 'dynaudnorm', 'scale_cuda', 'lut3d'])
@@ -981,6 +986,20 @@ def get_video_info(file_path):
         print(f"[WARN] Could not get video info for {file_path}, using defaults: {e}")
         return {"bit_depth": 8, "framerate": 30.0, "height": 1080, "width": 1920, "is_hdr": False, "codec_name": "h264"}
 
+def compute_original_target_resolution(res_key, info):
+    if not res_key:
+        return info["width"], info["height"]
+    res_key_norm = res_key.lower()
+    if res_key_norm == "original":
+        return info["width"], info["height"]
+    width_map_landscape = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "hd": 1920, "4k": 3840, "8k": 7680}
+    width_map_portrait = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "hd": 1080, "4k": 2160, "8k": 4320}
+    target_w = width_map_landscape.get(res_key_norm) if info["width"] >= info["height"] else width_map_portrait.get(res_key_norm)
+    if not target_w:
+        return None, None
+    target_h = int(target_w * info["height"] / info["width"])
+    return (target_w // 2) * 2, (target_h // 2) * 2
+
 def get_audio_stream_info(file_path):
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index,channels,channel_layout", "-of", "json", file_path]
     try:
@@ -1020,7 +1039,7 @@ def extract_embedded_subtitle(video_path, subtitle_index):
         if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
         return None
 
-def get_bitrate(output_resolution_key, framerate, is_hdr):
+def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, source_width=None):
     # Revised Defaults (roughly 50% of previous high-quality defaults)
     BITRATES = {
         "SDR_NORMAL_FPS": {"720p": 5000, "1080p": 8000, "2160p": 45000, "4320p": 160000},
@@ -1032,8 +1051,17 @@ def get_bitrate(output_resolution_key, framerate, is_hdr):
     dr_category = "HDR" if is_hdr else "SDR"
     key = f"{dr_category}_{fps_category}"
     # Map old keys for backward compatibility if needed, though we primarily use the new ones now
-    res_map = {"mobile": "720p", "hd": "1080p", "4k": "2160p", "8k": "4320p"}
-    mapped_key = res_map.get(output_resolution_key.lower(), output_resolution_key.lower())
+    res_map = {"mobile": "720p", "hd": "1080p", "4k": "2160p", "8k": "4320p", "original": "original"}
+    key_raw = output_resolution_key.lower() if isinstance(output_resolution_key, str) else output_resolution_key
+    mapped_key = res_map.get(key_raw, key_raw)
+    if mapped_key == "original":
+        if source_height:
+            if source_height <= 720: mapped_key = "720p"
+            elif source_height <= 1080: mapped_key = "1080p"
+            elif source_height <= 2160: mapped_key = "2160p"
+            else: mapped_key = "4320p"
+        else:
+            mapped_key = "1080p"
     
     return BITRATES.get(key, {}).get(mapped_key, BITRATES["SDR_NORMAL_FPS"]["1080p"])
 
@@ -1179,6 +1207,7 @@ class WorkflowPresetManager:
             "resolution": DEFAULT_RESOLUTION,
             "upscale_algo": DEFAULT_UPSCALE_ALGO,
             "output_format": DEFAULT_OUTPUT_FORMAT,
+            "video_codec": DEFAULT_VIDEO_CODEC,
             "orientation": DEFAULT_ORIENTATION,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
@@ -1406,6 +1435,8 @@ class VideoProcessorApp:
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
         self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
+        self.video_codec_var = tk.StringVar(value=DEFAULT_VIDEO_CODEC)
+        self.video_codec_var.trace_add('write', lambda *args: self._update_selected_jobs('video_codec'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
@@ -1658,6 +1689,7 @@ class VideoProcessorApp:
         self._toggle_upscale_options()
         self._toggle_audio_norm_options()
         self._update_audio_options_ui() 
+        self._update_codec_options(show_message=False)
         self._update_bitrate_display()
         
         # Load initial preset
@@ -1692,16 +1724,22 @@ class VideoProcessorApp:
         tune_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
 
+        # Codec
+        ttk.Label(basic_group, text="Codec:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.video_codec_combo = ttk.Combobox(basic_group, textvariable=self.video_codec_var, values=["h264", "hevc", "av1"], width=10, state="readonly")
+        self.video_codec_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(self.video_codec_combo, "Output codec. HDR requires HEVC or AV1.")
+
         # Profile SDR
-        ttk.Label(basic_group, text="Profile (SDR):").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (SDR):").grid(row=3, column=0, sticky=tk.W, pady=2)
         profile_sdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_sdr_var, values=["high", "main", "baseline"], width=10, state="readonly")
-        profile_sdr_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_sdr_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_sdr_combo, "NVENC Profile for SDR output.")
 
         # Profile HDR
-        ttk.Label(basic_group, text="Profile (HDR):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (HDR):").grid(row=4, column=0, sticky=tk.W, pady=2)
         profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
-        profile_hdr_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_hdr_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
 
         # GOP & B-Frames
@@ -2011,6 +2049,7 @@ class VideoProcessorApp:
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10); quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group); resolution_options_frame.pack(fill=tk.X)
         ttk.Label(resolution_options_frame, text="Resolution:").pack(side=tk.LEFT, padx=(0,5))
+        self.rb_original = ttk.Radiobutton(resolution_options_frame, text="Original", variable=self.resolution_var, value="original", command=lambda: self._update_selected_jobs("resolution")); self.rb_original.pack(side=tk.LEFT)
         self.rb_720p = ttk.Radiobutton(resolution_options_frame, text="720p", variable=self.resolution_var, value="720p", command=lambda: self._update_selected_jobs("resolution")); self.rb_720p.pack(side=tk.LEFT)
         self.rb_1080p = ttk.Radiobutton(resolution_options_frame, text="1080p", variable=self.resolution_var, value="1080p", command=lambda: self._update_selected_jobs("resolution")); self.rb_1080p.pack(side=tk.LEFT, padx=5)
         self.rb_2160p = ttk.Radiobutton(resolution_options_frame, text="2160p", variable=self.resolution_var, value="2160p", command=lambda: self._update_selected_jobs("resolution")); self.rb_2160p.pack(side=tk.LEFT)
@@ -2024,8 +2063,8 @@ class VideoProcessorApp:
         ToolTip(self.upscale_algo_combo, "Nearest=Fastest, Bilinear=Fast, Bicubic=Default, Lanczos=Best")
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT)
-        ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=lambda: self._update_selected_jobs("output_format")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
+        ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
         ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
         ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
         ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
@@ -2453,8 +2492,30 @@ class VideoProcessorApp:
         ref_job = self.processing_jobs[selected_indices[0]] if selected_indices else (self.processing_jobs[0] if self.processing_jobs else None)
         if ref_job:
             info = get_video_info(ref_job['video_path'])
-            bitrate = get_bitrate(self.resolution_var.get(), info["framerate"], self.output_format_var.get() == 'hdr')
+            bitrate = get_bitrate(self.resolution_var.get(), info["framerate"], self.output_format_var.get() == 'hdr', source_height=info["height"], source_width=info["width"])
             self.manual_bitrate_var.set(str(bitrate))
+    
+    def _get_allowed_codecs(self):
+        return ["h264", "hevc", "av1"] if self.output_format_var.get() == "sdr" else ["hevc", "av1"]
+
+    def _update_codec_options(self, show_message=True):
+        allowed = self._get_allowed_codecs()
+        if hasattr(self, "video_codec_combo"):
+            self.video_codec_combo.config(values=allowed)
+        current = self.video_codec_var.get()
+        if current not in allowed:
+            new_codec = allowed[0]
+            self.video_codec_var.set(new_codec)
+            if show_message:
+                messagebox.showinfo(
+                    "Codec Updated",
+                    f"HDR output requires HEVC or AV1.\nCodec set to '{new_codec}'."
+                )
+
+    def _on_output_format_change(self):
+        self._update_codec_options(show_message=True)
+        self._update_selected_jobs("output_format", "video_codec")
+        self._update_bitrate_display()
 
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
@@ -2619,7 +2680,7 @@ class VideoProcessorApp:
     def get_current_gui_options(self):
         return {
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
-            "output_format": self.output_format_var.get(), "fruc": self.fruc_var.get(),
+            "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(), "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
@@ -3156,6 +3217,7 @@ class VideoProcessorApp:
     def update_gui_from_job_options(self, job):
         options = job['options']
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
+        self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
         self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
@@ -3223,6 +3285,8 @@ class VideoProcessorApp:
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
         self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
         self.max_duration_var.set(options.get("max_duration", str(DEFAULT_MAX_DURATION)))
+
+        self._update_codec_options(show_message=False)
 
         # Title Burn options
         self.title_burn_var.set(options.get("title_burn_enabled", DEFAULT_TITLE_BURN_ENABLED))
@@ -3459,7 +3523,9 @@ class VideoProcessorApp:
                     except: sub_target_h = 1920
                 elif orientation == "original":
                     info = get_video_info(job['video_path'])
-                    sub_target_w, sub_target_h = info['width'], info['height']
+                    sub_target_w, sub_target_h = compute_original_target_resolution(res_key, info)
+                    if not sub_target_w or not sub_target_h:
+                        sub_target_w, sub_target_h = info['width'], info['height']
                 else: # Horizontal / Default
                     width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
                     sub_target_w = width_map.get(res_key, 1920)
@@ -3511,7 +3577,9 @@ class VideoProcessorApp:
                         except: sub_target_h = 1920
                     elif orientation == "original":
                         info = get_video_info(job['video_path'])
-                        sub_target_w, sub_target_h = info['width'], info['height']
+                        sub_target_w, sub_target_h = compute_original_target_resolution(res_key, info)
+                        if not sub_target_w or not sub_target_h:
+                            sub_target_w, sub_target_h = info['width'], info['height']
                     else:
                         width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
                         sub_target_w = width_map.get(res_key, 1920)
@@ -3637,7 +3705,18 @@ class VideoProcessorApp:
             video_out_tag = "[v_out]"
         else:
             vf_filters, cpu_filters = [], []
-            if orientation != "original":
+            # Default input tag for cases like "original" orientation (no resize/aspect chain)
+            video_in_tag = "[0:v]"
+            if orientation == "original":
+                res_key = options.get('resolution')
+                if res_key and res_key.lower() != "original":
+                    safe_algo = options.get('upscale_algo')
+                    if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
+                    target_w, target_h = compute_original_target_resolution(res_key, info)
+                    if not target_w or not target_h:
+                        raise VideoProcessingError(f"Invalid resolution '{res_key}' for original mode.")
+                    vf_filters.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
+            else:
                 res_key = options.get('resolution')
                 if orientation == "vertical":
                     aspect_str = options.get('vertical_aspect')
@@ -3669,7 +3748,6 @@ class VideoProcessorApp:
                 scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
                 
                 aspect_mode = options.get("aspect_mode", "pad")
-                video_in_tag = "[0:v]"
                 if aspect_mode == 'pixelate':
                     mult = options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER)
                     try: m = max(1, int(mult))
@@ -3742,7 +3820,7 @@ class VideoProcessorApp:
                 video_out_tag = video_in_tag
         
         # Track effective resolution for metadata/aspect forcing
-        eff_w, eff_h = (target_w, target_h) if (orientation != "original" and 'target_w' in locals() and 'target_h' in locals()) else (None, None)
+        eff_w, eff_h = (target_w, target_h) if ('target_w' in locals() and 'target_h' in locals()) else (None, None)
 
         if filter_complex_parts or audio_fc_str:
             full_fc = ";".join(filter(None, filter_complex_parts + ([audio_fc_str] if audio_fc_str else [])))
@@ -3750,7 +3828,7 @@ class VideoProcessorApp:
         cmd.extend(["-map", video_out_tag])
         cmd.extend(audio_cmd_parts)
         
-        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output)
+        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output, source_height=info["height"], source_width=info["width"])
         
         # --- Output Constraints Logic (Size & Duration) ---
         max_size_mb = float(options.get('max_size_mb', 0))
@@ -3808,24 +3886,32 @@ class VideoProcessorApp:
         nv_bframes = options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES)
         nv_b_ref_mode = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
 
-        if is_hdr_output:
-            nv_profile = options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR)
-            encoder_opts = [
-                "-c:v", "hevc_nvenc", "-preset", nv_preset, "-tune", nv_tune, "-profile:v", nv_profile,
-                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
-                "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
-                "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead,
-                "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"
-            ]
-        else:
+        selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
+        encoder_map = {"h264": "h264_nvenc", "hevc": "hevc_nvenc", "av1": "av1_nvenc"}
+        encoder_name = encoder_map.get(selected_codec, "h264_nvenc")
+
+        encoder_opts = ["-c:v", encoder_name, "-preset", nv_preset, "-tune", nv_tune]
+
+        if selected_codec == "h264":
             nv_profile = options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR)
-            encoder_opts = [
-                "-c:v", "h264_nvenc", "-preset", nv_preset, "-tune", nv_tune, "-profile:v", nv_profile,
-                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
-                "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
-                "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead,
-                "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"
-            ]
+            encoder_opts.extend(["-profile:v", nv_profile])
+        elif selected_codec == "hevc":
+            if is_hdr_output:
+                nv_profile = options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR)
+            else:
+                nv_profile = "main"
+            encoder_opts.extend(["-profile:v", nv_profile])
+
+        encoder_opts.extend([
+            "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
+            "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
+            "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead
+        ])
+
+        if is_hdr_output:
+            encoder_opts.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+        else:
+            encoder_opts.extend(["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
 
         # Force rotation strip and aspect ratio for landscape output if we had a vertical source
         if eff_w and eff_h:
@@ -3841,6 +3927,19 @@ class VideoProcessorApp:
              lut_path = self.lut_file_var.get()
              if lut_path and not os.path.exists(lut_path):
                  issues.append(f"LUT file path is set but file not found: {lut_path}")
+        
+        selected_codec = self.video_codec_var.get()
+        if self.output_format_var.get() == "hdr" and selected_codec == "h264":
+            issues.append("HDR output requires HEVC or AV1. H.264 cannot carry HDR.")
+        
+        if selected_codec == "h264" and self.resolution_var.get() == "4320p":
+            proceed = messagebox.askyesno(
+                "H.264 + 4320p Warning",
+                "H.264 with 4320p output is likely to fail on most NVENC GPUs.\n"
+                "Do you want to continue anyway?"
+            )
+            if not proceed:
+                return False
         
         try:
             if not -70 <= float(self.loudness_target_var.get()) <= 0:
