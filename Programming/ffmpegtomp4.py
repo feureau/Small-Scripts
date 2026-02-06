@@ -413,6 +413,82 @@ def _probe_audio_streams(video_path):
         return []
 
 # ---------------------------------------------------------------------------
+# Validation: Check if input already meets output requirements
+# ---------------------------------------------------------------------------
+def _probe_video_streams(video_path):
+    """Probe video streams via ffprobe (returns list of stream dicts)."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v",
+        "-show_streams",
+        "-show_entries", "stream=index,codec_name",
+        "-of", "json", video_path
+    ]
+    proc = run_command(cmd, capture_output=True)
+    if proc is None:
+        print(f"  FFprobe failed to start for {video_path}")
+        return []
+    if proc.returncode != 0:
+        print(f"  FFprobe returned non-zero for {video_path} (rc={proc.returncode})")
+        if getattr(proc, "stderr", None):
+            print(proc.stderr)
+        return []
+
+    try:
+        data = json.loads(proc.stdout or "{}")
+        return data.get("streams", []) or []
+    except Exception:
+        print(f"  Failed to parse video streams for {video_path}")
+        return []
+
+def check_output_requirements(video_path, target_extension):
+    """
+    Returns (ok, reasons) indicating whether input already meets output requirements:
+    - Has at least one video stream.
+    - Has at least one audio stream and ALL audio streams are AC3 5.1 layout.
+    - Has NO subtitle streams.
+    - Matches target container extension.
+    """
+    reasons = []
+
+    # Extension check
+    _, ext = os.path.splitext(video_path)
+    if ext.lstrip('.').lower() != target_extension.lstrip('.').lower():
+        reasons.append(f"Container mismatch (.{ext.lstrip('.') or 'none'} != .{target_extension.lstrip('.')})")
+
+    # Video stream check
+    video_streams = _probe_video_streams(video_path)
+    if not video_streams:
+        reasons.append("No video streams detected")
+
+    # Audio stream checks
+    audio_streams = _probe_audio_streams(video_path)
+    if not audio_streams:
+        reasons.append("No audio streams detected")
+    else:
+        for s in audio_streams:
+            codec = s.get('codec_name', 'unknown').lower()
+            try:
+                channels = int(s.get('channels', 0))
+            except (ValueError, TypeError):
+                channels = 0
+            layout = s.get('channel_layout', 'unknown')
+
+            is_compliant = (codec == 'ac3' and channels == 6 and layout == '5.1')
+            if not is_compliant:
+                reasons.append(
+                    f"Audio stream {s.get('index', '?')} not AC3 5.1 "
+                    f"(codec={codec}, channels={channels}, layout={layout})"
+                )
+
+    # Subtitle stream check
+    subtitle_streams = _probe_subtitle_streams(video_path)
+    if subtitle_streams:
+        reasons.append(f"Subtitle streams present ({len(subtitle_streams)})")
+
+    ok = len(reasons) == 0
+    return ok, reasons
+
+# ---------------------------------------------------------------------------
 # Embedded Subtitle Extraction Module
 # ---------------------------------------------------------------------------
 KNOWN_TEXT_SUBTITLE_CODECS = [
@@ -648,6 +724,12 @@ def main():
     parser.add_argument("-f", "--format",
                         choices=["hybrid", "srt", "mkv"], default="hybrid",
                         help="Subtitle extraction format (default: hybrid)")
+    parser.add_argument("-t", "--test",
+                        action="store_true",
+                        help="Only test whether inputs already meet output requirements")
+    parser.add_argument("-p", "--test-and-process",
+                        action="store_true",
+                        help="Test first, then process only files that fail requirements")
     parser.add_argument("input_patterns", nargs="*",
                         help="Optional file patterns or directories (default: recursive scan)")
     args = parser.parse_args()
@@ -722,6 +804,55 @@ def main():
         return
 
     print(f"Found {len(files_to_process)} video(s) to process.")
+
+    if args.test and args.test_and_process:
+        print("ERROR: Use only one of --test or --test-and-process.")
+        return
+
+    if args.test:
+        passed = 0
+        failed = 0
+        for file_path in files_to_process:
+            print(f"\n--- Testing: {file_path} ---")
+            if not is_supported_video(file_path):
+                print(f"  Skipping non-video file: {file_path}")
+                continue
+            ok, reasons = check_output_requirements(file_path, args.extension)
+            if ok:
+                print("  PASS: Meets all output requirements.")
+                passed += 1
+            else:
+                print("  FAIL: Does not meet output requirements.")
+                for reason in reasons:
+                    print(f"    - {reason}")
+                failed += 1
+        print(f"\nTest complete. Passed: {passed}, Failed: {failed}.")
+        return
+
+    if args.test_and_process:
+        passed = 0
+        failed = 0
+        files_to_process_after_test = []
+        for file_path in files_to_process:
+            print(f"\n--- Testing: {file_path} ---")
+            if not is_supported_video(file_path):
+                print(f"  Skipping non-video file: {file_path}")
+                continue
+            ok, reasons = check_output_requirements(file_path, args.extension)
+            if ok:
+                print("  PASS: Meets all output requirements.")
+                passed += 1
+            else:
+                print("  FAIL: Does not meet output requirements.")
+                for reason in reasons:
+                    print(f"    - {reason}")
+                failed += 1
+                files_to_process_after_test.append(file_path)
+        print(f"\nTest complete. Passed: {passed}, Failed: {failed}.")
+        if not files_to_process_after_test:
+            print("No failing files to process.")
+            return
+        files_to_process = files_to_process_after_test
 
     for file_path in files_to_process:
         print(f"\n--- Processing: {file_path} ---")
