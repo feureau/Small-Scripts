@@ -682,6 +682,10 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
         if stream_output:
             full_text = ""
             print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
+            thinking_active = False
+            thinking_started = False
+            thinking_ended = False
+            output_started = False
             for chunk in response:
                 if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during streaming.")
                 
@@ -690,6 +694,10 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
                     for part in chunk.candidates[0].content.parts:
                         # 1. Handle Thinking Content (dedicated attribute)
                         if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                            if not thinking_started:
+                                print("\n--- [THINKING START] ---\n", end="", flush=True)
+                                thinking_started = True
+                            thinking_active = True
                             # Print thought in gray (ANSI 90m)
                             print(f"\033[90m{part.text}\033[0m", end="", flush=True)
                         
@@ -699,13 +707,31 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
                             # Fallback: check if the text itself contains <think> tags 
                             # (Some models might not use the dedicated 'thought' part yet)
                             if "<think>" in text_part or "</think>" in text_part:
+                                if "<think>" in text_part:
+                                    thinking_active = True
+                                    if not thinking_started:
+                                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                                        thinking_started = True
                                 # Simple colorization for tags within a text part
                                 colored_text = text_part.replace("<think>", "\033[90m<think>").replace("</think>", "</think>\033[0m")
                                 print(colored_text, end="", flush=True)
+                                if "</think>" in text_part:
+                                    thinking_active = False
+                                    if not thinking_ended:
+                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        thinking_ended = True
                             else:
+                                if not output_started and not thinking_active:
+                                    if thinking_started and not thinking_ended:
+                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        thinking_ended = True
+                                    print("\n--- [OUTPUT START] ---\n", end="", flush=True)
+                                    output_started = True
                                 print(text_part, end="", flush=True)
                             
                             full_text += text_part
+            if output_started:
+                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
             print("\n----------------------------------------------\n", flush=True)
             return full_text
         else:
@@ -767,14 +793,29 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
             )
             full_text = ""
             thinking_active = False
+            thinking_started = False
+            thinking_ended = False
+            output_started = False
             for chunk in stream:
                 if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during Ollama streaming.")
-                part = chunk['message']['content']
+                msg = chunk.get('message', {})
+                part = msg.get('content', "") or chunk.get('response', "")
+                thinking_part = msg.get('thinking', "")
                 
+                # Stream model "thinking" if provided by Ollama (kept out of final output)
+                if thinking_part:
+                    if not thinking_started:
+                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                        thinking_started = True
+                    print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
+
                 # Simple Thinking Tag Handling
                 to_print = part
                 if "<think>" in to_print:
                     thinking_active = True
+                    if not thinking_started:
+                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                        thinking_started = True
                     # If tag is strictly present, try to colorize what's after it
                     to_print = to_print.replace("<think>", "\033[90m<think>")
                 
@@ -793,9 +834,21 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
 
                 if "</think>" in part:
                     thinking_active = False
+                    if not thinking_ended:
+                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                        thinking_ended = True
                 
-                print(to_print, end="", flush=True)
-                full_text += part
+                if part:
+                    if not output_started and not thinking_active:
+                        if thinking_started and not thinking_ended:
+                            print("\n--- [THINKING END] ---\n", end="", flush=True)
+                            thinking_ended = True
+                        print("\n--- [OUTPUT START] ---\n", end="", flush=True)
+                        output_started = True
+                    print(to_print, end="", flush=True)
+                    full_text += part
+            if output_started:
+                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
             print("\n---------------------------------------\n", flush=True)
             return full_text
         else:
@@ -840,6 +893,9 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
             print(f"\n--- [STREAM] LM Studio ({model_name}) ---\n", end="", flush=True)
             full_text = ""
             thinking_active = False
+            thinking_started = False
+            thinking_ended = False
+            output_started = False
             for line in response.iter_lines():
                 if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during LMStudio streaming.")
                 if line:
@@ -857,6 +913,9 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
                                 # Thinking Logic
                                 if "<think>" in to_print:
                                     thinking_active = True
+                                    if not thinking_started:
+                                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                                        thinking_started = True
                                     to_print = to_print.replace("<think>", "\033[90m<think>")
                                 
                                 if "</think>" in to_print:
@@ -868,9 +927,20 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
 
                                 if "</think>" in content:
                                     thinking_active = False
+                                    if not thinking_ended:
+                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        thinking_ended = True
 
+                                if not output_started and not thinking_active:
+                                    if thinking_started and not thinking_ended:
+                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        thinking_ended = True
+                                    print("\n--- [OUTPUT START] ---\n", end="", flush=True)
+                                    output_started = True
                                 print(to_print, end="", flush=True)
                         except json.JSONDecodeError: pass
+            if output_started:
+                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
             print("\n-----------------------------------------\n", flush=True)
             return full_text
         else:
@@ -884,7 +954,7 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
 
 def save_output_files(api_response, log_data, raw_path, log_path=None):
     try:
-        with open(raw_path, 'w', encoding='utf-8') as f: f.write(api_response or "[Empty Response]")
+        with open(raw_path, 'w', encoding='utf-8') as f: f.write(api_response if api_response is not None else "[Empty Response]")
         if log_path:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, 'w', encoding='utf-8') as f:
