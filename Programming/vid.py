@@ -21,6 +21,7 @@ System Requirements & Dependencies
 ----------------------------------
 *   **Hardware**: NVIDIA GPU (for CUDA/NVENC acceleration).
 *   **Tools**: FFmpeg (with `cuda`, `nvenc`, `libass`, `loudnorm`, `dynaudnorm` support).
+*   **Optional**: NVEncC (for NVEncC backend; uses FFmpeg preprocessing for unsupported filters).
 *   **Library**: `tkinterdnd2` (for drag-and-drop support).
 *   **Env Variables**: `FFMPEG_PATH` and `FFPROBE_PATH` (optional).
 
@@ -72,6 +73,14 @@ v8.9 - Codec Selection & Validation (2026-02-05)
     • FEATURE: Added explicit codec dropdown (H.264/HEVC/AV1) in the Encoder tab.
     • FEATURE: Codec list is linked to SDR/HDR output format (HDR requires HEVC/AV1).
     • UX: Warns before H.264 + 4320p encodes, with an option to continue anyway.
+v8.10 - NVEncC Backend Option (2026-02-07)
+    • FEATURE: Added Encoder Backend selection:
+        - ffmpeg_only
+        - nvencc_with_ffmpeg (FFmpeg preprocess + NVEncC encode)
+        - nvencc_only (NVEncC only, FFmpeg-only features disabled)
+        - nvencc_video_with_ffmpeg_audio (NVEncC video + FFmpeg audio prepass)
+    • FEATURE: NVEncC-only Upscale options: NVVFX SuperRes + NGX VSR with per-algo settings.
+    • NOTE: Output container remains MP4.
 v8.8 - Subtitle & Workflow Improvements (2025-12-29)
     • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
                differently (Width 1 vs 2), fixing premature wrapping for English
@@ -136,6 +145,7 @@ import signal
 # -------------------------- Configuration / Constants --------------------------
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
 FFPROBE_CMD = os.environ.get("FFPROBE_PATH", "ffprobe")
+NVENCC_CMD = os.environ.get("NVENCC_PATH", "NVEncC64")
 
 # Audio settings (Bitrates for different track types)
 AUDIO_SAMPLE_RATE = 48000                           # Sample rate for all audio outputs (Hz). Fixed: 48000
@@ -153,6 +163,9 @@ DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
 DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
 DEFAULT_VIDEO_CODEC = "h264"                        # Output codec. Default: h264, Options: h264, hevc, av1
+DEFAULT_ENCODER_BACKEND = "ffmpeg_only"             # Encoder backend. Default: ffmpeg_only, Options: ffmpeg_only, nvencc_with_ffmpeg, nvencc_only, nvencc_video_with_ffmpeg_audio
+DEFAULT_NVENC_SUPERRES_MODE = "1"                   # NVVFX SuperRes mode. Default: 1, Range: 0-1
+DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 1, Range: 1-4
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
@@ -349,6 +362,11 @@ def check_ffmpeg_capabilities():
     except Exception as e:
         print(f"[ERROR] Failed to check FFmpeg capabilities: {e}")
         return capabilities
+
+def check_nvencc_availability():
+    if os.path.isfile(NVENCC_CMD):
+        return True
+    return shutil.which(NVENCC_CMD) is not None
 
 def check_decoder_availability(codec_name):
     try:
@@ -1208,6 +1226,9 @@ class WorkflowPresetManager:
             "upscale_algo": DEFAULT_UPSCALE_ALGO,
             "output_format": DEFAULT_OUTPUT_FORMAT,
             "video_codec": DEFAULT_VIDEO_CODEC,
+            "encoder_backend": DEFAULT_ENCODER_BACKEND,
+            "nvenc_superres_mode": DEFAULT_NVENC_SUPERRES_MODE,
+            "nvenc_ngx_vsr_quality": DEFAULT_NVENC_NGX_VSR_QUALITY,
             "orientation": DEFAULT_ORIENTATION,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
@@ -1434,9 +1455,16 @@ class VideoProcessorApp:
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
+        self.upscale_algo_var.trace_add('write', lambda *args: self._toggle_superres_options())
         self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
         self.video_codec_var = tk.StringVar(value=DEFAULT_VIDEO_CODEC)
         self.video_codec_var.trace_add('write', lambda *args: self._update_selected_jobs('video_codec'))
+        self.encoder_backend_var = tk.StringVar(value=DEFAULT_ENCODER_BACKEND)
+        self.encoder_backend_var.trace_add('write', lambda *args: [self._update_selected_jobs('encoder_backend'), self._update_upscale_algo_options(), self._toggle_superres_options(), self._apply_backend_constraints()])
+        self.nvenc_superres_mode_var = tk.StringVar(value=DEFAULT_NVENC_SUPERRES_MODE)
+        self.nvenc_superres_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_superres_mode'))
+        self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
+        self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
@@ -1562,6 +1590,9 @@ class VideoProcessorApp:
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+        self.subtitle_path_var = tk.StringVar(value="")
+        self._suppress_subtitle_path_trace = False
+        self.subtitle_path_var.trace_add('write', lambda *args: self._on_subtitle_path_change())
 
         # Title Burn Variables
         self.title_burn_var = tk.BooleanVar(value=DEFAULT_TITLE_BURN_ENABLED)
@@ -1655,26 +1686,26 @@ class VideoProcessorApp:
 
         self.setup_input_pane(input_frame)
 
-        video_tab = ttk.Frame(settings_notebook, padding=10)
-        audio_tab = ttk.Frame(settings_notebook, padding=10)
-        loudness_tab = ttk.Frame(settings_notebook, padding=10)
-        title_tab = ttk.Frame(settings_notebook, padding=10)
-        subtitle_tab = ttk.Frame(settings_notebook, padding=10)
-        encoder_tab = ttk.Frame(settings_notebook, padding=10)
+        self.video_tab = ttk.Frame(settings_notebook, padding=10)
+        self.audio_tab = ttk.Frame(settings_notebook, padding=10)
+        self.loudness_tab = ttk.Frame(settings_notebook, padding=10)
+        self.title_tab = ttk.Frame(settings_notebook, padding=10)
+        self.subtitle_tab = ttk.Frame(settings_notebook, padding=10)
+        self.encoder_tab = ttk.Frame(settings_notebook, padding=10)
 
-        settings_notebook.add(video_tab, text="Video")
-        settings_notebook.add(audio_tab, text="Audio")
-        settings_notebook.add(loudness_tab, text="Loudness")
-        settings_notebook.add(title_tab, text="Title")
-        settings_notebook.add(subtitle_tab, text="Subtitles")
-        settings_notebook.add(encoder_tab, text="Encoder")
+        settings_notebook.add(self.video_tab, text="Video")
+        settings_notebook.add(self.audio_tab, text="Audio")
+        settings_notebook.add(self.loudness_tab, text="Loudness")
+        settings_notebook.add(self.title_tab, text="Title")
+        settings_notebook.add(self.subtitle_tab, text="Subtitles")
+        settings_notebook.add(self.encoder_tab, text="Encoder")
 
-        self.setup_video_tab(video_tab)
-        self.setup_audio_tab(audio_tab)
-        self.setup_loudness_tab(loudness_tab)
-        self.setup_title_tab(title_tab)
-        self.setup_subtitle_tab(subtitle_tab)
-        self.setup_encoder_tab(encoder_tab)
+        self.setup_video_tab(self.video_tab)
+        self.setup_audio_tab(self.audio_tab)
+        self.setup_loudness_tab(self.loudness_tab)
+        self.setup_title_tab(self.title_tab)
+        self.setup_subtitle_tab(self.subtitle_tab)
+        self.setup_encoder_tab(self.encoder_tab)
     
         # Add Apply Buttons below settings
         apply_frame = ttk.Frame(right_pane_frame)
@@ -1687,6 +1718,9 @@ class VideoProcessorApp:
 
         self._toggle_orientation_options()
         self._toggle_upscale_options()
+        self._update_upscale_algo_options()
+        self._toggle_superres_options()
+        self._apply_backend_constraints()
         self._toggle_audio_norm_options()
         self._update_audio_options_ui() 
         self._update_codec_options(show_message=False)
@@ -1712,34 +1746,46 @@ class VideoProcessorApp:
         basic_group = ttk.LabelFrame(scroll_frame, text="Basic NVENC Settings", padding=10)
         basic_group.pack(fill=tk.X, pady=5, padx=5)
 
+        # Backend
+        ttk.Label(basic_group, text="Backend:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        backend_combo = ttk.Combobox(
+            basic_group,
+            textvariable=self.encoder_backend_var,
+            values=["ffmpeg_only", "nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"],
+            width=26,
+            state="readonly"
+        )
+        backend_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
+
         # Preset
-        ttk.Label(basic_group, text="Preset:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Preset:").grid(row=1, column=0, sticky=tk.W, pady=2)
         preset_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_preset_var, values=[f"p{i}" for i in range(1, 8)], width=10, state="readonly")
-        preset_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        preset_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
 
         # Tune
-        ttk.Label(basic_group, text="Tune:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Tune:").grid(row=2, column=0, sticky=tk.W, pady=2)
         tune_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_tune_var, values=["hq", "ll", "ull", "lossless"], width=10, state="readonly")
-        tune_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        tune_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
 
         # Codec
-        ttk.Label(basic_group, text="Codec:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Codec:").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.video_codec_combo = ttk.Combobox(basic_group, textvariable=self.video_codec_var, values=["h264", "hevc", "av1"], width=10, state="readonly")
-        self.video_codec_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        self.video_codec_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(self.video_codec_combo, "Output codec. HDR requires HEVC or AV1.")
 
         # Profile SDR
-        ttk.Label(basic_group, text="Profile (SDR):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (SDR):").grid(row=4, column=0, sticky=tk.W, pady=2)
         profile_sdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_sdr_var, values=["high", "main", "baseline"], width=10, state="readonly")
-        profile_sdr_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_sdr_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_sdr_combo, "NVENC Profile for SDR output.")
 
         # Profile HDR
-        ttk.Label(basic_group, text="Profile (HDR):").grid(row=4, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (HDR):").grid(row=5, column=0, sticky=tk.W, pady=2)
         profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
-        profile_hdr_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_hdr_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
 
         # GOP & B-Frames
@@ -1970,11 +2016,16 @@ class VideoProcessorApp:
         geometry_group.pack(fill=tk.X, pady=(0, 5))
         orientation_frame = ttk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
         ttk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        ttk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options).pack(side=tk.LEFT)
-        ttk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(orientation_frame, text="Hybrid", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options).pack(side=tk.LEFT, padx=(5,0))
+        self.orientation_horizontal_rb = ttk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options)
+        self.orientation_horizontal_rb.pack(side=tk.LEFT)
+        self.orientation_vertical_rb = ttk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options)
+        self.orientation_vertical_rb.pack(side=tk.LEFT, padx=5)
+        self.orientation_both_rb = ttk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options)
+        self.orientation_both_rb.pack(side=tk.LEFT)
+        self.orientation_original_rb = ttk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options)
+        self.orientation_original_rb.pack(side=tk.LEFT, padx=5)
+        self.orientation_hybrid_rb = ttk.Radiobutton(orientation_frame, text="Hybrid", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options)
+        self.orientation_hybrid_rb.pack(side=tk.LEFT, padx=(5,0))
 
         self.aspect_ratio_frame = ttk.LabelFrame(geometry_group, text="Aspect Ratio", padding=10); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         self.horizontal_rb_frame = ttk.Frame(self.aspect_ratio_frame)
@@ -2005,11 +2056,16 @@ class VideoProcessorApp:
         ttk.Radiobutton(self.bottom_video_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
         aspect_handling_frame = ttk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X, pady=5)
         ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        ttk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options).pack(side=tk.LEFT)
-        ttk.Radiobutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_mode_var, value="blur", command=self._toggle_upscale_options).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_mode_var, value="pixelate", command=self._toggle_upscale_options).pack(side=tk.LEFT)
+        self.aspect_crop_rb = ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options)
+        self.aspect_crop_rb.pack(side=tk.LEFT)
+        self.aspect_pad_rb = ttk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options)
+        self.aspect_pad_rb.pack(side=tk.LEFT, padx=5)
+        self.aspect_stretch_rb = ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options)
+        self.aspect_stretch_rb.pack(side=tk.LEFT)
+        self.aspect_blur_rb = ttk.Radiobutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_mode_var, value="blur", command=self._toggle_upscale_options)
+        self.aspect_blur_rb.pack(side=tk.LEFT, padx=5)
+        self.aspect_pixelate_rb = ttk.Radiobutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_mode_var, value="pixelate", command=self._toggle_upscale_options)
+        self.aspect_pixelate_rb.pack(side=tk.LEFT)
         
         ttk.Label(aspect_handling_frame, text="Mult:").pack(side=tk.LEFT, padx=(10, 2))
         self.pixelate_multiplier_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_multiplier_var, width=3)
@@ -2057,10 +2113,22 @@ class VideoProcessorApp:
         
         upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
-        self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos"], width=10, state="readonly")
+        self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos"], width=14, state="readonly")
         self.upscale_algo_combo.pack(side=tk.LEFT)
         self.upscale_algo_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("upscale_algo"))
         ToolTip(self.upscale_algo_combo, "Nearest=Fastest, Bilinear=Fast, Bicubic=Default, Lanczos=Best")
+
+        # Super-Resolution Settings (NVEncC only)
+        superres_frame = ttk.Frame(quality_group); superres_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Label(superres_frame, text="NVVFX SuperRes Mode:").pack(side=tk.LEFT, padx=(0,5))
+        self.superres_mode_combo = ttk.Combobox(superres_frame, textvariable=self.nvenc_superres_mode_var, values=["0", "1"], width=5, state="readonly")
+        self.superres_mode_combo.pack(side=tk.LEFT)
+        ToolTip(self.superres_mode_combo, "NVEncC nvvfx-superres mode (0=conservative, 1=aggressive).")
+
+        ttk.Label(superres_frame, text="NGX VSR Quality:").pack(side=tk.LEFT, padx=(15,5))
+        self.ngx_vsr_quality_combo = ttk.Combobox(superres_frame, textvariable=self.nvenc_ngx_vsr_quality_var, values=["1", "2", "3", "4"], width=5, state="readonly")
+        self.ngx_vsr_quality_combo.pack(side=tk.LEFT)
+        ToolTip(self.ngx_vsr_quality_combo, "NVEncC ngx vsr-quality (1-4).")
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
@@ -2235,7 +2303,8 @@ class VideoProcessorApp:
         # Enable Title Burn checkbox
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Checkbutton(action_frame, text="Enable Title Burning", variable=self.title_burn_var, command=lambda: self._update_selected_jobs("title_burn_enabled")).pack(side=tk.LEFT)
+        self.title_burn_cb = ttk.Checkbutton(action_frame, text="Enable Title Burning", variable=self.title_burn_var, command=lambda: self._update_selected_jobs("title_burn_enabled"))
+        self.title_burn_cb.pack(side=tk.LEFT)
 
         # Source Settings
         source_group = ttk.LabelFrame(parent, text="Title Source", padding=10)
@@ -2347,7 +2416,19 @@ class VideoProcessorApp:
     def setup_subtitle_tab(self, parent):
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Checkbutton(action_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=lambda: self._update_selected_jobs("burn_subtitles")).pack(side=tk.LEFT)
+        self.burn_subtitles_cb = ttk.Checkbutton(action_frame, text="Enable Subtitle Burning", variable=self.burn_subtitles_var, command=lambda: self._update_selected_jobs("burn_subtitles"))
+        self.burn_subtitles_cb.pack(side=tk.LEFT)
+
+        source_frame = ttk.LabelFrame(parent, text="Subtitle Source", padding=10)
+        source_frame.pack(fill=tk.X, pady=(0, 10))
+        source_row = ttk.Frame(source_frame); source_row.pack(fill=tk.X)
+        ttk.Label(source_row, text="Subtitle File:").pack(side=tk.LEFT, padx=(0, 5))
+        self.subtitle_path_entry = ttk.Entry(source_row, textvariable=self.subtitle_path_var, width=60)
+        self.subtitle_path_entry.pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
+        self.subtitle_browse_btn = ttk.Button(source_row, text="Browse", command=self.browse_subtitle_file, width=8)
+        self.subtitle_browse_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.subtitle_detect_btn = ttk.Button(source_row, text="Detect", command=self.detect_subtitle_for_selected, width=8)
+        self.subtitle_detect_btn.pack(side=tk.LEFT)
 
         main_style_group = ttk.LabelFrame(parent, text="Subtitle Styling", padding=10)
         main_style_group.pack(fill=tk.BOTH, expand=True)
@@ -2479,6 +2560,104 @@ class VideoProcessorApp:
             self.sofa_file_var.set(file_path)
             self._update_selected_jobs("sofa_file")
 
+    def browse_subtitle_file(self):
+        file_path = filedialog.askopenfilename(title="Select Subtitle File", filetypes=[("Subtitle files", "*.srt"), ("All files", "*.*")])
+        if file_path:
+            self.subtitle_path_var.set(file_path)
+
+    def _on_subtitle_path_change(self):
+        if self._suppress_subtitle_path_trace:
+            return
+        self._apply_subtitle_path_to_selected(self.subtitle_path_var.get())
+
+    def _build_display_tag_for_subtitle(self, subtitle_path):
+        if not subtitle_path:
+            return "[No Subtitles]"
+        if subtitle_path.startswith("embedded:"):
+            return f"[Embedded: {subtitle_path.split(':', 1)[1]}]"
+        return f"(Custom: {os.path.basename(subtitle_path)})"
+
+    def _apply_subtitle_to_job(self, index, subtitle_path, display_tag):
+        job = self.processing_jobs[index]
+        job["subtitle_path"] = subtitle_path
+        job["display_tag"] = display_tag
+        base_name = os.path.basename(job["video_path"])
+        preset_name = job.get("preset_name", "")
+        job["display_name"] = f"{base_name} {display_tag} [{preset_name}]".strip()
+        self.job_listbox.delete(index)
+        self.job_listbox.insert(index, job["display_name"])
+        self.job_listbox.selection_set(index)
+
+    def _apply_subtitle_path_to_selected(self, raw_path, display_tag=None):
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+        subtitle_path = raw_path.strip()
+        if not subtitle_path:
+            subtitle_path = None
+        for index in selected_indices:
+            tag = display_tag if display_tag is not None else self._build_display_tag_for_subtitle(subtitle_path)
+            self._apply_subtitle_to_job(index, subtitle_path, tag)
+
+    def _detect_subtitles_for_video(self, video_path):
+        detected_subs = []
+        dir_name = os.path.dirname(video_path)
+        video_basename = os.path.splitext(os.path.basename(video_path))[0]
+        try:
+            for item in sorted(os.listdir(dir_name)):
+                if item.lower().endswith('.srt'):
+                    srt_basename = os.path.splitext(item)[0]
+                    if srt_basename == video_basename:
+                        detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': srt_basename})
+                    elif srt_basename.startswith(video_basename):
+                        remainder = srt_basename[len(video_basename):]
+                        if remainder and remainder[0] in [' ', '.', '-', '_']:
+                            full_path = os.path.join(dir_name, item)
+                            detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': srt_basename})
+        except Exception:
+            pass
+
+        embedded_subs = get_subtitle_stream_info(video_path)
+        for relative_index, sub_stream in enumerate(embedded_subs):
+            tags = sub_stream.get("tags", {})
+            lang = tags.get("language", "und")
+            title = tags.get("title", f"Track {sub_stream.get('index')}")
+            detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
+
+        return detected_subs
+
+    def _pick_preferred_subtitle(self, detected_subs):
+        if not detected_subs:
+            return None
+        for sub in detected_subs:
+            if not sub.get("path", "").startswith("embedded:") and sub.get("suffix", "") == "":
+                return sub
+        for sub in detected_subs:
+            if not sub.get("path", "").startswith("embedded:"):
+                return sub
+        return detected_subs[0]
+
+    def detect_subtitle_for_selected(self):
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+        updated = 0
+        for index in selected_indices:
+            job = self.processing_jobs[index]
+            detected_subs = self._detect_subtitles_for_video(job["video_path"])
+            preferred = self._pick_preferred_subtitle(detected_subs)
+            if preferred:
+                self._apply_subtitle_to_job(index, preferred["path"], preferred["display_tag"])
+                updated += 1
+        if updated == 0:
+            messagebox.showinfo("No Subtitles Found", "No matching subtitles were detected for the selected job(s).")
+        else:
+            if len(selected_indices) == 1:
+                self._suppress_subtitle_path_trace = True
+                self.subtitle_path_var.set(self.processing_jobs[selected_indices[0]].get("subtitle_path") or "")
+                self._suppress_subtitle_path_trace = False
+            self.update_status(f"Detected subtitles for {updated} job(s).")
+
     def _toggle_bitrate_override(self):
         is_override = self.override_bitrate_var.get()
         self.manual_bitrate_entry.config(state="normal" if is_override else "disabled")
@@ -2591,6 +2770,128 @@ class VideoProcessorApp:
         
         self._update_selected_jobs("aspect_mode")
 
+    def _update_upscale_algo_options(self):
+        backend = self.encoder_backend_var.get()
+        if backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
+            values = ["nearest", "bilinear", "bicubic", "lanczos", "nvvfx-superres", "ngx-vsr"]
+        else:
+            values = ["nearest", "bilinear", "bicubic", "lanczos"]
+        if hasattr(self, "upscale_algo_combo"):
+            self.upscale_algo_combo.config(values=values)
+        if self.upscale_algo_var.get() not in values:
+            self.upscale_algo_var.set(DEFAULT_UPSCALE_ALGO)
+
+    def _toggle_superres_options(self):
+        backend = self.encoder_backend_var.get()
+        algo = self.upscale_algo_var.get()
+        enable_superres = backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"] and algo == "nvvfx-superres"
+        enable_ngx = backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"] and algo == "ngx-vsr"
+        if hasattr(self, "superres_mode_combo"):
+            self.superres_mode_combo.config(state="readonly" if enable_superres else "disabled")
+        if hasattr(self, "ngx_vsr_quality_combo"):
+            self.ngx_vsr_quality_combo.config(state="readonly" if enable_ngx else "disabled")
+
+    def _set_widget_state_recursive(self, widget, state):
+        try:
+            widget.configure(state=state)
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._set_widget_state_recursive(child, state)
+
+    def _apply_backend_constraints(self):
+        backend = self.encoder_backend_var.get()
+        is_nvencc_only = backend == "nvencc_only"
+        is_nvencc_video_audio = backend == "nvencc_video_with_ffmpeg_audio"
+        is_ffmpeg_only = backend == "ffmpeg_only"
+
+        # NVEncC-only or NVEncC video + FFmpeg audio: disable FFmpeg video-only features
+        if is_nvencc_only or is_nvencc_video_audio:
+            if self.orientation_var.get() in ["hybrid (stacked)", "horizontal + vertical"]:
+                self.orientation_var.set("horizontal")
+            self.aspect_mode_var.set("stretch")
+            self.burn_subtitles_var.set(False)
+            self.title_burn_var.set(False)
+            self.fruc_var.set(False)
+            if is_nvencc_only:
+                self.normalize_audio_var.set(False)
+                self.use_dynaudnorm_var.set(False)
+                self.use_loudness_war_var.set(False)
+                self.measure_loudness_var.set(False)
+                self.audio_mono_var.set(False)
+                self.audio_stereo_downmix_var.set(False)
+                self.audio_stereo_sofalizer_var.set(False)
+                self.audio_surround_51_var.set(False)
+                self.audio_passthrough_var.set(True)
+            self._update_selected_jobs(
+                "orientation", "aspect_mode",
+                "burn_subtitles", "title_burn_enabled",
+                "fruc"
+            )
+            if is_nvencc_only:
+                self._update_selected_jobs(
+                    "normalize_audio", "use_dynaudnorm", "use_loudness_war", "measure_loudness",
+                    "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer", "audio_surround_51", "audio_passthrough"
+                )
+            # Apply to all jobs as well (not just selected)
+            for job in self.processing_jobs:
+                job_opts = job.get("options", {})
+                job_opts["orientation"] = self.orientation_var.get()
+                job_opts["aspect_mode"] = "stretch"
+                job_opts["burn_subtitles"] = False
+                job_opts["title_burn_enabled"] = False
+                job_opts["fruc"] = False
+                if is_nvencc_only:
+                    job_opts["normalize_audio"] = False
+                    job_opts["use_dynaudnorm"] = False
+                    job_opts["use_loudness_war"] = False
+                    job_opts["measure_loudness"] = False
+                    job_opts["audio_mono"] = False
+                    job_opts["audio_stereo_downmix"] = False
+                    job_opts["audio_stereo_sofalizer"] = False
+                    job_opts["audio_surround_51"] = False
+                    job_opts["audio_passthrough"] = True
+
+        # Disable/enable widgets
+        if hasattr(self, "burn_subtitles_cb"):
+            self.burn_subtitles_cb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+        if hasattr(self, "title_burn_cb"):
+            self.title_burn_cb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+
+        for rb in [getattr(self, "aspect_crop_rb", None), getattr(self, "aspect_pad_rb", None),
+                   getattr(self, "aspect_stretch_rb", None), getattr(self, "aspect_blur_rb", None),
+                   getattr(self, "aspect_pixelate_rb", None)]:
+            if rb:
+                rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+
+        # Orientation options: disable hybrid/both in NVEncC-only
+        if hasattr(self, "orientation_both_rb"):
+            self.orientation_both_rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+        if hasattr(self, "orientation_hybrid_rb"):
+            self.orientation_hybrid_rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+
+        # Disable FFmpeg-only tabs in NVEncC-only (and video-only tabs in video+audio mode)
+        for tab in [getattr(self, "audio_tab", None), getattr(self, "loudness_tab", None),
+                    getattr(self, "subtitle_tab", None), getattr(self, "title_tab", None)]:
+            if tab:
+                if is_nvencc_only:
+                    self._set_widget_state_recursive(tab, "disabled")
+                elif is_nvencc_video_audio:
+                    if tab in [self.subtitle_tab, self.title_tab]:
+                        self._set_widget_state_recursive(tab, "disabled")
+                    else:
+                        self._set_widget_state_recursive(tab, "normal")
+                else:
+                    self._set_widget_state_recursive(tab, "normal")
+
+        # Audio and loudness controls are handled by _update_audio_options_ui and _toggle_audio_norm_options
+        self._update_audio_options_ui()
+        self._toggle_audio_norm_options()
+
+        # NVEncC-only/FFmpeg-only impact superres controls
+        self._update_upscale_algo_options()
+        self._toggle_superres_options()
+
     def _toggle_audio_norm_options(self):
         is_passthrough = self.audio_passthrough_var.get()
         
@@ -2680,7 +2981,11 @@ class VideoProcessorApp:
     def get_current_gui_options(self):
         return {
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
-            "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(), "fruc": self.fruc_var.get(),
+            "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(),
+            "encoder_backend": self.encoder_backend_var.get(),
+            "nvenc_superres_mode": self.nvenc_superres_mode_var.get(),
+            "nvenc_ngx_vsr_quality": self.nvenc_ngx_vsr_quality_var.get(),
+            "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
@@ -3211,6 +3516,10 @@ class VideoProcessorApp:
                 self.trigger_scan_subs_var.set(False)
                 self.trigger_suffix_enable_var.set(False)
                 self.trigger_suffix_var.set("")
+
+            self._suppress_subtitle_path_trace = True
+            self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
+            self._suppress_subtitle_path_trace = False
                 
         # Multi-Select: Do NOTHING (Keep current GUI state)
 
@@ -3218,6 +3527,9 @@ class VideoProcessorApp:
         options = job['options']
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
+        self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
+        self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
+        self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
         self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
@@ -3287,6 +3599,9 @@ class VideoProcessorApp:
         self.max_duration_var.set(options.get("max_duration", str(DEFAULT_MAX_DURATION)))
 
         self._update_codec_options(show_message=False)
+        self._apply_backend_constraints()
+        self._update_upscale_algo_options()
+        self._toggle_superres_options()
 
         # Title Burn options
         self.title_burn_var.set(options.get("title_burn_enabled", DEFAULT_TITLE_BURN_ENABLED))
@@ -3450,6 +3765,7 @@ class VideoProcessorApp:
     def build_ffmpeg_command_and_run(self, job, orientation):
         global CURRENT_TEMP_FILE
         options = copy.deepcopy(job['options'])
+        encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         
         if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
             folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
@@ -3607,13 +3923,47 @@ class VideoProcessorApp:
                 else:
                     print("[WARN] Title burn enabled but no title text found (check JSON suffix or use override).")
             
-            cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
             duration = get_file_duration(job['video_path'])
             max_dur = float(options.get('max_duration', 0))
             if max_dur > 0: duration = min(duration, max_dur)
-            
-            if self.run_ffmpeg_command(cmd, duration) != 0: 
-                raise VideoProcessingError(f"Error encoding {job['video_path']}")
+
+            if encoder_backend == "nvencc_with_ffmpeg":
+                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv")
+                os.close(fd)
+                CURRENT_TEMP_FILE = temp_preproc
+                pre_cmd = self.construct_ffmpeg_command(
+                    job,
+                    temp_preproc,
+                    orientation,
+                    ass_burn_path,
+                    options,
+                    title_ass_path,
+                    encoder_backend="preprocess"
+                )
+                if self.run_ffmpeg_command(pre_cmd, duration) != 0:
+                    raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
+
+                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation)
+                if self.run_nvencc_command(nvencc_cmd) != 0:
+                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+            elif encoder_backend == "nvencc_only":
+                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation)
+                if self.run_nvencc_command(nvencc_cmd) != 0:
+                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+            elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
+                fd, temp_audio = tempfile.mkstemp(suffix=".mka")
+                os.close(fd)
+                CURRENT_TEMP_FILE = temp_audio
+                audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options)
+                if self.run_ffmpeg_command(audio_cmd, duration) != 0:
+                    raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
+                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation, audio_source_path=temp_audio)
+                if self.run_nvencc_command(nvencc_cmd) != 0:
+                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+            else:
+                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
+                if self.run_ffmpeg_command(cmd, duration) != 0: 
+                    raise VideoProcessingError(f"Error encoding {job['video_path']}")
             
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
@@ -3621,14 +3971,196 @@ class VideoProcessorApp:
             if options.get("measure_loudness"):
                 self.measure_loudness(output_file, options)
         finally:
-            if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE): os.remove(CURRENT_TEMP_FILE); CURRENT_TEMP_FILE = None
+            if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE):
+                try:
+                    os.remove(CURRENT_TEMP_FILE)
+                except Exception:
+                    pass
+                CURRENT_TEMP_FILE = None
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
             # Clean up title ASS file
             if title_ass_path and os.path.exists(title_ass_path): 
                 try: os.remove(title_ass_path)
                 except: pass
 
-    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None):
+    def compute_target_bitrate_kbps(self, options, info, file_path):
+        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(
+            options.get('resolution'),
+            info["framerate"],
+            options.get("output_format") == "hdr",
+            source_height=info["height"],
+            source_width=info["width"]
+        )
+
+        max_size_mb = float(options.get('max_size_mb', 0))
+        max_duration = float(options.get('max_duration', 0))
+        input_duration = get_file_duration(file_path)
+
+        calc_duration = input_duration
+        if max_duration > 0 and input_duration > max_duration:
+            calc_duration = max_duration
+
+        if max_size_mb > 0:
+            total_bits = max_size_mb * 8 * 1024 * 1024
+            audio_deduction_kbps = 0
+            if options.get("audio_mono"): audio_deduction_kbps += MONO_BITRATE_K
+            if options.get("audio_stereo_downmix"): audio_deduction_kbps += STEREO_BITRATE_K
+            if options.get("audio_stereo_sofalizer"): audio_deduction_kbps += STEREO_BITRATE_K
+            if options.get("audio_surround_51"): audio_deduction_kbps += SURROUND_BITRATE_K
+            if options.get("audio_passthrough"): audio_deduction_kbps += 384
+
+            audio_bits = audio_deduction_kbps * 1000 * calc_duration
+            available_video_bits = total_bits - audio_bits
+            if available_video_bits > 0 and calc_duration > 0:
+                max_video_rate_kbps = int((available_video_bits / calc_duration) / 1000)
+                if max_video_rate_kbps < 100: max_video_rate_kbps = 100
+                if bitrate_kbps > max_video_rate_kbps:
+                    print(f"[INFO] Constraint: Limiting video bitrate from {bitrate_kbps}k to {max_video_rate_kbps}k to fit {max_size_mb}MB limit.")
+                    bitrate_kbps = max_video_rate_kbps
+            else:
+                print("[WARN] Max Size too small for audio/duration! Using minimal video bitrate (100k).")
+                bitrate_kbps = 100
+
+        return bitrate_kbps, max_duration, input_duration
+
+    def compute_target_resolution_for_options(self, options, info, orientation):
+        res_key = options.get('resolution')
+        if orientation == "hybrid (stacked)":
+            width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+            target_w = width_map.get(res_key, 1080)
+            try:
+                num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
+                top_h = (int(target_w * den_top / num_top) // 2) * 2
+                bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
+                target_h = top_h + bot_h
+            except Exception:
+                target_h = 1920
+            return target_w, target_h
+        if orientation == "vertical":
+            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+            target_w = width_map.get(res_key, 1080)
+            try:
+                num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
+                target_h = int(target_w * den / num)
+            except Exception:
+                target_h = 1920
+            return (target_w // 2) * 2, (target_h // 2) * 2
+        if orientation == "original":
+            target_w, target_h = compute_original_target_resolution(res_key, info)
+            if not target_w or not target_h:
+                return info["width"], info["height"]
+            return target_w, target_h
+
+        width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
+        target_w = width_map.get(res_key, 1920)
+        try:
+            num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
+            target_h = int(target_w * den / num)
+        except Exception:
+            target_h = 1080
+        return (target_w // 2) * 2, (target_h // 2) * 2
+
+    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None):
+        info = get_video_info(input_file)
+        is_hdr_output = options.get("output_format") == "hdr"
+        bitrate_kbps, _, _ = self.compute_target_bitrate_kbps(options, info, input_file)
+        target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
+
+        selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
+        codec_map = {"h264": "h264", "hevc": "hevc", "av1": "av1"}
+        codec_name = codec_map.get(selected_codec, "h264")
+
+        cmd = [
+            NVENCC_CMD,
+            "--avhw",
+            "--codec", codec_name,
+            "--output", output_file,
+            "-i", input_file
+        ]
+
+        cmd.extend(["--vbr", str(bitrate_kbps), "--max-bitrate", str(bitrate_kbps * 2)])
+        # NVEncC preset mapping (FFmpeg p1..p7 -> NVEncC preset names)
+        nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
+        preset_map = {
+            "p1": "performance", "p2": "performance", "p3": "performance",
+            "p4": "default",
+            "p5": "quality", "p6": "quality", "p7": "quality"
+        }
+        cmd.extend(["--preset", preset_map.get(str(nv_preset).lower(), "default")])
+        cmd.extend(["--lookahead", str(options.get("nvenc_rc_lookahead", DEFAULT_NVENC_RC_LOOKAHEAD))])
+        cmd.extend(["--bframes", str(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))])
+
+        multipass_map = {"disabled": "disabled", "qres": "2pass-quarter", "fullres": "2pass-full"}
+        mp = multipass_map.get(options.get("nvenc_multipass", DEFAULT_NVENC_MULTIPASS))
+        if mp:
+            cmd.extend(["--multipass", mp])
+
+        if options.get("nvenc_spatial_aq", DEFAULT_NVENC_SPATIAL_AQ) == "1":
+            cmd.append("--aq")
+        if options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ) == "1":
+            cmd.append("--aq-temporal")
+
+        bref = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
+        if bref in ["disabled", "each", "middle", "auto"]:
+            cmd.extend(["--bref-mode", bref])
+
+        if is_hdr_output:
+            cmd.extend(["--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc"])
+        else:
+            cmd.extend(["--output-depth", "8", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
+
+        upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+        resize_algo = None
+        if upscale_algo == "nvvfx-superres":
+            mode = options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE)
+            resize_algo = f"nvvfx-superres,superres-mode={mode}"
+        elif upscale_algo == "ngx-vsr":
+            q = options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY)
+            resize_algo = f"ngx,vsr-quality={q}"
+        elif upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"]:
+            resize_algo = upscale_algo
+
+        if resize_algo and (info["width"] != target_w or info["height"] != target_h):
+            cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", f"{target_w}x{target_h}"])
+
+        if options.get("generate_log"):
+            log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
+            cmd.extend(["--log", log_path, "--log-level", "info"])
+
+        if audio_source_path:
+            cmd.extend(["--audio-source", audio_source_path])
+        else:
+            cmd.extend(["--audio-copy"])
+        return cmd
+
+    def run_nvencc_command(self, cmd):
+        print("Running NVEncC command:")
+        print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                if "\r" in line:
+                    progress_text = line.split("\r")[-1].strip()
+                    sys.stdout.write(f"\r{progress_text}")
+                    sys.stdout.flush()
+                else:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+            process.stdout.close()
+        ret_code = process.wait()
+        sys.stdout.write("\n")
+        return ret_code
+
+    def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options):
+        cmd = [FFMPEG_CMD, "-y", "-i", input_file, "-vn", "-sn", "-dn"]
+        audio_cmd_parts = self.build_audio_segment(input_file, options)
+        cmd.extend(audio_cmd_parts)
+        cmd.append(output_audio)
+        return cmd
+
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None, encoder_backend="ffmpeg"):
         options = options or job['options']
         file_path = job['video_path']
         info = get_video_info(file_path)
@@ -3638,6 +4170,9 @@ class VideoProcessorApp:
         use_cuda_decoder = "_cuvid" in decoder
         cmd = [FFMPEG_CMD, "-y", "-hide_banner"] + (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
         filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        upscale_algo = options.get("upscale_algo")
+        use_nvencc_resize = encoder_backend == "preprocess" and upscale_algo in ["nvvfx-superres", "ngx-vsr"]
+        ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
         audio_cmd_parts = self.build_audio_segment(file_path, options)
@@ -3671,7 +4206,7 @@ class VideoProcessorApp:
                 cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black" if mode == 'pad' else f"crop={target_w}:{target_h}"
                 return vf, cpu, target_h
 
-            safe_algo = options.get('upscale_algo')
+            safe_algo = ffmpeg_upscale_algo
             if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
             
             top_vf, top_cpu, _ = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
@@ -3710,12 +4245,15 @@ class VideoProcessorApp:
             if orientation == "original":
                 res_key = options.get('resolution')
                 if res_key and res_key.lower() != "original":
-                    safe_algo = options.get('upscale_algo')
+                    safe_algo = ffmpeg_upscale_algo
                     if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
                     target_w, target_h = compute_original_target_resolution(res_key, info)
                     if not target_w or not target_h:
                         raise VideoProcessingError(f"Invalid resolution '{res_key}' for original mode.")
-                    vf_filters.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
+                    if not (use_nvencc_resize and options.get("aspect_mode") == "stretch"):
+                        vf_filters.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
+                    else:
+                        target_w, target_h = info["width"], info["height"]
             else:
                 res_key = options.get('resolution')
                 if orientation == "vertical":
@@ -3742,7 +4280,7 @@ class VideoProcessorApp:
                 target_h = int(target_w * den / num)
                 target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
                 
-                safe_algo = options.get('upscale_algo')
+                safe_algo = ffmpeg_upscale_algo
                 if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
                 
                 scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
@@ -3792,7 +4330,11 @@ class VideoProcessorApp:
                 elif aspect_mode == 'crop':
                     vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                     cpu_filters.append(f"crop={target_w}:{target_h}")
-                else: vf_filters.append(scale_base)
+                else:
+                    if use_nvencc_resize and aspect_mode == "stretch":
+                        target_w, target_h = info["width"], info["height"]
+                    else:
+                        vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
                 cpu_filters.append(f"lut3d=file='{safe_lut}'")
@@ -3828,53 +4370,22 @@ class VideoProcessorApp:
         cmd.extend(["-map", video_out_tag])
         cmd.extend(audio_cmd_parts)
         
-        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(options.get('resolution'), info["framerate"], is_hdr_output, source_height=info["height"], source_width=info["width"])
-        
-        # --- Output Constraints Logic (Size & Duration) ---
-        max_size_mb = float(options.get('max_size_mb', 0))
-        max_duration = float(options.get('max_duration', 0))
-        input_duration = get_file_duration(file_path)
-        
-        calc_duration = input_duration
+        bitrate_kbps, max_duration, input_duration = self.compute_target_bitrate_kbps(options, info, file_path)
+
         if max_duration > 0 and input_duration > max_duration:
-            calc_duration = max_duration
             # Insert -t before output file (last arg) to trim output
             # Current cmd structure: [...encoder... -f mp4 output_file]
-            # Insert at -2 (before -f)
             cmd.insert(len(cmd)-2, "-t")
             cmd.insert(len(cmd)-2, str(max_duration))
-
-        if max_size_mb > 0:
-            # Dynamic Bitrate Calculation
-            total_bits = max_size_mb * 8 * 1024 * 1024
-            
-            # Estimate Audio Bitrate Deduction
-            audio_deduction_kbps = 0
-            # Rough estimate based on logic in build_audio_segment (fixed bitrates)
-            if options.get("audio_mono"): audio_deduction_kbps += MONO_BITRATE_K
-            if options.get("audio_stereo_downmix"): audio_deduction_kbps += STEREO_BITRATE_K
-            if options.get("audio_stereo_sofalizer"): audio_deduction_kbps += STEREO_BITRATE_K
-            if options.get("audio_surround_51"): audio_deduction_kbps += SURROUND_BITRATE_K
-            if options.get("audio_passthrough"):
-                 # Passthrough is unknown, but assume similar to Stereo/Surround mix (e.g. 512k safe margin)
-                 audio_deduction_kbps += 384 
-
-            audio_bits = audio_deduction_kbps * 1000 * calc_duration
-            available_video_bits = total_bits - audio_bits
-            
-            if available_video_bits > 0 and calc_duration > 0:
-                max_video_rate_kbps = int((available_video_bits / calc_duration) / 1000)
-                # Clamp to minimum usable (e.g. 100kbps)
-                if max_video_rate_kbps < 100: max_video_rate_kbps = 100
-                
-                if bitrate_kbps > max_video_rate_kbps:
-                     print(f"[INFO] Constraint: Limiting video bitrate from {bitrate_kbps}k to {max_video_rate_kbps}k to fit {max_size_mb}MB limit.")
-                     bitrate_kbps = max_video_rate_kbps
-            else:
-                 print("[WARN] Max Size too small for audio/duration! Using minimal video bitrate (100k).")
-                 bitrate_kbps = 100
         
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
+
+        if encoder_backend == "preprocess":
+            pix_fmt = "yuv420p10le" if is_hdr_output else "yuv420p"
+            encoder_opts = ["-c:v", "ffv1", "-pix_fmt", pix_fmt]
+            cmd.extend(encoder_opts)
+            cmd.extend(["-f", "matroska", output_file])
+            return cmd
         
         # Base encoder options
         nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
@@ -3923,6 +4434,8 @@ class VideoProcessorApp:
 
     def validate_processing_settings(self):
         issues = []
+        if self.encoder_backend_var.get() in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"] and not check_nvencc_availability():
+            issues.append(f"NVEncC not found. Set NVENCC_PATH or ensure '{NVENCC_CMD}' is in PATH.")
         if self.output_format_var.get() == 'sdr':
              lut_path = self.lut_file_var.get()
              if lut_path and not os.path.exists(lut_path):
