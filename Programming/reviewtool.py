@@ -51,6 +51,7 @@ class TranscriptionReviewer:
         self.image_ref = None 
         self.original_image = None
         self.current_txt_path = None
+        self.needs_fit = False
         
         self.all_versions = set()
         self.current_version_var = tk.StringVar()
@@ -62,6 +63,9 @@ class TranscriptionReviewer:
         self.text_font_size = 13
         self.last_mouse_x = 0
         self.last_mouse_y = 0
+        self.split_attempts = 10
+        self.split_settled = False
+        self.allow_render = False
 
         # UI Setup
         self._setup_ui()
@@ -78,8 +82,9 @@ class TranscriptionReviewer:
             return
 
         # FORCE 50/50 SPLIT
-        # We wait 100ms for the window to render, then force sash position
-        self.root.after(100, self._force_50_split)
+        # Keep trying briefly during startup until the panes have real size.
+        self.root.after(100, self._schedule_split_enforce)
+        self.root.bind('<Map>', lambda e: self._schedule_split_enforce())
 
     def _setup_ui(self):
         # 1. Paned Window
@@ -186,9 +191,28 @@ class TranscriptionReviewer:
         self.text_editor.bind('<Control-MouseWheel>', self._on_text_zoom)
 
     def _force_50_split(self):
+        if self.split_attempts <= 0:
+            return
         window_width = self.paned_window.winfo_width()
-        if window_width > 1:
+        if window_width >= 200:
             self.paned_window.sash_place(0, window_width // 2, 0)
+            self.split_attempts -= 1
+            if not self.split_settled:
+                self.split_settled = True
+                self.allow_render = True
+                self.needs_fit = False
+            # After geometry settles, refit to the new pane size
+            self.root.after_idle(lambda: self._display_image(reset_view=True))
+        else:
+            # Don't burn attempts until size is realistic
+            return
+
+    def _schedule_split_enforce(self):
+        if self.split_attempts <= 0:
+            return
+        self._force_50_split()
+        if self.split_attempts > 0:
+            self.root.after(200, self._schedule_split_enforce)
 
     def _find_files_fuzzy(self):
         try:
@@ -319,11 +343,23 @@ class TranscriptionReviewer:
 
         try:
             self.original_image = Image.open(img_path)
-            self._display_image(reset_view=True)
+            # Defer fit until we have a real frame size
+            self.needs_fit = True
+            if self.split_settled:
+                self.allow_render = True
+                self._display_image(reset_view=True)
+                # Also schedule a fit after idle to reduce first-draw jump
+                self.root.after_idle(self._fit_image_after_idle)
+            else:
+                # Avoid flash of full-GUI render before panes settle
+                self.allow_render = False
+                self.image_canvas.delete("all")
+                self._schedule_split_enforce()
         except: pass
 
     def _display_image(self, reset_view=False):
         if self.original_image is None: return
+        if not self.allow_render: return
         
         frame_width = self.image_frame.winfo_width()
         frame_height = self.image_frame.winfo_height()
@@ -361,7 +397,23 @@ class TranscriptionReviewer:
         # We only want to reset view if we haven't zoomed/panned yet? 
         # Actually, let's just keep current zoom/pan but maybe re-center if it's the first load.
         # For now, let's just re-display.
+        if self.needs_fit:
+            frame_width = self.image_frame.winfo_width()
+            frame_height = self.image_frame.winfo_height()
+            if frame_width >= 10 and frame_height >= 10:
+                self.needs_fit = False
+                self._display_image(reset_view=True)
+                return
         self._display_image()
+
+    def _fit_image_after_idle(self):
+        if not self.needs_fit:
+            return
+        frame_width = self.image_frame.winfo_width()
+        frame_height = self.image_frame.winfo_height()
+        if frame_width >= 10 and frame_height >= 10:
+            self.needs_fit = False
+            self._display_image(reset_view=True)
 
     def _on_image_zoom(self, event):
         if self.original_image is None: return
