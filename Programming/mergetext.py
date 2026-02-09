@@ -198,10 +198,20 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
         default_output_file = f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}"
         # Intelligent output naming if -o is not provided
         if output_filename == default_output_file:
+            output_extension = None
             first_pattern = file_patterns[0]
             pattern_parts = first_pattern.split('.')
             if len(pattern_parts) > 1 and pattern_parts[-1] != '*':
                 output_extension = pattern_parts[-1]
+            else:
+                # If no clear extension in pattern (e.g., explicit filenames),
+                # fall back to the first matched file's extension.
+                if files_to_merge:
+                    _, ext = os.path.splitext(files_to_merge[0])
+                    if ext:
+                        output_extension = ext.lstrip(".")
+
+            if output_extension:
                 output_filename = f"{DEFAULT_OUTPUT_BASENAME}.{output_extension}"
             else:
                 output_filename = default_output_file
