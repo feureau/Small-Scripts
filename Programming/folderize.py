@@ -39,6 +39,31 @@ def repair_json(s):
     
     return s
 
+def normalize_folder_key(folder):
+    """Normalize/secure AI folder keys. Supports subfolders like 'Parent/Child'."""
+    if not folder:
+        return MISC_FOLDER
+    # Normalize separators to forward slash
+    f = folder.strip().replace("\\", "/")
+    # Remove leading/trailing slashes and collapse repeats
+    f = re.sub(r"/{2,}", "/", f).strip("/")
+    # Remove dot segments and prevent traversal
+    parts = []
+    for p in f.split("/"):
+        p = p.strip()
+        if not p or p == "." or p == "..":
+            continue
+        parts.append(p)
+    if not parts:
+        return MISC_FOLDER
+    # Cap to one subfolder level (two parts)
+    if len(parts) > 2:
+        parts = parts[:2]
+    # Prevent misc subfolders; keep misc as a top-level catch-all only
+    if parts[0].lower() == MISC_FOLDER:
+        return MISC_FOLDER
+    return "/".join(parts)
+
 def get_model_context_window(model_name, provider):
     """Estimates or fetches the context window size for a model."""
     default_ctx = 4096 # Safe default
@@ -234,6 +259,8 @@ def get_ai_grouping_for_chunk(model_info, file_infos, verbose=False, raw=False):
         - DO NOT use words like 'vague', 'random', 'misc', 'other', or 'generic' in folder names.
         - GOOD NAMES: 'Unlabeled_Photos', 'MP4_Videos', 'Timestamped_JPEG_Files', 'Camera_Roll_Archive'.
         - BAD NAMES: 'vague_files', 'miscellaneous_audio', 'random_mp4s'.
+        - If helpful, you may create ONE subfolder level using '/' (e.g., 'Photos/Camera_Roll', 'Music/Artist').
+        - Do NOT use more than one '/' level and do NOT use 'misc' as part of a folder name.
     4. Group 'Series' or 'Project' titles (e.g., matching common strings like 'Upcoming-Descent').
     5. Ignore leading numbers, 'unused', 'misc_', or duplicate names.
     6. VERY IMPORTANT: If a file is an individual/singular item and does not belong to a group of 2 or more files, map it to the folder "misc".
@@ -446,6 +473,7 @@ def main():
         chunk_map = get_ai_grouping_for_chunk(selected_model, file_infos, verbose=args.verbose, raw=args.raw_stream)
         
         for folder, keywords in chunk_map.items():
+            folder = normalize_folder_key(folder)
             # Standardize: Find existing key with different case to prevent "The Rescue" vs "the rescue"
             target_key = folder
             for master_key in master_mapping.keys():
@@ -508,7 +536,8 @@ def main():
 
     count = 0
     for folder, files in final_plan.items():
-        dest_path = os.path.join(cur_dir, folder)
+        # Support subfolders (normalize to OS path)
+        dest_path = os.path.join(cur_dir, *folder.split("/"))
         if not os.path.exists(dest_path): os.makedirs(dest_path)
         
         for f in files:
