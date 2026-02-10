@@ -1,3 +1,68 @@
+"""
+# Photo.py — RawTherapee Batch Processor with Optional Denoise and LUT
+
+This script batch-processes RAW photos using RawTherapee CLI, with optional AI denoise (NAFNet),
+optional LUT application, and lossless TIFF compression.
+
+## Maintenance Rule
+> [!IMPORTANT]
+> This documentation block MUST be included and updated with every revision or update of the script.
+> Do not remove any content from this block; only append or update it.
+
+## Features
+- RAW conversion via RawTherapee CLI (recursive folders or explicit files)
+- Output formats: TIFF (default) or JPEG
+- Optional AI denoise (NAFNet) with CUDA + auto-calibrated max full-frame size
+- Optional LUT application using `.cube` files in `LUT/` or `lut/`
+- Lossless TIFF compression (Deflate + Predictor + Level 9)
+- Windows wildcard expansion for `*.arw` style inputs
+- Verbose error output for RawTherapee failures
+
+## Requirements
+- Python 3.x
+- RawTherapee CLI (`rawtherapee-cli`)
+- For LUTs: `pillow` and `pillow_lut`
+- For denoise: `numpy`, `torch`, and `nafnet_arch.py` next to this script
+
+## Usage
+```powershell
+photo.py *.arw -f tif
+photo.py *.arw -f jpg -q 92
+photo.py *.arw -f tif -d
+photo.py *.arw -f tif -l
+photo.py *.arw -f tif -l C:\path\to\MyLUT.cube
+```
+
+## Arguments
+- `paths`: Files or folders to process (supports wildcards on Windows)
+- `-f, --format`: Output format (`tif` default, or `jpg`)
+- `-q, --quality`: JPEG quality (only for JPG output)
+- `-o, --output`: Output folder name (defaults to format)
+- `-d, --denoise`: Run AI denoise after conversion
+- `-l, --lut`: Prompt for LUT selection, or pass a direct `.cube` file path
+- `--no-lut`: Skip LUT application
+
+## LUT Behavior
+- If `-l` is passed without a direct `.cube` file path, the script prompts for a LUT choice.
+- LUTs are searched in `LUT/` or `lut/` next to this script.
+- When a LUT is applied, its name is appended to the output filename.
+
+## Denoise Behavior
+- Denoise uses NAFNet (SIDD weights).
+- Auto mode attempts full-frame on CUDA if within calibrated limits, otherwise tiled.
+- Calibration results are saved in `denoise_cache.json` and reused.
+
+## Processing Order
+1. RawTherapee conversion
+2. LUT application (if enabled)
+3. Denoise (if enabled)
+4. TIFF compression (only when output is TIFF and denoise is not used)
+
+## Notes
+- TIFF compression uses Deflate + Predictor 2 + Level 9 (lossless).
+- If denoise is enabled, the output is re-saved using Pillow (currently 8-bit).
+"""
+
 import os
 import sys
 import platform
@@ -373,18 +438,9 @@ def _select_lut(lut_files, cli_lut=None):
         cli_lut = cli_lut.strip()
         if cli_lut.lower() in {"none", "off", "skip"}:
             return None
-        if cli_lut.isdigit():
-            idx = int(cli_lut) - 1
-            if 0 <= idx < len(lut_files):
-                return lut_files[idx]
-        else:
-            for lut_path in lut_files:
-                base = os.path.basename(lut_path)
-                stem = os.path.splitext(base)[0]
-                if cli_lut.lower() in {base.lower(), stem.lower()}:
-                    return lut_path
-        print(f"[LUT] Warning: Could not find '{cli_lut}'. Using first LUT.")
-        return lut_files[0]
+        # Only accept a direct LUT file path when provided via -l/--lut
+        if os.path.isfile(cli_lut) and cli_lut.lower().endswith(".cube"):
+            return cli_lut
 
     print("\nAvailable LUTs:")
     for i, lut_path in enumerate(lut_files, 1):
@@ -415,6 +471,24 @@ def _apply_lut_inplace(image_path, lut_path):
     except Exception as e:
         print(f"   [LUT] LUT apply failed: {e}")
         return False
+
+def _sanitize_tag(text):
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    return "".join(ch if ch in allowed else "_" for ch in text)
+
+def _append_lut_to_filename(image_path, lut_path):
+    base = os.path.splitext(os.path.basename(lut_path))[0]
+    tag = _sanitize_tag(base)
+    p = Path(image_path)
+    new_name = f"{p.stem}_{tag}{p.suffix}"
+    new_path = p.with_name(new_name)
+    try:
+        if new_path.exists():
+            return str(new_path)
+        os.replace(image_path, new_path)
+        return str(new_path)
+    except Exception:
+        return image_path
 
 class RawConverter:
     def __init__(self, executable_path=None):
@@ -494,7 +568,7 @@ def main():
     parser.add_argument("-q", "--quality", type=int, default=92, help="JPEG quality")
     parser.add_argument("-o", "--output", default=None, help="Output folder name (defaults to format)")
     parser.add_argument("-d", "--denoise", action="store_true", help="Run AI denoise after conversion")
-    parser.add_argument("--lut", help="LUT name or number. Use 'none' to skip.")
+    parser.add_argument("--lut", "-l", help="LUT name or number. Use 'none' to skip.")
     parser.add_argument("--no-lut", action="store_true", help="Skip LUT application.")
     
     args = parser.parse_args()
@@ -572,7 +646,11 @@ def main():
             if lut_path:
                 print(f"   [LUT] Applying {os.path.basename(lut_path)}...")
                 l_ok = _apply_lut_inplace(out_file, lut_path)
-                print("   [LUT] ✅ Applied." if l_ok else "   [LUT] ❌ Failed.")
+                if l_ok:
+                    out_file = _append_lut_to_filename(out_file, lut_path)
+                    print(f"   [LUT] ✅ Applied. Renamed to {os.path.basename(out_file)}")
+                else:
+                    print("   [LUT] ❌ Failed.")
 
             if args.denoise:
                 print(f"   [AI] Denoising {os.path.basename(out_file)}...")
