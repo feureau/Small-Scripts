@@ -30,7 +30,7 @@ photo.py *.arw -f tif
 photo.py *.arw -f jpg -q 92
 photo.py *.arw -f tif -d
 photo.py *.arw -f tif -l
-photo.py *.arw -f tif -l C:\path\to\MyLUT.cube
+photo.py *.arw -f tif -l C:\\path\\to\\MyLUT.cube
 ```
 
 ## Arguments
@@ -568,7 +568,7 @@ def main():
     parser.add_argument("-q", "--quality", type=int, default=92, help="JPEG quality")
     parser.add_argument("-o", "--output", default=None, help="Output folder name (defaults to format)")
     parser.add_argument("-d", "--denoise", action="store_true", help="Run AI denoise after conversion")
-    parser.add_argument("--lut", "-l", help="LUT name or number. Use 'none' to skip.")
+    parser.add_argument("--lut", "-l", nargs="?", const="__PROMPT__", help="Prompt for LUT selection or pass a .cube path")
     parser.add_argument("--no-lut", action="store_true", help="Skip LUT application.")
     
     args = parser.parse_args()
@@ -588,7 +588,8 @@ def main():
         print("💡 No profile selected. Using RawTherapee defaults.")
 
     lut_files = _find_lut_files()
-    lut_path = None if args.no_lut else _select_lut(lut_files, cli_lut=args.lut)
+    lut_arg = None if args.lut == "__PROMPT__" else args.lut
+    lut_path = None if args.no_lut else _select_lut(lut_files, cli_lut=lut_arg)
     if lut_path:
         print(f"🎨 LUT Selected: {os.path.basename(lut_path)}")
 
