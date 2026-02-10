@@ -139,6 +139,7 @@ def display_help():
     print("  -r, --regex      Treats old_string as a Regular Expression.")
     print("  -p, --prefix     Prepends a string to the filenames.")
     print("  -o, --order      Apply a sequence/ordering (e.g., 'reverse' or 'r').")
+    print("  -e, --extension  Changes file extension (e.g., 'jpg' or '.jpg').")
     print("\nExamples:")
     # ... (existing examples)
     print("  # Reverse the numbering of all .jpg files")
@@ -152,8 +153,10 @@ def display_help():
     print("  python FileRename.py * \" - \\d{8}\" \"\" -r")
     print("\n  # Add a prefix to all .jpg files")
     print("  python FileRename.py *.jpg --prefix \"Trip_2023_\"")
+    print("\n  # Change extension of all .jpeg files to .jpg")
+    print("  python FileRename.py *.jpeg --extension jpg")
 
-def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, order=None):
+def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, order=None, extension=None):
     """
     Proposes and executes file renames after user confirmation.
     """
@@ -209,6 +212,17 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
 
             if prefix:
                 new_filename = prefix + new_filename
+                match_found = True
+            
+            if extension is not None:
+                base, _ext = os.path.splitext(new_filename)
+                if extension == "":
+                    new_ext = ""
+                elif extension.startswith("."):
+                    new_ext = extension
+                else:
+                    new_ext = "." + extension
+                new_filename = base + new_ext
                 match_found = True
 
             if match_found:
@@ -310,8 +324,21 @@ def main():
         except (IndexError, ValueError):
             print("\nError: --prefix requires a value.")
             sys.exit(1)
+
+    # Extension support
+    extension = None
+    if '-e' in args or '--extension' in args:
+        try:
+            idx = args.index('-e') if '-e' in args else args.index('--extension')
+            extension = args[idx + 1]
+            # Remove flag and value
+            args.pop(idx + 1)
+            args.pop(idx)
+        except (IndexError, ValueError):
+            print("\nError: --extension requires a value.")
+            sys.exit(1)
     
-    if len(args) < 1 or (not prefix and not order and len(args) < 3):
+    if len(args) < 1 or (not prefix and not order and extension is None and len(args) < 3):
         print("\nError: Invalid number of arguments.")
         display_help()
         sys.exit(1)
@@ -335,6 +362,9 @@ def main():
         print(f"Adding prefix: '{prefix}'")
     if order:
         print(f"Applying order: '{order}'")
+    if extension is not None:
+        display_ext = extension if extension.startswith(".") or extension == "" else "." + extension
+        print(f"Changing extension to: '{display_ext}'")
     print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-s flag used)'}")
     print("---------------------------------")
     
@@ -344,7 +374,7 @@ def main():
     files_to_process = glob.glob(pathname, recursive=recursive)
     files_to_process = [f for f in files_to_process if os.path.isfile(f)] # Filter out directories
         
-    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, order=order)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, order=order, extension=extension)
 
 if __name__ == "__main__":
     main()
