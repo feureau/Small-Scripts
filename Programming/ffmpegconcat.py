@@ -289,7 +289,8 @@ def main():
             srt_file = base + ".srt"
             if os.path.exists(srt_file) and os.path.getsize(srt_file) > 0:
                 with open(srt_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
+                    # Normalize newlines so both LF and CRLF .srt files parse consistently.
+                    content = f.read().lstrip('\ufeff').replace('\r\n', '\n').replace('\r', '\n')
                 blocks = re.finditer(
                     r'(\d+)\s*\n'
                     r'(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})\s*\n'

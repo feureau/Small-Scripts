@@ -114,7 +114,13 @@ class NAFNet(nn.Module):
             chan = chan // 2
             self.decoders.append(nn.Sequential(*[NAFBlock(chan) for _ in range(num)]))
 
+        # Match official NAFNet behavior: pad to encoder stride before forward.
+        self.padder_size = 2 ** len(self.encoders)
+
     def forward(self, inp):
+        _, _, H, W = inp.shape
+        inp = self.check_image_size(inp)
+
         x = self.intro(inp)
         encs = []
         for encoder, down in zip(self.encoders, self.downs):
@@ -130,4 +136,12 @@ class NAFNet(nn.Module):
             x = decoder(x)
 
         x = self.ending(x)
-        return x + inp
+        x = x + inp
+        return x[:, :, :H, :W]
+
+    def check_image_size(self, x):
+        _, _, h, w = x.size()
+        mod_pad_h = (self.padder_size - h % self.padder_size) % self.padder_size
+        mod_pad_w = (self.padder_size - w % self.padder_size) % self.padder_size
+        x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h))
+        return x

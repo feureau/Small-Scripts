@@ -157,7 +157,7 @@ PASSTHROUGH_NORMALIZE_BITRATE_K = 192               # Bitrate when passthrough w
 # Video & General
 # NOTE: Set these to empty strings or valid paths on your machine.
 DEFAULT_LUT_PATH = ""                               # Path to 3D LUT file for HDR to SDR conversion. Default: "" (none)
-DEFAULT_SOFA_PATH = ""                              # Path to SOFA file for binaural audio (Sofalizer). Default: "" (none)
+DEFAULT_SOFA_PATH = r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"  # Path to SOFA file for binaural audio (Sofalizer). Default: E:\\Small-Scripts\\SOFALIZER\\D1_48K_24bit_256tap_FIR_SOFA.sofa
 
 DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default: 2160p (4k)
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
