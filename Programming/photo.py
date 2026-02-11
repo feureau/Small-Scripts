@@ -1,7 +1,7 @@
 """
 # Photo.py — RawTherapee Batch Processor with Optional Denoise and LUT
 
-This script batch-processes RAW photos using RawTherapee CLI, with optional AI inference (NAFNet),
+This script batch-processes RAW photos using RawTherapee CLI, with optional AI inference (NAFNet/Restormer),
 optional LUT application, and lossless TIFF compression.
 
 ## Maintenance Rule
@@ -14,6 +14,7 @@ optional LUT application, and lossless TIFF compression.
 - Non-RAW image input support (JPG/JPEG/PNG/TIF/TIFF/BMP/WEBP)
 - Output formats: TIFF (default) or JPEG
 - Optional AI inference with model selection (`-d` shortcut for NAFNet, or `-i MODEL`)
+- Optional DualDn RAW pre-denoising via external inference script (`-i DualDn-Big`)
 - Optional LUT application using `.cube` files in `LUT/` or `lut/`
 - Lossless TIFF compression (Deflate + Predictor + Level 9)
 - Windows wildcard expansion for `*.arw` style inputs
@@ -25,6 +26,7 @@ optional LUT application, and lossless TIFF compression.
 - RawTherapee CLI (`rawtherapee-cli`)
 - For LUTs: `pillow` and `pillow_lut`
 - For inference: `numpy`, `torch`, `tifffile`, local `nafnet_arch.py`, and `einops` (for Restormer)
+- For DualDn: compatible DualDn inference script + checkpoint (external execution)
 
 ## Usage
 ```powershell
@@ -50,7 +52,7 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `--rt-bit-depth`: RawTherapee output bit depth (`auto`, `8`, `16`, `16f`, `32`) for TIFF/PNG-capable paths
 - `-q, --quality`: JPEG quality (only for JPG output)
 - `-o, --output`: Output folder name (defaults to format)
-- `-d, --denoise`: Run AI inference after conversion using default model (`NAFNet-SIDD`)
+- `-d, --denoise`: Run AI inference after conversion using default model (`Restormer-real_denoising`)
 - `-i, --inference MODEL`: Run AI inference with a specific model name (e.g. `NAFNet-SIDD`)
 - `--tile-size`: Optional manual tile size override for AI tiling (auto-rounded to model-required multiple)
 - `--overlap`: Optional manual overlap override for AI tiling
@@ -59,6 +61,9 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `--calibrate`: Run CUDA full-frame calibration and save/update `denoise_cache.json`
 - `--calibrate-all`: Force recalibration for all supported models and overwrite cached limits
 - `--ai-safety-fallback`: Enable automatic safe retry chain when AI output looks suspicious
+- `--dualdn-python`: Python executable used to launch DualDn script
+- `--dualdn-script`: Path to DualDn inference script if auto-detection fails
+- `--dualdn-cmd`: Custom DualDn command template (`{python} {script} {weights} {input} {output_dir}`)
 - `-l, --lut`: Prompt for LUT selection, or pass a direct `.cube` file path
 - `--no-lut`: Skip LUT application
 - `-k, --keep`: Keep every intermediate stage with a unique stage suffix
@@ -70,9 +75,10 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - When a LUT is applied, its name is appended to the output filename.
 
 ## Inference Behavior
-- `-d` uses NAFNet-SIDD.
+- `-d` uses Restormer-real_denoising.
 - `-i MODEL` runs the same inference pipeline with the selected model.
 - Checkpoints are loaded from `F:\\AI\\Inference\\NAFNet` and `F:\\AI\\Inference\\Restormer`.
+- `DualDn-Big` runs through DualDn's native Real_captured inference flow and returns an sRGB output image.
 - Auto mode attempts full-frame on CUDA if within calibrated limits, otherwise tiled.
 - Calibration results are saved in `denoise_cache.json` and reused per model.
 - Calibration is opt-in via `--calibrate`.
@@ -84,8 +90,9 @@ photo.py input\\**\\* -m tif --skip-rt -d
 ## Processing Order
 1. RawTherapee conversion (or direct non-RAW conversion/copy)
 2. LUT application (if enabled)
-3. AI inference (if enabled)
+3. AI inference (if enabled; NAFNet/Restormer RGB path)
 4. TIFF compression (only when output is TIFF and inference is not used)
+5. Special case: `DualDn-Big` replaces step 1+3 for RAW files using DualDn's external inference flow.
 
 ## Notes
 - TIFF compression uses Deflate + Predictor 2 + Level 9 (lossless).
@@ -104,6 +111,8 @@ import glob
 import json
 import importlib.util
 import math
+import time
+import uuid
 from pathlib import Path
 
 # --- AI INFERENCE SETTINGS ---
@@ -119,10 +128,12 @@ TIF_LEVEL = 9
 RAW_EXTENSIONS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.orf', '.raf', '.srw'}
 RASTER_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.webp'}
 SUPPORTED_INPUT_EXTENSIONS = RAW_EXTENSIONS | RASTER_EXTENSIONS
-DEFAULT_INFERENCE_MODEL = "NAFNet-SIDD"
+DEFAULT_INFERENCE_MODEL = "Restormer-real_denoising"
 INFERENCE_ROOT = r"F:\AI\Inference"
 NAFNET_DIR = os.path.join(INFERENCE_ROOT, "NAFNet")
 RESTORMER_DIR = os.path.join(INFERENCE_ROOT, "Restormer")
+DUALDN_DIR = os.path.join(INFERENCE_ROOT, "DualDn")
+DUALDN_OUTPUT_DIR = os.path.join(DUALDN_DIR, "_output")
 INFERENCE_MODELS = {
     "NAFNet-SIDD": {
         "loader": "nafnet_local",
@@ -194,6 +205,11 @@ INFERENCE_MODELS = {
         },
         "supported_input_channels": 6,
         "unsupported_reason": "This checkpoint requires 6-channel dual-pixel input, but Photo.py currently feeds RGB images.",
+    },
+    "DualDn-Big": {
+        "loader": "dualdn_external",
+        "model_path": os.path.join(DUALDN_DIR, "DualDn_Big.pth"),
+        "raw_only": True,
     },
 }
 
@@ -309,6 +325,181 @@ def _resolve_inference_model_name(model_name):
     for canonical in INFERENCE_MODELS:
         if canonical.lower() == wanted:
             return canonical
+    return None
+
+def _get_inference_model_cfg(model_name):
+    canonical = _resolve_inference_model_name(model_name)
+    if not canonical:
+        return None, None
+    return canonical, INFERENCE_MODELS.get(canonical, {})
+
+def _find_dualdn_script(override_path=None):
+    candidates = []
+    if override_path:
+        candidates.append(override_path)
+    candidates.extend([
+        os.path.join(DUALDN_DIR, "inference_dualdn.py"),
+        os.path.join(DUALDN_DIR, "test_dualdn.py"),
+        os.path.join(DUALDN_DIR, "inference.py"),
+        os.path.join(DUALDN_DIR, "test.py"),
+        os.path.join(DUALDN_DIR, "scripts", "inference.py"),
+        os.path.join(DUALDN_DIR, "scripts", "test.py"),
+    ])
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dualdn_script=None, dualdn_cmd=None):
+    canonical, cfg = _get_inference_model_cfg(model_name)
+    if not canonical or not cfg:
+        print(f"   [DualDn] Unknown model: {model_name}")
+        return None
+    if cfg.get("loader") != "dualdn_external":
+        print(f"   [DualDn] Model is not a DualDn external model: {canonical}")
+        return None
+
+    weights = cfg.get("model_path")
+    if not weights or not os.path.isfile(weights):
+        print(f"   [DualDn] Checkpoint not found: {weights}")
+        return None
+    if not os.path.isfile(raw_input_path):
+        print(f"   [DualDn] RAW input not found: {raw_input_path}")
+        return None
+
+    script_path = _find_dualdn_script(dualdn_script)
+    if not script_path:
+        print("   [DualDn] Could not find DualDn inference script.")
+        print("   [DualDn] Pass --dualdn-script <path-to-script.py>.")
+        return None
+
+    python_exe = dualdn_python or sys.executable
+    repo_root = DUALDN_DIR
+    started = time.time()
+
+    # Stage single-file inference into DualDn's expected Real_captured dataset layout.
+    ds_root = os.path.join(repo_root, "datasets", "real_capture")
+    raw_dir = os.path.join(ds_root, "Raw")
+    ref_dir = os.path.join(ds_root, "ref_sRGB")
+    list_dir = os.path.join(ds_root, "list_file")
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(ref_dir, exist_ok=True)
+    os.makedirs(list_dir, exist_ok=True)
+
+    src = Path(raw_input_path)
+    tag = f"{src.stem}_{uuid.uuid4().hex[:8]}"
+    staged_raw_name = f"{tag}{src.suffix.lower()}"
+    staged_raw_path = os.path.join(raw_dir, staged_raw_name)
+    staged_ref_path = os.path.join(ref_dir, f"{tag}.jpg")
+    staged_list = os.path.join(list_dir, "val_list.txt")
+
+    try:
+        shutil.copy2(raw_input_path, staged_raw_path)
+    except Exception as e:
+        print(f"   [DualDn] Failed to stage RAW input: {e}")
+        return None
+
+    # Optional same-prefix JPG for BGU color alignment. If absent, we disable BGU via force_yml.
+    ref_src = None
+    for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
+        p = src.with_suffix(ext)
+        if p.exists():
+            ref_src = str(p)
+            break
+    has_ref = False
+    if ref_src:
+        try:
+            shutil.copy2(ref_src, staged_ref_path)
+            has_ref = True
+        except Exception as e:
+            print(f"   [DualDn] Warning: failed to stage reference JPG ({e}); disabling BGU.")
+
+    try:
+        with open(staged_list, "w", encoding="utf-8") as f:
+            f.write(staged_raw_name + "\n")
+    except Exception as e:
+        print(f"   [DualDn] Failed to update val list: {e}")
+        return None
+
+    if dualdn_cmd:
+        try:
+            cmd = dualdn_cmd.format(
+                python=python_exe,
+                script=script_path,
+                weights=weights,
+                input=staged_raw_path,
+                output_dir=os.path.join(repo_root, "results"),
+            )
+        except Exception as e:
+            print(f"   [DualDn] Invalid --dualdn-cmd template: {e}")
+            return None
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            shell=True,
+            cwd=os.path.dirname(script_path),
+        )
+        cmd_desc = cmd
+    else:
+        option_path = os.path.join(repo_root, "options", "DualDn_Big.yml")
+        if not os.path.isfile(option_path):
+            print(f"   [DualDn] Option file not found: {option_path}")
+            return None
+        cmd = [
+            python_exe,
+            script_path,
+            "-opt",
+            option_path,
+            "--pretrained_model",
+            weights,
+            "--val_datasets",
+            "Real_captured",
+            "--force_yml",
+            "datasets:val:val_datasets:Real_captured:data_path=datasets/real_capture",
+        ]
+        if not has_ref:
+            cmd.append("datasets:val:val_datasets:Real_captured:BGU=false")
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+        cmd_desc = " ".join(cmd)
+
+    if res.returncode != 0:
+        print("   [DualDn] Inference failed.")
+        print(f"   [DualDn] Command: {cmd_desc}")
+        if res.stdout:
+            print("   [DualDn] STDOUT:")
+            print(res.stdout.strip())
+        if res.stderr:
+            print("   [DualDn] STDERR:")
+            print(res.stderr.strip())
+        return None
+
+    best = None
+    results_root = Path(repo_root) / "results"
+    for p in results_root.rglob("*_ours.png"):
+        if not p.is_file():
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except Exception:
+            continue
+        if mtime + 1.0 < started:
+            continue
+        # Prefer output that contains our staged stem.
+        if tag not in p.name and best is not None:
+            continue
+        if best is None or mtime > best[0]:
+            best = (mtime, p)
+    if best:
+        return str(best[1])
+
+    print("   [DualDn] Inference ran, but no output image was found.")
+    print(f"   [DualDn] Checked results root: {results_root}")
     return None
 
 def _extract_state_dict_from_checkpoint(checkpoint):
@@ -1048,6 +1239,9 @@ def _calibrate_max_full_frame(model, device, torch=None, aspect_ratio=3/2, use_a
 def _get_calibratable_model_names():
     names = []
     for name, cfg in INFERENCE_MODELS.items():
+        loader = cfg.get("loader")
+        if loader not in {"nafnet_local", "restormer_external"}:
+            continue
         if cfg.get("supported_input_channels", 3) == 3:
             names.append(name)
     return sorted(names)
@@ -1691,6 +1885,9 @@ def main():
     parser.add_argument("--calibrate", action="store_true", help="Run CUDA calibration for AI full-frame limits and save denoise_cache.json")
     parser.add_argument("--calibrate-all", action="store_true", help="Force calibration of all supported models and refresh denoise_cache.json")
     parser.add_argument("--ai-safety-fallback", action="store_true", help="Enable automatic safe retry chain when AI output is flagged suspicious")
+    parser.add_argument("--dualdn-python", default=None, help="Python executable for DualDn external inference (default: current Python)")
+    parser.add_argument("--dualdn-script", default=None, help="Path to DualDn inference script (if auto-detect fails)")
+    parser.add_argument("--dualdn-cmd", default=None, help="Optional DualDn command template with placeholders: {python} {script} {weights} {input} {output_dir}")
     parser.add_argument("--lut", "-l", nargs="?", const="__PROMPT__", help="Prompt for LUT selection or pass a .cube path")
     parser.add_argument("--no-lut", action="store_true", help="Skip LUT application.")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep every intermediate stage with a unique stage suffix")
@@ -1711,11 +1908,16 @@ def main():
             return
     elif args.denoise:
         selected_model = DEFAULT_INFERENCE_MODEL
+    selected_model_cfg = INFERENCE_MODELS.get(selected_model, {}) if selected_model else {}
+    selected_loader = selected_model_cfg.get("loader") if selected_model_cfg else None
+    is_dualdn_selected = selected_loader == "dualdn_external"
+    if is_dualdn_selected and (args.calibrate or args.calibrate_all):
+        print("ℹ️  --calibrate/--calibrate-all are ignored for DualDn external models.")
 
     # Calibration pre-pass:
     # - --calibrate-all: force recalibrate every supported model
     # - --calibrate with no selected model: calibrate every supported model missing cache
-    if args.calibrate_all or (args.calibrate and selected_model is None):
+    if (args.calibrate_all or (args.calibrate and selected_model is None)) and not is_dualdn_selected:
         targets = _get_calibratable_model_names()
         if not targets:
             print("   [AI] No calibratable models configured.")
@@ -1814,34 +2016,64 @@ def main():
     for photo in process_list:
         print(f"⏳ Processing {photo.name}...", end=" ", flush=True)
         is_raw = photo.suffix.lower() in RAW_EXTENSIONS
+        if is_dualdn_selected and not is_raw:
+            print("❌ FAILED.")
+            print("   [DualDn] This model only supports RAW input files.")
+            continue
         if is_raw:
-            try:
-                res, cmd = converter.process_file(
-                    photo,
-                    output_dir,
-                    selected_pp3,
-                    args.quality,
-                    args.out_format,
-                    args.rt_bit_depth,
+            if is_dualdn_selected:
+                print("✅ Done.")
+                print(f"   [DualDn] Running {selected_model} on RAW input...")
+                dualdn_out = _run_dualdn_external_raw(
+                    str(photo),
+                    model_name=selected_model,
+                    dualdn_python=args.dualdn_python,
+                    dualdn_script=args.dualdn_script,
+                    dualdn_cmd=args.dualdn_cmd,
                 )
-            except Exception as e:
-                print(f"❌ FAILED. {e}")
-                continue
-            if res.returncode != 0:
-                print("❌ FAILED.")
-                print(f"   [RT] Command: {' '.join(cmd)}")
-                if res.stdout:
-                    print("   [RT] STDOUT:")
-                    print(res.stdout.strip())
-                if res.stderr:
-                    print("   [RT] STDERR:")
-                    print(res.stderr.strip())
-                continue
-            print("✅ Done.")
-            out_ext = ".jpg" if args.out_format == "jpg" else ".tif"
-            out_file = os.path.join(output_dir, photo.with_suffix(out_ext).name)
-            if args.keep:
-                out_file = _rename_with_stage(out_file, "rt")
+                if not dualdn_out:
+                    print(f"   [DualDn] ❌ {selected_model} inference failed.")
+                    continue
+                print(f"   [DualDn] ✅ Output: {os.path.basename(dualdn_out)}")
+                out_file, ok = _prepare_nonraw_image(
+                    dualdn_out,
+                    output_dir,
+                    out_format=args.out_format,
+                    quality=args.quality,
+                )
+                if not ok:
+                    print("   [DualDn] ❌ Failed to convert DualDn output.")
+                    continue
+                if args.keep:
+                    out_file = _rename_with_stage(out_file, f"infer_{selected_model.lower()}")
+            else:
+                try:
+                    res, cmd = converter.process_file(
+                        photo,
+                        output_dir,
+                        selected_pp3,
+                        args.quality,
+                        args.out_format,
+                        args.rt_bit_depth,
+                    )
+                except Exception as e:
+                    print(f"❌ FAILED. {e}")
+                    continue
+                if res.returncode != 0:
+                    print("❌ FAILED.")
+                    print(f"   [RT] Command: {' '.join(cmd)}")
+                    if res.stdout:
+                        print("   [RT] STDOUT:")
+                        print(res.stdout.strip())
+                    if res.stderr:
+                        print("   [RT] STDERR:")
+                        print(res.stderr.strip())
+                    continue
+                print("✅ Done.")
+                out_ext = ".jpg" if args.out_format == "jpg" else ".tif"
+                out_file = os.path.join(output_dir, photo.with_suffix(out_ext).name)
+                if args.keep:
+                    out_file = _rename_with_stage(out_file, "rt")
         else:
             out_file, ok = _prepare_nonraw_image(photo, output_dir, out_format=args.out_format, quality=args.quality)
             if not ok:
@@ -1880,7 +2112,7 @@ def main():
                 else:
                     print("   [LUT] ❌ Failed.")
 
-        if selected_model:
+        if selected_model and not is_dualdn_selected:
             print(f"   [AI] Running {selected_model} on {os.path.basename(out_file)}...")
             if args.keep:
                 stage_tag = "denoise" if args.denoise and not args.inference else f"infer_{selected_model.lower()}"
@@ -1919,6 +2151,8 @@ def main():
                 print(f"   [AI] ✅ {selected_model} inference complete.")
             else:
                 print(f"   [AI] ❌ {selected_model} inference failed.")
+        elif selected_model and is_dualdn_selected:
+            print(f"   [DualDn] ✅ {selected_model} inference complete (RAW pre-processing stage).")
         elif args.out_format in {"tif", "tiff"}:
             print(f"   [TIFF] Compressing {os.path.basename(out_file)}...")
             if args.keep:
