@@ -29,6 +29,24 @@ def organize_and_count_files(dry_run=False):
         video_extensions = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".ts", ".3gp"}
 
         # --- STEP 1: CONSOLIDATE FILES FROM EXISTING FOLDERS ---
+
+        def remove_total_markers(folder_path):
+            """Remove bookkeeping files like 'total 47' from a folder."""
+            try:
+                entries = os.listdir(folder_path)
+            except OSError:
+                return
+
+            for name in entries:
+                full_path = os.path.join(folder_path, name)
+                if os.path.isfile(full_path) and name.startswith("total "):
+                    try:
+                        if dry_run:
+                            log_action("REMOVE", full_path)
+                        else:
+                            os.remove(full_path)
+                    except OSError:
+                        pass
         
         def get_folder_index(folder_name):
             # Extract number from "Horz 2-14" or "Horz 2"
@@ -109,6 +127,9 @@ def organize_and_count_files(dry_run=False):
                                         pass
                                 processed_files.add(item)
 
+                    # Old bookkeeping files prevent cleanup; remove them here.
+                    remove_total_markers(folder_path)
+
                     # Attempt to remove the old folder only if it is truly empty.
                     # Never force-delete here; subfolders/non-video files may exist.
                     try:
@@ -125,6 +146,7 @@ def organize_and_count_files(dry_run=False):
             for base_dir in base_dirs:
                 if base_dir == current_directory:
                     continue
+                remove_total_markers(base_dir)
                 try:
                     if not os.listdir(base_dir):
                         if dry_run:
