@@ -350,6 +350,28 @@ def _find_dualdn_script(override_path=None):
             return p
     return None
 
+def _read_exif_noise_profile(raw_path):
+    try:
+        res = subprocess.run(
+            ["exiftool", "-j", "-NoiseProfile", raw_path],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0 or not res.stdout.strip():
+            return None
+        payload = json.loads(res.stdout)
+        if not payload or not isinstance(payload, list):
+            return None
+        val = payload[0].get("NoiseProfile")
+        if val is None:
+            return None
+        text = str(val).strip()
+        if not text:
+            return None
+        return text
+    except Exception:
+        return None
+
 def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dualdn_script=None, dualdn_cmd=None):
     canonical, cfg = _get_inference_model_cfg(model_name)
     if not canonical or not cfg:
@@ -399,6 +421,13 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
         print(f"   [DualDn] Failed to stage RAW input: {e}")
         return None
 
+    noise_profile = _read_exif_noise_profile(staged_raw_path)
+    if not noise_profile:
+        print("   [DualDn] Missing EXIF NoiseProfile in RAW file.")
+        print("   [DualDn] DualDn Real_captured path requires NoiseProfile metadata.")
+        print("   [DualDn] Use smartphone Pro RAW (as in DualDn docs), or use another model for this file.")
+        return None
+
     # Optional same-prefix JPG for BGU color alignment. If absent, we disable BGU via force_yml.
     ref_src = None
     for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
@@ -435,8 +464,6 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
             return None
         res = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
             shell=True,
             cwd=os.path.dirname(script_path),
         )
@@ -462,8 +489,6 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
             cmd.append("datasets:val:val_datasets:Real_captured:BGU=false")
         res = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
             cwd=repo_root,
         )
         cmd_desc = " ".join(cmd)
@@ -471,12 +496,6 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
     if res.returncode != 0:
         print("   [DualDn] Inference failed.")
         print(f"   [DualDn] Command: {cmd_desc}")
-        if res.stdout:
-            print("   [DualDn] STDOUT:")
-            print(res.stdout.strip())
-        if res.stderr:
-            print("   [DualDn] STDERR:")
-            print(res.stderr.strip())
         return None
 
     best = None
