@@ -312,28 +312,26 @@ class TranscriptionReviewer:
         
         if txt_path:
             self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
-            # Only reload if the text file has changed
-            if txt_path != self.current_txt_path:
-                try:
-                    print(f"Loading text file: {txt_path}")
-                    with open(txt_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        
-                    if not content:
-                        content = "[File is empty]"
+            try:
+                print(f"Loading text file: {txt_path}")
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
 
-                    self.text_editor.delete('1.0', tk.END)
-                    self.text_editor.insert('1.0', content)
-                    self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
-                    
-                    # FOCUS TEXT EDITOR
-                    self.text_editor.focus_set()
-                    self.current_txt_path = txt_path
-                    
-                except Exception as e:
-                    self.text_editor.delete('1.0', tk.END)
-                    self.text_editor.insert('1.0', f"Error: {e}")
-                    self.current_txt_path = None
+                if not content:
+                    content = "[File is empty]"
+
+                self.text_editor.delete('1.0', tk.END)
+                self.text_editor.insert('1.0', content)
+                self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
+
+                # FOCUS TEXT EDITOR
+                self.text_editor.focus_set()
+                self.current_txt_path = txt_path
+
+            except Exception as e:
+                self.text_editor.delete('1.0', tk.END)
+                self.text_editor.insert('1.0', f"Error: {e}")
+                self.current_txt_path = None
         else:
              self.lbl_filename.config(text=f"{selected_ver}: (Not Found)")
              self.text_editor.delete('1.0', tk.END)
@@ -467,14 +465,15 @@ class TranscriptionReviewer:
         return "break" # Prevent double processing if any
 
     def save_current_text(self):
-        if not self.pairs: return
+        if not self.pairs:
+            return False
         _, versions = self.pairs[self.current_index]
         selected_ver = self.current_version_var.get()
         txt_path = versions.get(selected_ver)
         
         if not txt_path:
             messagebox.showerror("Save Error", f"No file exists for version '{selected_ver}' to save to.")
-            return
+            return False
 
         content = self.text_editor.get('1.0', 'end-1c')
         try:
@@ -482,11 +481,14 @@ class TranscriptionReviewer:
             orig_bg = self.btn_save.cget("background")
             self.btn_save.config(bg="#44aa44", text="Saved!")
             self.root.after(500, lambda: self.btn_save.config(bg=orig_bg, text="Save (Ctrl+S)"))
+            return True
         except Exception as e:
             messagebox.showerror("Save Error", f"{e}")
+            return False
 
     def next_pair(self, jump_set=False):
-        self.save_current_text() 
+        if not self.save_current_text():
+            return
         if self.current_index >= len(self.pairs) - 1:
             messagebox.showinfo("Done", "End of list.")
             return
@@ -511,7 +513,8 @@ class TranscriptionReviewer:
                 messagebox.showinfo("Done", "End of list (no more sets).")
 
     def prev_pair(self, jump_set=False):
-        self.save_current_text() 
+        if not self.save_current_text():
+            return
         if self.current_index <= 0: return
 
         if not jump_set:
