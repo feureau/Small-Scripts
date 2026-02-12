@@ -458,7 +458,7 @@
             "nvenc_bframes": "4",
             "nvenc_b_ref_mode": "middle",
             "output_suffix_override": "-4K",
-            "title_burn_enabled": false,
+            "title_burn_enabled": true,
             "title_json_suffix": "",
             "title_override_text": "",
             "title_start_time": "00:00:00.00",
