@@ -4,6 +4,7 @@ import subprocess
 import glob
 import json
 import struct
+import io
 
 # ==========================================
 # DEPENDENCY CHECK
@@ -256,7 +257,10 @@ def get_easyocr_reader():
 
 def preprocess_image(img):
     bg_black = Image.new("RGB", img.size, (0, 0, 0))
-    bg_black.paste(img, mask=img.split()[3]) # Composite onto black
+    if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+        bg_black.paste(img.convert("RGB"), mask=img.split()[-1])
+    else:
+        bg_black.paste(img.convert("RGB"))
     
     # For Tesseract: We want Black Text on White Background -> Invert
     gray = bg_black.convert('L')
@@ -268,7 +272,10 @@ def preprocess_for_easyocr(img):
     # But just to be safe, let's composite onto black like we do for Tesseract,
     # but skip the inversion (keep text white, BG black).
     bg_black = Image.new("RGB", img.size, (0, 0, 0))
-    bg_black.paste(img, mask=img.split()[3])
+    if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+        bg_black.paste(img.convert("RGB"), mask=img.split()[-1])
+    else:
+        bg_black.paste(img.convert("RGB"))
     return bg_black
 
 def format_time(seconds):
@@ -379,10 +386,10 @@ def perform_ocr(captions):
 # MAIN PIPELINE
 # ==========================================
 
-def get_pgs_tracks(mkv_path):
+def get_subtitle_tracks(mkv_path):
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "s",
-        "-show_entries", "stream=index:stream_tags=language:stream=codec_name",
+        "-show_entries", "stream=index,codec_name,width,height:stream_tags=language",
         "-of", "json", mkv_path
     ]
     try:
@@ -392,14 +399,48 @@ def get_pgs_tracks(mkv_path):
         print("Error: Could not probe file. Is ffmpeg installed and in PATH?")
         return []
     
-    pgs_tracks = []
-    for stream in data.get('streams', []):
-        if stream.get('codec_name') == 'hdmv_pgs_subtitle':
-            pgs_tracks.append({
+    tracks = []
+    for sub_idx, stream in enumerate(data.get('streams', [])):
+        codec = stream.get('codec_name')
+        if codec in ("hdmv_pgs_subtitle", "dvd_subtitle"):
+            tracks.append({
                 'index': stream['index'],
-                'lang': stream.get('tags', {}).get('language', 'und')
+                'sub_idx': sub_idx,
+                'codec': codec,
+                'lang': stream.get('tags', {}).get('language', 'und'),
+                'width': stream.get('width'),
+                'height': stream.get('height')
             })
-    return pgs_tracks
+    return tracks
+
+def get_mkv_packet_entries(mkv_path, track_selector):
+    """
+    Extract packet timings for one subtitle track and preserve packet order.
+    Returns a list of dicts: [{'start': float, 'duration': float_or_none}, ...]
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", track_selector,
+        "-show_entries", "packet=pts_time,duration_time",
+        "-of", "json", mkv_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        entries = []
+        for p in data.get('packets', []):
+            try:
+                pts = float(p.get('pts_time', 0))
+                dur_raw = p.get('duration_time')
+                dur = float(dur_raw) if dur_raw is not None else None
+                if pts >= 0:
+                    entries.append({'start': pts, 'duration': dur if dur and dur > 0 else None})
+            except (ValueError, TypeError):
+                continue
+        return entries
+    except Exception as e:
+        print(f"   [WARN] Could not extract packet timing list: {e}")
+        return []
 
 def get_mkv_timings(mkv_path, track_index):
     """
@@ -442,6 +483,47 @@ def get_mkv_timings(mkv_path, track_index):
         print(f"   [WARN] Could not extract packet timings: {e}")
         return {}
 
+def render_vobsub_frame(mkv_path, sub_idx, start_time, width=720, height=480):
+    # Small offset helps ensure we sample after subtitle start, not on the boundary.
+    sample_time = max(0.0, start_time + 0.05)
+    filter_graph = f"[0:v][1:s:{sub_idx}]overlay"
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-f", "lavfi", "-i", f"color=black:s={width}x{height}:r=25:d=1",
+        "-itsoffset", str(-sample_time), "-i", mkv_path,
+        "-filter_complex", filter_graph,
+        "-frames:v", "1",
+        "-f", "image2pipe", "-vcodec", "png", "-"
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return Image.open(io.BytesIO(result.stdout)).convert('RGBA')
+    except Exception:
+        return None
+
+def decode_vobsub_captions(mkv_path, track):
+    print(f"   [VOBSUB] Rendering subtitle bitmaps from stream {track['index']}...")
+    width = int(track.get('width') or 720)
+    height = int(track.get('height') or 480)
+    packet_entries = get_mkv_packet_entries(mkv_path, f"s:{track['sub_idx']}")
+    if not packet_entries:
+        print("   [VOBSUB] No packet timings found for this stream.")
+        return []
+
+    captions = []
+    with tqdm(total=len(packet_entries), desc="[1/2] Decoding VobSub Stream", unit="pkt") as pbar:
+        for item in packet_entries:
+            start = item['start']
+            duration = item.get('duration')
+            end = start + duration if duration else None
+            img = render_vobsub_frame(mkv_path, track['sub_idx'], start, width, height)
+            if img:
+                captions.append({'start': start, 'end': end, 'type': 'caption', 'image': img})
+            pbar.update(1)
+    return captions
+
 def extract_sup(mkv_path, track_index, output_sup):
     cmd = [
         "ffmpeg", "-y", "-i", mkv_path,
@@ -455,9 +537,9 @@ def process_file(mkv_path):
     print(f"Processing MKV: {mkv_path}")
     print(f"{'='*60}")
     
-    tracks = get_pgs_tracks(mkv_path)
+    tracks = get_subtitle_tracks(mkv_path)
     if not tracks:
-        print("No PGS subtitles found.")
+        print("No supported image subtitle tracks found (PGS/VobSub).")
         return
 
     base_name = os.path.splitext(mkv_path)[0]
@@ -465,29 +547,34 @@ def process_file(mkv_path):
     for track in tracks:
         lang = track['lang']
         idx = track['index']
-        print(f"\n-> Found PGS Track {idx} ({lang})")
+        codec = track['codec']
+        codec_label = "PGS" if codec == "hdmv_pgs_subtitle" else "VobSub"
+        print(f"\n-> Found {codec_label} Track {idx} ({lang})")
         
         temp_sup = f"temp_{idx}.sup"
         output_srt = f"{base_name}.{lang}.srt"
         
         try:
-            # 1. Extract
-            print("   Extracting stream using ffmpeg (please wait)...")
-            extract_sup(mkv_path, idx, temp_sup)
-            
-            if os.path.exists(temp_sup):
-                size_mb = os.path.getsize(temp_sup) / (1024 * 1024)
-                print(f"   Stream extracted successfully: {size_mb:.2f} MB")
-            else:
-                print("   Error: Extraction failed.")
-                continue
-            
-            # 2. Extract MKV Timings (Container Truth)
-            packet_timings = get_mkv_timings(mkv_path, idx)
+            if codec == "hdmv_pgs_subtitle":
+                # 1. Extract
+                print("   Extracting stream using ffmpeg (please wait)...")
+                extract_sup(mkv_path, idx, temp_sup)
+                
+                if os.path.exists(temp_sup):
+                    size_mb = os.path.getsize(temp_sup) / (1024 * 1024)
+                    print(f"   Stream extracted successfully: {size_mb:.2f} MB")
+                else:
+                    print("   Error: Extraction failed.")
+                    continue
+                
+                # 2. Extract MKV Timings (Container Truth)
+                packet_timings = get_mkv_timings(mkv_path, idx)
 
-            # 3. Parse & Decode
-            decoder = PGSDecoder(temp_sup, mkv_timings=packet_timings)
-            captions = decoder.parse()
+                # 3. Parse & Decode
+                decoder = PGSDecoder(temp_sup, mkv_timings=packet_timings)
+                captions = decoder.parse()
+            else:
+                captions = decode_vobsub_captions(mkv_path, track)
             
             print(f"   Decoded {len(captions)} unique caption images.")
             
@@ -514,13 +601,14 @@ def process_file(mkv_path):
 
 def main():
     try:
+        # If no args are provided, scan common video containers in CWD.
         if len(sys.argv) < 2:
-            print("Usage: python PGStoSRT.py <pattern>")
-            sys.exit(1)
-
-        # Get all arguments after the script name
-        # On some Windows shells, non-breaking spaces or weird characters might be present
-        patterns = sys.argv[1:]
+            patterns = ["*.mkv", "*.mp4", "*.m4v", "*.mov", "*.avi", "*.ts", "*.m2ts", "*.webm"]
+            print("[INFO] No pattern provided. Scanning current directory for compatible files...")
+        else:
+            # Get all arguments after the script name
+            # On some Windows shells, non-breaking spaces or weird characters might be present
+            patterns = sys.argv[1:]
         files = []
         
         cwd = os.getcwd()
@@ -545,17 +633,28 @@ def main():
                     
             files.extend(matched)
         
-        # Remove duplicates and sort
-        files = sorted(list(set(files)))
+        # Remove duplicates, keep files only, and sort
+        files = sorted([f for f in set(files) if os.path.isfile(f)])
         
         if not files:
             print(f"\n[ERROR] No files found matching the pattern(s): {patterns}")
             print(f"Current Directory: {cwd}")
             print(f"Files in directory: {os.listdir(cwd)[:10]} ... (total {len(os.listdir(cwd))} files)")
             sys.exit(1)
-            
-        print(f"\n[INFO] Found {len(files)} file(s) to process.")
+
+        # Keep only files that actually contain supported image subtitle tracks.
+        compatible_files = []
         for f in files:
+            tracks = get_subtitle_tracks(f)
+            if tracks:
+                compatible_files.append(f)
+
+        if not compatible_files:
+            print("\n[INFO] No compatible subtitle tracks (PGS/VobSub) found in matched files.")
+            sys.exit(0)
+
+        print(f"\n[INFO] Found {len(compatible_files)} compatible file(s) to process.")
+        for f in compatible_files:
             process_file(f)
             
     except KeyboardInterrupt:
