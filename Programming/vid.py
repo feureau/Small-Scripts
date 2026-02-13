@@ -256,6 +256,9 @@ DEFAULT_SUBTITLE_MARGIN_L = "50"                    # Left margin from edge (pix
 DEFAULT_SUBTITLE_MARGIN_R = "100"                   # Right margin from edge (pixels). Default: 100, Range: 0 to 960
 DEFAULT_REFORMAT_SUBTITLES = True                   # Reformat to single wrapped line. Default: True
 DEFAULT_WRAP_LIMIT = "42"                           # Characters per line before wrapping. Default: 42, Range: 20 to 100
+DEFAULT_SUBTITLE_MAX_LINES = "2"                    # Max lines for a subtitle block after wrapping. Default: 2
+DEFAULT_SUBTITLE_REPEAT_MIN_RUN = "12"              # Min repeat length to collapse (e.g., "whyyyy..."). Default: 12
+DEFAULT_SUBTITLE_REPEAT_RATIO = "0.75"              # Skip line if single char dominates ratio. Default: 0.75
 
 # Fill (Primary text color)
 DEFAULT_FILL_COLOR = "#FFAA00"                      # Fill color (hex). Default: #FFAA00 (orange)
@@ -729,6 +732,25 @@ def smart_wrap_text(text, limit):
             current_line_width += token['width']
             i += 1
             continue
+
+        # Guard: single token longer than limit when line is empty.
+        # Hard-wrap the token to avoid infinite loops (e.g., "whyyyyyyyy...").
+        if current_line_width == 0 and token['width'] > limit and token['type'] != 'space':
+            chunk = ""
+            chunk_w = 0
+            for ch in token['text']:
+                w = get_char_width(ch)
+                if chunk_w + w > limit and chunk:
+                    lines.append(chunk)
+                    chunk = ch
+                    chunk_w = w
+                else:
+                    chunk += ch
+                    chunk_w += w
+            if chunk:
+                lines.append(chunk)
+            i += 1
+            continue
             
         # --- Algorithm: LINE FULL, DECIDE WHERE TO BREAK ---
         
@@ -840,6 +862,32 @@ def smart_wrap_text(text, limit):
 
     return lines
 
+def _collapse_repeats(text, min_run, suffix="..."):
+    if not text or min_run <= 1:
+        return text
+    pattern = re.compile(r"(.)\1{" + str(max(1, min_run - 1)) + r",}")
+    def repl(m):
+        ch = m.group(1)
+        return (ch * 3) + suffix
+    return pattern.sub(repl, text)
+
+def _is_spammy_line(text, ratio, min_len):
+    if not text:
+        return False
+    chars = [c for c in text if not c.isspace()]
+    if len(chars) < min_len:
+        return False
+    top = Counter(chars).most_common(1)[0][1]
+    return (top / len(chars)) >= ratio
+
+def sanitize_subtitle_line(text, repeat_min_run, repeat_ratio, truncate_suffix="..."):
+    if not text:
+        return ""
+    cleaned = _collapse_repeats(text, repeat_min_run, truncate_suffix)
+    if _is_spammy_line(cleaned, repeat_ratio, repeat_min_run):
+        return ""
+    return cleaned
+
 def hex_to_libass_color(hex_color):
     if not hex_color or not hex_color.startswith("#"): return "&H000000"
     hex_val = hex_color.lstrip('#')
@@ -904,6 +952,19 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     final_limit = min(user_limit for user_limit in [user_wrap_limit, calculated_limit] if user_limit > 5)
     
     # print(f"[DEBUG] Subtitle Wrap: User={user_wrap_limit}, Calc={calculated_limit} (W={available_width}), Final={final_limit}")
+    try:
+        max_lines = int(options.get('subtitle_max_lines', DEFAULT_SUBTITLE_MAX_LINES))
+    except (ValueError, TypeError):
+        max_lines = int(DEFAULT_SUBTITLE_MAX_LINES)
+    try:
+        repeat_min_run = int(options.get('subtitle_repeat_min_run', DEFAULT_SUBTITLE_REPEAT_MIN_RUN))
+    except (ValueError, TypeError):
+        repeat_min_run = int(DEFAULT_SUBTITLE_REPEAT_MIN_RUN)
+    try:
+        repeat_ratio = float(options.get('subtitle_repeat_ratio', DEFAULT_SUBTITLE_REPEAT_RATIO))
+    except (ValueError, TypeError):
+        repeat_ratio = float(DEFAULT_SUBTITLE_REPEAT_RATIO)
+    truncate_suffix = "..."
 
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
     fill_alpha_val = options.get('fill_alpha', DEFAULT_FILL_ALPHA)
@@ -949,10 +1010,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         end_ass = end_time.replace(',', '.')[:-1]
         if reformat_subs:
             single_line_text = ' '.join(clean_text.strip().split())
+            single_line_text = sanitize_subtitle_line(single_line_text, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+            if not single_line_text:
+                continue
             wrapped_lines = smart_wrap_text(single_line_text, limit=final_limit)
+            if max_lines > 0 and len(wrapped_lines) > max_lines:
+                wrapped_lines = wrapped_lines[:max_lines]
+                last = wrapped_lines[-1].rstrip()
+                if len(last) + len(truncate_suffix) > final_limit:
+                    last = last[:max(0, final_limit - len(truncate_suffix))]
+                wrapped_lines[-1] = last + truncate_suffix
             text_ass = '\\N'.join(wrapped_lines)
         else:
-            text_ass = clean_text.strip().replace('\n', '\\N')
+            raw_lines = [line.strip() for line in clean_text.splitlines()]
+            cleaned_lines = [
+                sanitize_subtitle_line(line, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+                for line in raw_lines
+            ]
+            cleaned_lines = [line for line in cleaned_lines if line]
+            if not cleaned_lines:
+                continue
+            if max_lines > 0 and len(cleaned_lines) > max_lines:
+                cleaned_lines = cleaned_lines[:max_lines]
+                last = cleaned_lines[-1].rstrip()
+                if len(last) + len(truncate_suffix) > final_limit:
+                    last = last[:max(0, final_limit - len(truncate_suffix))]
+                cleaned_lines[-1] = last + truncate_suffix
+            text_ass = '\\N'.join(cleaned_lines)
 
         tags = (
             f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"
