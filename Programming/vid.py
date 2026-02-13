@@ -81,6 +81,10 @@ v8.10 - NVEncC Backend Option (2026-02-07)
         - nvencc_video_with_ffmpeg_audio (NVEncC video + FFmpeg audio prepass)
     • FEATURE: NVEncC-only Upscale options: NVVFX SuperRes + NGX VSR with per-algo settings.
     • NOTE: Output container remains MP4.
+v8.11 - FFmpeg CPU Controls (2026-02-12)
+    • FEATURE: Added FFmpeg CPU thread control (`-threads`) in Encoder tab.
+    • FEATURE: Added FFmpeg process priority control for Windows (Idle to Realtime).
+    • UX: New options are saved in presets and applied per job.
 v8.8 - Subtitle & Workflow Improvements (2025-12-29)
     • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
                differently (Width 1 vs 2), fixing premature wrapping for English
@@ -139,7 +143,7 @@ import time
 import glob
 import textwrap
 import hashlib
-from collections import Counter
+from collections import Counter, deque
 import signal
 
 # -------------------------- Configuration / Constants --------------------------
@@ -195,6 +199,8 @@ DEFAULT_NVENC_SPATIAL_AQ = "1"                      # Spatial AQ. Default: 1 (En
 DEFAULT_NVENC_TEMPORAL_AQ = "1"                     # Temporal AQ. Default: 1 (Enabled)
 DEFAULT_NVENC_BFRAMES = "4"                         # Number of B-frames. Default: 4
 DEFAULT_NVENC_B_REF_MODE = "middle"                 # B-frame reference mode. Default: middle
+DEFAULT_FFMPEG_THREADS = "0"                        # FFmpeg CPU threads. Default: 0 (auto)
+DEFAULT_FFMPEG_PRIORITY = "normal"                  # FFmpeg process priority. Windows only. Default: normal
 DEFAULT_SHARPENING_ALGO = "unsharp"                 # Sharpening algorithm. Default: cas, Options: cas, unsharp
 DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Default: 0.5, Range: 0.0 to 1.0
 
@@ -270,6 +276,8 @@ DEFAULT_SHADOW_BLUR = "5"                           # Shadow blur radius (pixels
 # Title Burn defaults
 DEFAULT_TITLE_BURN_ENABLED = False                  # Enable title burning. Default: False
 DEFAULT_TITLE_JSON_SUFFIX = ""                      # JSON file suffix (e.g., "-yt", "-instagram"). Default: blank
+DEFAULT_TITLE_REMOVE_HASHTAGS = True                # Remove hashtags from extracted title text. Default: True
+DEFAULT_TITLE_ENABLE_EMOJI = True                   # Enable emoji rendering in title text. Default: True
 DEFAULT_TITLE_OVERRIDE_TEXT = ""                    # Manual title text override. Default: blank
 DEFAULT_TITLE_START_TIME = "00:00:00.00"            # Title start time. Default: 00:00:00.00
 DEFAULT_TITLE_END_TIME = "00:00:03.00"              # Title end time. Default: 00:00:03.00 (3 seconds)
@@ -306,8 +314,36 @@ def debug_print(*args, **kwargs):
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
 
+FFMPEG_PRIORITY_LABELS = ["idle", "below_normal", "normal", "above_normal", "high", "realtime"]
+
 class VideoProcessingError(Exception):
     pass
+
+def normalize_ffmpeg_threads(value):
+    """Returns validated FFmpeg thread count. 0 means auto."""
+    try:
+        n = int(str(value).strip())
+        return n if n >= 0 else 0
+    except Exception:
+        return 0
+
+def normalize_ffmpeg_priority(value):
+    raw = str(value).strip().lower()
+    return raw if raw in FFMPEG_PRIORITY_LABELS else DEFAULT_FFMPEG_PRIORITY
+
+def get_windows_creationflags_for_priority(priority_label):
+    """Maps a priority label to subprocess creationflags on Windows."""
+    if os.name != "nt":
+        return 0
+    priority_map = {
+        "idle": getattr(subprocess, "IDLE_PRIORITY_CLASS", 0),
+        "below_normal": getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0),
+        "normal": getattr(subprocess, "NORMAL_PRIORITY_CLASS", 0),
+        "above_normal": getattr(subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0),
+        "high": getattr(subprocess, "HIGH_PRIORITY_CLASS", 0),
+        "realtime": getattr(subprocess, "REALTIME_PRIORITY_CLASS", 0),
+    }
+    return priority_map.get(normalize_ffmpeg_priority(priority_label), 0)
 
 # --- Graceful Exit Handler ---
 def handle_sigint(signum, frame):
@@ -437,45 +473,96 @@ def get_file_duration(file_path):
     except Exception:
         return 0.0
 
-def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None):
+def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None, priority="normal"):
     global CURRENT_FFMPEG_PROCESS
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "env": env,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+        }
+        creationflags = get_windows_creationflags_for_priority(priority)
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+        process = subprocess.Popen(cmd, **popen_kwargs)
         CURRENT_FFMPEG_PROCESS = process
-        
-        output_lines = []
+
+        recent_lines = deque(maxlen=400)
+        time_pattern = re.compile(r'time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)')
+        carry = ""
+        progress_line_active = False
+        last_progress_len = 0
+
         while True:
-            line = process.stdout.readline()
-            if not line and process.poll() is not None:
+            if process.stdout is None:
                 break
-            if line:
-                output_lines.append(line)
-                
-                # Progress Parsing
+            ch = process.stdout.read(1)
+            if ch == "":
+                if process.poll() is not None:
+                    # Flush any trailing text that didn't end with newline.
+                    if carry.strip():
+                        line = carry.strip()
+                        recent_lines.append(line)
+                        sys.stdout.write(("\n" if progress_line_active else "") + line + "\n")
+                        sys.stdout.flush()
+                    break
+                continue
+
+            if ch in ("\r", "\n"):
+                line = carry.strip()
+                carry = ""
+                if not line:
+                    continue
+
+                recent_lines.append(line)
+
+                # Progress Parsing (for GUI progress bar)
                 if duration and progress_callback and "time=" in line:
-                    match = re.search(r'time=(\d{2}):(\d{2}):(\d{2}\.\d{2})', line)
+                    match = time_pattern.search(line)
                     if match:
-                        h, m, s = map(float, match.groups())
-                        current_seconds = h * 3600 + m * 60 + s
+                        h, m, s = match.groups()
+                        current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
                         percent = min(100, (current_seconds / duration) * 100)
                         progress_callback(percent)
 
-                # Console output
-                if "\r" in line:
-                    sys.stdout.write("\r" + line.strip())
+                # Render progress-like lines dynamically with carriage return.
+                is_progress_like = any(tok in line for tok in ("frame=", "fps=", "time=", "speed=", "bitrate="))
+                if is_progress_like:
+                    pad = " " * max(0, last_progress_len - len(line))
+                    sys.stdout.write("\r" + line + pad)
+                    sys.stdout.flush()
+                    progress_line_active = True
+                    last_progress_len = len(line)
                 else:
-                    sys.stdout.write(line)
-                sys.stdout.flush()
-        
-        process.stdout.close()
+                    if progress_line_active:
+                        sys.stdout.write("\n")
+                        progress_line_active = False
+                        last_progress_len = 0
+                    sys.stdout.write(line + "\n")
+                    sys.stdout.flush()
+            else:
+                carry += ch
+
+        if process.stdout is not None:
+            process.stdout.close()
         return_code = process.wait()
         CURRENT_FFMPEG_PROCESS = None
-        
+        if progress_line_active:
+            sys.stdout.write("\n")
+
         if return_code != 0:
-            error_output = "".join(output_lines)
-            raise VideoProcessingError(f"FFmpeg {operation} failed with return code {return_code}")
+            error_tail = "\n".join(recent_lines)
+            raise VideoProcessingError(
+                f"FFmpeg {operation} failed with return code {return_code}\n"
+                f"--- Last FFmpeg output ---\n{error_tail}"
+            )
         return return_code
+    except VideoProcessingError:
+        raise
     except FileNotFoundError:
         raise VideoProcessingError("FFmpeg not found. Please ensure FFmpeg is installed and in PATH")
     except Exception as e:
@@ -487,54 +574,100 @@ def get_char_width(char):
     w = unicodedata.east_asian_width(char)
     return 2 if w in ('F', 'W', 'A') else 1
 
-def sanitize_title(raw_title):
+def sanitize_title(raw_title, remove_hashtags=True, keep_emoji=True):
     """
-    Remove emojis and hashtags from a title string.
+    Normalize title text for burn-in.
+    - Decodes unicode escape sequences to real characters (including emoji).
+    - Optionally strips hashtags and trailing hashtag segment.
     Returns the cleaned title text.
     """
-    # Remove hashtags and everything after them (split on # preceded by optional space)
-    title = re.split(r'\s*#', raw_title)[0]
-    # Remove emojis (unicode ranges for common emoji blocks)
-    emoji_pattern = re.compile("["
-        u"\U0001F600-\U0001F64F"  # emoticons
-        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-        u"\U0001F680-\U0001F6FF"  # transport & map
-        u"\U0001F1E0-\U0001F1FF"  # flags
-        u"\U00002702-\U000027B0"
-        u"\U000024C2-\U0001F251"
-        u"\U0001F900-\U0001F9FF"  # supplemental symbols
-        u"\U0001FA00-\U0001FA6F"  # chess symbols
-        u"\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
-        u"\U00002600-\U000026FF"  # misc symbols
-        u"\U00002300-\U000023FF"  # misc technical
-        "]+", flags=re.UNICODE)
-    title = emoji_pattern.sub('', title)
+    title = raw_title or ""
+    # Handle literal unicode escapes (e.g. "\\ud83d\\ude31") if present.
+    if "\\u" in title:
+        try:
+            title = title.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            pass
+
+    if remove_hashtags:
+        # Remove hashtags and everything after them (split on # preceded by optional space)
+        title = re.split(r'\s*#', title)[0]
+    if not keep_emoji:
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map
+            u"\U0001F1E0-\U0001F1FF"  # flags
+            u"\U00002702-\U000027B0"
+            u"\U000024C2-\U0001F251"
+            u"\U0001F900-\U0001F9FF"  # supplemental symbols
+            u"\U0001FA00-\U0001FA6F"  # chess symbols
+            u"\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-A
+            u"\U00002600-\U000026FF"  # misc symbols
+            u"\U00002300-\U000023FF"  # misc technical
+            u"\u200D"                 # zero width joiner
+            u"\uFE0F"                 # variation selector-16
+            "]+", flags=re.UNICODE)
+        title = emoji_pattern.sub('', title)
+    # Normalize punctuation/spaces that often cause missing glyph fallback in ASS fonts.
+    title = title.translate(str.maketrans({
+        "\u2010": "-",  # hyphen
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2015": "-",  # horizontal bar
+        "\u2212": "-",  # minus sign
+        "\u00A0": " ",  # non-breaking space
+        "\u2018": "'",  # left single quote
+        "\u2019": "'",  # right single quote
+        "\u201C": "\"", # left double quote
+        "\u201D": "\"", # right double quote
+        "\u2026": "...",# ellipsis
+    }))
+    title = re.sub(r'\s+', ' ', title)
     return title.strip()
 
-def find_title_json_file(video_path, subtitle_path, json_suffix):
+def find_title_json_file(video_path, subtitle_path, json_suffix, remove_hashtags=True, keep_emoji=True):
     """
     Find the associated JSON file containing the title.
-    Looks for: {subtitle_basename}{json_suffix}.txt
+    Looks for (in order):
+    - {subtitle_basename}{json_suffix}.txt
+    - {subtitle_basename}{json_suffix}.json
+    - {subtitle_basename}.txt
+    - {subtitle_basename}.json
     Returns: (json_path, sanitized_title) or (None, None)
     """
     if not subtitle_path or subtitle_path.startswith("embedded:"):
         return None, None
-    if not json_suffix:
-        return None, None
-    
+
     srt_basename = os.path.splitext(subtitle_path)[0]
-    json_path = f"{srt_basename}{json_suffix}.txt"
-    
-    if os.path.exists(json_path):
+
+    candidate_bases = [f"{srt_basename}{json_suffix or ''}"]
+    if json_suffix:
+        candidate_bases.append(srt_basename)
+
+    seen = set()
+    candidate_paths = []
+    for base in candidate_bases:
+        for ext in (".txt", ".json"):
+            path = f"{base}{ext}"
+            if path not in seen:
+                seen.add(path)
+                candidate_paths.append(path)
+
+    for json_path in candidate_paths:
+        if not os.path.exists(json_path):
+            continue
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             raw_title = data.get('title', '')
             if raw_title:
-                return json_path, sanitize_title(raw_title)
+                return json_path, sanitize_title(raw_title, remove_hashtags=remove_hashtags, keep_emoji=keep_emoji)
         except Exception as e:
             debug_print(f"Failed to parse JSON title file {json_path}: {e}")
-            return None, None
+            continue
     return None, None
 
 def smart_wrap_text(text, limit):
@@ -1134,6 +1267,8 @@ def get_job_hash(job_options):
         # Title Burn options for unique hashing
         str(job_options.get('title_burn_enabled', False)),
         job_options.get('title_json_suffix', ''),
+        str(job_options.get('title_remove_hashtags', DEFAULT_TITLE_REMOVE_HASHTAGS)),
+        str(job_options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)),
         job_options.get('title_override_text', ''),
         job_options.get('title_start_time', ''),
         job_options.get('title_end_time', ''),
@@ -1308,9 +1443,38 @@ class WorkflowPresetManager:
             "nvenc_temporal_aq": DEFAULT_NVENC_TEMPORAL_AQ,
             "nvenc_bframes": DEFAULT_NVENC_BFRAMES,
             "nvenc_b_ref_mode": DEFAULT_NVENC_B_REF_MODE,
+            "ffmpeg_threads": DEFAULT_FFMPEG_THREADS,
+            "ffmpeg_priority": DEFAULT_FFMPEG_PRIORITY,
             "override_bitrate": False,
             "manual_bitrate": "0",
-            "output_suffix_override": ""
+            "output_suffix_override": "",
+            # Title Burn defaults
+            "title_burn_enabled": DEFAULT_TITLE_BURN_ENABLED,
+            "title_json_suffix": DEFAULT_TITLE_JSON_SUFFIX,
+            "title_remove_hashtags": DEFAULT_TITLE_REMOVE_HASHTAGS,
+            "title_enable_emoji": DEFAULT_TITLE_ENABLE_EMOJI,
+            "title_override_text": DEFAULT_TITLE_OVERRIDE_TEXT,
+            "title_start_time": DEFAULT_TITLE_START_TIME,
+            "title_end_time": DEFAULT_TITLE_END_TIME,
+            "title_font": DEFAULT_TITLE_FONT,
+            "title_font_size": DEFAULT_TITLE_FONT_SIZE,
+            "title_bold": DEFAULT_TITLE_BOLD,
+            "title_italic": DEFAULT_TITLE_ITALIC,
+            "title_underline": DEFAULT_TITLE_UNDERLINE,
+            "title_alignment": DEFAULT_TITLE_ALIGNMENT,
+            "title_margin_v": DEFAULT_TITLE_MARGIN_V,
+            "title_margin_l": DEFAULT_TITLE_MARGIN_L,
+            "title_margin_r": DEFAULT_TITLE_MARGIN_R,
+            "title_fill_color": DEFAULT_TITLE_FILL_COLOR,
+            "title_fill_alpha": DEFAULT_TITLE_FILL_ALPHA,
+            "title_outline_color": DEFAULT_TITLE_OUTLINE_COLOR,
+            "title_outline_alpha": DEFAULT_TITLE_OUTLINE_ALPHA,
+            "title_outline_width": DEFAULT_TITLE_OUTLINE_WIDTH,
+            "title_shadow_color": DEFAULT_TITLE_SHADOW_COLOR,
+            "title_shadow_alpha": DEFAULT_TITLE_SHADOW_ALPHA,
+            "title_shadow_offset_x": DEFAULT_TITLE_SHADOW_OFFSET_X,
+            "title_shadow_offset_y": DEFAULT_TITLE_SHADOW_OFFSET_Y,
+            "title_shadow_blur": DEFAULT_TITLE_SHADOW_BLUR
         }
         self.load_presets()
 
@@ -1442,6 +1606,7 @@ class VideoProcessorApp:
         self.processing_jobs = []
         self.input_files = [] # New: Staging area for files
         self.preset_manager = WorkflowPresetManager()
+        self._is_loading_job_to_gui = False
 
         # --- Initialize all tk Variables ---
         self.current_preset_var = tk.StringVar(value=self.preset_manager.get_preset_names()[0] if self.preset_manager.get_preset_names() else "")
@@ -1551,6 +1716,10 @@ class VideoProcessorApp:
         self.nvenc_bframes_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_bframes'))
         self.nvenc_b_ref_mode_var = tk.StringVar(value=DEFAULT_NVENC_B_REF_MODE)
         self.nvenc_b_ref_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_b_ref_mode'))
+        self.ffmpeg_threads_var = tk.StringVar(value=DEFAULT_FFMPEG_THREADS)
+        self.ffmpeg_threads_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_threads'))
+        self.ffmpeg_priority_var = tk.StringVar(value=DEFAULT_FFMPEG_PRIORITY)
+        self.ffmpeg_priority_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_priority'))
 
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
@@ -1598,6 +1767,8 @@ class VideoProcessorApp:
         self.title_burn_var = tk.BooleanVar(value=DEFAULT_TITLE_BURN_ENABLED)
         self.title_json_suffix_var = tk.StringVar(value=DEFAULT_TITLE_JSON_SUFFIX)
         self.title_json_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('title_json_suffix'))
+        self.title_remove_hashtags_var = tk.BooleanVar(value=DEFAULT_TITLE_REMOVE_HASHTAGS)
+        self.title_enable_emoji_var = tk.BooleanVar(value=DEFAULT_TITLE_ENABLE_EMOJI)
         self.title_override_var = tk.StringVar(value=DEFAULT_TITLE_OVERRIDE_TEXT)
         self.title_override_var.trace_add('write', lambda *args: self._update_selected_jobs('title_override_text'))
         self.title_start_time_var = tk.StringVar(value=DEFAULT_TITLE_START_TIME)
@@ -1787,6 +1958,24 @@ class VideoProcessorApp:
         profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
         profile_hdr_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
+
+        # FFmpeg CPU Threads
+        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=6, column=0, sticky=tk.W, pady=2)
+        ffmpeg_threads_entry = ttk.Entry(basic_group, textvariable=self.ffmpeg_threads_var, width=10)
+        ffmpeg_threads_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(ffmpeg_threads_entry, "FFmpeg `-threads` value. Use 0 for auto, or a positive integer.")
+
+        # FFmpeg Process Priority
+        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=7, column=0, sticky=tk.W, pady=2)
+        ffmpeg_priority_combo = ttk.Combobox(
+            basic_group,
+            textvariable=self.ffmpeg_priority_var,
+            values=FFMPEG_PRIORITY_LABELS,
+            width=14,
+            state="readonly"
+        )
+        ffmpeg_priority_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(ffmpeg_priority_combo, "FFmpeg process priority (Windows). Non-Windows systems ignore this setting.")
 
         # GOP & B-Frames
         gop_group = ttk.LabelFrame(scroll_frame, text="GOP & B-Frames", padding=10)
@@ -2314,11 +2503,25 @@ class VideoProcessorApp:
         ttk.Label(suffix_frame, text="JSON Suffix:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(suffix_frame, textvariable=self.title_json_suffix_var, width=15).pack(side=tk.LEFT)
         ttk.Label(suffix_frame, text="(e.g., -yt, -instagram, -tiktok)").pack(side=tk.LEFT, padx=(10, 0))
+
+        sanitize_frame = ttk.Frame(source_group); sanitize_frame.pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(
+            sanitize_frame,
+            text="Remove hashtags from extracted title",
+            variable=self.title_remove_hashtags_var,
+            command=lambda: self._update_selected_jobs("title_remove_hashtags")
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            sanitize_frame,
+            text="Enable emoji in title",
+            variable=self.title_enable_emoji_var,
+            command=lambda: self._update_selected_jobs("title_enable_emoji")
+        ).pack(side=tk.LEFT, padx=(15, 0))
         
         override_frame = ttk.Frame(source_group); override_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(override_frame, text="Title Override:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(override_frame, text="Title:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(override_frame, textvariable=self.title_override_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ToolTip(override_frame, "If set, this text is used instead of extracting from JSON file")
+        ToolTip(override_frame, "Auto-filled from detected JSON title when available. Edit this field to use your own title.")
 
         # Timing Settings
         timing_group = ttk.LabelFrame(parent, text="Display Timing", padding=10)
@@ -2577,9 +2780,33 @@ class VideoProcessorApp:
             return f"[Embedded: {subtitle_path.split(':', 1)[1]}]"
         return f"(Custom: {os.path.basename(subtitle_path)})"
 
+    def _detect_title_text_for_job(self, job):
+        options = job.get("options", {})
+        _, detected_title = find_title_json_file(
+            job.get("video_path"),
+            job.get("subtitle_path"),
+            options.get("title_json_suffix", ""),
+            remove_hashtags=options.get("title_remove_hashtags", DEFAULT_TITLE_REMOVE_HASHTAGS),
+            keep_emoji=options.get("title_enable_emoji", DEFAULT_TITLE_ENABLE_EMOJI)
+        )
+        return detected_title
+
+    def _autofill_title_for_job(self, job, force=False):
+        options = job.get("options", {})
+        current_title = (options.get("title_override_text", "") or "").strip()
+        if current_title and not force:
+            return False
+        detected_title = self._detect_title_text_for_job(job)
+        if not detected_title:
+            return False
+        options["title_override_text"] = detected_title
+        return True
+
     def _apply_subtitle_to_job(self, index, subtitle_path, display_tag):
         job = self.processing_jobs[index]
         job["subtitle_path"] = subtitle_path
+        # Keep the Title field populated from detected metadata unless user typed one.
+        self._autofill_title_for_job(job, force=False)
         job["display_tag"] = display_tag
         base_name = os.path.basename(job["video_path"])
         preset_name = job.get("preset_name", "")
@@ -2968,6 +3195,8 @@ class VideoProcessorApp:
         self.root.after(0, lambda: self.progress_bar.config(value=percent))
 
     def _update_selected_jobs(self, *keys_to_update):
+        if self._is_loading_job_to_gui:
+            return
         selected_indices = self.job_listbox.curselection()
         if not selected_indices:
             return
@@ -3043,10 +3272,14 @@ class VideoProcessorApp:
             "nvenc_temporal_aq": self.nvenc_temporal_aq_var.get(),
             "nvenc_bframes": self.nvenc_bframes_var.get(),
             "nvenc_b_ref_mode": self.nvenc_b_ref_mode_var.get(),
+            "ffmpeg_threads": self.ffmpeg_threads_var.get(),
+            "ffmpeg_priority": self.ffmpeg_priority_var.get(),
             "output_suffix_override": self.output_suffix_override_var.get(),
             # Title Burn options
             "title_burn_enabled": self.title_burn_var.get(),
             "title_json_suffix": self.title_json_suffix_var.get(),
+            "title_remove_hashtags": self.title_remove_hashtags_var.get(),
+            "title_enable_emoji": self.title_enable_emoji_var.get(),
             "title_override_text": self.title_override_var.get(),
             "title_start_time": self.title_start_time_var.get(),
             "title_end_time": self.title_end_time_var.get(),
@@ -3410,20 +3643,20 @@ class VideoProcessorApp:
         
         for index in selected_indices:
              video_path = self.input_files[index]
-             # We create a job assuming 'Standard/Clean' flow unless user wants to match subs?
-             # "Add to Jobs (Force Current Preset)" usually implies applying the SETTINGS to the VIDEO.
-             # Handling subtitles manually is tricky here. 
-             # Let's assume we treat it as a "Video Trigger" job (No Subtitles specified manually implies Clean or Embedded?)
-             # Actually, if we force a preset, we should probably check if that preset WANTS subtitles.
-             # Simpler: Just add it as a job with NO subtitle path initially? Or trigger detection?
-             # User expectation: "I want this video processed with this preset."
-             # If the preset burns subtitles, it might fail or pick defaults if we don't specify.
-             # Let's run a "Single Preset Scan" on this file!
-             
-             # Re-use logic but force match?
-             # Let's just create a job for the video file. If the preset has "Scan Subs" enabled, maybe we should scan?
-             # For now, simplistic approach: Add as [Manual] job.
-             self._create_job_entry(video_path, None, preset['options'], preset_name, "[Manual Add]")
+             # Manual add should still auto-pick the best subtitle if one exists
+             # so subtitle burn and JSON title discovery work without extra clicks.
+             detected_subs = self._detect_subtitles_for_video(video_path)
+             preferred_sub = self._pick_preferred_subtitle(detected_subs)
+             if preferred_sub:
+                 self._create_job_entry(
+                     video_path,
+                     preferred_sub["path"],
+                     preset['options'],
+                     preset_name,
+                     preferred_sub["display_tag"]
+                 )
+             else:
+                 self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
         
         self.update_status(f"Added {len(selected_indices)} jobs manually.")
 
@@ -3448,13 +3681,6 @@ class VideoProcessorApp:
         for index in reversed(list(self.job_listbox.curselection())):
             del self.processing_jobs[index]; self.job_listbox.delete(index)
     
-    def on_job_select(self, event=None):
-         # Renamed from on_input_file_select to match new semantics
-         self.on_input_file_select(event) # Re-use existing logic for now, or copy paste it?
-         # Existing logic is at line 2532. It refers to self.job_listbox.
-         # So just calling it is fine, or I should have renamed it there too.
-         pass
-
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
         new_job = {
             "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
@@ -3464,67 +3690,66 @@ class VideoProcessorApp:
             "preset_name": preset_name, # Store preset name
             "display_tag": display_tag   # Store tag permanently
         }
+        # Populate the Title field on add when metadata is available.
+        self._autofill_title_for_job(new_job, force=False)
         new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
         self.processing_jobs.append(new_job)
         self.job_listbox.insert(tk.END, new_job["display_name"])
 
     def on_job_select(self, event=None):
         sel = self.job_listbox.curselection()
-        if len(sel) == 1:
-            # Single Select: Sync Selection -> GUI
-            selected_job = self.processing_jobs[sel[0]]
-            
-            # Load the preset of this job into the GUI
-            # Note: This might overwrite some manual changes if we strictly reload the preset.
-            # But user wants "preset name and setting in the gui needs to also switch".
-            # If the job has a known preset, we load it.
-            preset_name = selected_job.get('preset_name')
-            if preset_name and preset_name in self.preset_manager.get_preset_names():
-                 # We avoid calling load_preset_to_gui because that triggers "Apply to Selected" logic!
-                 # We must manually update the GUI variables to match the Job (which might be custom)
-                 # and just set the Combobox to the name.
-                 
-                 self.current_preset_var.set(preset_name)
-                 self.update_gui_from_job_options(selected_job)
-                 
-                 # Also update triggers UI? 
-                 # The job doesn't store triggers, only the preset does.
-                 # If we want to show the preset's triggers, we fetch them.
-                 preset = self.preset_manager.get_preset(preset_name)
-                 if preset:
-                     triggers = preset['triggers']
-                     
-                     on_no_sub = triggers.get('on_no_sub', False)
-                     on_clean = triggers.get('on_clean_copy_if_subs', False)
-                     self.trigger_video_always_var.set(on_no_sub and on_clean)
-                     self.trigger_video_fallback_var.set(on_no_sub and not on_clean)
-                         
-                     self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
-                     suffix_val = triggers.get('suffix_filter')
-                     if suffix_val is not None:
-                         self.trigger_suffix_enable_var.set(True)
-                         self.trigger_suffix_var.set(suffix_val)
-                     else:
-                         self.trigger_suffix_enable_var.set(False)
-                         self.trigger_suffix_var.set("")
-            else:
-                self.current_preset_var.set("") # Custom or Unknown
-                self.update_gui_from_job_options(selected_job)
-                # Reset triggers
-                self.trigger_video_always_var.set(False)
-                self.trigger_video_fallback_var.set(False)
-                self.trigger_scan_subs_var.set(False)
-                self.trigger_suffix_enable_var.set(False)
-                self.trigger_suffix_var.set("")
+        if not sel:
+            return
 
-            self._suppress_subtitle_path_trace = True
-            self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
-            self._suppress_subtitle_path_trace = False
-                
-        # Multi-Select: Do NOTHING (Keep current GUI state)
+        active_idx = self.job_listbox.index(tk.ACTIVE)
+        if active_idx not in sel:
+            active_idx = sel[-1]
+
+        selected_job = self.processing_jobs[active_idx]
+        self._autofill_title_for_job(selected_job, force=False)
+        
+        # Load the preset of this job into the GUI.
+        # We avoid calling load_preset_to_gui because that applies settings to selection.
+        preset_name = selected_job.get('preset_name')
+        if preset_name and preset_name in self.preset_manager.get_preset_names():
+             self.current_preset_var.set(preset_name)
+             self.update_gui_from_job_options(selected_job)
+             
+             # Job stores preset name, not trigger settings.
+             preset = self.preset_manager.get_preset(preset_name)
+             if preset:
+                 triggers = preset['triggers']
+                 
+                 on_no_sub = triggers.get('on_no_sub', False)
+                 on_clean = triggers.get('on_clean_copy_if_subs', False)
+                 self.trigger_video_always_var.set(on_no_sub and on_clean)
+                 self.trigger_video_fallback_var.set(on_no_sub and not on_clean)
+                     
+                 self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
+                 suffix_val = triggers.get('suffix_filter')
+                 if suffix_val is not None:
+                     self.trigger_suffix_enable_var.set(True)
+                     self.trigger_suffix_var.set(suffix_val)
+                 else:
+                     self.trigger_suffix_enable_var.set(False)
+                     self.trigger_suffix_var.set("")
+        else:
+            self.current_preset_var.set("") # Custom or Unknown
+            self.update_gui_from_job_options(selected_job)
+            # Reset triggers
+            self.trigger_video_always_var.set(False)
+            self.trigger_video_fallback_var.set(False)
+            self.trigger_scan_subs_var.set(False)
+            self.trigger_suffix_enable_var.set(False)
+            self.trigger_suffix_var.set("")
+
+        self._suppress_subtitle_path_trace = True
+        self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
+        self._suppress_subtitle_path_trace = False
 
     def update_gui_from_job_options(self, job):
         options = job['options']
+        self._is_loading_job_to_gui = True
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
         self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
@@ -3593,6 +3818,8 @@ class VideoProcessorApp:
         self.nvenc_temporal_aq_var.set(options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ))
         self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
+        self.ffmpeg_threads_var.set(options.get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
+        self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
 
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
         self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
@@ -3606,6 +3833,8 @@ class VideoProcessorApp:
         # Title Burn options
         self.title_burn_var.set(options.get("title_burn_enabled", DEFAULT_TITLE_BURN_ENABLED))
         self.title_json_suffix_var.set(options.get("title_json_suffix", DEFAULT_TITLE_JSON_SUFFIX))
+        self.title_remove_hashtags_var.set(options.get("title_remove_hashtags", DEFAULT_TITLE_REMOVE_HASHTAGS))
+        self.title_enable_emoji_var.set(options.get("title_enable_emoji", DEFAULT_TITLE_ENABLE_EMOJI))
         self.title_override_var.set(options.get("title_override_text", DEFAULT_TITLE_OVERRIDE_TEXT))
         self.title_start_time_var.set(options.get("title_start_time", DEFAULT_TITLE_START_TIME))
         self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
@@ -3635,6 +3864,7 @@ class VideoProcessorApp:
         if hasattr(self, 'title_outline_swatch'): self.title_outline_swatch.config(bg=self.title_outline_color_var.get())
         if hasattr(self, 'title_shadow_swatch'): self.title_shadow_swatch.config(bg=self.title_shadow_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
+        self._is_loading_job_to_gui = False
 
     def duplicate_selected_jobs(self):
         selected_indices = self.job_listbox.curselection()
@@ -3911,7 +4141,16 @@ class VideoProcessorApp:
                     _, title_text = find_title_json_file(
                         job['video_path'],
                         job.get('subtitle_path'),
-                        options.get('title_json_suffix', '')
+                        options.get('title_json_suffix', ''),
+                        remove_hashtags=options.get('title_remove_hashtags', DEFAULT_TITLE_REMOVE_HASHTAGS),
+                        keep_emoji=options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)
+                    )
+                else:
+                    # Normalize manually typed title too (unicode decode + optional emoji stripping).
+                    title_text = sanitize_title(
+                        title_text,
+                        remove_hashtags=False,
+                        keep_emoji=options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)
                     )
                 
                 if title_text:
@@ -3940,7 +4179,7 @@ class VideoProcessorApp:
                     title_ass_path,
                     encoder_backend="preprocess"
                 )
-                if self.run_ffmpeg_command(pre_cmd, duration) != 0:
+                if self.run_ffmpeg_command(pre_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
 
                 nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation)
@@ -3955,14 +4194,14 @@ class VideoProcessorApp:
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_audio
                 audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options)
-                if self.run_ffmpeg_command(audio_cmd, duration) != 0:
+                if self.run_ffmpeg_command(audio_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation, audio_source_path=temp_audio)
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             else:
                 cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
-                if self.run_ffmpeg_command(cmd, duration) != 0: 
+                if self.run_ffmpeg_command(cmd, duration, options=options) != 0: 
                     raise VideoProcessingError(f"Error encoding {job['video_path']}")
             
             print(f"File finalized => {output_file}")
@@ -4472,6 +4711,14 @@ class VideoProcessorApp:
                                      self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
             if not any_proc_selected:
                 issues.append("No audio processing tracks are selected. Choose at least one or select Passthrough.")
+        try:
+            if int(self.ffmpeg_threads_var.get()) < 0:
+                issues.append("FFmpeg threads must be 0 or a positive integer.")
+        except ValueError:
+            issues.append("FFmpeg threads must be an integer (0 = auto).")
+        raw_priority = str(self.ffmpeg_priority_var.get()).strip().lower()
+        if normalize_ffmpeg_priority(raw_priority) != raw_priority:
+            issues.append("FFmpeg priority must be one of: idle, below_normal, normal, above_normal, high, realtime.")
 
         if issues:
             messagebox.showerror("Configuration Issues", "Please fix the following issues:\n" + "\n".join(f"• {issue}" for issue in issues))
@@ -4522,10 +4769,27 @@ class VideoProcessorApp:
         self.root.after(0, lambda: self.progress_bar.config(value=0))
         self.root.after(0, lambda: self.start_button.config(state="normal"))
 
-    def run_ffmpeg_command(self, cmd, duration=None):
+    def run_ffmpeg_command(self, cmd, duration=None, options=None):
+        # Force dynamic progress + verbose diagnostics in console for easier debugging.
+        prepared_cmd = list(cmd)
+        insert_flags = []
+        ffmpeg_threads = normalize_ffmpeg_threads((options or {}).get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
+        ffmpeg_priority = normalize_ffmpeg_priority((options or {}).get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY))
+        if "-threads" not in prepared_cmd:
+            insert_flags.extend(["-threads", str(ffmpeg_threads)])
+        if "-loglevel" not in prepared_cmd:
+            insert_flags.extend(["-loglevel", "verbose"])
+        if "-stats" not in prepared_cmd and "-nostats" not in prepared_cmd:
+            insert_flags.append("-stats")
+        if "-stats_period" not in prepared_cmd:
+            insert_flags.extend(["-stats_period", "0.5"])
+        if insert_flags:
+            prepared_cmd = [prepared_cmd[0]] + insert_flags + prepared_cmd[1:]
+
         print("Running FFmpeg command:")
-        print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
-        return safe_ffmpeg_execution(cmd, "video encoding", duration, self.update_progress)
+        print(" ".join(f'"{c}"' if " " in c else c for c in prepared_cmd))
+        print(f"[INFO] FFmpeg CPU settings: threads={ffmpeg_threads}, priority={ffmpeg_priority}")
+        return safe_ffmpeg_execution(prepared_cmd, "video encoding", duration, self.update_progress, priority=ffmpeg_priority)
 
     def verify_output_file(self, file_path, options=None):
         print(f"--- Verifying output: {os.path.basename(file_path)} ---")
