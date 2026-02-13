@@ -120,7 +120,7 @@ Arguments:
                         patterns (e.g., *.mp4). If omitted, searches the
                         current directory tree.
   -o, --output          Optional. The name for the final merged video file.
-                        Defaults to "output.mp4".
+                        Defaults to the first compatible input filename.
   --no-extract-srt      Optional. By default, a final merged .srt file is
                         saved. Use this flag to disable this behavior.
 
@@ -148,6 +148,7 @@ from collections import Counter
 VIDEO_EXTENSIONS = [
     '.mp4', '.mkv', '.mov', '.avi', '.flv', '.wmv', '.webm', '.mpeg', '.mpg', '.m4v'
 ]
+INPUT_SUBDIR = 'input'
 
 # --- Helper Functions for Time Conversion ---
 
@@ -175,6 +176,63 @@ def seconds_to_youtube_time(seconds):
     else:
         return f"{minutes:02d}:{sec:02d}"
 
+def move_processed_videos_to_input_folder(video_files, input_subdir, protected_paths=None):
+    """Move processed source videos and sidecars into an input archive folder."""
+    os.makedirs(input_subdir, exist_ok=True)
+    input_abs = os.path.normcase(os.path.abspath(input_subdir))
+    protected_abs = set()
+    for path in (protected_paths or []):
+        protected_abs.add(os.path.normcase(os.path.abspath(path)))
+    moved_count = 0
+
+    for source_path in video_files:
+        if not os.path.isfile(source_path):
+            continue
+
+        source_abs = os.path.normcase(os.path.abspath(source_path))
+        if source_abs.startswith(input_abs + os.sep):
+            continue
+        if source_abs in protected_abs:
+            continue
+
+        base_name = os.path.basename(source_path)
+        destination_path = os.path.join(input_subdir, base_name)
+        if os.path.exists(destination_path):
+            name_root, name_ext = os.path.splitext(base_name)
+            suffix = 1
+            while True:
+                candidate = os.path.join(input_subdir, f"{name_root}_{suffix}{name_ext}")
+                if not os.path.exists(candidate):
+                    destination_path = candidate
+                    break
+                suffix += 1
+
+        source_base, _ = os.path.splitext(source_path)
+        files_to_move = [source_path]
+        for ext in ('.srt', '.txt'):
+            sidecar = source_base + ext
+            if os.path.isfile(sidecar):
+                sidecar_abs = os.path.normcase(os.path.abspath(sidecar))
+                if sidecar_abs not in protected_abs:
+                    files_to_move.append(sidecar)
+
+        target_video_base, _ = os.path.splitext(destination_path)
+        for move_src in files_to_move:
+            move_src_abs = os.path.normcase(os.path.abspath(move_src))
+            if move_src_abs in protected_abs:
+                continue
+            src_ext = os.path.splitext(move_src)[1]
+            move_dest = target_video_base + src_ext if move_src != source_path else destination_path
+            try:
+                shutil.move(move_src, move_dest)
+                print(f"Moved processed input: {move_src} -> {move_dest}")
+            except Exception as e:
+                print(f"Warning: Could not move '{move_src}' to '{input_subdir}'. Error: {e}")
+        moved_count += 1
+
+    if moved_count:
+        print(f"Moved {moved_count} processed input file(s) into '{input_subdir}'.")
+
 def main():
     """The main function that orchestrates the entire concatenation process."""
     parser = argparse.ArgumentParser(
@@ -182,7 +240,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('videos', nargs='*', help="List of video files or patterns (e.g., *.mp4).")
-    parser.add_argument('-o', '--output', default='output.mp4', help="Name of the output video file.")
+    parser.add_argument('-o', '--output', default=None, help="Name of the output video file. Defaults to the first compatible input filename.")
     parser.add_argument('--no-extract-srt', dest='extract_srt', action='store_false', help="Do not save the final merged subtitle track as a separate .srt file.")
     
     args = parser.parse_args()
@@ -198,7 +256,12 @@ def main():
         print("No video files provided. Searching current directory and subdirectories...")
         for ext in VIDEO_EXTENSIONS:
             initial_video_files.extend(glob.glob(f'**/*{ext}', recursive=True))
-        initial_video_files = sorted(initial_video_files)
+        initial_video_files = sorted(list(dict.fromkeys(initial_video_files)))
+        input_abs = os.path.normcase(os.path.abspath(INPUT_SUBDIR))
+        initial_video_files = [
+            f for f in initial_video_files
+            if not os.path.normcase(os.path.abspath(f)).startswith(input_abs + os.sep)
+        ]
 
     if not initial_video_files:
         print("Error: No video files found to process.")
@@ -239,11 +302,27 @@ def main():
         print(f"\nError: Only {len(video_files_to_process)} compatible video file found. Cannot concatenate.")
         return
         
+    if args.output:
+        final_output = args.output
+    else:
+        final_output = os.path.basename(video_files_to_process[0])
+        print(f"No output name provided. Using first compatible input filename: {final_output}")
+
+    # Build sets of source paths so output artifacts do not overwrite source files.
+    input_video_abs_paths = {os.path.normcase(os.path.abspath(p)) for p in video_files_to_process}
+    input_sidecar_abs_paths = set()
+    for video_path in video_files_to_process:
+        source_base, _ = os.path.splitext(video_path)
+        for ext in ('.srt', '.txt'):
+            sidecar_path = source_base + ext
+            if os.path.isfile(sidecar_path):
+                input_sidecar_abs_paths.add(os.path.normcase(os.path.abspath(sidecar_path)))
+
     # --- Initialize temporary file paths ---
     merged_srt_file = None
     metadata_file = None
     list_filename = f"mylist_{uuid.uuid4()}.txt"
-    temp_output_filename = f"temp_concat_{uuid.uuid4()}{os.path.splitext(args.output)[1]}"
+    temp_output_filename = f"temp_concat_{uuid.uuid4()}{os.path.splitext(final_output)[1]}"
     
     try:
         # --- Stage 2: Pre-process Subtitles and Chapters ---
@@ -322,11 +401,21 @@ def main():
                     f.write(f"title={chap['title']}\n")
             print(f"Successfully created FFmpeg metadata file: {metadata_file}")
         
-        output_chapters_file = os.path.splitext(args.output)[0] + ".txt"
+        desired_output_chapters_file = os.path.splitext(final_output)[0] + ".txt"
+        desired_output_chapters_abs = os.path.normcase(os.path.abspath(desired_output_chapters_file))
+        if desired_output_chapters_abs in input_sidecar_abs_paths or desired_output_chapters_abs in input_video_abs_paths:
+            output_chapters_file = f"chapters_{uuid.uuid4()}.txt"
+            print(
+                f"Chapter output path '{desired_output_chapters_file}' conflicts with an input file. "
+                f"Writing to temporary '{output_chapters_file}' first."
+            )
+        else:
+            output_chapters_file = desired_output_chapters_file
+
         with open(output_chapters_file, 'w', encoding='utf-8') as f:
             for ts, title in youtube_chapters:
                 f.write(f"{ts} - {title}\n")
-        print(f"Successfully created YouTube chapter file: {output_chapters_file}")
+        print(f"Successfully created YouTube chapter file: {desired_output_chapters_file}")
 
         # --- Stage 4: Execute FFmpeg Two-Pass Process ---
         print("\n--- Pass 1: Concatenating video and audio streams ---")
@@ -360,24 +449,61 @@ def main():
         # Set codecs
         mux_command.extend(['-c', 'copy']) # Stream copy everything from the concatenated video
         if merged_srt_file:
-            output_ext = os.path.splitext(args.output)[1].lower()
+            output_ext = os.path.splitext(final_output)[1].lower()
             sub_codec = 'mov_text' if output_ext == '.mp4' else 'srt'
             mux_command.extend(['-c:s', sub_codec]) # But encode the subtitle stream
         
-        mux_command.append(args.output)
+        final_output_abs = os.path.normcase(os.path.abspath(final_output))
+        if final_output_abs in input_video_abs_paths:
+            safe_final_output = f"merged_{uuid.uuid4()}_{os.path.basename(final_output)}"
+            print(
+                f"Output name matches an input file path. "
+                f"Writing to temporary '{safe_final_output}' first."
+            )
+        else:
+            safe_final_output = final_output
+
+        mux_command.append(safe_final_output)
         
         print(f"  > {' '.join(mux_command)}")
         subprocess.run(mux_command, check=True, capture_output=True, text=True, encoding='utf-8')
         print("Pass 2 completed successfully.")
         
         print(f"\n--- SUCCESS ---")
-        print(f"Successfully created final video '{args.output}'")
+        print(f"Successfully created final video '{final_output}'")
         
+        output_srt_file = None
+        safe_output_srt_file = None
         if args.extract_srt and merged_srt_file:
-            output_srt_base, _ = os.path.splitext(args.output)
+            output_srt_base, _ = os.path.splitext(final_output)
             output_srt_file = output_srt_base + ".srt"
+            output_srt_abs = os.path.normcase(os.path.abspath(output_srt_file))
+            if output_srt_abs in input_sidecar_abs_paths or output_srt_abs in input_video_abs_paths:
+                safe_output_srt_file = f"subs_{uuid.uuid4()}.srt"
+                print(
+                    f"Subtitle output path '{output_srt_file}' conflicts with an input file. "
+                    f"Writing to temporary '{safe_output_srt_file}' first."
+                )
+            else:
+                safe_output_srt_file = output_srt_file
+
             print(f"\nSaving final merged subtitles to: {output_srt_file}")
-            shutil.copy(merged_srt_file, output_srt_file)
+            shutil.copy(merged_srt_file, safe_output_srt_file)
+
+        protected_paths = [safe_final_output, output_chapters_file]
+        if args.extract_srt and merged_srt_file and safe_output_srt_file:
+            protected_paths.append(safe_output_srt_file)
+        move_processed_videos_to_input_folder(video_files_to_process, INPUT_SUBDIR, protected_paths=protected_paths)
+
+        if safe_final_output != final_output:
+            os.replace(safe_final_output, final_output)
+            print(f"Placed final video at '{final_output}'")
+        if output_chapters_file != desired_output_chapters_file:
+            os.replace(output_chapters_file, desired_output_chapters_file)
+            print(f"Placed chapter file at '{desired_output_chapters_file}'")
+        if safe_output_srt_file and output_srt_file and safe_output_srt_file != output_srt_file:
+            os.replace(safe_output_srt_file, output_srt_file)
+            print(f"Placed final subtitles at '{output_srt_file}'")
 
     except subprocess.CalledProcessError as e:
         print("\n--- FFMPEG ERROR ---")
