@@ -56,6 +56,9 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `-i, --inference MODEL`: Run AI inference with a specific model name (e.g. `NAFNet-SIDD`)
 - `--tile-size`: Optional manual tile size override for AI tiling (auto-rounded to model-required multiple)
 - `--overlap`: Optional manual overlap override for AI tiling
+- `--overlap-fit`: Keep tile size fixed and auto-fit X/Y overlaps so all tiles stay full size (default: on)
+- `--no-overlap-fit`: Disable overlap-fit and use fixed nominal step tiling
+- `--pp3`: Prompt to choose a `.pp3` profile from `pp3/` next to this script (includes RAW sidecar mode)
 - `-f, --fit`: Fit image dimensions to an exact tile grid using uniform scaling + center crop (no aspect distortion)
 - `-tf, --tile-fit`: Keep image size and auto-fit tile size to image dimensions where possible
 - `--calibrate`: Run CUDA full-frame calibration and save/update `denoise_cache.json`
@@ -86,6 +89,8 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `--calibrate-all` forces calibration of all supported models even when cached.
 - With `--fit`, image size is adjusted to exact tile counts without changing aspect ratio (scale + center crop).
 - With `--tile-fit`, tile size is adjusted (instead of image size) to best fit image dimensions.
+- With `--overlap-fit` (enabled by default), tile size is preserved and tile starts are redistributed so edge tiles remain full-sized.
+- RAW default profile is `pp3/auto_film.pp3` when present; use `--pp3` to interactively pick another profile or RAW sidecar mode (`*.ext.pp3`) with default fallback.
 
 ## Processing Order
 1. RawTherapee conversion (or direct non-RAW conversion/copy)
@@ -118,6 +123,9 @@ from pathlib import Path
 # --- AI INFERENCE SETTINGS ---
 SCRIPT_DIR = Path(__file__).parent
 DENOISE_CACHE = os.path.join(SCRIPT_DIR, "denoise_cache.json")
+PP3_DIR = SCRIPT_DIR / "pp3"
+DEFAULT_PP3_PROFILE = PP3_DIR / "auto_film.pp3"
+PP3_MODE_SIDECAR = "__USE_RAW_SIDECAR_PP3__"
 CALIBRATE_ASPECT = "3:2"
 CALIBRATE_MAX_MP = 200
 LUT_DIR = os.path.join(SCRIPT_DIR, "LUT")
@@ -657,6 +665,12 @@ def _fit_image_to_tile_grid_pil(im, tile_size):
         "tile_size": tile_size,
         "tiles_x": best["nx"],
         "tiles_y": best["ny"],
+        "crop_left": left,
+        "crop_top": top,
+        "crop_right": max(0, sw - (left + tw)),
+        "crop_bottom": max(0, sh - (top + th)),
+        "crop_total_w": max(0, sw - tw),
+        "crop_total_h": max(0, sh - th),
     }
 
 def _fit_image_to_tile_grid_np(img_np, tile_size, torch=None, F=None):
@@ -741,6 +755,12 @@ def _fit_image_to_tile_grid_np(img_np, tile_size, torch=None, F=None):
         "tile_size": tile_size,
         "tiles_x": best["nx"],
         "tiles_y": best["ny"],
+        "crop_left": left,
+        "crop_top": top,
+        "crop_right": max(0, sw - (left + tw)),
+        "crop_bottom": max(0, sh - (top + th)),
+        "crop_total_w": max(0, sw - tw),
+        "crop_total_h": max(0, sh - th),
     }
 
 def _read_image_for_ai(image_path, np):
@@ -1003,22 +1023,24 @@ def _fit_tile_size_to_image_dims(width, height, base_tile, tile_multiple, min_ti
     # No exact tile exists under required multiple; keep current tile.
     return base_tile, False, {"gcd": gcd_wh, "candidates": 0, "min_tile": min_tile}
 
-def _run_tiled_with_fallback(img_tensor, model, tile_candidates, overlap=64, torch=None, F=None, np=None, model_name="model"):
+def _run_tiled_with_fallback(img_tensor, model, tile_candidates, overlap=64, overlap_fit=False, torch=None, F=None, np=None, model_name="model"):
     last_error = None
     attempted = False
     for tile in tile_candidates:
         use_overlap = min(overlap, max(0, tile - 16))
         try:
+            fit_tag = ", overlap-fit" if overlap_fit else ""
             if not attempted:
-                print(f"   [AI] Tiled pass: tile {tile}, overlap {use_overlap}")
+                print(f"   [AI] Tiled pass: tile {tile}, overlap {use_overlap}{fit_tag}")
             else:
-                print(f"   [AI] Retrying {model_name} with tile {tile}, overlap {use_overlap}")
+                print(f"   [AI] Retrying {model_name} with tile {tile}, overlap {use_overlap}{fit_tag}")
             attempted = True
             restored = _tile_process_overlap_blend(
                 img_tensor,
                 model,
                 tile_size=tile,
                 overlap=use_overlap,
+                overlap_fit=overlap_fit,
                 torch=torch,
                 F=F,
                 np=np,
@@ -1067,7 +1089,70 @@ def _is_ai_output_suspicious(stats):
         reasons.append("very high output variance")
     return (len(reasons) > 0), reasons
 
-def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, torch=None, F=None, np=None):
+def _compute_fitted_tile_starts(length, tile_size, overlap, overlap_fit):
+    if length <= tile_size:
+        return [0]
+
+    nominal_step = max(1, tile_size - overlap)
+    if not overlap_fit:
+        return list(range(0, length, nominal_step))
+
+    # Keep tile size fixed and redistribute starts so first tile starts at 0 and
+    # last tile ends exactly at image boundary (no partial edge tile).
+    tile_count = int(math.ceil((length - tile_size) / nominal_step)) + 1
+    max_start = max(0, length - tile_size)
+    if tile_count <= 1 or max_start == 0:
+        return [0]
+    return [(i * max_start) // (tile_count - 1) for i in range(tile_count)]
+
+def _analyze_axis_tiling(length, tile_size, overlap, overlap_fit):
+    starts = _compute_fitted_tile_starts(length, tile_size, overlap, overlap_fit)
+    lengths = []
+    deficits = []
+    for s in starts:
+        end = min(s + tile_size, length)
+        curr = max(0, end - s)
+        lengths.append(curr)
+        deficits.append(max(0, tile_size - curr))
+    full_count = sum(1 for v in lengths if v == tile_size)
+    partial_count = len(lengths) - full_count
+    ends = [min(s + tile_size, length) for s in starts]
+    max_end = max(ends) if ends else 0
+    steps = [starts[i + 1] - starts[i] for i in range(len(starts) - 1)]
+    return {
+        "starts": starts,
+        "count": len(starts),
+        "full_count": full_count,
+        "partial_count": partial_count,
+        "uncovered_px": max(0, length - max_end),
+        "total_deficit_px": int(sum(deficits)),
+        "last_deficit_px": int(deficits[-1] if deficits else 0),
+        "step_min": int(min(steps)) if steps else 0,
+        "step_max": int(max(steps)) if steps else 0,
+    }
+
+def _report_tiling_math(width, height, tile_size, overlap, overlap_fit, label="active"):
+    nominal_step = max(1, tile_size - overlap)
+    x = _analyze_axis_tiling(width, tile_size, overlap, overlap_fit)
+    y = _analyze_axis_tiling(height, tile_size, overlap, overlap_fit)
+    total_tiles = x["count"] * y["count"]
+    full_tiles = x["full_count"] * y["full_count"]
+    nonfull_tiles = total_tiles - full_tiles
+    print(f"   [AI] Tiling math ({label}): image {width}x{height}, tile={tile_size}, overlap={overlap}, nominal_step={nominal_step}, overlap_fit={overlap_fit}")
+    print(
+        f"   [AI]   X-axis: tiles={x['count']} full={x['full_count']} partial={x['partial_count']} "
+        f"starts={x['starts'][0]}..{x['starts'][-1]} step[min,max]={x['step_min']},{x['step_max']} "
+        f"uncovered_px={x['uncovered_px']} spare_deficit_px={x['total_deficit_px']} right_edge_deficit_px={x['last_deficit_px']}"
+    )
+    print(
+        f"   [AI]   Y-axis: tiles={y['count']} full={y['full_count']} partial={y['partial_count']} "
+        f"starts={y['starts'][0]}..{y['starts'][-1]} step[min,max]={y['step_min']},{y['step_max']} "
+        f"uncovered_px={y['uncovered_px']} spare_deficit_px={y['total_deficit_px']} bottom_edge_deficit_px={y['last_deficit_px']}"
+    )
+    print(f"   [AI]   Grid: {x['count']}x{y['count']} => total_tiles={total_tiles}, full_tiles={full_tiles}, nonfull_tiles={nonfull_tiles}")
+    return {"x": x, "y": y, "total_tiles": total_tiles, "full_tiles": full_tiles, "nonfull_tiles": nonfull_tiles}
+
+def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, overlap_fit=False, torch=None, F=None, np=None):
     """
     Processes the image in overlapping tiles and blends them to avoid seams.
     """
@@ -1084,13 +1169,20 @@ def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, to
     wx = 0.5 - 0.5 * torch.cos(np.pi * wx)
     w2d = (wy[:, None] * wx[None, :]).unsqueeze(0).unsqueeze(0)
 
-    step = tile_size - overlap
-    for y in range(0, h, step):
-        for x in range(0, w, step):
-            y_end = min(y + tile_size, h)
-            x_end = min(x + tile_size, w)
-            curr_h = y_end - y
-            curr_w = x_end - x
+    y_starts = _compute_fitted_tile_starts(h, tile_size, overlap, overlap_fit)
+    x_starts = _compute_fitted_tile_starts(w, tile_size, overlap, overlap_fit)
+    for y in y_starts:
+        for x in x_starts:
+            if overlap_fit and (y + tile_size <= h) and (x + tile_size <= w):
+                y_end = y + tile_size
+                x_end = x + tile_size
+                curr_h = tile_size
+                curr_w = tile_size
+            else:
+                y_end = min(y + tile_size, h)
+                x_end = min(x + tile_size, w)
+                curr_h = y_end - y
+                curr_w = x_end - x
 
             tile = padded[:, :, y:y+curr_h+2*pad, x:x+curr_w+2*pad]
             with torch.no_grad():
@@ -1319,7 +1411,7 @@ def _calibrate_model_cache_entry(model_name, force=False):
         print(f"   [AI] Calibration failed for {canonical_model_name}: {e}")
         return False
 
-def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None, np=None, denoise_mode="auto", tile_size=512, overlap=64, max_full_pixels=None, input_multiple=16, tile_candidates=None, model_name="model", allow_full_without_limit=False, safety_fallback=False):
+def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None, np=None, denoise_mode="auto", tile_size=512, overlap=64, overlap_fit=False, max_full_pixels=None, input_multiple=16, tile_candidates=None, model_name="model", allow_full_without_limit=False, safety_fallback=False):
     print(f"   [AI] Running denoise on {device.upper()}...")
     img_tensor = torch.from_numpy(np.transpose(img_srgb_np, (2, 0, 1))).float().unsqueeze(0).to(device)
     img_tensor, pad = _pad_to_multiple(img_tensor, multiple=input_multiple, torch=torch, F=F)
@@ -1365,6 +1457,7 @@ def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None,
                         model,
                         tile_candidates=attempt_tile_candidates,
                         overlap=attempt_overlap,
+                        overlap_fit=overlap_fit,
                         torch=torch,
                         F=F,
                         np=np,
@@ -1378,6 +1471,7 @@ def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None,
                 model,
                 tile_candidates=attempt_tile_candidates,
                 overlap=attempt_overlap,
+                overlap_fit=overlap_fit,
                 torch=torch,
                 F=F,
                 np=np,
@@ -1452,7 +1546,7 @@ def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None,
 
     return chosen, used_full, pixels
 
-def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto", tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL, calibrate=False, fit=False, tile_fit=False, safety_fallback=False):
+def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto", tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL, calibrate=False, fit=False, tile_fit=False, overlap_fit=False, safety_fallback=False):
     np, torch, F, Image = _import_denoise_deps()
     if np is None:
         print(f"   [AI] Missing denoise dependencies: {Image}")
@@ -1502,6 +1596,14 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
                 f"   [AI] Tile-fit: no exact tile found for {w}x{h} with multiple {tile_multiple} "
                 f"and min tile {min_fit_tile}; using tile {tile_size} (gcd={meta['gcd']})"
             )
+        nx = (w + tile_size - 1) // tile_size
+        ny = (h + tile_size - 1) // tile_size
+        spare_w = (tile_size - (w % tile_size)) % tile_size
+        spare_h = (tile_size - (h % tile_size)) % tile_size
+        print(
+            f"   [AI] Tile-fit math: nx=ceil({w}/{tile_size})={nx}, ny=ceil({h}/{tile_size})={ny}, "
+            f"spare_if_grid_aligned=+{spare_w}px right, +{spare_h}px bottom"
+        )
 
     if fit:
         img, fit_info = _fit_image_to_tile_grid_np(img, tile_size=tile_size, torch=torch, F=F)
@@ -1513,8 +1615,17 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
                 f"{fit_info['final_w']}x{fit_info['final_h']} "
                 f"({fit_info['tiles_x']}x{fit_info['tiles_y']} tiles @ {fit_info['tile_size']})"
             )
+            print(
+                f"   [AI] Fit math: scale={fit_info['scaled_w']}/{fit_info['orig_w']} and {fit_info['scaled_h']}/{fit_info['orig_h']} (uniform), "
+                f"crop_total=({fit_info['crop_total_w']}px, {fit_info['crop_total_h']}px), "
+                f"crop_ltrb=({fit_info['crop_left']},{fit_info['crop_top']},{fit_info['crop_right']},{fit_info['crop_bottom']})"
+            )
+    h, w = img.shape[:2]
 
-    print(f"   [AI] Tiling config for {canonical_model_name}: tile {tile_size}, overlap {overlap}, multiple {tile_multiple}")
+    fit_mode = ", overlap-fit on" if overlap_fit else ""
+    print(f"   [AI] Tiling config for {canonical_model_name}: tile {tile_size}, overlap {overlap}, multiple {tile_multiple}{fit_mode}")
+    if fit or tile_fit or overlap_fit:
+        _report_tiling_math(w, h, tile_size, overlap, overlap_fit, label="post-fit")
 
     cache = _load_denoise_cache() or {}
     models_cache = cache.setdefault("models", {})
@@ -1571,6 +1682,7 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
         denoise_mode=denoise_mode,
         tile_size=tile_size,
         overlap=overlap,
+        overlap_fit=overlap_fit,
         max_full_pixels=max_full_pixels,
         input_multiple=tile_multiple,
         tile_candidates=tile_candidates,
@@ -1859,28 +1971,37 @@ class RawConverter:
         cmd.extend(["-c", abs_input])
         return subprocess.run(cmd, capture_output=True, text=True), cmd
 
-def select_profile():
-    """Looks for .pp3 files in a 'profiles' subfolder next to the script."""
-    script_dir = Path(__file__).parent
-    profile_dir = script_dir / "profiles"
-    
+def select_profile(profile_dir=PP3_DIR, default_profile=None):
+    """Prompt user to choose a .pp3 profile from profile_dir."""
+    profile_dir = Path(profile_dir)
     if not profile_dir.exists():
-        return None
+        print(f"⚠️  PP3 folder not found: {profile_dir}")
+        return str(default_profile) if default_profile and Path(default_profile).exists() else None
 
-    pp3_files = list(profile_dir.glob("*.pp3"))
+    pp3_files = sorted(profile_dir.glob("*.pp3"), key=lambda p: p.name.lower())
     if not pp3_files:
-        return None
+        print(f"⚠️  No .pp3 files found in: {profile_dir}")
+        return str(default_profile) if default_profile and Path(default_profile).exists() else None
 
-    print("\n--- Available Profiles ---")
-    print("0: [Default/Neutral]")
+    default_path = Path(default_profile) if default_profile else None
+    default_exists = bool(default_path and default_path.exists())
+    default_label = default_path.name if default_exists else "RawTherapee defaults"
+
+    print("\n--- Available PP3 Profiles ---")
+    print(f"Folder: {profile_dir}")
+    print(f"0: [Use default: {default_label}]")
+    sidecar_choice = len(pp3_files) + 1
+    print(f"{sidecar_choice}: [Use RAW sidecar (*.ext.pp3), fallback default]")
     for i, p in enumerate(pp3_files, 1):
         print(f"{i}: {p.name}")
-    
+
     while True:
         try:
-            choice = int(input("\nSelect a profile number to apply: "))
+            choice = int(input("\nSelect a profile number: "))
             if choice == 0:
-                return None
+                return str(default_path) if default_exists else None
+            if choice == sidecar_choice:
+                return PP3_MODE_SIDECAR
             if 1 <= choice <= len(pp3_files):
                 return str(pp3_files[choice - 1])
         except ValueError:
@@ -1898,6 +2019,8 @@ def main():
     parser.add_argument("-i", "--inference", nargs="?", const="__PROMPT__", metavar="MODEL", default=None, help="Run AI inference with a specific model (or prompt if omitted)")
     parser.add_argument("--tile-size", type=int, default=None, help="Override AI tile size (auto-rounded to model multiple: NAFNet=16, Restormer=8)")
     parser.add_argument("--overlap", type=int, default=None, help="Override AI tile overlap")
+    parser.add_argument("--overlap-fit", dest="overlap_fit", action="store_true", default=True, help="Keep tile size fixed and auto-fit X/Y overlap so all tiles are full-size (default: enabled)")
+    parser.add_argument("--no-overlap-fit", dest="overlap_fit", action="store_false", help="Disable overlap-fit and use fixed nominal tile step")
     fit_group = parser.add_mutually_exclusive_group()
     fit_group.add_argument("-f", "--fit", action="store_true", help="Fit image dimensions to exact tile grid (uniform scale + center crop, no aspect distortion)")
     fit_group.add_argument("-tf", "--tile-fit", action="store_true", help="Fit tile size to image dimensions (keeps image size)")
@@ -1909,6 +2032,7 @@ def main():
     parser.add_argument("--dualdn-cmd", default=None, help="Optional DualDn command template with placeholders: {python} {script} {weights} {input} {output_dir}")
     parser.add_argument("--lut", "-l", nargs="?", const="__PROMPT__", help="Prompt for LUT selection or pass a .cube path")
     parser.add_argument("--no-lut", action="store_true", help="Skip LUT application.")
+    parser.add_argument("--pp3", action="store_true", help="Prompt to choose a .pp3 profile from pp3/ (includes sidecar mode; default RAW profile is pp3/auto_film.pp3 if present)")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep every intermediate stage with a unique stage suffix")
     parser.add_argument("--skip-rt", action="store_true", help="Skip RawTherapee stage (RAW files will be skipped).")
     
@@ -1996,6 +2120,7 @@ def main():
 
     converter = None
     selected_pp3 = None
+    default_pp3 = str(DEFAULT_PP3_PROFILE) if DEFAULT_PP3_PROFILE.exists() else None
     if processable_raw:
         try:
             converter = RawConverter()
@@ -2003,11 +2128,20 @@ def main():
         except Exception as e:
             print(f"❌ {e}")
             return
-        selected_pp3 = select_profile()
-        if selected_pp3:
-            print(f"🎨 Selected Profile: {Path(selected_pp3).name}")
+        if args.pp3:
+            selected_pp3 = select_profile(profile_dir=PP3_DIR, default_profile=default_pp3)
         else:
-            print("💡 No profile selected. Using RawTherapee defaults.")
+            selected_pp3 = default_pp3
+        if selected_pp3 == PP3_MODE_SIDECAR:
+            fallback_label = Path(default_pp3).name if default_pp3 else "RawTherapee defaults"
+            print(f"🎨 Using PP3 Mode: RAW sidecar (*.ext.pp3), fallback={fallback_label}")
+        elif selected_pp3:
+            print(f"🎨 Using PP3 Profile: {Path(selected_pp3).name}")
+        else:
+            if args.pp3:
+                print("💡 No PP3 profile selected. Using RawTherapee defaults.")
+            else:
+                print("💡 Default PP3 not found. Using RawTherapee defaults.")
     else:
         if args.skip_rt:
             print("⚙️  RawTherapee stage bypassed via --skip-rt.")
@@ -2066,11 +2200,23 @@ def main():
                 if args.keep:
                     out_file = _rename_with_stage(out_file, f"infer_{selected_model.lower()}")
             else:
+                profile_for_file = selected_pp3
+                if selected_pp3 == PP3_MODE_SIDECAR:
+                    sidecar_pp3 = Path(str(photo) + ".pp3")
+                    if sidecar_pp3.exists():
+                        profile_for_file = str(sidecar_pp3)
+                        print(f"   [RT] PP3: sidecar {sidecar_pp3.name}")
+                    else:
+                        profile_for_file = default_pp3
+                        if profile_for_file:
+                            print(f"   [RT] PP3: sidecar missing, fallback {Path(profile_for_file).name}")
+                        else:
+                            print("   [RT] PP3: sidecar missing, fallback RawTherapee defaults")
                 try:
                     res, cmd = converter.process_file(
                         photo,
                         output_dir,
-                        selected_pp3,
+                        profile_for_file,
                         args.quality,
                         args.out_format,
                         args.rt_bit_depth,
@@ -2146,6 +2292,7 @@ def main():
                         calibrate=args.calibrate,
                         fit=args.fit,
                         tile_fit=args.tile_fit,
+                        overlap_fit=args.overlap_fit,
                         safety_fallback=args.ai_safety_fallback,
                         model_name=selected_model,
                     )
@@ -2163,6 +2310,7 @@ def main():
                     calibrate=args.calibrate,
                     fit=args.fit,
                     tile_fit=args.tile_fit,
+                    overlap_fit=args.overlap_fit,
                     safety_fallback=args.ai_safety_fallback,
                     model_name=selected_model,
                 )
@@ -2192,4 +2340,8 @@ def main():
     print("\nBatch Complete.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled by user (Ctrl+C). Exiting.")
+        sys.exit(130)
