@@ -1703,16 +1703,42 @@ def _compress_tif_inplace(image_path):
     if Image is None:
         print(f"   [TIFF] Compression skipped (Pillow missing): {err}")
         return False
+    src = Path(image_path)
+    tmp = src.with_name(f"{src.stem}.tmp_{uuid.uuid4().hex}{src.suffix}")
     try:
-        with Image.open(image_path) as im:
+        with Image.open(src) as im:
             im.save(
-                image_path,
+                tmp,
                 compression=TIF_COMPRESSION,
                 predictor=TIF_PREDICTOR,
                 compress_level=TIF_LEVEL,
             )
+        os.replace(tmp, src)
         return True
     except Exception as e:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        # One short retry can recover from transient file-handle timing on Windows.
+        try:
+            time.sleep(0.1)
+            with Image.open(src) as im:
+                im.save(
+                    tmp,
+                    compression=TIF_COMPRESSION,
+                    predictor=TIF_PREDICTOR,
+                    compress_level=TIF_LEVEL,
+                )
+            os.replace(tmp, src)
+            return True
+        except Exception:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
         print(f"   [TIFF] Compression failed: {e}")
         return False
 
