@@ -822,6 +822,8 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import shlex
 import re
+import queue
+import time
 
 # ================== USER CONFIGURABLE VARIABLES ==================
 YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
@@ -840,6 +842,23 @@ failed_urls_lock = threading.Lock()
 
 YTDLP_TASK = "yt-dlp"
 GALLERYDL_TASK = "gallery-dl"
+HEARTBEAT_SECONDS = 20
+
+def should_echo_live_line(line, args):
+    """Controls how much child-process output is shown in real time."""
+    if args.verbose:
+        return True
+    lowered = line.lower()
+    return (
+        "[download]" in line
+        or "[merger]" in line
+        or "[extractaudio]" in line
+        or "error:" in lowered
+        or "warning:" in lowered
+        or "retrying" in lowered
+        or "destination:" in lowered
+        or "already been downloaded" in lowered
+    )
 
 def ms_to_srt_time(ms):
     """Converts milliseconds to SRT timestamp format (HH:MM:SS,mmm)."""
@@ -987,20 +1006,65 @@ def run_download_task(task_type, identifier, title, args, original_url):
             command_list,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True, encoding='utf-8', errors='replace'
+            text=True, encoding='utf-8', errors='replace', bufsize=1
         )
         with process_lock:
             running_processes.add(process)
-        
-        stdout, stderr = process.communicate()
 
-        if args.verbose:
-            with print_lock:
-                print("--- YTDLP STDOUT ---")
-                print(stdout)
-                print("--- YTDLP STDERR ---")
-                print(stderr)
-                print("--------------------")
+        stdout_chunks = []
+        stderr_chunks = []
+        output_queue = queue.Queue()
+
+        def reader_thread(stream, stream_name):
+            try:
+                for raw_line in iter(stream.readline, ''):
+                    output_queue.put((stream_name, raw_line.rstrip('\r\n')))
+            finally:
+                stream.close()
+                output_queue.put((stream_name, None))
+
+        out_t = threading.Thread(target=reader_thread, args=(process.stdout, "stdout"), daemon=True)
+        err_t = threading.Thread(target=reader_thread, args=(process.stderr, "stderr"), daemon=True)
+        out_t.start()
+        err_t.start()
+
+        finished_streams = set()
+        last_output_ts = time.monotonic()
+        start_ts = last_output_ts
+
+        while len(finished_streams) < 2:
+            try:
+                stream_name, line = output_queue.get(timeout=1.0)
+            except queue.Empty:
+                if process.poll() is not None and out_t.is_alive() is False and err_t.is_alive() is False:
+                    break
+                now = time.monotonic()
+                if now - last_output_ts >= HEARTBEAT_SECONDS:
+                    elapsed = int(now - start_ts)
+                    with print_lock:
+                        print(f"  [DEBUG] {tool_name} still running for {elapsed}s with no new output (title: {display_title})")
+                    last_output_ts = now
+                continue
+
+            if line is None:
+                finished_streams.add(stream_name)
+                continue
+
+            last_output_ts = time.monotonic()
+            if stream_name == "stdout":
+                stdout_chunks.append(line)
+            else:
+                stderr_chunks.append(line)
+
+            if should_echo_live_line(line, args):
+                with print_lock:
+                    print(f"  [{tool_name}] {line}")
+
+        process.wait()
+        out_t.join(timeout=1)
+        err_t.join(timeout=1)
+        stdout = "\n".join(stdout_chunks)
+        stderr = "\n".join(stderr_chunks)
         
         if process.returncode == 0:
             if args.json3:
@@ -1053,36 +1117,65 @@ def run_download_task(task_type, identifier, title, args, original_url):
 
 def run_text_extraction_task(url):
     """Extracts text metadata from a URL using yt-dlp or gallery-dl."""
-    TITLE_KEYS, CONTENT_KEYS = ['title', 'fullname', 'username'], ['description', 'content', 'caption', 'tweet-text']
+    TITLE_KEYS = ['title', 'fullname', 'username']
+    CONTENT_KEYS = ['description', 'content', 'caption', 'tweet-text']
     data = None
-    
+
     try:
-        command = [*YTDLP_PATH, '--dump-single-json', '--skip-download', '--ignore-no-formats-error', url]
+        command = [*YTDLP_PATH, '--dump-json', '--skip-download', '--ignore-no-formats-error', url]
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        data = json.loads(result.stdout)
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        data = result.stdout
+    except subprocess.CalledProcessError:
         pass
-        
-    if data is None:
+
+    entries = []
+    if data:
+        for line in data.strip().splitlines():
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if not entries:
         try:
             command = [GALLERYDL_PATH, '--dump-json', '--no-download', url]
             result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
             first_line = result.stdout.strip().splitlines()[0]
-            data = json.loads(first_line)
+            entries = [json.loads(first_line)]
         except (subprocess.CalledProcessError, json.JSONDecodeError, IndexError):
             return ("FAILURE", "Could not extract metadata from either yt-dlp or gallery-dl.")
 
-    title = next((data.get(key) for key in TITLE_KEYS if data.get(key)), "Untitled")
-    content = next((data.get(key) for key in CONTENT_KEYS if data.get(key)), "")
-    if not content and title != "Untitled" and title in data.values():
-        content = title
-        
-    if not content:
-        return ("FAILURE", "No text content found in metadata.")
+    primary = entries[0]
+    title = next((primary.get(key) for key in TITLE_KEYS if primary.get(key)), "Untitled")
 
+    # If this looks like a thread (multiple tweet entries), stitch them together.
+    stitched = []
+    thread_entries = primary.get('entries') if isinstance(primary, dict) else None
+    if thread_entries and isinstance(thread_entries, list):
+        for entry in thread_entries:
+            if not isinstance(entry, dict):
+                continue
+            text = next((entry.get(key) for key in CONTENT_KEYS if entry.get(key)), "")
+            if text:
+                stitched.append(text.strip())
+    else:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            text = next((entry.get(key) for key in CONTENT_KEYS if entry.get(key)), "")
+            if text:
+                stitched.append(text.strip())
+
+    if not stitched:
+        if title != "Untitled" and isinstance(primary, dict) and title in primary.values():
+            stitched = [title]
+        else:
+            return ("FAILURE", "No text content found in metadata.")
+
+    content = "\n\n---\n\n".join(stitched)
     final_text = f"Title: {title}\nURL: {url}\n\n---\n\n{content}"
     filename = sanitize_filename(title)
-    
+
     try:
         with open(f"{filename}.txt", "w", encoding="utf-8") as f:
             f.write(final_text)
@@ -1161,7 +1254,7 @@ def get_tasks_from_url(url):
 
 def build_ytdlp_command(target_url, args):
     video_url = target_url
-    command_list = [*YTDLP_PATH, '--no-warnings', '-o', OUTPUT_TEMPLATE]
+    command_list = [*YTDLP_PATH, '--no-warnings', '--newline', '--progress-delta', '2', '-o', OUTPUT_TEMPLATE]
 
     if args.verbose:
         command_list.append('-v')
