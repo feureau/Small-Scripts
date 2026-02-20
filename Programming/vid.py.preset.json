@@ -524,9 +524,11 @@
             "blur_steps": "1",
             "horizontal_aspect": "16:9",
             "vertical_aspect": "9:16",
-            "burn_subtitles": true,
+            "burn_subtitles": false,
             "override_bitrate": false,
             "manual_bitrate": "45000",
+            "max_size_mb": "0",
+            "max_duration": "0",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -625,6 +627,7 @@
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
             "on_scan_subs": true,
+            "auto_detect_subs": false,
             "suffix_filter": null
         }
     },
@@ -651,9 +654,11 @@
             "blur_steps": "1",
             "horizontal_aspect": "16:9",
             "vertical_aspect": "9:16",
-            "burn_subtitles": true,
+            "burn_subtitles": false,
             "override_bitrate": false,
             "manual_bitrate": "8000",
+            "max_size_mb": "0",
+            "max_duration": "0",
             "use_dynaudnorm": true,
             "dyn_frame_len": "100",
             "dyn_gauss_win": "3",
@@ -752,6 +757,7 @@
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
             "on_scan_subs": true,
+            "auto_detect_subs": false,
             "suffix_filter": null
         }
     },
