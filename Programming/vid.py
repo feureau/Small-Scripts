@@ -281,6 +281,7 @@ DEFAULT_TITLE_BURN_ENABLED = False                  # Enable title burning. Defa
 DEFAULT_TITLE_JSON_SUFFIX = ""                      # JSON file suffix (e.g., "-yt", "-instagram"). Default: blank
 DEFAULT_TITLE_REMOVE_HASHTAGS = True                # Remove hashtags from extracted title text. Default: True
 DEFAULT_TITLE_ENABLE_EMOJI = True                   # Enable emoji rendering in title text. Default: True
+DEFAULT_TITLE_AUTODETECT = True                     # Auto-detect title from JSON when available. Default: True
 DEFAULT_TITLE_OVERRIDE_TEXT = ""                    # Manual title text override. Default: blank
 DEFAULT_TITLE_START_TIME = "00:00:00.00"            # Title start time. Default: 00:00:00.00
 DEFAULT_TITLE_END_TIME = "00:00:03.00"              # Title end time. Default: 00:00:03.00 (3 seconds)
@@ -1454,6 +1455,8 @@ class WorkflowPresetManager:
             "manual_bitrate": "0",
             "override_bitrate": False,
             "aspect_mode": DEFAULT_ASPECT_MODE,
+            "video_offset_x": DEFAULT_VIDEO_OFFSET_X,
+            "video_offset_y": DEFAULT_VIDEO_OFFSET_Y,
             "pixelate_multiplier": DEFAULT_PIXELATE_MULTIPLIER,
             "pixelate_brightness": DEFAULT_PIXELATE_BRIGHTNESS,
             "pixelate_saturation": DEFAULT_PIXELATE_SATURATION,
@@ -1467,6 +1470,7 @@ class WorkflowPresetManager:
             "hybrid_bottom_mode": "crop",
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
+            "generate_log": False,
             "burn_subtitles": DEFAULT_BURN_SUBTITLES,
             "use_sharpening": DEFAULT_USE_SHARPENING,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
@@ -1537,6 +1541,7 @@ class WorkflowPresetManager:
             "title_json_suffix": DEFAULT_TITLE_JSON_SUFFIX,
             "title_remove_hashtags": DEFAULT_TITLE_REMOVE_HASHTAGS,
             "title_enable_emoji": DEFAULT_TITLE_ENABLE_EMOJI,
+            "title_autodetect": DEFAULT_TITLE_AUTODETECT,
             "title_override_text": DEFAULT_TITLE_OVERRIDE_TEXT,
             "title_start_time": DEFAULT_TITLE_START_TIME,
             "title_end_time": DEFAULT_TITLE_END_TIME,
@@ -1637,6 +1642,7 @@ class WorkflowPresetManager:
             "triggers": {
                 "video_trigger": "Always (Clean/Backup)",
                 "on_scan_subs": False,
+                "auto_detect_subs": False,
                 "suffix_filter": None 
             }
         }
@@ -1656,6 +1662,7 @@ class WorkflowPresetManager:
             "triggers": {
                 "video_trigger": "Never",
                 "on_scan_subs": True,
+                "auto_detect_subs": False,
                 "suffix_filter": None # Matches ALL (Wildcard)
             }
         }
@@ -1671,6 +1678,7 @@ class WorkflowPresetManager:
             "triggers": {
                 "video_trigger": "Never",
                 "on_scan_subs": True,
+                "auto_detect_subs": False,
                 "suffix_filter": "-cn" # Matches ONLY -cn
             }
         }
@@ -1697,6 +1705,7 @@ class VideoProcessorApp:
         self.trigger_video_always_var = tk.BooleanVar(value=False)
         self.trigger_video_fallback_var = tk.BooleanVar(value=False)
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
+        self.trigger_autodetect_subs_var = tk.BooleanVar(value=False)
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
         self.output_suffix_override_var = tk.StringVar(value="")
@@ -1853,6 +1862,7 @@ class VideoProcessorApp:
         self.title_json_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('title_json_suffix'))
         self.title_remove_hashtags_var = tk.BooleanVar(value=DEFAULT_TITLE_REMOVE_HASHTAGS)
         self.title_enable_emoji_var = tk.BooleanVar(value=DEFAULT_TITLE_ENABLE_EMOJI)
+        self.title_autodetect_var = tk.BooleanVar(value=DEFAULT_TITLE_AUTODETECT)
         self.title_override_var = tk.StringVar(value=DEFAULT_TITLE_OVERRIDE_TEXT)
         self.title_override_var.trace_add('write', lambda *args: self._update_selected_jobs('title_override_text'))
         self.title_start_time_var = tk.StringVar(value=DEFAULT_TITLE_START_TIME)
@@ -2162,6 +2172,10 @@ class VideoProcessorApp:
         
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2_2, text="Trigger on Subtitle", variable=self.trigger_scan_subs_var).pack(side=tk.LEFT, padx=(5,5))
+
+        cb_autodetect = ttk.Checkbutton(row2_2, text="Auto-detect Subtitles", variable=self.trigger_autodetect_subs_var)
+        cb_autodetect.pack(side=tk.LEFT, padx=(10, 5))
+        ToolTip(cb_autodetect, "Auto-pick a subtitle file/stream when adding jobs for this preset.")
         
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row2_2, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var).pack(side=tk.LEFT, padx=(10, 5))
@@ -2601,10 +2615,17 @@ class VideoProcessorApp:
             variable=self.title_enable_emoji_var,
             command=lambda: self._update_selected_jobs("title_enable_emoji")
         ).pack(side=tk.LEFT, padx=(15, 0))
+        ttk.Checkbutton(
+            sanitize_frame,
+            text="Auto-detect title from JSON",
+            variable=self.title_autodetect_var,
+            command=self._on_title_autodetect_toggle
+        ).pack(side=tk.LEFT, padx=(15, 0))
         
         override_frame = ttk.Frame(source_group); override_frame.pack(fill=tk.X, pady=2)
         ttk.Label(override_frame, text="Title:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(override_frame, textvariable=self.title_override_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(override_frame, text="Detect", command=lambda: self.detect_title_for_selected(force=True), width=8).pack(side=tk.LEFT, padx=(5, 0))
         ToolTip(override_frame, "Auto-filled from detected JSON title when available. Edit this field to use your own title.")
 
         # Timing Settings
@@ -2877,6 +2898,8 @@ class VideoProcessorApp:
 
     def _autofill_title_for_job(self, job, force=False):
         options = job.get("options", {})
+        if not force and not options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT):
+            return False
         current_title = (options.get("title_override_text", "") or "").strip()
         if current_title and not force:
             return False
@@ -2885,6 +2908,27 @@ class VideoProcessorApp:
             return False
         options["title_override_text"] = detected_title
         return True
+
+    def detect_title_for_selected(self, force=False):
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+        updated = 0
+        for index in selected_indices:
+            job = self.processing_jobs[index]
+            if self._autofill_title_for_job(job, force=force):
+                updated += 1
+        if updated == 0:
+            messagebox.showinfo("No Title Found", "No matching title was detected from JSON for the selected job(s).")
+        else:
+            if len(selected_indices) == 1:
+                self.title_override_var.set(self.processing_jobs[selected_indices[0]]['options'].get("title_override_text", ""))
+            self.update_status(f"Detected titles for {updated} job(s).")
+
+    def _on_title_autodetect_toggle(self):
+        self._update_selected_jobs("title_autodetect")
+        if self.title_autodetect_var.get():
+            self.detect_title_for_selected(force=False)
 
     def _apply_subtitle_to_job(self, index, subtitle_path, display_tag):
         job = self.processing_jobs[index]
@@ -3045,21 +3089,6 @@ class VideoProcessorApp:
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
 
-        is_vertical_target = orientation in ["vertical", "hybrid (stacked)", "horizontal + vertical"]
-
-        if is_vertical_target:
-            selected_indices = self.job_listbox.curselection()
-            should_enable_burn = False
-            if selected_indices:
-                for index in selected_indices:
-                    job = self.processing_jobs[index]
-                    if job.get('subtitle_path') is not None:
-                        should_enable_burn = True
-                        break 
-            
-            if should_enable_burn:
-                self.burn_subtitles_var.set(True)
-        
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
     def _toggle_upscale_options(self):
@@ -3311,6 +3340,8 @@ class VideoProcessorApp:
             "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(), 
+            "max_size_mb": self.max_size_mb_var.get(),
+            "max_duration": self.max_duration_var.get(),
             "use_dynaudnorm": self.use_dynaudnorm_var.get(),
             "dyn_frame_len": self.dyn_frame_len_var.get(), "dyn_gauss_win": self.dyn_gauss_win_var.get(),
             "dyn_peak": self.dyn_peak_var.get(), "dyn_max_gain": self.dyn_max_gain_var.get(),
@@ -3364,6 +3395,7 @@ class VideoProcessorApp:
             "title_json_suffix": self.title_json_suffix_var.get(),
             "title_remove_hashtags": self.title_remove_hashtags_var.get(),
             "title_enable_emoji": self.title_enable_emoji_var.get(),
+            "title_autodetect": self.title_autodetect_var.get(),
             "title_override_text": self.title_override_var.get(),
             "title_start_time": self.title_start_time_var.get(),
             "title_end_time": self.title_end_time_var.get(),
@@ -3419,6 +3451,7 @@ class VideoProcessorApp:
             elif on_no_sub and not on_clean_copy: self.trigger_video_fallback_var.set(True)
 
         self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
+        self.trigger_autodetect_subs_var.set(triggers.get('auto_detect_subs', False))
 
         suffix_val = triggers.get('suffix_filter')
         if suffix_val is not None:
@@ -3542,6 +3575,7 @@ class VideoProcessorApp:
             "on_no_sub": on_no_sub,
             "on_clean_copy_if_subs": on_clean_copy,
             "on_scan_subs": self.trigger_scan_subs_var.get(),
+            "auto_detect_subs": self.trigger_autodetect_subs_var.get(),
             "suffix_filter": self.trigger_suffix_var.get() if self.trigger_suffix_enable_var.get() else None
         }
         self.preset_manager.save_preset(name, options, triggers)
@@ -3766,6 +3800,15 @@ class VideoProcessorApp:
             del self.processing_jobs[index]; self.job_listbox.delete(index)
     
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
+        if subtitle_path is None:
+            preset = self.preset_manager.get_preset(preset_name) if preset_name else None
+            triggers = preset.get('triggers', {}) if preset else {}
+            if triggers.get('auto_detect_subs'):
+                detected_subs = self._detect_subtitles_for_video(video_path)
+                preferred = self._pick_preferred_subtitle(detected_subs)
+                if preferred:
+                    subtitle_path = preferred.get("path")
+                    display_tag = preferred.get("display_tag", display_tag)
         new_job = {
             "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
             "video_path": video_path,
@@ -3796,27 +3839,28 @@ class VideoProcessorApp:
         # We avoid calling load_preset_to_gui because that applies settings to selection.
         preset_name = selected_job.get('preset_name')
         if preset_name and preset_name in self.preset_manager.get_preset_names():
-             self.current_preset_var.set(preset_name)
-             self.update_gui_from_job_options(selected_job)
-             
-             # Job stores preset name, not trigger settings.
-             preset = self.preset_manager.get_preset(preset_name)
-             if preset:
-                 triggers = preset['triggers']
-                 
-                 on_no_sub = triggers.get('on_no_sub', False)
-                 on_clean = triggers.get('on_clean_copy_if_subs', False)
-                 self.trigger_video_always_var.set(on_no_sub and on_clean)
-                 self.trigger_video_fallback_var.set(on_no_sub and not on_clean)
-                     
-                 self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
-                 suffix_val = triggers.get('suffix_filter')
-                 if suffix_val is not None:
-                     self.trigger_suffix_enable_var.set(True)
-                     self.trigger_suffix_var.set(suffix_val)
-                 else:
-                     self.trigger_suffix_enable_var.set(False)
-                     self.trigger_suffix_var.set("")
+            self.current_preset_var.set(preset_name)
+            self.update_gui_from_job_options(selected_job)
+            
+            # Job stores preset name, not trigger settings.
+            preset = self.preset_manager.get_preset(preset_name)
+            if preset:
+                triggers = preset['triggers']
+                
+                on_no_sub = triggers.get('on_no_sub', False)
+                on_clean = triggers.get('on_clean_copy_if_subs', False)
+                self.trigger_video_always_var.set(on_no_sub and on_clean)
+                self.trigger_video_fallback_var.set(on_no_sub and not on_clean)
+                    
+                self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
+                self.trigger_autodetect_subs_var.set(triggers.get('auto_detect_subs', False))
+                suffix_val = triggers.get('suffix_filter')
+                if suffix_val is not None:
+                    self.trigger_suffix_enable_var.set(True)
+                    self.trigger_suffix_var.set(suffix_val)
+                else:
+                    self.trigger_suffix_enable_var.set(False)
+                    self.trigger_suffix_var.set("")
         else:
             self.current_preset_var.set("") # Custom or Unknown
             self.update_gui_from_job_options(selected_job)
@@ -3824,6 +3868,7 @@ class VideoProcessorApp:
             self.trigger_video_always_var.set(False)
             self.trigger_video_fallback_var.set(False)
             self.trigger_scan_subs_var.set(False)
+            self.trigger_autodetect_subs_var.set(False)
             self.trigger_suffix_enable_var.set(False)
             self.trigger_suffix_var.set("")
 
@@ -3919,6 +3964,7 @@ class VideoProcessorApp:
         self.title_json_suffix_var.set(options.get("title_json_suffix", DEFAULT_TITLE_JSON_SUFFIX))
         self.title_remove_hashtags_var.set(options.get("title_remove_hashtags", DEFAULT_TITLE_REMOVE_HASHTAGS))
         self.title_enable_emoji_var.set(options.get("title_enable_emoji", DEFAULT_TITLE_ENABLE_EMOJI))
+        self.title_autodetect_var.set(options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT))
         self.title_override_var.set(options.get("title_override_text", DEFAULT_TITLE_OVERRIDE_TEXT))
         self.title_start_time_var.set(options.get("title_start_time", DEFAULT_TITLE_START_TIME))
         self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
