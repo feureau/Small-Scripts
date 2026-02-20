@@ -98,6 +98,9 @@ def main():
         print(f"No files found matching: {file_pattern}")
         sys.exit(1)
     
+    success_items = []
+    failed_items = []
+
     for file in files:
         print(f"Processing: {file}")
         
@@ -118,15 +121,68 @@ def main():
 
         print("Running command: " + " ".join(command))
         try:
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             print(f"Successfully created: {output_file}")
             
             shutil.move(file, os.path.join(input_dir, os.path.basename(file)))
             print(f"Moved original file to: {os.path.join(input_dir, os.path.basename(file))}")
+            success_items.append({
+                "source": file,
+                "output": output_file,
+                "status": "ok",
+            })
 
         except subprocess.CalledProcessError as e:
             print(f"Error processing {file}: {e}")
             print(f"FFmpeg Error Output:\n{e.stderr}")
+            failed_items.append({
+                "source": file,
+                "status": "ffmpeg_error",
+                "returncode": e.returncode,
+                "reason": (e.stderr or "").strip() or "No stderr captured",
+            })
+        except Exception as e:
+            print(f"Unexpected error processing {file}: {e}")
+            failed_items.append({
+                "source": file,
+                "status": "script_error",
+                "reason": str(e),
+            })
+
+    print("\n" + "=" * 72)
+    print("Processing summary")
+    print("=" * 72)
+    print(f"Total files discovered : {len(files)}")
+    print(f"Successful conversions : {len(success_items)}")
+    print(f"Not processed / failed : {len(failed_items)}")
+
+    if success_items:
+        print("\nSuccessful files:")
+        for idx, item in enumerate(success_items, 1):
+            print(f"{idx}. {item['source']}")
+            print(f"   Output: {item['output']}")
+
+    if failed_items:
+        print("\nFailed files:")
+        for idx, item in enumerate(failed_items, 1):
+            print(f"{idx}. {item['source']}")
+            if "returncode" in item:
+                print(f"   Return code: {item['returncode']}")
+            print(f"   Type: {item['status']}")
+            reason = item.get("reason", "").strip()
+            if reason:
+                print("   Reason:")
+                for line in reason.splitlines()[:12]:
+                    print(f"   {line}")
+                if len(reason.splitlines()) > 12:
+                    print("   ... (truncated)")
 
 if __name__ == '__main__':
     main()
