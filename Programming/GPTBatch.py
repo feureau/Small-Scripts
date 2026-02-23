@@ -144,6 +144,7 @@ LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
 LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
 
 USER_PROMPT_TEMPLATE = """Analyze the provided content."""
+CONTEXT_PROMPT_PLACEHOLDER = "{{CONTEXT_TEXT}}"
 
 # --- AUTO-LOAD SETTINGS ---
 AUTO_LOAD_EXTENSIONS = [
@@ -1075,6 +1076,17 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
     return chunks
 
 
+def apply_context_to_prompt(user_prompt, context_text):
+    prompt = user_prompt or ""
+    context = (context_text or "").strip()
+
+    if CONTEXT_PROMPT_PLACEHOLDER in prompt:
+        return prompt.replace(CONTEXT_PROMPT_PLACEHOLDER, context)
+    if context:
+        return f"{prompt}\n\nContext:\n{context}"
+    return prompt
+
+
 
 
 def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, cancellation_event=None, **kwargs):
@@ -1195,6 +1207,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             
             file_content_all = "".join(prompt_parts)
             
+            resolved_user_prompt = apply_context_to_prompt(user_prompt, kwargs.get('context_text', ''))
+
             if kwargs.get('enable_chunking', False):
                 max_tok = kwargs.get('chunk_size', 4000)
                 overlap = kwargs.get('chunk_overlap', 200)
@@ -1204,7 +1218,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 chunks = [file_content_all]
 
                 
-            log_data['prompt_sent'] = user_prompt + file_content_all
+            log_data['prompt_sent'] = resolved_user_prompt + file_content_all
             if len(chunks) > 1:
                 log_data['chunk_count'] = len(chunks)
             
@@ -1217,7 +1231,7 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 if len(chunks) > 1:
                     console_log(f"Processing chunk {idx+1}/{len(chunks)} for {base_name}...", "INFO")
                 
-                full_chunk_prompt = user_prompt + chunk_content
+                full_chunk_prompt = resolved_user_prompt + chunk_content
                 
                 resp = call_generative_ai_api(
                     engine, 
@@ -1494,6 +1508,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', True))
         self.thinking_var = tk.BooleanVar(value=False) # New for Gemini (v25.8)
         self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
+        self.default_context_text = getattr(self.args, 'context_text', '')
+        self.persistent_context_var = tk.BooleanVar(value=False)
+        self.global_context_text_value = self.default_context_text
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
@@ -1610,16 +1627,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
         tab_ai = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_ai, text="AI Engine")
+        tab_ai.columnconfigure(1, weight=1)
         ttk.Label(tab_ai, text="Provider:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(tab_ai, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
         ttk.Label(tab_ai, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
-        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=50)
+        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=1)
         self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
         
         ttk.Checkbutton(tab_ai, text="Stream Output", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(tab_ai, text="Enable Thinking (Gemini)", variable=self.thinking_var).grid(row=3, column=0, columnspan=2, sticky="w")
         ttk.Checkbutton(tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var).grid(row=4, column=0, columnspan=2, sticky="w")
-        
+
         # --- Chunking Frame ---
         chunk_f = ttk.LabelFrame(tab_ai, text="Text Chunking (Process very long text in parts)", padding=5)
         chunk_f.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(15, 0))
@@ -1645,17 +1663,34 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.ollama_search_var = tk.BooleanVar(value=False)
         self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
-        self.ollama_search_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(5,0))
+        self.ollama_search_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5,0))
+
+        ttk.Checkbutton(
+            tab_ai,
+            text="Persistent Context (Global)",
+            variable=self.persistent_context_var,
+            command=self.on_persistent_context_toggle
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(tab_ai, text="Context Text:").grid(row=8, column=0, sticky="w", pady=(6, 3))
+        ttk.Button(tab_ai, text="Insert Context", command=self.insert_context_placeholder).grid(row=8, column=1, sticky="e", pady=(6, 3))
+        self.context_text = scrolledtext.ScrolledText(tab_ai, height=4)
+        self.context_text.grid(row=9, column=0, columnspan=2, sticky="ew")
+        self.context_text.bind("<<Modified>>", self._on_context_text_modified)
+        if self.default_context_text:
+            self.context_text.insert(tk.END, self.default_context_text)
+            self.context_text.edit_modified(False)
 
 
         tab_out = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_out, text="Output & Batch")
+        tab_out.columnconfigure(1, weight=1)
         ttk.Label(tab_out, text="Folder:").grid(row=0, column=0, sticky="w")
         self.out_ent = ttk.Entry(tab_out, textvariable=self.output_dir_var, width=15); self.out_ent.grid(row=0, column=1, sticky="ew")
         ttk.Button(tab_out, text="...", width=3, command=self.browse_out).grid(row=0, column=2)
         ttk.Label(tab_out, text="Suffix/Ext:").grid(row=1, column=0, sticky="w")
         f_ext = ttk.Frame(tab_out); f_ext.grid(row=1, column=1, columnspan=2, sticky="ew")
-        self.suf_ent = ttk.Entry(f_ext, textvariable=self.suffix_var, width=10); self.suf_ent.pack(side=tk.LEFT)
-        self.ext_ent = ttk.Entry(f_ext, textvariable=self.output_ext_var, width=6); self.ext_ent.pack(side=tk.LEFT, padx=5)
+        f_ext.columnconfigure(0, weight=1)
+        self.suf_ent = ttk.Entry(f_ext, textvariable=self.suffix_var, width=10); self.suf_ent.grid(row=0, column=0, sticky="ew")
+        self.ext_ent = ttk.Entry(f_ext, textvariable=self.output_ext_var, width=6); self.ext_ent.grid(row=0, column=1, sticky="e", padx=(5, 0))
         self.group_check = ttk.Checkbutton(tab_out, text="Group Files:", variable=self.group_files_var, command=self.toggle_grouping)
         self.group_check.grid(row=2, column=0, sticky="w", pady=5)
         
@@ -1710,6 +1745,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # === TAB: Image & Format ===
         tab_img = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_img, text="Image & Format")
+        tab_img.columnconfigure(0, weight=1)
         
         # Master Toggle
         self.convert_check = ttk.Checkbutton(tab_img, text="Enable Image Pre-processing / Conversion", variable=self.enable_img_conversion_var, command=self.toggle_img_settings)
@@ -1718,6 +1754,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # Container for sub-settings
         self.img_settings_frame = ttk.Frame(tab_img)
         self.img_settings_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.img_settings_frame.columnconfigure(0, weight=1)
 
         ttk.Label(self.img_settings_frame, text="Temporary File Format:", font=('Helvetica', 9, 'bold')).grid(row=0, column=0, sticky="w", pady=(0, 5))
         fmt_frame = ttk.Frame(self.img_settings_frame)
@@ -1731,10 +1768,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Label(self.img_settings_frame, text="Compression Quality (1-100):").grid(row=2, column=0, sticky="w")
         q_frame = ttk.Frame(self.img_settings_frame)
         q_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.qual_scale = ttk.Scale(q_frame, from_=1, to=100, variable=self.img_quality_var, orient=tk.HORIZONTAL, length=200, command=lambda s: self.img_quality_var.set(int(float(s))))
-        self.qual_scale.pack(side=tk.LEFT)
-        ttk.Label(q_frame, textvariable=self.img_quality_var).pack(side=tk.LEFT, padx=5)
-        ttk.Label(q_frame, text="(JPEG/WEBP only)", font=('Helvetica', 8, 'italic'), foreground="gray").pack(side=tk.LEFT)
+        q_frame.columnconfigure(0, weight=1)
+        self.qual_scale = ttk.Scale(q_frame, from_=1, to=100, variable=self.img_quality_var, orient=tk.HORIZONTAL, length=1, command=lambda s: self.img_quality_var.set(int(float(s))))
+        self.qual_scale.grid(row=0, column=0, sticky="ew")
+        ttk.Label(q_frame, textvariable=self.img_quality_var).grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Label(q_frame, text="(JPEG/WEBP only)", font=('Helvetica', 8, 'italic'), foreground="gray").grid(row=0, column=2, sticky="w")
 
         # Max Dimension
         ttk.Label(self.img_settings_frame, text="Max Dimension (px):").grid(row=4, column=0, sticky="w")
@@ -1758,6 +1796,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Checkbutton(tab_safe, text="Enable Filters", variable=self.enable_safety_var, command=self.toggle_safety).pack(anchor="w")
         self.safety_widgets = []
         safe_grid = ttk.Frame(tab_safe); safe_grid.pack(fill=tk.X, pady=5)
+        safe_grid.columnconfigure(1, weight=1)
         for i, (txt, var) in enumerate([("Harassment", self.harassment_var), ("Hate Speech", self.hate_speech_var), 
                                         ("Sexual", self.sexually_explicit_var), ("Dangerous", self.dangerous_content_var)]):
             l = ttk.Label(safe_grid, text=txt); l.grid(row=i, column=0, sticky="w")
@@ -1828,6 +1867,37 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         overlap_active = chunk_enabled and self.enable_overlap_var.get()
         self.chunk_overlap_spin.config(state='normal' if overlap_active else 'disabled')
 
+    def insert_context_placeholder(self):
+        self.prompt_text.insert(tk.INSERT, CONTEXT_PROMPT_PLACEHOLDER)
+        self.prompt_text.focus_set()
+        self.prompt_text.see(tk.INSERT)
+
+    def _get_context_text(self):
+        return self.context_text.get("1.0", tk.END).strip()
+
+    def _set_context_text(self, text):
+        self.context_text.delete("1.0", tk.END)
+        self.context_text.insert(tk.END, text or "")
+        self.context_text.edit_modified(False)
+
+    def _on_context_text_modified(self, event=None):
+        if not self.context_text.edit_modified():
+            return
+        if self.persistent_context_var.get():
+            self.global_context_text_value = self._get_context_text()
+        self.context_text.edit_modified(False)
+
+    def on_persistent_context_toggle(self):
+        if self.persistent_context_var.get():
+            self.global_context_text_value = self._get_context_text()
+            return
+
+        # When leaving global mode, restore the selected preset's saved local context.
+        name = self.preset_var.get()
+        if name in self.current_presets:
+            preset_local_context = self.current_presets[name].get('context_text', '')
+            self._set_context_text(preset_local_context)
+
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
@@ -1855,6 +1925,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.thinking_var, 'enable_thinking', False) # Default False
             set_var(self.add_filename_var, 'add_filename_to_prompt', False)
             set_var(self.ollama_search_var, 'enable_web_search', False)
+            set_var(self.persistent_context_var, 'persistent_context', False)
+            selected_local_context = data.get('context_text', '')
+            selected_global_context = data.get('global_context_text', selected_local_context)
+
+            if self.persistent_context_var.get():
+                # Global mode: do not overwrite existing textbox while switching presets.
+                if not self._get_context_text():
+                    self._set_context_text(selected_global_context)
+                self.global_context_text_value = self._get_context_text()
+            else:
+                self._set_context_text(selected_local_context)
             
             # Safety Settings
             set_var(self.enable_safety_var, 'enable_safety', False)
@@ -1906,6 +1987,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
 
     def get_current_settings_dict(self):
+        current_context = self._get_context_text()
+        if self.persistent_context_var.get():
+            self.global_context_text_value = current_context
+
         return {
             'prompt': self.prompt_text.get("1.0", tk.END).strip(),
             'engine': self.engine_var.get(),
@@ -1925,6 +2010,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             'delay_sec': self.delay_sec_var.get(),
             'upload_mode': self.upload_mode_var.get(),
             'add_filename_to_prompt': self.add_filename_var.get(),
+            'context_text': current_context,
+            'persistent_context': self.persistent_context_var.get(),
+            'global_context_text': self.global_context_text_value,
             'enable_web_search': self.ollama_search_var.get(),
             'enable_safety': self.enable_safety_var.get(),
             'safety_harassment': self.harassment_var.get(),
@@ -2232,6 +2320,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         d_min = self.delay_min_var.get()
         d_sec = self.delay_sec_var.get()
         total_delay = (d_min * 60) + d_sec
+        current_context = self._get_context_text()
+        use_persistent_context = self.persistent_context_var.get()
+        if use_persistent_context:
+            self.global_context_text_value = current_context
 
         for batch in batches:
             self.job_id_counter += 1
@@ -2243,6 +2335,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 'output_folder': self.output_dir_var.get(), 'output_suffix': self.suffix_var.get(),
                 'output_extension': self.output_ext_var.get(), 'stream_output': self.stream_var.get(),
                 'safety_settings': safe, 'add_filename_to_prompt': self.add_filename_var.get(),
+                'context_text': self.global_context_text_value if use_persistent_context else current_context,
+                'use_persistent_context': use_persistent_context,
                 'overwrite_original': self.overwrite_var.get(),
                 'enable_web_search': self.ollama_search_var.get(), 
                 'validate_json': self.validate_json_var.get(),
@@ -2593,6 +2687,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.result_queue.put({'job_id': jid, 'status': 'Running'})
             params = job.copy(); params.pop('job_id')
             params['enable_thinking'] = self.thinking_var.get() # Pass GUI state
+            if params.get('use_persistent_context'):
+                params['context_text'] = self.global_context_text_value
             
             if self.global_runtime_overrides:
                 params['engine'] = self.global_runtime_overrides['engine']
@@ -2688,6 +2784,7 @@ def main():
     parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama', 'lmstudio'])
     parser.add_argument("-m", "--model")
     parser.add_argument("--add-filename-to-prompt", action='store_true')
+    parser.add_argument("--context-text", default="")
     args = parser.parse_args()
 
     # --- STARTUP CLEANUP ---
