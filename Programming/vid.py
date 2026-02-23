@@ -85,6 +85,16 @@ v8.11 - FFmpeg CPU Controls (2026-02-12)
     • FEATURE: Added FFmpeg CPU thread control (`-threads`) in Encoder tab.
     • FEATURE: Added FFmpeg process priority control for Windows (Idle to Realtime).
     • UX: New options are saved in presets and applied per job.
+v8.12 - NVEncC Aspect Handling (2026-02-20)
+    • FIX: Re-enabled Aspect Handling options (Crop/Pad/Stretch) for `nvencc_only`
+           and `nvencc_video_with_ffmpeg_audio`.
+    • FEATURE: NVEncC path now maps aspect mode to `--output-res` behavior:
+           Crop -> `preserve_aspect_ratio=increase`, Pad/Fit -> `decrease`.
+    • UX: `Blur` and `Pixelate` remain disabled on NVEncC-only video paths.
+v8.13 - Merged Horizontal/Vertical Mode (2026-02-20)
+    • UX: Merged Horizontal + Vertical into a single orientation mode.
+    • FEATURE: Output orientation is derived from the selected aspect ratio.
+    • UX: Horizontal and vertical aspect presets are shown together in merged mode.
 v8.8 - Subtitle & Workflow Improvements (2025-12-29)
     • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
                differently (Width 1 vs 2), fixing premature wrapping for English
@@ -164,7 +174,7 @@ DEFAULT_LUT_PATH = ""                               # Path to 3D LUT file for HD
 DEFAULT_SOFA_PATH = r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"  # Path to SOFA file for binaural audio (Sofalizer). Default: E:\\Small-Scripts\\SOFALIZER\\D1_48K_24bit_256tap_FIR_SOFA.sofa
 
 DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default: 2160p (4k)
-DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos
+DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos, spline36 (NVEncC)
 DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Default: sdr, Options: sdr, hdr
 DEFAULT_VIDEO_CODEC = "h264"                        # Output codec. Default: h264, Options: h264, hevc, av1
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"             # Encoder backend. Default: ffmpeg_only, Options: ffmpeg_only, nvencc_with_ffmpeg, nvencc_only, nvencc_video_with_ffmpeg_audio
@@ -172,7 +182,7 @@ DEFAULT_NVENC_SUPERRES_MODE = "1"                   # NVVFX SuperRes mode. Defau
 DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 1, Range: 1-4
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
-DEFAULT_ORIENTATION = "horizontal"                  # Video orientation. Default: horizontal, Options: horizontal, vertical, hybrid (stacked), original, horizontal + vertical
+DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), original
 DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
 DEFAULT_PIXELATE_BRIGHTNESS = "-0.4"                # Background brightness adjustment. Default: -0.4
@@ -256,7 +266,7 @@ DEFAULT_SUBTITLE_MARGIN_L = "50"                    # Left margin from edge (pix
 DEFAULT_SUBTITLE_MARGIN_R = "100"                   # Right margin from edge (pixels). Default: 100, Range: 0 to 960
 DEFAULT_REFORMAT_SUBTITLES = True                   # Reformat to single wrapped line. Default: True
 DEFAULT_WRAP_LIMIT = "42"                           # Characters per line before wrapping. Default: 42, Range: 20 to 100
-DEFAULT_SUBTITLE_MAX_LINES = "2"                    # Max lines for a subtitle block after wrapping. Default: 2
+DEFAULT_SUBTITLE_MAX_LINES = "0"                    # Max lines for a subtitle block after wrapping. 0 = unlimited.
 DEFAULT_SUBTITLE_REPEAT_MIN_RUN = "12"              # Min repeat length to collapse (e.g., "whyyyy..."). Default: 12
 DEFAULT_SUBTITLE_REPEAT_RATIO = "0.75"              # Skip line if single char dominates ratio. Default: 0.75
 
@@ -1082,6 +1092,108 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
 
+def create_temporary_ass_passthrough_file(ass_path):
+    global CURRENT_TEMP_FILE
+    if not ass_path or not os.path.exists(ass_path):
+        return None
+    try:
+        with open(ass_path, "r", encoding="utf-8", errors="replace") as src:
+            ass_content = src.read()
+    except Exception as e:
+        print(f"[ERROR] Could not read ASS file {ass_path}: {e}")
+        return None
+
+    filename = f"vid_temp_sub_passthrough_{int(time.time() * 1000)}.ass"
+    filepath = os.path.join(os.getcwd(), filename)
+    try:
+        with open(filepath, "w", encoding="utf-8") as dst:
+            dst.write(ass_content)
+        CURRENT_TEMP_FILE = filepath
+        debug_print(f"Created temporary passthrough ASS file: {filepath}")
+        return filename
+    except Exception as e:
+        print(f"[ERROR] Could not create temporary passthrough ASS file: {e}")
+        return None
+
+def _find_ass_section_bounds(lines, section_names):
+    wanted = {name.lower() for name in section_names}
+    start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if stripped in wanted:
+            start = i
+            break
+    if start is None:
+        return None, None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        stripped = lines[j].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end = j
+            break
+    return start, end
+
+def create_merged_ass_for_nvencc(sub_ass_path, title_ass_path):
+    global CURRENT_TEMP_FILE
+    if sub_ass_path and not title_ass_path:
+        return sub_ass_path
+    if title_ass_path and not sub_ass_path:
+        return title_ass_path
+    if not sub_ass_path or not title_ass_path:
+        return None
+
+    try:
+        with open(sub_ass_path, "r", encoding="utf-8", errors="replace") as sf:
+            sub_lines = sf.read().splitlines()
+        with open(title_ass_path, "r", encoding="utf-8", errors="replace") as tf:
+            title_lines = tf.read().splitlines()
+    except Exception as e:
+        print(f"[ERROR] Could not read ASS inputs for NVEncC merge: {e}")
+        return sub_ass_path
+
+    title_style_lines = [ln for ln in title_lines if ln.startswith("Style: ")]
+    title_event_lines = [ln for ln in title_lines if ln.startswith("Dialogue: ")]
+    if not title_style_lines and not title_event_lines:
+        return sub_ass_path
+
+    style_start, style_end = _find_ass_section_bounds(sub_lines, {"[v4+ styles]", "[v4 styles]"})
+    if style_start is None:
+        return sub_ass_path
+
+    event_start, event_end = _find_ass_section_bounds(sub_lines, {"[events]"})
+    if event_start is None:
+        return sub_ass_path
+
+    merged_lines = list(sub_lines)
+
+    insert_at_styles = style_end
+    for style_line in title_style_lines:
+        if style_line not in merged_lines:
+            merged_lines.insert(insert_at_styles, style_line)
+            insert_at_styles += 1
+
+    if insert_at_styles != style_end and event_start >= style_end:
+        shift = insert_at_styles - style_end
+        event_start += shift
+        event_end += shift
+
+    insert_at_events = event_end
+    for event_line in title_event_lines:
+        merged_lines.insert(insert_at_events, event_line)
+        insert_at_events += 1
+
+    filename = f"vid_temp_sub_merged_{int(time.time() * 1000)}.ass"
+    filepath = os.path.join(os.getcwd(), filename)
+    try:
+        with open(filepath, "w", encoding="utf-8") as out_f:
+            out_f.write("\n".join(merged_lines) + "\n")
+        CURRENT_TEMP_FILE = filepath
+        debug_print(f"Created merged ASS for NVEncC: {filepath}")
+        return filename
+    except Exception as e:
+        print(f"[ERROR] Could not create merged ASS file: {e}")
+        return sub_ass_path
+
 def create_title_ass_file(title_text, options, target_res=None):
     """
     Creates a temporary ASS file containing a single title entry.
@@ -1136,7 +1248,7 @@ def create_title_ass_file(title_text, options, target_res=None):
     
     # Build style
     style_title = (
-        f"Style: Title,{font_name},{font_size},"
+        f"Style: __VID_TITLE__,{font_name},{font_size},"
         f"{hex_to_libass_color(fill_color_hex)},"
         "&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
@@ -1184,7 +1296,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     title_escaped = title_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
     
     # Build dialogue line
-    dialogue = f"Dialogue: 0,{start_ass},{end_ass},Title,,0,0,0,,{pos_override}{title_escaped}"
+    dialogue = f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE__,,0,0,0,,{pos_override}{title_escaped}"
     
     full_ass_content = header + dialogue
     filename = f"vid_temp_title_{int(time.time() * 1000)}.ass"
@@ -1339,6 +1451,7 @@ def get_job_hash(job_options):
         job_options.get('shadow_offset_y', ''),
         job_options.get('shadow_blur', ''),
         job_options.get('wrap_limit', ''),
+        job_options.get('subtitle_max_lines', ''),
         job_options.get('subtitle_margin_l', ''),
         job_options.get('subtitle_margin_r', ''),
         job_options.get('audio_mono', False),
@@ -1521,6 +1634,7 @@ class WorkflowPresetManager:
             "shadow_blur": DEFAULT_SHADOW_BLUR,
             "reformat_subtitles": DEFAULT_REFORMAT_SUBTITLES,
             "wrap_limit": DEFAULT_WRAP_LIMIT,
+            "subtitle_max_lines": DEFAULT_SUBTITLE_MAX_LINES,
             "nvenc_preset": DEFAULT_NVENC_PRESET,
             "nvenc_tune": DEFAULT_NVENC_TUNE,
             "nvenc_profile_sdr": DEFAULT_NVENC_PROFILE_SDR,
@@ -1630,7 +1744,8 @@ class WorkflowPresetManager:
     def get_default_presets(self):
         # 1. Horizontal Clean (Replaces PRESET_NO_SUBTITLES)
         h_clean_opts = {
-            "orientation": "horizontal",
+            "orientation": "horizontal + vertical",
+            "merged_aspect": "16:9",
             "resolution": "4k",
             "normalize_audio": True,
             "audio_type": "surround_51", 
@@ -1671,7 +1786,7 @@ class WorkflowPresetManager:
         h_hardsub_opts = copy.deepcopy(h_clean_opts) 
         h_hardsub_opts["burn_subtitles"] = True
         h_hardsub_opts["subtitle_alignment"] = "bottom"
-        h_hardsub_opts["orientation"] = "horizontal"
+        h_hardsub_opts["orientation"] = "horizontal + vertical"
         
         h_hardsub = {
             "options": h_hardsub_opts,
@@ -1742,6 +1857,7 @@ class VideoProcessorApp:
         self.blur_steps_var.trace_add('write', lambda *args: self._update_selected_jobs('blur_steps'))
         self.horizontal_aspect_var = tk.StringVar(value=DEFAULT_HORIZONTAL_ASPECT)
         self.vertical_aspect_var = tk.StringVar(value=DEFAULT_VERTICAL_ASPECT)
+        self.merged_aspect_var = tk.StringVar(value=DEFAULT_HORIZONTAL_ASPECT)
         self.fruc_var = tk.BooleanVar(value=DEFAULT_FRUC)
         self.fruc_fps_var = tk.StringVar(value=DEFAULT_FRUC_FPS)
         self.fruc_fps_var.trace_add('write', lambda *args: self._update_selected_jobs('fruc_fps'))
@@ -1851,6 +1967,8 @@ class VideoProcessorApp:
         self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
+        self.subtitle_max_lines_var = tk.StringVar(value=DEFAULT_SUBTITLE_MAX_LINES)
+        self.subtitle_max_lines_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_max_lines'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         self.subtitle_path_var = tk.StringVar(value="")
         self._suppress_subtitle_path_trace = False
@@ -2303,11 +2421,7 @@ class VideoProcessorApp:
         geometry_group.pack(fill=tk.X, pady=(0, 5))
         orientation_frame = ttk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
         ttk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
-        self.orientation_horizontal_rb = ttk.Radiobutton(orientation_frame, text="Horizontal", variable=self.orientation_var, value="horizontal", command=self._toggle_orientation_options)
-        self.orientation_horizontal_rb.pack(side=tk.LEFT)
-        self.orientation_vertical_rb = ttk.Radiobutton(orientation_frame, text="Vertical", variable=self.orientation_var, value="vertical", command=self._toggle_orientation_options)
-        self.orientation_vertical_rb.pack(side=tk.LEFT, padx=5)
-        self.orientation_both_rb = ttk.Radiobutton(orientation_frame, text="Both", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options)
+        self.orientation_both_rb = ttk.Radiobutton(orientation_frame, text="Horizontal / Vertical", variable=self.orientation_var, value="horizontal + vertical", command=self._toggle_orientation_options)
         self.orientation_both_rb.pack(side=tk.LEFT)
         self.orientation_original_rb = ttk.Radiobutton(orientation_frame, text="Original", variable=self.orientation_var, value="original", command=self._toggle_orientation_options)
         self.orientation_original_rb.pack(side=tk.LEFT, padx=5)
@@ -2315,14 +2429,17 @@ class VideoProcessorApp:
         self.orientation_hybrid_rb.pack(side=tk.LEFT, padx=(5,0))
 
         self.aspect_ratio_frame = ttk.LabelFrame(geometry_group, text="Aspect Ratio", padding=10); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        self.horizontal_rb_frame = ttk.Frame(self.aspect_ratio_frame)
-        ttk.Radiobutton(self.horizontal_rb_frame, text="16:9 (Widescreen)", variable=self.horizontal_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        ttk.Radiobutton(self.horizontal_rb_frame, text="5:4", variable=self.horizontal_aspect_var, value="5:4", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        ttk.Radiobutton(self.horizontal_rb_frame, text="4:3 (Classic TV)", variable=self.horizontal_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("horizontal_aspect")).pack(anchor="w")
-        self.vertical_rb_frame = ttk.Frame(self.aspect_ratio_frame)
-        ttk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.vertical_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
-        ttk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.vertical_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
-        ttk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.vertical_aspect_var, value="3:4", command=lambda: self._update_selected_jobs("vertical_aspect")).pack(anchor="w")
+        self.aspect_columns_frame = ttk.Frame(self.aspect_ratio_frame)
+        self.horizontal_rb_frame = ttk.Frame(self.aspect_columns_frame)
+        ttk.Label(self.horizontal_rb_frame, text="Horizontal").pack(anchor="w")
+        ttk.Radiobutton(self.horizontal_rb_frame, text="16:9 (Widescreen)", variable=self.merged_aspect_var, value="16:9", command=lambda: self._on_merged_aspect_change("16:9")).pack(anchor="w")
+        ttk.Radiobutton(self.horizontal_rb_frame, text="5:4", variable=self.merged_aspect_var, value="5:4", command=lambda: self._on_merged_aspect_change("5:4")).pack(anchor="w")
+        ttk.Radiobutton(self.horizontal_rb_frame, text="4:3 (Classic TV)", variable=self.merged_aspect_var, value="4:3", command=lambda: self._on_merged_aspect_change("4:3")).pack(anchor="w")
+        self.vertical_rb_frame = ttk.Frame(self.aspect_columns_frame)
+        ttk.Label(self.vertical_rb_frame, text="Vertical").pack(anchor="w")
+        ttk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.merged_aspect_var, value="9:16", command=lambda: self._on_merged_aspect_change("9:16")).pack(anchor="w")
+        ttk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.merged_aspect_var, value="4:5", command=lambda: self._on_merged_aspect_change("4:5")).pack(anchor="w")
+        ttk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.merged_aspect_var, value="3:4", command=lambda: self._on_merged_aspect_change("3:4")).pack(anchor="w")
 
         self.hybrid_frame = ttk.Frame(geometry_group)
         self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5); self.top_video_frame.pack(fill=tk.X, pady=(5,0))
@@ -2400,10 +2517,10 @@ class VideoProcessorApp:
         
         upscale_frame = ttk.Frame(quality_group); upscale_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(upscale_frame, text="Upscale Algo:").pack(side=tk.LEFT, padx=(0,5))
-        self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos"], width=14, state="readonly")
+        self.upscale_algo_combo = ttk.Combobox(upscale_frame, textvariable=self.upscale_algo_var, values=["nearest", "bilinear", "bicubic", "lanczos", "spline36"], width=14, state="readonly")
         self.upscale_algo_combo.pack(side=tk.LEFT)
         self.upscale_algo_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("upscale_algo"))
-        ToolTip(self.upscale_algo_combo, "Nearest=Fastest, Bilinear=Fast, Bicubic=Default, Lanczos=Best")
+        ToolTip(self.upscale_algo_combo, "Nearest=Fastest, Bilinear=Fast, Bicubic=Default, Lanczos=Sharp, Spline36=Sharp/Smooth")
 
         # Super-Resolution Settings (NVEncC only)
         superres_frame = ttk.Frame(quality_group); superres_frame.pack(fill=tk.X, pady=(5,0))
@@ -2780,6 +2897,9 @@ class VideoProcessorApp:
         wrap_limit_entry = ttk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
         wrap_limit_entry.pack(side=tk.LEFT)
         ttk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
+        ttk.Label(reformat_frame, text="Max lines:").pack(side=tk.LEFT, padx=(12, 5))
+        ttk.Entry(reformat_frame, textvariable=self.subtitle_max_lines_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(reformat_frame, text="(0 = unlimited)").pack(side=tk.LEFT, padx=(2,0))
 
         fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
         fill_pane.pack(fill=tk.X, pady=2, padx=2)
@@ -2869,7 +2989,10 @@ class VideoProcessorApp:
             self._update_selected_jobs("sofa_file")
 
     def browse_subtitle_file(self):
-        file_path = filedialog.askopenfilename(title="Select Subtitle File", filetypes=[("Subtitle files", "*.srt"), ("All files", "*.*")])
+        file_path = filedialog.askopenfilename(
+            title="Select Subtitle File",
+            filetypes=[("Subtitle files", "*.srt;*.ass;*.ssa"), ("All files", "*.*")]
+        )
         if file_path:
             self.subtitle_path_var.set(file_path)
 
@@ -2960,15 +3083,16 @@ class VideoProcessorApp:
         video_basename = os.path.splitext(os.path.basename(video_path))[0]
         try:
             for item in sorted(os.listdir(dir_name)):
-                if item.lower().endswith('.srt'):
-                    srt_basename = os.path.splitext(item)[0]
-                    if srt_basename == video_basename:
-                        detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': srt_basename})
-                    elif srt_basename.startswith(video_basename):
-                        remainder = srt_basename[len(video_basename):]
+                item_lower = item.lower()
+                if item_lower.endswith((".srt", ".ass", ".ssa")):
+                    sub_basename = os.path.splitext(item)[0]
+                    if sub_basename == video_basename:
+                        detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': sub_basename})
+                    elif sub_basename.startswith(video_basename):
+                        remainder = sub_basename[len(video_basename):]
                         if remainder and remainder[0] in [' ', '.', '-', '_']:
                             full_path = os.path.join(dir_name, item)
-                            detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': srt_basename})
+                            detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': sub_basename})
         except Exception:
             pass
 
@@ -3055,6 +3179,15 @@ class VideoProcessorApp:
         orientation = self.orientation_var.get()
         current_alignment = self.subtitle_alignment_var.get()
 
+        # Migrate legacy orientation values to merged mode in GUI.
+        if orientation in ["horizontal", "vertical"]:
+            self.orientation_var.set("horizontal + vertical")
+            if orientation == "vertical":
+                self.merged_aspect_var.set(self.vertical_aspect_var.get() or DEFAULT_VERTICAL_ASPECT)
+            else:
+                self.merged_aspect_var.set(self.horizontal_aspect_var.get() or DEFAULT_HORIZONTAL_ASPECT)
+            orientation = "horizontal + vertical"
+
         if orientation == "hybrid (stacked)":
             if current_alignment != "seam":
                 self.last_standard_alignment.set(current_alignment)
@@ -3066,22 +3199,16 @@ class VideoProcessorApp:
             self.seam_align_rb.config(state="disabled")
         
         self.aspect_ratio_frame.pack_forget()
+        self.aspect_columns_frame.pack_forget()
         self.horizontal_rb_frame.pack_forget()
         self.vertical_rb_frame.pack_forget()
         self.hybrid_frame.pack_forget()
         
-        if orientation == "horizontal":
-            self.aspect_ratio_frame.config(text="Horizontal Aspect Ratio")
-            self.horizontal_rb_frame.pack(fill="x")
-            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        elif orientation == "vertical":
-            self.aspect_ratio_frame.config(text="Vertical Aspect Ratio")
-            self.vertical_rb_frame.pack(fill="x")
-            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        elif orientation == "horizontal + vertical":
+        if orientation == "horizontal + vertical":
             self.aspect_ratio_frame.config(text="Aspect Ratios (H & V)")
-            self.horizontal_rb_frame.pack(fill="x", pady=(0, 5))
-            self.vertical_rb_frame.pack(fill="x")
+            self.aspect_columns_frame.pack(fill="x")
+            self.horizontal_rb_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
+            self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         elif orientation == "hybrid (stacked)":
             self.hybrid_frame.pack(fill=tk.X, pady=5)
@@ -3090,6 +3217,27 @@ class VideoProcessorApp:
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
 
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
+
+    def _aspect_to_orientation(self, aspect_str, fallback="horizontal"):
+        try:
+            num, den = map(int, str(aspect_str).split(":"))
+            return "horizontal" if num >= den else "vertical"
+        except Exception:
+            return fallback
+
+    def _resolve_orientation(self, options, requested_orientation):
+        if requested_orientation == "horizontal + vertical":
+            merged_aspect = options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
+            return self._aspect_to_orientation(merged_aspect, fallback="horizontal")
+        return requested_orientation
+
+    def _on_merged_aspect_change(self, aspect_value):
+        self.merged_aspect_var.set(aspect_value)
+        if self._aspect_to_orientation(aspect_value) == "vertical":
+            self.vertical_aspect_var.set(aspect_value)
+        else:
+            self.horizontal_aspect_var.set(aspect_value)
+        self._update_selected_jobs("merged_aspect", "horizontal_aspect", "vertical_aspect")
 
     def _toggle_upscale_options(self):
         aspect_mode = self.aspect_mode_var.get()
@@ -3113,7 +3261,7 @@ class VideoProcessorApp:
     def _update_upscale_algo_options(self):
         backend = self.encoder_backend_var.get()
         if backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
-            values = ["nearest", "bilinear", "bicubic", "lanczos", "nvvfx-superres", "ngx-vsr"]
+            values = ["nearest", "bilinear", "bicubic", "lanczos", "spline36", "nvvfx-superres", "ngx-vsr"]
         else:
             values = ["nearest", "bilinear", "bicubic", "lanczos"]
         if hasattr(self, "upscale_algo_combo"):
@@ -3144,14 +3292,15 @@ class VideoProcessorApp:
         is_nvencc_only = backend == "nvencc_only"
         is_nvencc_video_audio = backend == "nvencc_video_with_ffmpeg_audio"
         is_ffmpeg_only = backend == "ffmpeg_only"
+        is_nvencc_video_backend = is_nvencc_only or is_nvencc_video_audio
 
-        # NVEncC-only or NVEncC video + FFmpeg audio: disable FFmpeg video-only features
-        if is_nvencc_only or is_nvencc_video_audio:
-            if self.orientation_var.get() in ["hybrid (stacked)", "horizontal + vertical"]:
-                self.orientation_var.set("horizontal")
-            self.aspect_mode_var.set("stretch")
-            self.burn_subtitles_var.set(False)
-            self.title_burn_var.set(False)
+        # NVEncC-only or NVEncC video + FFmpeg audio: disable unsupported FFmpeg video-only features.
+        # Subtitle burning is supported via NVEncC vpp-subburn.
+        if is_nvencc_video_backend:
+            if self.orientation_var.get() == "hybrid (stacked)":
+                self.orientation_var.set("horizontal + vertical")
+            if self.aspect_mode_var.get() in ["blur", "pixelate"]:
+                self.aspect_mode_var.set("pad")
             self.fruc_var.set(False)
             if is_nvencc_only:
                 self.normalize_audio_var.set(False)
@@ -3165,7 +3314,6 @@ class VideoProcessorApp:
                 self.audio_passthrough_var.set(True)
             self._update_selected_jobs(
                 "orientation", "aspect_mode",
-                "burn_subtitles", "title_burn_enabled",
                 "fruc"
             )
             if is_nvencc_only:
@@ -3173,40 +3321,28 @@ class VideoProcessorApp:
                     "normalize_audio", "use_dynaudnorm", "use_loudness_war", "measure_loudness",
                     "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer", "audio_surround_51", "audio_passthrough"
                 )
-            # Apply to all jobs as well (not just selected)
-            for job in self.processing_jobs:
-                job_opts = job.get("options", {})
-                job_opts["orientation"] = self.orientation_var.get()
-                job_opts["aspect_mode"] = "stretch"
-                job_opts["burn_subtitles"] = False
-                job_opts["title_burn_enabled"] = False
-                job_opts["fruc"] = False
-                if is_nvencc_only:
-                    job_opts["normalize_audio"] = False
-                    job_opts["use_dynaudnorm"] = False
-                    job_opts["use_loudness_war"] = False
-                    job_opts["measure_loudness"] = False
-                    job_opts["audio_mono"] = False
-                    job_opts["audio_stereo_downmix"] = False
-                    job_opts["audio_stereo_sofalizer"] = False
-                    job_opts["audio_surround_51"] = False
-                    job_opts["audio_passthrough"] = True
+            # Do not mutate every queued job here. Backend constraints should affect
+            # current GUI state and selected jobs only, so mixed queues preserve
+            # per-job options (e.g., Hybrid FFmpeg jobs alongside NVEncC jobs).
 
         # Disable/enable widgets
         if hasattr(self, "burn_subtitles_cb"):
-            self.burn_subtitles_cb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+            self.burn_subtitles_cb.config(state="normal")
         if hasattr(self, "title_burn_cb"):
-            self.title_burn_cb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+            self.title_burn_cb.config(state="normal")
 
         for rb in [getattr(self, "aspect_crop_rb", None), getattr(self, "aspect_pad_rb", None),
                    getattr(self, "aspect_stretch_rb", None), getattr(self, "aspect_blur_rb", None),
                    getattr(self, "aspect_pixelate_rb", None)]:
             if rb:
-                rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+                if rb in [getattr(self, "aspect_blur_rb", None), getattr(self, "aspect_pixelate_rb", None)]:
+                    rb.config(state="disabled" if is_nvencc_video_backend else "normal")
+                else:
+                    rb.config(state="normal")
 
-        # Orientation options: disable hybrid/both in NVEncC-only
+        # Orientation options: disable hybrid in NVEncC-only paths
         if hasattr(self, "orientation_both_rb"):
-            self.orientation_both_rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+            self.orientation_both_rb.config(state="normal")
         if hasattr(self, "orientation_hybrid_rb"):
             self.orientation_hybrid_rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
 
@@ -3215,12 +3351,12 @@ class VideoProcessorApp:
                     getattr(self, "subtitle_tab", None), getattr(self, "title_tab", None)]:
             if tab:
                 if is_nvencc_only:
-                    self._set_widget_state_recursive(tab, "disabled")
-                elif is_nvencc_video_audio:
                     if tab in [self.subtitle_tab, self.title_tab]:
-                        self._set_widget_state_recursive(tab, "disabled")
-                    else:
                         self._set_widget_state_recursive(tab, "normal")
+                    else:
+                        self._set_widget_state_recursive(tab, "disabled")
+                elif is_nvencc_video_audio:
+                    self._set_widget_state_recursive(tab, "normal")
                 else:
                     self._set_widget_state_recursive(tab, "normal")
 
@@ -3338,6 +3474,7 @@ class VideoProcessorApp:
             "blur_sigma": self.blur_sigma_var.get(),
             "blur_steps": self.blur_steps_var.get(),
             "horizontal_aspect": self.horizontal_aspect_var.get(), "vertical_aspect": self.vertical_aspect_var.get(),
+            "merged_aspect": self.merged_aspect_var.get(),
             "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(), 
             "max_size_mb": self.max_size_mb_var.get(),
@@ -3373,6 +3510,7 @@ class VideoProcessorApp:
             "shadow_offset_x": self.shadow_offset_x_var.get(), "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
+            "subtitle_max_lines": self.subtitle_max_lines_var.get(),
             "output_to_subfolders": self.output_subfolders_var.get(),
             "use_sharpening": self.use_sharpening_var.get(),
             "sharpening_algo": self.sharpening_algo_var.get(),
@@ -3673,15 +3811,16 @@ class VideoProcessorApp:
             # Scan external
             try:
                 for item in os.listdir(dir_name):
-                    if item.lower().endswith('.srt'):
-                        srt_basename = os.path.splitext(item)[0]
-                        if srt_basename == video_basename:
-                            detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': srt_basename})
-                        elif srt_basename.startswith(video_basename):
-                            remainder = srt_basename[len(video_basename):]
+                    item_lower = item.lower()
+                    if item_lower.endswith((".srt", ".ass", ".ssa")):
+                        sub_basename = os.path.splitext(item)[0]
+                        if sub_basename == video_basename:
+                            detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': sub_basename})
+                        elif sub_basename.startswith(video_basename):
+                            remainder = sub_basename[len(video_basename):]
                             if remainder and remainder[0] in [' ', '.', '-', '_']:
                                 full_path = os.path.join(dir_name, item)
-                                detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': srt_basename})
+                                detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': sub_basename})
             except Exception: pass
             
              # Scan embedded
@@ -3885,7 +4024,17 @@ class VideoProcessorApp:
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
-        self.orientation_var.set(options.get("orientation", DEFAULT_ORIENTATION)); self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
+        raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
+        if raw_orientation == "vertical":
+            self.merged_aspect_var.set(options.get("merged_aspect", options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)))
+            self.orientation_var.set("horizontal + vertical")
+        elif raw_orientation == "horizontal":
+            self.merged_aspect_var.set(options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)))
+            self.orientation_var.set("horizontal + vertical")
+        else:
+            self.merged_aspect_var.set(options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)))
+            self.orientation_var.set(raw_orientation)
+        self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
         self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
         self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
@@ -3895,6 +4044,7 @@ class VideoProcessorApp:
         self.blur_steps_var.set(options.get("blur_steps", DEFAULT_BLUR_STEPS))
         self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
+        self._on_merged_aspect_change(self.merged_aspect_var.get())
         self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); 
         self.use_dynaudnorm_var.set(options.get("use_dynaudnorm", DEFAULT_USE_DYNAUDNORM))
@@ -3927,6 +4077,7 @@ class VideoProcessorApp:
         self.shadow_blur_var.set(options.get("shadow_blur", DEFAULT_SHADOW_BLUR)); self.lut_file_var.set(options.get("lut_file", DEFAULT_LUT_PATH))
         self.reformat_subtitles_var.set(options.get("reformat_subtitles", DEFAULT_REFORMAT_SUBTITLES))
         self.wrap_limit_var.set(options.get("wrap_limit", DEFAULT_WRAP_LIMIT))
+        self.subtitle_max_lines_var.set(options.get("subtitle_max_lines", DEFAULT_SUBTITLE_MAX_LINES))
         self.audio_mono_var.set(options.get("audio_mono", DEFAULT_AUDIO_MONO))
         self.audio_stereo_downmix_var.set(options.get("audio_stereo_downmix", DEFAULT_AUDIO_STEREO_DOWNMIX))
         self.audio_stereo_sofalizer_var.set(options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))
@@ -4126,6 +4277,14 @@ class VideoProcessorApp:
         global CURRENT_TEMP_FILE
         options = copy.deepcopy(job['options'])
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
+        requested_orientation = orientation
+        orientation = self._resolve_orientation(options, requested_orientation)
+        if requested_orientation == "horizontal + vertical":
+            merged_aspect = options.get("merged_aspect", DEFAULT_HORIZONTAL_ASPECT)
+            if self._aspect_to_orientation(merged_aspect) == "vertical":
+                options["vertical_aspect"] = merged_aspect
+            else:
+                options["horizontal_aspect"] = merged_aspect
         
         if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
             folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
@@ -4169,6 +4328,7 @@ class VideoProcessorApp:
         output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
         
         ass_burn_path, temp_extracted_srt_path = None, None
+        nvencc_subburn_path = None
         try:
             if options.get("burn_subtitles") and job.get('subtitle_path'):
                 # --- Calculate Target Resolution for Subtitles ---
@@ -4234,8 +4394,15 @@ class VideoProcessorApp:
                          except (ValueError, AttributeError, ZeroDivisionError):
                             print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                     
-                    ass_burn_path = create_temporary_ass_file(subtitle_source_file, options, target_res=(sub_target_w, sub_target_h))
-                    if not ass_burn_path: raise VideoProcessingError("Failed to create styled ASS file.")
+                    sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
+                    if sub_ext in [".ass", ".ssa"]:
+                        ass_burn_path = create_temporary_ass_passthrough_file(subtitle_source_file)
+                        if not ass_burn_path:
+                            raise VideoProcessingError("Failed to prepare ASS subtitle file.")
+                    else:
+                        ass_burn_path = create_temporary_ass_file(subtitle_source_file, options, target_res=(sub_target_w, sub_target_h))
+                        if not ass_burn_path:
+                            raise VideoProcessingError("Failed to create styled ASS file.")
             
             # --- Title Burn ASS Creation ---
             title_ass_path = None
@@ -4316,7 +4483,14 @@ class VideoProcessorApp:
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation)
+                nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                nvencc_cmd = self.construct_nvencc_command(
+                    job['video_path'],
+                    output_file,
+                    options,
+                    orientation,
+                    subtitle_burn_path=nvencc_subburn_path
+                )
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
@@ -4326,7 +4500,15 @@ class VideoProcessorApp:
                 audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options)
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation, audio_source_path=temp_audio)
+                nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                nvencc_cmd = self.construct_nvencc_command(
+                    job['video_path'],
+                    output_file,
+                    options,
+                    orientation,
+                    audio_source_path=temp_audio,
+                    subtitle_burn_path=nvencc_subburn_path
+                )
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             else:
@@ -4347,6 +4529,12 @@ class VideoProcessorApp:
                     pass
                 CURRENT_TEMP_FILE = None
             if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
+            if nvencc_subburn_path and nvencc_subburn_path not in [ass_burn_path, title_ass_path] and os.path.exists(nvencc_subburn_path):
+                try: os.remove(nvencc_subburn_path)
+                except: pass
+            if ass_burn_path and os.path.exists(ass_burn_path):
+                try: os.remove(ass_burn_path)
+                except: pass
             # Clean up title ASS file
             if title_ass_path and os.path.exists(title_ass_path): 
                 try: os.remove(title_ass_path)
@@ -4393,6 +4581,7 @@ class VideoProcessorApp:
         return bitrate_kbps, max_duration, input_duration
 
     def compute_target_resolution_for_options(self, options, info, orientation):
+        orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
         if orientation == "hybrid (stacked)":
             width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
@@ -4430,11 +4619,58 @@ class VideoProcessorApp:
             target_h = 1080
         return (target_w // 2) * 2, (target_h // 2) * 2
 
-    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None):
+    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None, subtitle_burn_path=None):
         info = get_video_info(input_file)
         is_hdr_output = options.get("output_format") == "hdr"
         bitrate_kbps, _, _ = self.compute_target_bitrate_kbps(options, info, input_file)
         target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
+        aspect_mode = options.get("aspect_mode", "stretch")
+
+        def _compute_center_crop(src_w, src_h, dst_w, dst_h):
+            def _align_crop_dim(src_dim, crop_dim):
+                # NVEncC requires even crop offsets on each side, so:
+                # (src_dim - crop_dim) / 2 must be even -> (src_dim - crop_dim) % 4 == 0
+                crop_dim = max(2, min(src_dim, (crop_dim // 2) * 2))
+                if (src_dim - crop_dim) % 4 != 0:
+                    for candidate in (crop_dim - 2, crop_dim + 2):
+                        if 2 <= candidate <= src_dim and (src_dim - candidate) % 4 == 0:
+                            crop_dim = candidate
+                            break
+                return crop_dim
+
+            try:
+                src_ar = float(src_w) / float(src_h)
+                dst_ar = float(dst_w) / float(dst_h)
+            except Exception:
+                return None
+            if abs(src_ar - dst_ar) < 1e-6:
+                return None
+            if src_ar > dst_ar:
+                crop_h = src_h
+                crop_w = int(round(crop_h * dst_ar))
+            else:
+                crop_w = src_w
+                crop_h = int(round(crop_w / dst_ar))
+            crop_w = _align_crop_dim(src_w, crop_w)
+            crop_h = _align_crop_dim(src_h, crop_h)
+            left = max(0, (src_w - crop_w) // 2)
+            right = max(0, src_w - crop_w - left)
+            top = max(0, (src_h - crop_h) // 2)
+            bottom = max(0, src_h - crop_h - top)
+            if any(v % 2 != 0 for v in (left, top, right, bottom)):
+                return None
+            if left == 0 and right == 0 and top == 0 and bottom == 0:
+                return None
+            return left, top, right, bottom
+
+        precrop = None
+        use_precrop = (
+            aspect_mode == "crop"
+            and (info["width"] != target_w or info["height"] != target_h)
+        )
+        if use_precrop:
+            precrop = _compute_center_crop(info["width"], info["height"], target_w, target_h)
+        use_avsw_reader = bool(precrop)
 
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         codec_map = {"h264": "h264", "hevc": "hevc", "av1": "av1"}
@@ -4442,7 +4678,7 @@ class VideoProcessorApp:
 
         cmd = [
             NVENCC_CMD,
-            "--avhw",
+            "--avsw" if use_avsw_reader else "--avhw",
             "--codec", codec_name,
             "--output", output_file,
             "-i", input_file
@@ -4487,11 +4723,19 @@ class VideoProcessorApp:
         elif upscale_algo == "ngx-vsr":
             q = options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY)
             resize_algo = f"ngx,vsr-quality={q}"
-        elif upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"]:
+        elif upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos", "spline36"]:
             resize_algo = upscale_algo
 
+        if precrop:
+            cmd.extend(["--crop", f"{precrop[0]},{precrop[1]},{precrop[2]},{precrop[3]}"])
+
         if resize_algo and (info["width"] != target_w or info["height"] != target_h):
-            cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", f"{target_w}x{target_h}"])
+            output_res = f"{target_w}x{target_h}"
+            if aspect_mode == "pad":
+                output_res = f"{output_res},preserve_aspect_ratio=decrease"
+            elif aspect_mode == "crop" and not precrop:
+                output_res = f"{output_res},preserve_aspect_ratio=increase"
+            cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", output_res])
 
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
@@ -4501,6 +4745,9 @@ class VideoProcessorApp:
             cmd.extend(["--audio-source", audio_source_path])
         else:
             cmd.extend(["--audio-copy"])
+
+        if subtitle_burn_path:
+            cmd.extend(["--vpp-subburn", f"filename={subtitle_burn_path},charcode=utf-8"])
         return cmd
 
     def run_nvencc_command(self, cmd):
@@ -4877,17 +5124,13 @@ class VideoProcessorApp:
             
             print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-"*80)
             try:
-                orientation = job['options'].get("orientation", "horizontal")
+                orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
                 resolution = job['options'].get("resolution", "Unknown")
                 print(f"[DEBUG] Job: {job['display_name']}")
                 print(f"[DEBUG] Orientation: {orientation}")
                 print(f"[DEBUG] Resolution: {resolution}")
                 
-                if orientation == "horizontal + vertical":
-                    self.build_ffmpeg_command_and_run(job, "horizontal")
-                    self.build_ffmpeg_command_and_run(job, "vertical")
-                else:
-                    self.build_ffmpeg_command_and_run(job, orientation)
+                self.build_ffmpeg_command_and_run(job, orientation)
                 successful += 1; print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
             except (VideoProcessingError, Exception) as e:
                 failed += 1; print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
