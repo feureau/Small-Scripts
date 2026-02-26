@@ -3,6 +3,7 @@ import shutil
 import traceback
 import glob
 import argparse
+import re
 from datetime import datetime
 
 def organize_and_count_files(dry_run=False):
@@ -160,179 +161,139 @@ def organize_and_count_files(dry_run=False):
                         log_exception(f"remove_total_markers remove {full_path}", exc)
         
         def get_folder_index(folder_name):
-            # Extract number from "Horz 2-14" or "Horz 2"
+            # Extract number from "Horz 2-14" or "Horz 2" or "Replay 59"
             parts = folder_name.split()
             if len(parts) > 1:
-                idx_part = parts[1].split('-')[0]
-                try:
-                    return int(idx_part)
-                except ValueError:
-                    return 0
+                # Try to get the first number in the second part
+                match = re.search(r'(\d+)', parts[1])
+                if match:
+                    try:
+                        return int(match.group(1))
+                    except ValueError:
+                        return 0
             return 0
 
-        def collect_from_folders(prefix, base_dirs, video_list, processed_files):
-            # Find all folders starting with the prefix inside each base dir
-            debug(f"collect_from_folders prefix={prefix} base_dirs={base_dirs}")
-            for base_dir in base_dirs:
+        def consolidate_all_organized_folders():
+            """
+            Find all folders that match our naming conventions (Container or Chunk)
+            and move their video/sidecar contents to the root directory for re-sorting.
+            """
+            debug("consolidate_all_organized_folders START")
+            
+            # Patterns for folders we recognize
+            # Containers: "Replay 59", "Full 9"
+            container_pattern = re.compile(rf"^({container_replay_label}|{container_full_label}) \d+$")
+            # Chunks: "Replay 0-15", "Horz 0-9"
+            chunk_pattern = re.compile(rf"^({base_replay_name}|{base_horz_name}) \d+-\d+$")
+
+            def is_organized_folder(name):
+                return container_pattern.match(name) or chunk_pattern.match(name)
+
+            # We'll collect all matching folders first to avoid issues with directory walking while moving files
+            folders_to_process = []
+            for root, dirs, _ in os.walk(current_directory):
+                for d in dirs:
+                    if is_organized_folder(d):
+                        folders_to_process.append(os.path.join(root, d))
+            
+            # Process longest paths first (deepest folders) to flatten correctly
+            folders_to_process.sort(key=len, reverse=True)
+            
+            for folder_path in folders_to_process:
+                debug(f"Consolidating folder: {folder_path}")
                 try:
-                    entries = os.listdir(base_dir)
+                    entries = os.listdir(folder_path)
                 except OSError as exc:
-                    log_exception(f"collect_from_folders listdir base_dir={base_dir}", exc)
+                    log_exception(f"consolidate_all_organized_folders listdir {folder_path}", exc)
                     continue
 
-                folders = [d for d in entries
-                           if os.path.isdir(os.path.join(base_dir, d)) and d.startswith(prefix)]
-
-                # Sort folders numerically by index
-                folders.sort(key=get_folder_index)
-                debug(f"collect_from_folders base_dir={base_dir} folders={folders}")
-
-                for folder_name in folders:
-                    folder_path = os.path.join(base_dir, folder_name)
-                    try:
-                        folder_content = os.listdir(folder_path)
-                    except OSError as exc:
-                        log_exception(f"collect_from_folders listdir folder_path={folder_path}", exc)
-                        continue
-
-                    for item in folder_content:
-                        full_path = os.path.join(folder_path, item)
-                        if os.path.isfile(full_path):
-                            _, ext = os.path.splitext(item)
-                            dest_path = os.path.join(current_directory, item)
+                for item in entries:
+                    full_path = os.path.join(folder_path, item)
+                    if os.path.isfile(full_path):
+                        _, ext = os.path.splitext(item)
+                        dest_path = os.path.join(current_directory, item)
+                        
+                        # Process video files
+                        if ext.lower() in video_extensions:
+                            if not os.path.exists(dest_path):
+                                try:
+                                    if dry_run:
+                                        log_action("MOVE", full_path, dest_path)
+                                    else:
+                                        shutil.move(full_path, dest_path)
+                                except OSError as exc:
+                                    log_exception(f"consolidate_all_organized_folders move video {full_path} -> {dest_path}", exc)
+                                    continue
+                            debug(f"TRACK consolidated video={item} from {folder_path}")
                             
-                            # Process video files
-                            if ext.lower() in video_extensions:
-                                if not os.path.exists(dest_path):
-                                    try:
-                                        if dry_run:
-                                            log_action("MOVE", full_path, dest_path)
-                                        else:
-                                            shutil.move(full_path, dest_path)
-                                    except OSError as exc:
-                                        log_exception(f"collect_from_folders move video {full_path} -> {dest_path}", exc)
-                                        continue
-                                video_list.append(item)
-                                processed_files.add(item)
-                                debug(f"TRACK video={item} from {folder_path}")
-                                
-                                # Move corresponding .srt if exists (exact match)
-                                base, _ = os.path.splitext(item)
-                                srt_name = base + ".srt"
-                                srt_full_path = os.path.join(folder_path, srt_name)
-                                if os.path.exists(srt_full_path):
-                                    srt_dest = os.path.join(current_directory, srt_name)
-                                    if not os.path.exists(srt_dest):
-                                        try:
-                                            if dry_run:
-                                                log_action("MOVE", srt_full_path, srt_dest)
-                                            else:
-                                                shutil.move(srt_full_path, srt_dest)
-                                        except OSError as exc:
-                                            log_exception(f"collect_from_folders move srt {srt_full_path} -> {srt_dest}", exc)
-                                    processed_files.add(srt_name)
-                                    debug(f"TRACK srt={srt_name}")
-
-                                # Move associated sidecars with the video.
-                                move_associated_sidecars(folder_path, current_directory, item, processed_files)
-                            
-                            # Move any other .srt files that might be orphaned
-                            elif ext.lower() == ".srt":
-                                if not os.path.exists(dest_path):
-                                    try:
-                                        if dry_run:
-                                            log_action("MOVE", full_path, dest_path)
-                                        else:
-                                            shutil.move(full_path, dest_path)
-                                    except OSError as exc:
-                                        log_exception(f"collect_from_folders move orphan srt {full_path} -> {dest_path}", exc)
-                                processed_files.add(item)
-                                debug(f"TRACK orphan-srt={item}")
-
-                    # Old bookkeeping files prevent cleanup; remove them here.
-                    remove_total_markers(folder_path)
-
-                    # Attempt to remove the old folder only if it is truly empty.
-                    # Never force-delete here; subfolders/non-video files may exist.
-                    try:
-                        if not os.listdir(folder_path):
-                            if dry_run:
-                                log_action("RMDIR", folder_path)
-                            else:
-                                os.rmdir(folder_path)
-                    except OSError as exc:
-                        # Folder might be locked, skip it for now
-                        log_exception(f"collect_from_folders rmdir folder_path={folder_path}", exc)
-
-            # Clean up empty container folders
-            for base_dir in base_dirs:
-                if base_dir == current_directory:
-                    continue
-                remove_total_markers(base_dir)
+                            # Move associated sidecars
+                            move_associated_sidecars(folder_path, current_directory, item, processed_files)
+                        
+                        # Move orphaned .srt files
+                        elif ext.lower() == ".srt":
+                            if not os.path.exists(dest_path):
+                                try:
+                                    if dry_run:
+                                        log_action("MOVE", full_path, dest_path)
+                                    else:
+                                        shutil.move(full_path, dest_path)
+                                except OSError as exc:
+                                    log_exception(f"consolidate_all_organized_folders move orphan srt {full_path} -> {dest_path}", exc)
+                            processed_files.add(item)
+                            debug(f"TRACK consolidated orphan-srt={item}")
+                
+                # Clean up bookkeeping files
+                remove_total_markers(folder_path)
+                
+                # Remove the folder if it's now empty
                 try:
-                    if not os.listdir(base_dir):
+                    if not os.listdir(folder_path):
                         if dry_run:
-                            log_action("RMDIR", base_dir)
+                            log_action("RMDIR", folder_path)
                         else:
-                            os.rmdir(base_dir)
+                            os.rmdir(folder_path)
+                            debug(f"Removed consolidated folder: {folder_path}")
                 except OSError as exc:
-                    log_exception(f"collect_from_folders rmdir base_dir={base_dir}", exc)
+                    log_exception(f"consolidate_all_organized_folders rmdir {folder_path}", exc)
 
-        existing_replay_videos = []
-        existing_horz_videos = []
-        processed_files = set()
-        
-        def find_container_dirs(label_prefix):
-            dirs = []
+            # Also clean up any lingering container-looking folders in the root that might be empty
             for d in os.listdir(current_directory):
                 path = os.path.join(current_directory, d)
-                if os.path.isdir(path) and d.startswith(label_prefix):
-                    dirs.append(path)
-            return dirs
+                if os.path.isdir(path) and is_organized_folder(d):
+                    remove_total_markers(path)
+                    try:
+                        if not os.listdir(path):
+                            if dry_run:
+                                log_action("RMDIR", path)
+                            else:
+                                os.rmdir(path)
+                    except OSError:
+                        pass
 
-        container_dirs = find_container_dirs(container_full_label) + find_container_dirs(container_replay_label)
-        base_dirs = [current_directory] + container_dirs
-        debug(f"container_dirs={container_dirs}")
-        debug(f"base_dirs={base_dirs}")
-
-        collect_from_folders(base_replay_name, base_dirs, existing_replay_videos, processed_files)
-        collect_from_folders(base_horz_name, base_dirs, existing_horz_videos, processed_files)
-        debug(f"existing_replay_videos={len(existing_replay_videos)} existing_horz_videos={len(existing_horz_videos)} processed_files={len(processed_files)}")
+        processed_files = set()
+        consolidate_all_organized_folders()
         
-        # --- STEP 2: GATHER NEW FILES ---
-        debug("STEP 2 START gather new files")
+        # After consolidation, all videos are in the root (current_directory)
+        # We need to gather and sort them for distributing into chunks
+        existing_replay_videos = []
+        existing_horz_videos = []
         
-        root_files = os.listdir(current_directory)
-        new_replay_videos = []
-        new_horz_videos = []
-        
-        # Sort root files to ensure consistent order
-        for f in sorted(root_files):
-            if f in processed_files:
+        for f in sorted(os.listdir(current_directory)):
+            if not os.path.isfile(os.path.join(current_directory, f)):
                 continue
-            full_path = os.path.join(current_directory, f)
-            if not os.path.isfile(full_path):
+            if f == "folderbyrec.py" or f == "replay_debug.log":
                 continue
                 
             _, ext = os.path.splitext(f)
             if ext.lower() in video_extensions:
                 if "Replay" in f:
-                    new_replay_videos.append(f)
+                    existing_replay_videos.append(f)
                 elif "Rec" in f:
-                    new_horz_videos.append(f)
+                    existing_horz_videos.append(f)
         
-        # Combine: Existing Groups first, then New Files alphabetically
-        replay_videos = existing_replay_videos + new_replay_videos
-        horz_videos = existing_horz_videos + new_horz_videos
-
-        # Deduplicate while preserving order
-        def uniq(seq):
-            seen = set()
-            return [x for x in seq if not (x in seen or seen.add(x))]
-
-        replay_videos = uniq(replay_videos)
-        horz_videos = uniq(horz_videos)
-        debug(f"new_replay_videos={len(new_replay_videos)} new_horz_videos={len(new_horz_videos)}")
+        # Combine and Sort (alphabetical ensure consistent order)
+        replay_videos = sorted(existing_replay_videos)
+        horz_videos = sorted(existing_horz_videos)
         debug(f"replay_videos_final={len(replay_videos)} horz_videos_final={len(horz_videos)}")
 
         def distribute_files(file_list, base_folder_name):
@@ -466,24 +427,14 @@ def organize_and_count_files(dry_run=False):
         debug("STEP 4 START group into containers")
 
         def group_into_container(label, total_count, child_prefix, planned_child_folders=None):
-            # Remove old containers with this label (should be empty after consolidation)
-            for d in os.listdir(current_directory):
-                path = os.path.join(current_directory, d)
-                if os.path.isdir(path) and d.startswith(label):
-                    try:
-                        if not os.listdir(path):
-                            if dry_run:
-                                log_action("RMDIR", path)
-                            else:
-                                os.rmdir(path)
-                    except OSError as exc:
-                        log_exception(f"group_into_container cleanup old container {path}", exc)
+            # Pattern for child folders: "Replay 0-15"
+            child_pattern = re.compile(rf"^{child_prefix} \d+-\d+$")
 
             if dry_run and planned_child_folders is not None:
                 child_folders = planned_child_folders
             else:
                 child_folders = [d for d in os.listdir(current_directory)
-                                 if os.path.isdir(os.path.join(current_directory, d)) and d.startswith(child_prefix)]
+                                 if os.path.isdir(os.path.join(current_directory, d)) and child_pattern.match(d)]
 
             if total_count == 0 and not child_folders:
                 debug(f"group_into_container skipping empty container label={label} total_count=0 child_prefix={child_prefix}")
@@ -503,6 +454,11 @@ def organize_and_count_files(dry_run=False):
                 if not os.path.exists(src):
                     debug(f"group_into_container missing src={src}; skipping")
                     continue
+                
+                # Check if src is actually the container itself (should not happen with regex but safe-guard)
+                if src == container_path:
+                    continue
+
                 if not os.path.exists(dest):
                     try:
                         if dry_run:
