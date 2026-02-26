@@ -219,24 +219,6 @@ def move_input_to_backup(file_path):
         print(f"  Error moving file: {e}")
         return None
 
-# ---------------------------------------------------------------------------
-# Audio Conversion Logic
-# ---------------------------------------------------------------------------
-def select_audio_encoder(channels):
-    """
-    Selects the appropriate encoder and bitrate based on channel count.
-    Logic taken from ffmpegac3.py.
-    """
-    if channels <= 6:
-        return "ac3", "640k"
-    elif channels <= 8:
-        return "eac3", "640k"
-    else:
-        return None, None
-
-# ---------------------------------------------------------------------------
-# Audio Conversion Logic
-# ---------------------------------------------------------------------------
 def select_audio_encoder(channels):
     """
     Selects the appropriate encoder and bitrate based on channel count.
@@ -336,7 +318,7 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
             audio_maps.extend([
                 f"-c:a:{i}", "ac3",
                 f"-b:a:{i}", "640k",
-                f"-ac:{i}", "6"
+                f"-ac:a:{i}", "6"
             ])
 
         # Disposition handling
@@ -411,6 +393,38 @@ def _probe_audio_streams(video_path):
     except Exception:
         print(f"  Failed to parse audio streams for {video_path}")
         return []
+
+def verify_converted_audio_streams(video_path):
+    """
+    Post-conversion ffprobe check for output audio streams.
+    Prints codec/channels/layout per track and whether all are AC3 5.1.
+    """
+    print("  Post-conversion audio verification (ffprobe):")
+    streams = _probe_audio_streams(video_path)
+    if not streams:
+        print("    WARN: No audio streams detected in output.")
+        return False
+
+    all_ok = True
+    for s in streams:
+        idx = s.get("index", "?")
+        codec = str(s.get("codec_name", "unknown")).lower()
+        try:
+            channels = int(s.get("channels", 0))
+        except (ValueError, TypeError):
+            channels = 0
+        layout = s.get("channel_layout", "unknown")
+        is_ok = (codec == "ac3" and channels == 6 and layout == "5.1")
+        status = "OK" if is_ok else "WARN"
+        print(f"    [{status}] Stream {idx}: codec={codec}, channels={channels}, layout='{layout}'")
+        if not is_ok:
+            all_ok = False
+
+    if all_ok:
+        print("    Result: All output audio tracks are AC3 5.1.")
+    else:
+        print("    Result: One or more output audio tracks are NOT AC3 5.1.")
+    return all_ok
 
 # ---------------------------------------------------------------------------
 # Validation: Check if input already meets output requirements
@@ -882,6 +896,7 @@ def main():
         
         if converted_file:
             print("  Conversion done.")
+            verify_converted_audio_streams(converted_file)
             
         # 3. Extract Subtitles from the Backup file
         # Force explicit output to original dir so 'SRT' folder attempts to be in root
