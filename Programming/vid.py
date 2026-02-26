@@ -3297,8 +3297,8 @@ class VideoProcessorApp:
         # NVEncC-only or NVEncC video + FFmpeg audio: disable unsupported FFmpeg video-only features.
         # Subtitle burning is supported via NVEncC vpp-subburn.
         if is_nvencc_video_backend:
-            if self.orientation_var.get() == "hybrid (stacked)":
-                self.orientation_var.set("horizontal + vertical")
+            # We NO LONGER disable Hybrid Stacked here, because if requested with NVEncC, 
+            # we will dynamically route it to nvencc_with_ffmpeg during process_file.
             if self.aspect_mode_var.get() in ["blur", "pixelate"]:
                 self.aspect_mode_var.set("pad")
             self.fruc_var.set(False)
@@ -3340,11 +3340,11 @@ class VideoProcessorApp:
                 else:
                     rb.config(state="normal")
 
-        # Orientation options: disable hybrid in NVEncC-only paths
+        # Orientation options: disable hybrid in NVEncC-only paths NO LONGER APPLIES. We support it by routing to nvencc_with_ffmpeg.
         if hasattr(self, "orientation_both_rb"):
             self.orientation_both_rb.config(state="normal")
         if hasattr(self, "orientation_hybrid_rb"):
-            self.orientation_hybrid_rb.config(state="disabled" if (is_nvencc_only or is_nvencc_video_audio) else "normal")
+            self.orientation_hybrid_rb.config(state="normal")
 
         # Disable FFmpeg-only tabs in NVEncC-only (and video-only tabs in video+audio mode)
         for tab in [getattr(self, "audio_tab", None), getattr(self, "loudness_tab", None),
@@ -4279,6 +4279,16 @@ class VideoProcessorApp:
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         requested_orientation = orientation
         orientation = self._resolve_orientation(options, requested_orientation)
+        
+        # --- Override backend for NVEncC + Hybrid Stacked ---
+        # NVEncC lacks native vpp-stacking, so if the user requested an NVEncC-only pipeline
+        # alongside Hybrid mode, we seamlessly route it through FFmpeg preprocessing.
+        if orientation == "hybrid (stacked)" and encoder_backend in ["nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
+            print(f"[INFO] Hybrid (Stacked) requires FFmpeg preprocessing. Using 'nvencc_with_ffmpeg' for '{job['display_name']}'.")
+            encoder_backend = "nvencc_with_ffmpeg"
+            # Update the option so downstream functions use the correct backend path
+            options["encoder_backend"] = encoder_backend
+
         if requested_orientation == "horizontal + vertical":
             merged_aspect = options.get("merged_aspect", DEFAULT_HORIZONTAL_ASPECT)
             if self._aspect_to_orientation(merged_aspect) == "vertical":
@@ -4846,11 +4856,19 @@ class VideoProcessorApp:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
                 cpu_chain.append(f"subtitles=filename='{safe_title_ass}'")
             if not is_hdr_output: cpu_chain.append("format=nv12")
+            
+            # For "preprocess" backend, the output encoder is ffv1 (software), so we must NOT upload back to hardware.
+            # Otherwise we'll get a format mismatch error.
+            if encoder_backend == "preprocess":
+                final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]" if cpu_chain else "[stacked][v_out]"
+            else:
+                final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
+
             video_fc_parts = [
                 "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
                 f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
                 "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
-                f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
+                final_v_out
             ]
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
