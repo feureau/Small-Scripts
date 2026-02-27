@@ -5015,8 +5015,27 @@ class VideoProcessorApp:
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
 
         if encoder_backend == "preprocess":
-            pix_fmt = "yuv420p10le" if is_hdr_output else "yuv420p"
-            encoder_opts = ["-c:v", "ffv1", "-pix_fmt", pix_fmt]
+            # GPU-only intermediate: lossless NVENC so NVEncC can decode via CUVID.
+            if is_hdr_output or info["bit_depth"] == 10:
+                pix_fmt = "yuv420p10le"
+                encoder_opts = [
+                    "-c:v", "hevc_nvenc",
+                    "-pix_fmt", pix_fmt,
+                    "-preset", "p1",
+                    "-tune", "lossless",
+                    "-rc", "constqp",
+                    "-qp", "0"
+                ]
+            else:
+                pix_fmt = "yuv420p"
+                encoder_opts = [
+                    "-c:v", "h264_nvenc",
+                    "-pix_fmt", pix_fmt,
+                    "-preset", "p1",
+                    "-tune", "lossless",
+                    "-rc", "constqp",
+                    "-qp", "0"
+                ]
             cmd.extend(encoder_opts)
             cmd.extend(["-f", "matroska", output_file])
             return cmd
