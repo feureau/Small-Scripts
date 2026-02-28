@@ -846,14 +846,16 @@ HEARTBEAT_SECONDS = 20
 
 def should_echo_live_line(line, args):
     """Controls how much child-process output is shown in real time."""
-    if args.verbose:
+    if getattr(args, 'verbose', False):
         return True
-    lowered = line.lower()
+    
+    lowered = line.strip().lower()
+    # Show lines starting with a tag like [youtube], [info], [download], [merger], [ffmpeg], etc.
+    if lowered.startswith("["):
+        return True
+    
     return (
-        "[download]" in line
-        or "[merger]" in line
-        or "[extractaudio]" in line
-        or "error:" in lowered
+        "error:" in lowered
         or "warning:" in lowered
         or "retrying" in lowered
         or "destination:" in lowered
