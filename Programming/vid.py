@@ -147,6 +147,7 @@ import sys
 import math
 import argparse
 import tempfile
+import atexit
 import re
 import copy
 import time
@@ -320,6 +321,9 @@ DEBUG_MODE = False
 # --- Global State for Graceful Exit ---
 CURRENT_FFMPEG_PROCESS = None
 CURRENT_TEMP_FILE = None
+CURRENT_JOB_TEMP_DIR = None
+TRACKED_TEMP_FILES = set()
+TRACKED_TEMP_LOCK = threading.Lock()
 
 def debug_print(*args, **kwargs):
     if DEBUG_MODE:
@@ -359,6 +363,61 @@ def get_windows_creationflags_for_priority(priority_label):
     }
     return priority_map.get(normalize_ffmpeg_priority(priority_label), 0)
 
+def _normalize_temp_path(path):
+    if not path:
+        return ""
+    if not os.path.isabs(path):
+        path = os.path.join(os.getcwd(), path)
+    return os.path.abspath(path)
+
+def register_temp_file(path):
+    norm = _normalize_temp_path(path)
+    if not norm:
+        return
+    with TRACKED_TEMP_LOCK:
+        TRACKED_TEMP_FILES.add(norm)
+
+def unregister_temp_file(path):
+    norm = _normalize_temp_path(path)
+    if not norm:
+        return
+    with TRACKED_TEMP_LOCK:
+        TRACKED_TEMP_FILES.discard(norm)
+
+def cleanup_tracked_temp_files(verbose=False):
+    with TRACKED_TEMP_LOCK:
+        tracked = list(TRACKED_TEMP_FILES)
+        TRACKED_TEMP_FILES.clear()
+    for temp_path in tracked:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                if verbose:
+                    print(f"[INFO] Cleaned up temp file: {temp_path}")
+        except Exception as e:
+            if verbose:
+                print(f"[WARN] Could not delete temp file: {temp_path} ({e})")
+
+def cleanup_single_temp_file(path, verbose=False):
+    norm = _normalize_temp_path(path)
+    if not norm:
+        return
+    try:
+        if os.path.exists(norm):
+            os.remove(norm)
+            if verbose:
+                print(f"[INFO] Cleaned up temp file: {norm}")
+    except Exception as e:
+        if verbose:
+            print(f"[WARN] Could not delete temp file: {norm} ({e})")
+    finally:
+        unregister_temp_file(norm)
+
+def get_temp_work_dir():
+    if CURRENT_JOB_TEMP_DIR and os.path.isdir(CURRENT_JOB_TEMP_DIR):
+        return CURRENT_JOB_TEMP_DIR
+    return os.getcwd()
+
 # --- Graceful Exit Handler ---
 def handle_sigint(signum, frame):
     """Handles Ctrl+C to clean up subprocesses and temp files."""
@@ -376,12 +435,9 @@ def handle_sigint(signum, frame):
         except Exception as e:
             print(f"[ERROR] Failed to kill process: {e}")
 
-    if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE):
-        try:
-            os.remove(CURRENT_TEMP_FILE)
-            print(f"[INFO] Cleaned up temp file: {CURRENT_TEMP_FILE}")
-        except Exception as e:
-            print(f"[WARN] Could not delete temp file: {e}")
+    if CURRENT_TEMP_FILE:
+        cleanup_single_temp_file(CURRENT_TEMP_FILE, verbose=True)
+    cleanup_tracked_temp_files(verbose=True)
 
     print("[INFO] Exiting.")
     sys.exit(0)
@@ -1079,15 +1135,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     full_ass_content = header + "\n".join(dialogue_lines)
     filename = f"vid_temp_sub_{int(time.time() * 1000)}.ass"
-    # Create in current working directory to allow relative path usage
-    filepath = os.path.join(os.getcwd(), filename)
+    filepath = os.path.join(get_temp_work_dir(), filename)
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(full_ass_content)
         CURRENT_TEMP_FILE = filepath
+        register_temp_file(filepath)
         debug_print(f"Created temporary subtitle file: {filepath}")
-        # Return the filename only (relative path) to avoid colon/quote issues in absolute paths
-        return filename
+        return filepath
     except Exception as e:
         print(f"[ERROR] Could not create temporary ASS file: {e}")
         return None
@@ -1104,13 +1159,14 @@ def create_temporary_ass_passthrough_file(ass_path):
         return None
 
     filename = f"vid_temp_sub_passthrough_{int(time.time() * 1000)}.ass"
-    filepath = os.path.join(os.getcwd(), filename)
+    filepath = os.path.join(get_temp_work_dir(), filename)
     try:
         with open(filepath, "w", encoding="utf-8") as dst:
             dst.write(ass_content)
         CURRENT_TEMP_FILE = filepath
+        register_temp_file(filepath)
         debug_print(f"Created temporary passthrough ASS file: {filepath}")
-        return filename
+        return filepath
     except Exception as e:
         print(f"[ERROR] Could not create temporary passthrough ASS file: {e}")
         return None
@@ -1183,13 +1239,14 @@ def create_merged_ass_for_nvencc(sub_ass_path, title_ass_path):
         insert_at_events += 1
 
     filename = f"vid_temp_sub_merged_{int(time.time() * 1000)}.ass"
-    filepath = os.path.join(os.getcwd(), filename)
+    filepath = os.path.join(get_temp_work_dir(), filename)
     try:
         with open(filepath, "w", encoding="utf-8") as out_f:
             out_f.write("\n".join(merged_lines) + "\n")
         CURRENT_TEMP_FILE = filepath
+        register_temp_file(filepath)
         debug_print(f"Created merged ASS for NVEncC: {filepath}")
-        return filename
+        return filepath
     except Exception as e:
         print(f"[ERROR] Could not create merged ASS file: {e}")
         return sub_ass_path
@@ -1300,12 +1357,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     
     full_ass_content = header + dialogue
     filename = f"vid_temp_title_{int(time.time() * 1000)}.ass"
-    filepath = os.path.join(os.getcwd(), filename)
+    filepath = os.path.join(get_temp_work_dir(), filename)
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(full_ass_content)
+        register_temp_file(filepath)
         debug_print(f"Created temporary title file: {filepath}")
-        return filename
+        return filepath
     except Exception as e:
         print(f"[ERROR] Could not create temporary title ASS file: {e}")
         return None
@@ -1367,24 +1425,29 @@ def get_subtitle_stream_info(file_path):
         print(f"[WARN] Could not get embedded subtitle info for {file_path}: {e}")
         return []
 
-def extract_embedded_subtitle(video_path, subtitle_index):
+def extract_embedded_subtitle(video_path, subtitle_index, temp_dir=None):
     temp_subtitle_path = ""
     try:
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.srt', encoding='utf-8') as temp_f:
-            temp_subtitle_path = temp_f.name
+        fd, temp_subtitle_path = tempfile.mkstemp(
+            suffix=".srt",
+            prefix="vid_temp_sub_extract_",
+            dir=temp_dir if temp_dir and os.path.isdir(temp_dir) else None
+        )
+        os.close(fd)
+        register_temp_file(temp_subtitle_path)
         cmd = [FFMPEG_CMD, '-y', '-hide_banner', '-i', video_path, '-map', f'0:s:{subtitle_index}', '-c:s', 'srt', temp_subtitle_path]
         print(f"[INFO] Extracting embedded subtitle stream {subtitle_index}...")
         subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=env)
         if os.path.exists(temp_subtitle_path) and os.path.getsize(temp_subtitle_path) > 0:
             return temp_subtitle_path
         else:
-            if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
+            cleanup_single_temp_file(temp_subtitle_path)
             return None
     except subprocess.CalledProcessError:
-        if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
+        cleanup_single_temp_file(temp_subtitle_path)
         return None
     except Exception:
-        if os.path.exists(temp_subtitle_path): os.remove(temp_subtitle_path)
+        cleanup_single_temp_file(temp_subtitle_path)
         return None
 
 def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, source_width=None):
@@ -4274,7 +4337,7 @@ class VideoProcessorApp:
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
 
     def build_ffmpeg_command_and_run(self, job, orientation):
-        global CURRENT_TEMP_FILE
+        global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         options = copy.deepcopy(job['options'])
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         requested_orientation = orientation
@@ -4314,6 +4377,7 @@ class VideoProcessorApp:
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, final_sub_path)
         os.makedirs(output_dir, exist_ok=True)
+        CURRENT_JOB_TEMP_DIR = output_dir
 
         original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
         
@@ -4384,7 +4448,7 @@ class VideoProcessorApp:
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
                     stream_index = int(sub_identifier.split(':')[1])
-                    temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index)
+                    temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index, temp_dir=output_dir)
                     if temp_extracted_srt_path: subtitle_source_file = temp_extracted_srt_path
                     else: print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'.")
                 elif os.path.exists(sub_identifier): subtitle_source_file = sub_identifier
@@ -4474,9 +4538,14 @@ class VideoProcessorApp:
             if max_dur > 0: duration = min(duration, max_dur)
 
             if encoder_backend == "nvencc_with_ffmpeg":
-                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv")
+                fd, temp_preproc = tempfile.mkstemp(
+                    suffix=".mkv",
+                    prefix="vid_temp_preproc_",
+                    dir=output_dir
+                )
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
+                register_temp_file(temp_preproc)
                 pre_cmd = self.construct_ffmpeg_command(
                     job,
                     temp_preproc,
@@ -4504,9 +4573,14 @@ class VideoProcessorApp:
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
-                fd, temp_audio = tempfile.mkstemp(suffix=".mka")
+                fd, temp_audio = tempfile.mkstemp(
+                    suffix=".mka",
+                    prefix="vid_temp_audio_",
+                    dir=output_dir
+                )
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_audio
+                register_temp_file(temp_audio)
                 audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options)
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
@@ -4532,23 +4606,19 @@ class VideoProcessorApp:
             if options.get("measure_loudness"):
                 self.measure_loudness(output_file, options)
         finally:
-            if CURRENT_TEMP_FILE and os.path.exists(CURRENT_TEMP_FILE):
-                try:
-                    os.remove(CURRENT_TEMP_FILE)
-                except Exception:
-                    pass
+            if CURRENT_TEMP_FILE:
+                cleanup_single_temp_file(CURRENT_TEMP_FILE)
                 CURRENT_TEMP_FILE = None
-            if temp_extracted_srt_path and os.path.exists(temp_extracted_srt_path): os.remove(temp_extracted_srt_path)
+            if temp_extracted_srt_path:
+                cleanup_single_temp_file(temp_extracted_srt_path)
             if nvencc_subburn_path and nvencc_subburn_path not in [ass_burn_path, title_ass_path] and os.path.exists(nvencc_subburn_path):
-                try: os.remove(nvencc_subburn_path)
-                except: pass
+                cleanup_single_temp_file(nvencc_subburn_path)
             if ass_burn_path and os.path.exists(ass_burn_path):
-                try: os.remove(ass_burn_path)
-                except: pass
+                cleanup_single_temp_file(ass_burn_path)
             # Clean up title ASS file
             if title_ass_path and os.path.exists(title_ass_path): 
-                try: os.remove(title_ass_path)
-                except: pass
+                cleanup_single_temp_file(title_ass_path)
+            CURRENT_JOB_TEMP_DIR = None
 
     def compute_target_bitrate_kbps(self, options, info, file_path):
         bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(
@@ -4757,14 +4827,17 @@ class VideoProcessorApp:
             cmd.extend(["--audio-copy"])
 
         if subtitle_burn_path:
-            cmd.extend(["--vpp-subburn", f"filename={subtitle_burn_path},charcode=utf-8"])
+            safe_sub = str(subtitle_burn_path).replace("\\", "/").replace(",", r"\,")
+            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         return cmd
 
     def run_nvencc_command(self, cmd):
+        global CURRENT_FFMPEG_PROCESS
         print("Running NVEncC command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
+        CURRENT_FFMPEG_PROCESS = process
         if process.stdout:
             for line in iter(process.stdout.readline, ''):
                 if "\r" in line:
@@ -4776,6 +4849,7 @@ class VideoProcessorApp:
                     sys.stdout.flush()
             process.stdout.close()
         ret_code = process.wait()
+        CURRENT_FFMPEG_PROCESS = None
         sys.stdout.write("\n")
         return ret_code
 
@@ -5314,8 +5388,11 @@ class VideoProcessorApp:
     def toggle_fruc_fps(self): self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
 
 if __name__ == "__main__":
+    atexit.register(cleanup_tracked_temp_files)
     # Register the Ctrl+C handler
     signal.signal(signal.SIGINT, handle_sigint)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, handle_sigint)
 
     parser = argparse.ArgumentParser(description="YouTube Batch Video Processing Tool", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-o', '--output-mode', dest='output_mode', choices=['local', 'pooled'], default='local', help="Set initial output directory mode.")
