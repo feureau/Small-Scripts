@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v25.9
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.1
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -39,6 +39,13 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 - ✅ **FEATURE**: Added "Text Chunking" option to AI Engine tab. Handles massive text by splitting into token-based chunks and reassembling the AI output.
 - ✅ **FEATURE**: Added "Force Cutoff" option to chunking. Ensures chunks end at sentence boundaries (.!?) for cleaner processing without overlap.
 - ✅ **IMPROVEMENT**: Default chunk overlap set to 0.
+
+### v26.0
+- ✅ **FEATURE**: Added "Output Under Each Input Folder" option so relative output folders are created under each source file folder instead of pooling in one shared folder.
+
+### v26.1
+- ✅ **FEATURE**: Added "Merge Outputs When Done" option to create one merged file per output folder after processing completes.
+- ✅ **IMPROVEMENT**: Merged filename now reflects batch range (first-to-last output name) with safe truncation to avoid overly long paths.
 
 ### v25.8
 - ✅ **BUGFIX**: Defensive natural sorting for image/text files to ensure sequential filename order.
@@ -436,6 +443,50 @@ def determine_unique_output_paths(base_name, suffix, out_folder, log_folder, ext
     raw_path = find_unique(out_folder, out_base, ext)
     log_path = find_unique(log_folder, out_base, LOG_FILE_EXTENSION) if log_folder else None
     return raw_path, log_path
+
+def resolve_output_folder(source_dir, output_folder_value, output_under_input_folder=False):
+    """
+    Resolves final output folder for a job.
+    """
+    output_folder_value = (output_folder_value or "").strip()
+    if not output_folder_value:
+        return source_dir
+    if output_under_input_folder and not os.path.isabs(output_folder_value):
+        return os.path.join(source_dir, output_folder_value)
+    return output_folder_value
+
+def build_merged_output_basename(filepaths, max_len=96):
+    """
+    Build a compact, descriptive merged filename stem from first/last batch outputs.
+    """
+    if not filepaths:
+        return "merged_output"
+    names = sorted([os.path.splitext(os.path.basename(p))[0] for p in filepaths], key=natural_sort_key)
+    if len(names) == 1:
+        base = f"merged_{names[0]}"
+    else:
+        base = f"merged_{names[0]}_to_{names[-1]}"
+    base = sanitize_filename(base) or "merged_output"
+    if len(base) > max_len:
+        base = base[:max_len].rstrip(" ._-") or "merged_output"
+    return base
+
+def merge_output_text_files(filepaths, output_path):
+    """
+    Merge text outputs using the same core method as mergetext.py:
+    natural sort + markdown fence cleanup + newline join.
+    """
+    files_sorted = sorted(list(set(filepaths)), key=natural_sort_key)
+    if not files_sorted:
+        return None
+    with open(output_path, 'w', encoding='utf-8') as outfile:
+        for idx, path in enumerate(files_sorted):
+            with open(path, 'r', encoding='utf-8') as infile:
+                content = sanitize_api_response(infile.read())
+                outfile.write(content)
+            if idx < len(files_sorted) - 1:
+                outfile.write("\n")
+    return output_path
 
 # --- GEMINI FILES API UPLOADER (Cached & Robust) ---
 def upload_image_file(path, client, retries=3, display_name=None):
@@ -1105,19 +1156,25 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
     source_dir = os.path.dirname(filepaths_group[0])
     if not source_dir: source_dir = "."
 
+    output_under_input = kwargs.get('output_under_input', False)
+
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
         log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME) if save_log else None
 
         _, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), log_dir, log_dir)
     else:
-        out_folder = kwargs.get('output_folder') or source_dir
+        out_folder = resolve_output_folder(source_dir, kwargs.get('output_folder'), output_under_input)
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME) if save_log else None
         os.makedirs(out_folder, exist_ok=True)
 
         requested_ext = kwargs.get('output_extension', '').strip()
         ext = ('.' + requested_ext.lstrip('.')) if requested_ext else RAW_OUTPUT_FILE_EXTENSION
         raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
+
+    if 'result_metadata' in kwargs:
+        kwargs['result_metadata']['raw_output_path'] = raw_path
+        kwargs['result_metadata']['resolved_output_folder'] = os.path.dirname(raw_path)
 
     try:
         # --- SPLIT TEXT vs IMAGES (with defensive sorting) ---
@@ -1169,9 +1226,10 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                         try:
                             # 1. Determine Dest Dir
                             if output_folder_defined:
-                                dest_dir = output_folder_defined
+                                dest_dir = resolve_output_folder(source_dir, output_folder_defined, output_under_input)
                             else:
                                 dest_dir = os.path.dirname(img_path)
+                            os.makedirs(dest_dir, exist_ok=True)
                             
                             # 2. Determine Dest Filename (Original Name + New Extension)
                             orig_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
@@ -1348,6 +1406,8 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
 
         log_data.update({'status': 'Success', 'end_time': datetime.datetime.now()})
         save_output_files(response, log_data, raw_path, log_path)
+        if 'result_metadata' in kwargs:
+            kwargs['result_metadata']['raw_output_saved'] = True
         console_log(f"Saved: {os.path.basename(raw_path)}", "SUCCESS")
         return None
 
@@ -1474,7 +1534,7 @@ class ModelSelectionDialog(tk.Toplevel):
 class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v25.9 (Gemini Files API Supported)")
+        self.title("Multimodal AI Batch Processor v26.1 (Gemini Files API Supported)")
         self.geometry("1400x800")
 
         self.minsize(1100, 700)
@@ -1502,6 +1562,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.engine_var = tk.StringVar(value=getattr(self.args, 'engine', DEFAULT_ENGINE))
         self.model_var = tk.StringVar()
         self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
+        self.output_under_input_var = tk.BooleanVar(value=getattr(self.args, 'output_under_input', False))
+        self.merge_outputs_var = tk.BooleanVar(value=getattr(self.args, 'merge_outputs', False))
         self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
         self.output_ext_var = tk.StringVar(value=getattr(self.args, 'output_ext', ''))
         # --- UPDATE: STREAM ENABLED BY DEFAULT ---
@@ -1699,36 +1761,50 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         
         self.over_check = ttk.Checkbutton(tab_out, text="Overwrite Original", variable=self.overwrite_var, command=self.toggle_overwrite)
         self.over_check.grid(row=3, column=0, columnspan=2, sticky="w")
+
+        self.out_under_input_check = ttk.Checkbutton(
+            tab_out,
+            text="Output Under Each Input Folder",
+            variable=self.output_under_input_var
+        )
+        self.out_under_input_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        self.merge_outputs_check = ttk.Checkbutton(
+            tab_out,
+            text="Merge Outputs When Done (Per Output Folder)",
+            variable=self.merge_outputs_var
+        )
+        self.merge_outputs_check.grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         # New Cleanup Option
         self.clean_md_check = ttk.Checkbutton(tab_out, text="Clean Markdown Fences (```)", variable=self.clean_markdown_var)
-        self.clean_md_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.clean_md_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         self.json_check = ttk.Checkbutton(tab_out, text="Validate JSON Output", variable=self.validate_json_var)
-        self.json_check.grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.json_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         # New Checkbox for Schema Validation (v25.6)
         self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
-        self.json_keys_check.grid(row=6, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
+        self.json_keys_check.grid(row=8, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
 
         self.save_log_check = ttk.Checkbutton(tab_out, text="Save Processing Logs", variable=self.save_log_var)
-        self.save_log_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.save_log_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         # Rename Mode
         self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
-        self.rename_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.rename_check.grid(row=10, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Rename Options
         self.rename_opts_frame = ttk.Frame(tab_out)
-        self.rename_opts_frame.grid(row=9, column=0, columnspan=2, sticky="w", padx=(20, 0))
+        self.rename_opts_frame.grid(row=11, column=0, columnspan=2, sticky="w", padx=(20, 0))
         ttk.Radiobutton(self.rename_opts_frame, text="Full Rename", variable=self.rename_method_var, value="full").pack(side=tk.LEFT)
         ttk.Radiobutton(self.rename_opts_frame, text="Prefix", variable=self.rename_method_var, value="prefix").pack(side=tk.LEFT, padx=10)
         ttk.Radiobutton(self.rename_opts_frame, text="Suffix", variable=self.rename_method_var, value="suffix").pack(side=tk.LEFT)
 
         # Upload Mode Radio Buttons
-        ttk.Label(tab_out, text="Upload Mode:").grid(row=10, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(tab_out, text="Upload Mode:").grid(row=12, column=0, sticky="w", pady=(5, 0))
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=10, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        u_frame.grid(row=12, column=1, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
         ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
 
@@ -1736,7 +1812,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=12, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=14, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
@@ -1918,6 +1994,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.update_models()
             set_var(self.model_var, 'model')
             set_var(self.output_dir_var, 'output_folder') # Missing Key
+            set_var(self.output_under_input_var, 'output_under_input', False)
+            set_var(self.merge_outputs_var, 'merge_outputs', False)
             set_var(self.suffix_var, 'output_suffix')
             set_var(self.output_ext_var, 'output_extension', "")
             set_var(self.overwrite_var, 'overwrite_original', False)
@@ -1996,6 +2074,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             'engine': self.engine_var.get(),
             'model': self.model_var.get(),
             'output_folder': self.output_dir_var.get(), # Missing Key
+            'output_under_input': self.output_under_input_var.get(),
+            'merge_outputs': self.merge_outputs_var.get(),
             'output_suffix': self.suffix_var.get(),
             'output_extension': self.output_ext_var.get(),
             'overwrite_original': self.overwrite_var.get(),
@@ -2333,6 +2413,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 'user_prompt': self.prompt_text.get("1.0", tk.END).strip(),
                 'engine': self.engine_var.get(), 'model_name': mod, 'api_key': self.api_key,
                 'output_folder': self.output_dir_var.get(), 'output_suffix': self.suffix_var.get(),
+                'output_under_input': self.output_under_input_var.get(),
                 'output_extension': self.output_ext_var.get(), 'stream_output': self.stream_var.get(),
                 'safety_settings': safe, 'add_filename_to_prompt': self.add_filename_var.get(),
                 'context_text': self.global_context_text_value if use_persistent_context else current_context,
@@ -2503,6 +2584,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def start_processing(self):
         if not self.job_queue.empty() and (not self.worker_thread or not self.worker_thread.is_alive()):
+            self.current_run_merge_outputs = self.merge_outputs_var.get()
             self.processing_cancelled.clear(); self.processing_paused.clear()
             self.worker_thread = threading.Thread(target=self._worker, daemon=True)
             self.worker_thread.start()
@@ -2648,9 +2730,44 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         event_container['result'] = dialog.result
         event_container['event'].set()
 
+    def _merge_completed_outputs_by_folder(self, output_paths):
+        if not output_paths:
+            console_log("Merge Outputs: no completed output files found for this run.", "WARN")
+            return
+
+        folder_map = {}
+        for p in output_paths:
+            if not p or not os.path.isfile(p):
+                continue
+            folder = os.path.dirname(p)
+            folder_map.setdefault(folder, []).append(p)
+
+        if not folder_map:
+            console_log("Merge Outputs: no readable files to merge.", "WARN")
+            return
+
+        merged_count = 0
+        for folder, files in folder_map.items():
+            if not files:
+                continue
+            files_sorted = sorted(list(set(files)), key=natural_sort_key)
+            ext = os.path.splitext(files_sorted[0])[1] or RAW_OUTPUT_FILE_EXTENSION
+            base = build_merged_output_basename(files_sorted)
+            merged_path = find_unique(folder, base, ext)
+            try:
+                merge_output_text_files(files_sorted, merged_path)
+                merged_count += 1
+                console_log(f"Merged {len(files_sorted)} files -> {os.path.basename(merged_path)}", "SUCCESS")
+            except Exception as e:
+                console_log(f"Merge failed in folder '{folder}': {e}", "ERROR")
+
+        if merged_count > 0:
+            console_log(f"Merge Outputs complete: created {merged_count} merged file(s).", "SUCCESS")
+
     def _worker(self):
         console_log("Worker thread started.", "INFO")
         first_job = True
+        successful_output_paths = []
         while not self.job_queue.empty():
             if self.processing_cancelled.is_set(): break
             if self.processing_paused.is_set(): time.sleep(0.5); continue
@@ -2710,6 +2827,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 try:
                     err = process_file_group(**params, cancellation_event=self.processing_cancelled)
                     if not err:
+                        meta = job.get('result_metadata', {})
+                        out_path = meta.get('raw_output_path') if isinstance(meta, dict) else None
+                        if out_path and os.path.isfile(out_path):
+                            successful_output_paths.append(out_path)
                         self.result_queue.put({'job_id': jid, 'status': 'Completed'})
                         break
                     else: raise Exception(err)
@@ -2771,6 +2892,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         [copy_failed_file(fp) for fp in job['filepaths_group']]
                         self.result_queue.put({'job_id': jid, 'status': 'Failed'})
                         break
+
+        if getattr(self, 'current_run_merge_outputs', False) and not self.processing_cancelled.is_set():
+            self._merge_completed_outputs_by_folder(successful_output_paths)
         console_log("Worker thread finished.", "INFO")
         self.after(0, self._reset_gui)
 
@@ -2778,6 +2902,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="*")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME)
+    parser.add_argument("--output-under-input", action='store_true', help="Resolve relative output folder under each input file's folder.")
+    parser.add_argument("--merge-outputs", action='store_true', help="Merge completed outputs per output folder when run finishes.")
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX)
     parser.add_argument("--output-ext", default="")
     parser.add_argument("--stream", action='store_true')
