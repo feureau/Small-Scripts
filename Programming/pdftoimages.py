@@ -68,11 +68,11 @@ def convert_pdf_to_images(pdf_pattern, pdf_flag, ext, user_output_folder=None):
         
         # Determine output directory
         if user_output_folder:
-            # Use the user-provided folder exactly as is
-            output_dir = user_output_folder
+            # Put each PDF into its own subfolder under the user-specified directory
+            output_dir = os.path.join(user_output_folder, base_name)
         else:
-            # Default behavior: {filename}_images
-            output_dir = f"{base_name}_images"
+            # Default behavior: {filename}
+            output_dir = base_name
             
         output_dir = os.path.join(cwd, output_dir)
         os.makedirs(output_dir, exist_ok=True)
@@ -101,8 +101,17 @@ if __name__ == "__main__":
                 "  Convert PDF pages to JPEG images:\n"
                 "    python pdftoimages.py '*.pdf' --jpg")
     )
-    parser.add_argument("pdf_pattern", help="Pattern to match PDF files (e.g., '*.pdf').")
-    parser.add_argument("-o", "--output", help="Specify output directory (files inside will not have '_images' suffix if this is used).")
+    parser.add_argument(
+        "pdf_pattern",
+        nargs="?",
+        default="*.pdf",
+        help="Pattern to match PDF files (e.g., '*.pdf'). Defaults to '*.pdf'."
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="Base output directory. Each PDF will get its own subfolder inside this directory."
+    )
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--jpg", action="store_true", help="Output images in JPEG format.")
     group.add_argument("--png", action="store_true", help="Output images in PNG format (default).")
