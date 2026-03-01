@@ -1,0 +1,11 @@
+{
+  "models": {
+    "Restormer-real_denoising": {
+      "gpu_name": "NVIDIA GeForce RTX 4070 SUPER",
+      "total_vram_mb": 12281,
+      "max_full_pixels": 2055680,
+      "max_full_mp": 2.07,
+      "aspect": "3:2"
+    }
+  }
+}
