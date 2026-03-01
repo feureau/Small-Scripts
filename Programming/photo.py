@@ -63,6 +63,8 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `-tf, --tile-fit`: Keep image size and auto-fit tile size to image dimensions where possible
 - `--calibrate`: Run CUDA full-frame calibration and save/update `denoise_cache.json`
 - `--calibrate-all`: Force recalibration for all supported models and overwrite cached limits
+- `--denoise-mode`: AI execution mode (`auto`, `full`, `tiled`)
+- `--denoise-strength`: Denoise strength scalar (`0.0-2.0`, default `1.0`)
 - `--ai-safety-fallback`: Enable automatic safe retry chain when AI output looks suspicious
 - `--dualdn-python`: Python executable used to launch DualDn script
 - `--dualdn-script`: Path to DualDn inference script if auto-detection fails
@@ -79,10 +81,13 @@ photo.py input\\**\\* -m tif --skip-rt -d
 
 ## Inference Behavior
 - `-d` uses Restormer-real_denoising.
+- `-d` also applies tuned defaults unless overridden: `--denoise-mode full`, `--denoise-strength 1.3`, `--ai-safety-fallback`.
 - `-i MODEL` runs the same inference pipeline with the selected model.
 - Checkpoints are loaded from `F:\\AI\\Inference\\NAFNet` and `F:\\AI\\Inference\\Restormer`.
 - `DualDn-Big` runs through DualDn's native Real_captured inference flow and returns an sRGB output image.
 - Auto mode attempts full-frame on CUDA if within calibrated limits, otherwise tiled.
+- `--denoise-mode full` forces a full-frame attempt first (falls back to tiled on OOM).
+- `--denoise-mode tiled` always uses tiled inference.
 - Calibration results are saved in `denoise_cache.json` and reused per model.
 - Calibration is opt-in via `--calibrate`.
 - If no model is selected, `--calibrate` calibrates each supported model that is not yet cached.
@@ -1163,11 +1168,21 @@ def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, ov
     pad = overlap
     padded = F.pad(img_tensor, (pad, pad, pad, pad), mode='reflect')
 
-    wy = torch.linspace(0, 1, steps=tile_size, device=img_tensor.device)
-    wx = torch.linspace(0, 1, steps=tile_size, device=img_tensor.device)
-    wy = 0.5 - 0.5 * torch.cos(np.pi * wy)  # Hann
-    wx = 0.5 - 0.5 * torch.cos(np.pi * wx)
-    w2d = (wy[:, None] * wx[None, :]).unsqueeze(0).unsqueeze(0)
+    def _edge_fade_vec(length, fade_left, fade_right):
+        v = torch.ones(length, device=img_tensor.device, dtype=img_tensor.dtype)
+        if length <= 1:
+            return v
+        if overlap > 0 and fade_left:
+            left_n = min(overlap, length - 1)
+            if left_n > 0:
+                t = torch.linspace(0, 1, steps=left_n + 1, device=img_tensor.device, dtype=img_tensor.dtype)[1:]
+                v[:left_n] *= t
+        if overlap > 0 and fade_right:
+            right_n = min(overlap, length - 1)
+            if right_n > 0:
+                t = torch.linspace(1, 0, steps=right_n + 1, device=img_tensor.device, dtype=img_tensor.dtype)[:-1]
+                v[-right_n:] *= t
+        return v
 
     y_starts = _compute_fitted_tile_starts(h, tile_size, overlap, overlap_fit)
     x_starts = _compute_fitted_tile_starts(w, tile_size, overlap, overlap_fit)
@@ -1189,7 +1204,13 @@ def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, ov
                 processed = model(tile)
 
             processed = processed[:, :, pad:pad+curr_h, pad:pad+curr_w]
-            w_curr = w2d[:, :, :curr_h, :curr_w]
+            fade_left = x > 0
+            fade_right = x_end < w
+            fade_top = y > 0
+            fade_bottom = y_end < h
+            wy = _edge_fade_vec(curr_h, fade_top, fade_bottom)
+            wx = _edge_fade_vec(curr_w, fade_left, fade_right)
+            w_curr = (wy[:, None] * wx[None, :]).unsqueeze(0).unsqueeze(0)
             output[:, :, y:y_end, x:x_end] += processed * w_curr
             weight[:, :, y:y_end, x:x_end] += w_curr
 
@@ -1264,6 +1285,12 @@ def _get_inference_model(model_name, torch=None):
                     print(f"   [AI] Missing keys: {len(missing)}")
                 if unexpected:
                     print(f"   [AI] Unexpected keys: {len(unexpected)}")
+                mismatch_count = len(missing) + len(unexpected)
+                if mismatch_count >= 100:
+                    print(
+                        "   [AI] Warning: large checkpoint mismatch detected; output quality may be degraded. "
+                        "Prefer denoise-specific models (NAFNet-SIDD or Restormer-real_denoising)."
+                    )
             else:
                 print(f"   [AI] Warning: strict load failed, relaxed load used ({strict_err}).")
         model.to(device).eval()
@@ -1546,7 +1573,7 @@ def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None,
 
     return chosen, used_full, pixels
 
-def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto", tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL, calibrate=False, fit=False, tile_fit=False, overlap_fit=False, safety_fallback=False):
+def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto", tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL, calibrate=False, fit=False, tile_fit=False, overlap_fit=False, safety_fallback=False, denoise_strength=1.0):
     np, torch, F, Image = _import_denoise_deps()
     if np is None:
         print(f"   [AI] Missing denoise dependencies: {Image}")
@@ -1671,6 +1698,10 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
             print(f"   [AI] Calibration failed: {e}")
     elif denoise_mode == "auto" and device == "cuda" and max_full_pixels is None and not calibrate:
         print("   [AI] No calibration limit found; using tiled inference. Use --calibrate to measure and cache full-frame limits.")
+    elif denoise_mode == "full":
+        print("   [AI] Denoise mode: full (full-frame preferred; tiled fallback on OOM).")
+    elif denoise_mode == "tiled":
+        print("   [AI] Denoise mode: tiled (full-frame disabled).")
 
     denoised, used_full, pixels = _run_denoise_srgb_with_model(
         img,
@@ -1690,6 +1721,36 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
         allow_full_without_limit=False,
         safety_fallback=safety_fallback,
     )
+    if denoise_strength < 1.0:
+        mix = max(0.0, float(denoise_strength))
+        print(f"   [AI] Applying denoise strength blend: {mix:.2f} (toward original)")
+        denoised = (img * (1.0 - mix)) + (denoised * mix)
+    elif denoise_strength > 1.0:
+        extra_mix = min(1.0, float(denoise_strength) - 1.0)
+        print(
+            f"   [AI] Applying stronger denoise: second pass with blend {extra_mix:.2f} "
+            f"(strength={float(denoise_strength):.2f})"
+        )
+        denoised_pass2, _, _ = _run_denoise_srgb_with_model(
+            denoised,
+            model,
+            device,
+            torch=torch,
+            F=F,
+            np=np,
+            denoise_mode=denoise_mode if denoise_mode in {"full", "tiled"} else "auto",
+            tile_size=tile_size,
+            overlap=overlap,
+            overlap_fit=overlap_fit,
+            max_full_pixels=max_full_pixels,
+            input_multiple=tile_multiple,
+            tile_candidates=tile_candidates,
+            model_name=canonical_model_name,
+            allow_full_without_limit=False,
+            safety_fallback=safety_fallback,
+        )
+        denoised = (denoised * (1.0 - extra_mix)) + (denoised_pass2 * extra_mix)
+    denoised = np.clip(denoised, 0.0, 1.0)
 
     if denoise_mode == "auto" and used_full and pixels:
         if max_full_pixels is None or pixels > max_full_pixels:
@@ -2052,6 +2113,8 @@ def main():
     fit_group.add_argument("-tf", "--tile-fit", action="store_true", help="Fit tile size to image dimensions (keeps image size)")
     parser.add_argument("--calibrate", action="store_true", help="Run CUDA calibration for AI full-frame limits and save denoise_cache.json")
     parser.add_argument("--calibrate-all", action="store_true", help="Force calibration of all supported models and refresh denoise_cache.json")
+    parser.add_argument("--denoise-mode", default="auto", choices=["auto", "full", "tiled"], help="AI denoise execution mode: auto (calibrated full-or-tiled), full (prefer full-frame), or tiled")
+    parser.add_argument("--denoise-strength", type=float, default=1.0, help="Denoise strength scalar: <1 blends toward original, >1 runs an extra denoise pass and blends in")
     parser.add_argument("--ai-safety-fallback", action="store_true", help="Enable automatic safe retry chain when AI output is flagged suspicious")
     parser.add_argument("--dualdn-python", default=None, help="Python executable for DualDn external inference (default: current Python)")
     parser.add_argument("--dualdn-script", default=None, help="Path to DualDn inference script (if auto-detect fails)")
@@ -2063,6 +2126,29 @@ def main():
     parser.add_argument("--skip-rt", action="store_true", help="Skip RawTherapee stage (RAW files will be skipped).")
     
     args = parser.parse_args()
+    cli_args = sys.argv[1:]
+    has_denoise_mode_arg = any(a == "--denoise-mode" or a.startswith("--denoise-mode=") for a in cli_args)
+    has_denoise_strength_arg = any(a == "--denoise-strength" or a.startswith("--denoise-strength=") for a in cli_args)
+    has_safety_fallback_arg = "--ai-safety-fallback" in cli_args
+    if args.denoise and args.inference is None:
+        # Tuned defaults for -d only; explicit user flags always win.
+        if not has_denoise_mode_arg:
+            args.denoise_mode = "full"
+        if not has_denoise_strength_arg:
+            args.denoise_strength = 1.3
+        if not has_safety_fallback_arg:
+            args.ai_safety_fallback = True
+        print(
+            f"ℹ️  -d defaults: denoise_mode={args.denoise_mode}, "
+            f"denoise_strength={args.denoise_strength:.2f}, "
+            f"ai_safety_fallback={'on' if args.ai_safety_fallback else 'off'}"
+        )
+    if args.denoise_strength < 0.0:
+        print("ℹ️  --denoise-strength below 0 is invalid; clamping to 0.0.")
+        args.denoise_strength = 0.0
+    if args.denoise_strength > 2.0:
+        print("ℹ️  --denoise-strength above 2.0 is not recommended; clamping to 2.0.")
+        args.denoise_strength = 2.0
     if args.out_format == "jpg" and args.rt_bit_depth != "auto":
         print(f"ℹ️  --rt-bit-depth {args.rt_bit_depth} ignored for JPG output (always 8-bit).")
     if args.calibrate and args.calibrate_all:
@@ -2313,6 +2399,7 @@ def main():
                         denoise_file,
                         out_format=args.out_format,
                         quality=args.quality,
+                        denoise_mode=args.denoise_mode,
                         tile_size=args.tile_size,
                         overlap=args.overlap,
                         calibrate=args.calibrate,
@@ -2320,6 +2407,7 @@ def main():
                         tile_fit=args.tile_fit,
                         overlap_fit=args.overlap_fit,
                         safety_fallback=args.ai_safety_fallback,
+                        denoise_strength=args.denoise_strength,
                         model_name=selected_model,
                     )
                     if ok:
@@ -2331,6 +2419,7 @@ def main():
                     out_file,
                     out_format=args.out_format,
                     quality=args.quality,
+                    denoise_mode=args.denoise_mode,
                     tile_size=args.tile_size,
                     overlap=args.overlap,
                     calibrate=args.calibrate,
@@ -2338,6 +2427,7 @@ def main():
                     tile_fit=args.tile_fit,
                     overlap_fit=args.overlap_fit,
                     safety_fallback=args.ai_safety_fallback,
+                    denoise_strength=args.denoise_strength,
                     model_name=selected_model,
                 )
             if ok:
