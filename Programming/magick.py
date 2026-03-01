@@ -1,7 +1,7 @@
 """###############################################################################
 Image Conversion Script - GIMP/XCF/RAW/JPG Batch Converter
 -------------------------------------------------------------------------------
-Version: 2.2.0 (2026-02-03)
+Version: 2.2.1 (2026-03-02)
 
 PURPOSE:
     This script batch-converts images of many types (including GIMP 3 `.xcf` files)
@@ -54,6 +54,11 @@ WHY WE USE `magick input output` INSTEAD OF `mogrify`:
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-03-02 (v2.2.1):
+    ▸ Added automatic JP2 lossless mode when target format is `jp2`.
+    ▸ `-f jp2` (or positional `jp2`) now forces mathematically lossless output.
+    ▸ User `-q/--quality` is ignored for JP2 because lossless is always enforced.
+
 2026-02-03 (v2.2.0):
     ▸ Renamed `-t` to `-f / --format` for target format.
     ▸ Added `-t / --threads` to control ImageMagick's internal threading limit.
@@ -340,10 +345,14 @@ def main():
     for i in range(1, max_workers + 1):
         shared_dict[f"W{i:02}"] = "IDLE - Waiting for task"
 
+    jp2_lossless_mode = (target_format == "jp2")
+
     print("=" * 80)
-    print(f"IMAGE CONVERSION ENGINE (v2.2.0)")
+    print(f"IMAGE CONVERSION ENGINE (v2.2.1)")
     print("-" * 80)
     print(f"Workload: {len(input_files)} files | Target: {target_format.upper()} | Parallelism: {max_workers} Cores")
+    if jp2_lossless_mode:
+        print("Mode: JP2 lossless forced (ignores -q/--quality)")
     print("-" * 80)
 
     painter = DashboardPainter(max_workers, len(input_files))
@@ -365,7 +374,7 @@ def main():
             if str(args.threads).lower() != "auto":
                 magick_command.extend(["-limit", "thread", str(args.threads)])
 
-            if args.quality is not None:
+            if args.quality is not None and not jp2_lossless_mode:
                 magick_command.extend(["-quality", str(args.quality)])
 
             # Always flatten with background (safe for alpha, xcf, psd)
@@ -383,6 +392,10 @@ def main():
                 magick_command.extend(["-profile", args.profile])
             if args.resize:
                 magick_command.extend(["-resize", args.resize])
+
+            if jp2_lossless_mode:
+                # Force mathematically lossless JPEG 2000 compression.
+                magick_command.extend(["-define", "jp2:rate=1", "-quality", "100"])
 
             magick_command.append(output_file)
 
