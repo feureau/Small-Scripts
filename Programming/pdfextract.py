@@ -1,7 +1,71 @@
 import fitz  # PyMuPDF
 import argparse
 import pathlib
-import sys
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def get_output_path(pdf_path, output_dir=None, multiple_pdfs=False):
+    """Resolve output directory for a given PDF."""
+    if output_dir:
+        if multiple_pdfs:
+            return output_dir / pdf_path.stem
+        return output_dir
+    return pdf_path.parent / pdf_path.stem
+
+
+def process_single_pdf(pdf_path, output_dir=None, multiple_pdfs=False, index=None, total=None):
+    """Extract images from a single PDF and return count of extracted images."""
+    images_in_pdf = 0
+    progress = f" ({index}/{total})" if index and total else ""
+    print(f"\n--- Processing PDF{progress}: {pdf_path.name} ---")
+
+    output_path = get_output_path(pdf_path, output_dir=output_dir, multiple_pdfs=multiple_pdfs)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Cache extracted image payloads by xref; many PDFs reuse the same xref.
+    xref_cache = {}
+
+    try:
+        pdf_document = fitz.open(pdf_path)
+        for page_index in range(len(pdf_document)):
+            page = pdf_document.load_page(page_index)
+            image_list = page.get_images(full=True)
+
+            if not image_list:
+                continue
+
+            print(f"  Page {page_index + 1}: Found {len(image_list)} image reference(s).")
+
+            for img_index, img_info in enumerate(image_list):
+                xref = img_info[0]
+
+                try:
+                    if xref not in xref_cache:
+                        base_image = pdf_document.extract_image(xref)
+                        if not base_image:
+                            print(f"    - Could not extract image data for xref {xref} on page {page_index + 1}.")
+                            continue
+                        xref_cache[xref] = (base_image["image"], base_image["ext"])
+
+                    image_bytes, image_ext = xref_cache[xref]
+                    image_filename = f"page{page_index + 1:03d}_img{img_index + 1:03d}.{image_ext}"
+                    save_path = output_path / image_filename
+
+                    with open(save_path, "wb") as img_file:
+                        img_file.write(image_bytes)
+                    images_in_pdf += 1
+
+                except Exception as img_err:
+                    print(f"    - ERROR processing image {img_index + 1} (xref {xref}) on page {page_index + 1}: {img_err}")
+
+        pdf_document.close()
+        print(f"  -> Extracted {images_in_pdf} image(s) to folder '{output_path}'")
+        return images_in_pdf
+
+    except Exception as pdf_err:
+        print(f"  ERROR: Could not process PDF file {pdf_path.name}. Reason: {pdf_err}")
+        return 0
 
 def extract_images_from_pdfs(pdf_files, output_dir=None):
     """
@@ -12,93 +76,91 @@ def extract_images_from_pdfs(pdf_files, output_dir=None):
         pdf_files (list of pathlib.Path): List of PDF files to process.
         output_dir (pathlib.Path, optional): Optional output directory override.
     """
-    pdf_count = 0
+def extract_images_from_pdfs(pdf_files, output_dir=None, jobs=1):
+    pdf_count = len(pdf_files)
     total_images_extracted = 0
 
     if not pdf_files:
         print("No PDF files to process.")
         return
 
-    print(f"Found {len(pdf_files)} PDF file(s) to process.")
+    print(f"Found {pdf_count} PDF file(s) to process.")
 
-    for pdf_path in pdf_files:
-        pdf_count += 1
-        images_in_pdf = 0
-        print(f"\n--- Processing PDF ({pdf_count}/{len(pdf_files)}): {pdf_path.name} ---")
+    multiple_pdfs = len(pdf_files) > 1
+    worker_count = max(1, min(jobs, len(pdf_files)))
 
-        # Determine output path logic
-        if output_dir:
-            if len(pdf_files) == 1:
-                # Single file with explicit output -> Use exactly as provided
-                output_path = output_dir
-            else:
-                # Multiple files with output root -> Create subfolder inside root
-                output_folder_name = f"{pdf_path.stem}_extract"
-                output_path = output_dir / output_folder_name
-        else:
-            # No output flag -> Create folder alongside PDF
-            output_folder_name = f"{pdf_path.stem}_extract"
-            output_path = pdf_path.parent / output_folder_name
-
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        try:
-            # Open the PDF file
-            pdf_document = fitz.open(pdf_path)
-
-            # Iterate through each page to find images
-            for page_index in range(len(pdf_document)):
-                page = pdf_document.load_page(page_index)
-                image_list = page.get_images(full=True) # Get list of images on the page
-
-                if not image_list:
-                    continue # No images on this page
-
-                print(f"  Page {page_index + 1}: Found {len(image_list)} image reference(s).")
-
-                for img_index, img_info in enumerate(image_list):
-                    # img_info is a tuple, the first element is the xref of the image
-                    xref = img_info[0]
-
-                    try:
-                        # Extract the base image dictionary
-                        base_image = pdf_document.extract_image(xref)
-                        if not base_image:
-                           print(f"    - Could not extract image data for xref {xref} on page {page_index + 1}.")
-                           continue
-
-                        image_bytes = base_image["image"]
-                        image_ext = base_image["ext"]
-
-                        # Generate a filename
-                        image_filename = f"page{page_index + 1:03d}_img{img_index + 1:03d}.{image_ext}"
-                        save_path = output_path / image_filename
-
-                        # --- Method: Direct Save (Extracts content as-is) ---
-                        print(f"    - Saving image {img_index + 1} (xref {xref}) as {save_path.name}")
-                        with open(save_path, "wb") as img_file:
-                            img_file.write(image_bytes)
-                        images_in_pdf += 1
-
-                    except Exception as img_err:
-                        print(f"    - ERROR processing image {img_index + 1} (xref {xref}) on page {page_index + 1}: {img_err}")
-
-            pdf_document.close()
-            print(f"  -> Extracted {images_in_pdf} image(s) to folder '{output_path}'")
-            total_images_extracted += images_in_pdf
-
-        except Exception as pdf_err:
-            print(f"  ERROR: Could not process PDF file {pdf_path.name}. Reason: {pdf_err}")
+    if worker_count > 1 and multiple_pdfs:
+        print(f"Using {worker_count} parallel worker(s).")
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    process_single_pdf,
+                    pdf_path,
+                    output_dir,
+                    multiple_pdfs,
+                    i + 1,
+                    len(pdf_files),
+                ): pdf_path
+                for i, pdf_path in enumerate(pdf_files)
+            }
+            for future in as_completed(futures):
+                total_images_extracted += future.result()
+    else:
+        for i, pdf_path in enumerate(pdf_files):
+            total_images_extracted += process_single_pdf(
+                pdf_path,
+                output_dir=output_dir,
+                multiple_pdfs=multiple_pdfs,
+                index=i + 1,
+                total=len(pdf_files),
+            )
 
     print(f"\n--- Finished ---")
     print(f"Processed {pdf_count} PDF file(s).")
     print(f"Total images extracted: {total_images_extracted}")
 
 
+def determine_worker_count(jobs_arg, pdf_count):
+    """
+    Determine worker count from CLI flag:
+    - No -j passed: 1
+    - -j passed without value: auto
+    - -j N: explicit N
+    """
+    if pdf_count <= 1:
+        return 1
+
+    if jobs_arg is None:
+        return 1
+
+    if jobs_arg == "auto":
+        cpu_count = os.cpu_count() or 4
+        # Keep one core free when possible and cap by number of PDFs.
+        return max(1, min(pdf_count, max(2, cpu_count - 1)))
+
+    try:
+        jobs = int(jobs_arg)
+    except ValueError:
+        raise ValueError(f"Invalid jobs value: {jobs_arg}. Use -j, -j auto, or -j <positive-int>.")
+
+    if jobs < 1:
+        raise ValueError(f"Invalid jobs value: {jobs}. It must be >= 1.")
+
+    return max(1, min(jobs, pdf_count))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract images from PDF files.")
     parser.add_argument("files", nargs="*", help="PDF files to process. If empty, scans current directory.")
     parser.add_argument("-o", "--output", help="Output directory. For single files, this is the destination folder. For multiple files, this is the root folder.")
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        nargs="?",
+        const="auto",
+        default=None,
+        help="Parallel workers for multiple PDFs. Omit flag: single-thread. Use -j for auto. Use -j N for explicit workers.",
+    )
 
     args = parser.parse_args()
 
@@ -150,6 +212,15 @@ if __name__ == "__main__":
         pdf_to_process.sort()
         # Filter duplicates just in case
         pdf_to_process = list(dict.fromkeys(pdf_to_process))
-        extract_images_from_pdfs(pdf_to_process, output_dir)
+        try:
+            jobs = determine_worker_count(args.jobs, len(pdf_to_process))
+        except ValueError as err:
+            print(err)
+            raise SystemExit(2)
+
+        if args.jobs == "auto":
+            print(f"Auto-selected parallel workers: {jobs}")
+
+        extract_images_from_pdfs(pdf_to_process, output_dir, jobs=jobs)
     else:
         print("No valid PDF files found to process.")
