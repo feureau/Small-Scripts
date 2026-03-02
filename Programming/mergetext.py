@@ -140,6 +140,14 @@ def process_footnotes(content, global_state):
     if not local_mapping:
         return content, False
 
+    # Remove now-redundant footnote section headings left behind after
+    # extracting footnote definitions.
+    processed_content = re.sub(
+        r'(?im)^[ \t]*#{1,6}[ \t]*footnotes?[ \t]*$',
+        '',
+        processed_content
+    )
+
     # 3. Replace references in text using the local mapping
     ref_pattern = re.compile(r'\[\^([^\]]+)\](?!=:)')
     
@@ -151,8 +159,8 @@ def process_footnotes(content, global_state):
 
     processed_content = ref_pattern.sub(replace_ref, processed_content)
     
-    # Cleanup trailing whitespace left by removed definitions
-    processed_content = processed_content.rstrip()
+    # Cleanup whitespace left by removed definitions/headings
+    processed_content = re.sub(r'\n{3,}', '\n\n', processed_content).rstrip()
     
     return processed_content, True
 
@@ -166,6 +174,70 @@ def sanitize_api_response(text):
     if match:
         return match.group(1).strip()
     return text.strip()
+
+
+def derive_output_basename(files_to_merge):
+    """
+    Derives a readable output base name from input filenames.
+    Example:
+      INDO_..._page-01.txt + INDO_..._page-02.txt -> INDO_...
+    """
+    stems = []
+    for path in files_to_merge:
+        name = os.path.basename(path)
+        stem, _ = os.path.splitext(name)
+        if stem:
+            stems.append(stem)
+
+    if not stems:
+        return DEFAULT_OUTPUT_BASENAME
+
+    # Character-level common prefix across all stems.
+    common = os.path.commonprefix(stems).rstrip(" _-.()[]{}")
+    if not common:
+        return DEFAULT_OUTPUT_BASENAME
+
+    # Remove trailing page/index token patterns if present.
+    common = re.sub(
+        r'([ _\-.]*(?:page|pg|p)\s*[-_\.]?\s*\d+)$',
+        '',
+        common,
+        flags=re.IGNORECASE
+    ).rstrip(" _-.()[]{}")
+    common = re.sub(
+        r'([ _\-.]*(?:page|pg|p))$',
+        '',
+        common,
+        flags=re.IGNORECASE
+    ).rstrip(" _-.()[]{}")
+
+    return common or DEFAULT_OUTPUT_BASENAME
+
+
+def derive_output_extension(files_to_merge, file_patterns):
+    """
+    Derives output extension from matched files, preferring the dominant type.
+    Falls back to first pattern extension, then default extension.
+    """
+    ext_counts = {}
+    for path in files_to_merge:
+        _, ext = os.path.splitext(path)
+        if ext:
+            clean_ext = ext.lstrip(".").lower()
+            ext_counts[clean_ext] = ext_counts.get(clean_ext, 0) + 1
+
+    if ext_counts:
+        # Pick the most frequent extension; ties are resolved alphabetically
+        # for deterministic behavior.
+        return sorted(ext_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+    if file_patterns:
+        first_pattern = file_patterns[0]
+        pattern_parts = first_pattern.split('.')
+        if len(pattern_parts) > 1 and pattern_parts[-1] != '*':
+            return pattern_parts[-1].lower()
+
+    return DEFAULT_OUTPUT_EXTENSION
 
 
 def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_linebreaks=False, remove_strings=True, add_markers=False, recursive=False, **kwargs):
@@ -198,23 +270,9 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
         default_output_file = f"{DEFAULT_OUTPUT_BASENAME}.{DEFAULT_OUTPUT_EXTENSION}"
         # Intelligent output naming if -o is not provided
         if output_filename == default_output_file:
-            output_extension = None
-            first_pattern = file_patterns[0]
-            pattern_parts = first_pattern.split('.')
-            if len(pattern_parts) > 1 and pattern_parts[-1] != '*':
-                output_extension = pattern_parts[-1]
-            else:
-                # If no clear extension in pattern (e.g., explicit filenames),
-                # fall back to the first matched file's extension.
-                if files_to_merge:
-                    _, ext = os.path.splitext(files_to_merge[0])
-                    if ext:
-                        output_extension = ext.lstrip(".")
-
-            if output_extension:
-                output_filename = f"{DEFAULT_OUTPUT_BASENAME}.{output_extension}"
-            else:
-                output_filename = default_output_file
+            output_basename = derive_output_basename(files_to_merge)
+            output_extension = derive_output_extension(files_to_merge, file_patterns)
+            output_filename = f"{output_basename}.{output_extension}"
 
         # Apply Natural Sorting
         files_to_merge.sort(key=get_numerical_sort_key)
