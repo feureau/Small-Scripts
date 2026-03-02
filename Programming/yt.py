@@ -1,9 +1,180 @@
 """
-=================================================
-Ultimate YouTube Batch Uploader & Manager
-=================================================
-Version: 1.7 (High-Precision Matching + Safety Guards)
-Date: 2024-12-19
+# Ultimate YouTube Batch Uploader & Manager
+
+Desktop (Tkinter) tool for two workflows:
+1. **Update mode**: bulk-edit existing YouTube videos (schedule, visibility, metadata).
+2. **Upload mode**: upload local video files with optional metadata/subtitle matching.
+
+---
+
+## What This Script Does
+
+- Authenticates with the YouTube Data API (OAuth installed app flow).
+- Loads existing channel videos or videos from a specific playlist.
+- Matches local `.txt` descriptions and subtitle files to videos.
+- Bulk updates titles/descriptions/tags/category/language/scheduling/privacy.
+- Uploads local files as private videos (with optional post-upload file moving).
+- Provides guardrails (blank metadata-file skip, dry-run mode, log persistence).
+
+---
+
+## High-Level Architecture
+
+### 1) Configuration and constants
+- API scopes, file/folder names, upload patterns, limits, and language/category maps.
+
+### 2) Logging
+- Standard logger outputs to console and in-memory list.
+- Optional "save log on exit" writes buffered logs to `yt_manager.log`.
+
+### 3) Utility helpers
+- Text normalization/sanitization for matching and YouTube-safe payloads.
+- JSON cleaning for tolerant metadata parsing from `.txt`.
+- File moving helpers for uploaded/failed organization.
+
+### 4) Data models
+- `VideoData`: existing YouTube video + API metadata cache.
+- `VideoEntry`: local file queued for upload + inferred metadata/subtitle.
+
+### 5) GUI controller (`MainApp`)
+- Builds the interface, handles mode switching, filtering, selection, and actions.
+- Spawns background threads for API-heavy operations.
+- Keeps UI responsive while updating status bar text.
+
+### 6) Processing engines
+- `update_videos_on_youtube(...)`: applies updates in batch order.
+- `upload_new_videos(...)`: uploads selected local files.
+
+---
+
+## End-to-End Flows
+
+## Update Mode Flow
+1. Authenticate.
+2. Load existing videos (uploads playlist or custom playlist ID).
+3. (Optional) Filter/select subset in tree view.
+4. Set schedule/visibility/metadata options.
+5. Click `PROCESS` to update selected videos.
+
+Notes:
+- Scheduling uses `First Publish + interval` sequence.
+- Auto-set buttons:
+  - `Auto-Regular`: anchor to latest scheduled regular video.
+  - `Auto-Shorts`: anchor to latest scheduled short video.
+- Shorts heuristic in this script:
+  - vertical aspect ratio (`height > width`) and
+  - duration `<= 180` seconds.
+
+## Upload Mode Flow
+1. Load local files matching video patterns.
+2. Script auto-finds matching `.txt` description and subtitle files.
+3. Select desired rows and click `PROCESS`.
+4. Each upload is inserted as private (optionally with `publishAt` if set).
+5. Optional file moves into organized `uploaded/...` folders.
+
+---
+
+## API Usage Summary
+
+- `channels().list(...)`: channel info and uploads playlist ID.
+- `playlistItems().list(...)`: enumerate video IDs in a playlist.
+- `videos().list(...)`: fetch `snippet,status,fileDetails,contentDetails`.
+- `videos().update(...)`: apply metadata/status changes.
+- `videos().insert(...)`: upload new videos.
+
+Key fields used:
+- `status.publishAt`: schedule timestamp.
+- `status.privacyStatus`: private/unlisted/public.
+- `contentDetails.duration`: ISO-8601 duration (for short detection).
+- `fileDetails.videoStreams`: width/height and source file hints.
+
+---
+
+## Section-by-Section Reference
+
+### Logger and auth helpers
+- `ListHandler`: stores formatted log lines in memory.
+- `revoke_token`, `setup_revocation_on_exit`: cleanup token on exit/signals.
+- `get_authenticated_service`: OAuth bootstrap + credential refresh + service build.
+
+### Text and metadata sanitizers
+- `normalize_for_matching`: normalize text for loose matching.
+- `sanitize_for_youtube`: strips `<` and `>` and truncates.
+- `sanitize_description`: removes control chars and enforces 5000 chars.
+- `sanitize_tags`: enforces character/count/length constraints.
+- `sanitize_and_parse_json`: tolerant extraction of JSON blocks from `.txt`.
+
+### File movement and logs
+- `generate_batch_id`: unique batch key.
+- `safe_move_file`: collision-safe move helper.
+- `move_uploaded_files`: move video/description/subtitles after upload.
+- `save_upload_log`: save structured upload result JSON.
+
+### Data model classes
+- `VideoData`:
+  - stores raw API payload fragments + current effective values.
+  - parses ISO-8601 duration to seconds.
+  - `is_likely_short()` for scheduling heuristics.
+- `VideoEntry`:
+  - represents local upload candidate.
+  - auto-loads adjacent `.txt`/subtitle if present.
+
+### GUI class (`MainApp`)
+- `build_gui`: constructs all widgets and binds callbacks.
+- Scheduling helpers:
+  - `_read_interval_delta`
+  - `_get_latest_scheduled_dt`
+  - `_auto_set_start_time`
+  - `auto_set_start_time_regular`
+  - `auto_set_start_time_shorts`
+  - `auto_set_start_time` (backward-compatible fallback)
+- Mode/UI handlers:
+  - `_update_gui_for_mode`, `_update_ui_states`
+  - `_populate_treeview`, `on_video_select_display_info`
+  - filter + sorting helpers (`apply_filters`, `_sort_column`, etc.)
+- Load/auth handlers:
+  - `select_credentials_and_auth`, `load_channel_categories`
+  - `gui_load_existing_videos`, `run_video_load`, `finish_video_load`
+  - `gui_load_files_for_upload`
+- Data fetch:
+  - `fetch_all_videos_from_api` (playlist traversal + local file matching).
+- Execution:
+  - `start_processing_thread`, `run_update_processing`, `run_upload_processing`
+  - `on_exit`
+
+### Processing functions
+- `update_videos_on_youtube(service, processing_data)`:
+  - builds request body per selected video.
+  - applies scheduling/visibility/metadata options.
+  - supports dry run and blank-file safety skip.
+- `upload_new_videos(service, video_entries, skip_subtitles, move_files=True)`:
+  - resumable upload loop.
+  - optional post-upload file movement.
+
+---
+
+## Safety Guards and Behaviors
+
+- Blank metadata `.txt` files are skipped.
+- Invalid date input for scheduling aborts update run with log error.
+- Network/API exceptions are logged; app continues where possible.
+- Dry-run mode logs intended updates without calling `videos().update(...)`.
+
+---
+
+## Local Files and Folders Used
+
+- `token.json`: OAuth credentials.
+- `yt_manager.log`: optional saved runtime logs.
+- `uploaded/`: successful upload archive.
+- `failed_updates/`: failed update artifacts.
+
+---
+
+## Entry Point
+
+- Script starts with:
+  - `if __name__ == '__main__': MainApp()`
 """
 
 import os
@@ -220,11 +391,12 @@ def save_upload_log(batch_id, upload_data):
     except Exception as e: logger.error(f"Failed to save upload log: {e}")
 
 class VideoData:
-    def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None):
+    def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None, video_content_details=None):
         self.video_id = video_id
         self.original_title = video_title 
         self.video_snippet = video_snippet or {}
         self.video_status = video_status or {}
+        self.video_content_details = video_content_details or {}
         self.upload_date = self.video_snippet.get('publishedAt', '')
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
@@ -245,6 +417,27 @@ class VideoData:
         self.current_made_for_kids = self.video_status.get('selfDeclaredMadeForKids')
         self.current_embeddable = self.video_status.get('embeddable', True)
         self.current_public_stats_viewable = self.video_status.get('publicStatsViewable', False)
+        self.duration_seconds = self._parse_iso8601_duration_seconds(self.video_content_details.get('duration'))
+
+    @staticmethod
+    def _parse_iso8601_duration_seconds(duration_str):
+        if not duration_str:
+            return None
+        # Supports common YouTube API formats like PT59S, PT1M2S, PT2H5M.
+        match = re.fullmatch(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
+        if not match:
+            return None
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        seconds = int(match.group(3) or 0)
+        return hours * 3600 + minutes * 60 + seconds
+
+    def is_likely_short(self):
+        is_vertical = self.height > self.width if self.width and self.height else False
+        if self.duration_seconds is None:
+            return is_vertical
+        # Shorts eligibility now supports up to 3 minutes.
+        return self.duration_seconds <= 180 and is_vertical
 
 class VideoEntry:
     def __init__(self, filepath):
@@ -314,7 +507,8 @@ class MainApp:
         self.start_ent = ttk.Entry(sched, width=20)
         self.start_ent.insert(0, calculate_default_start_time())
         self.start_ent.grid(row=0, column=1, sticky='ew', padx=5, pady=2)
-        ttk.Button(sched, text="Auto-Set", width=8, command=self.auto_set_start_time).grid(row=0, column=2, sticky='w', padx=2)
+        ttk.Button(sched, text="Auto-Regular", width=12, command=self.auto_set_start_time_regular).grid(row=0, column=2, sticky='w', padx=2)
+        ttk.Button(sched, text="Auto-Shorts", width=12, command=self.auto_set_start_time_shorts).grid(row=0, column=3, sticky='w', padx=2)
 
         ttk.Label(sched, text='Interval Hours:').grid(row=1, column=0, sticky='w')
         self.interval_hour_var = tk.StringVar(value='2')
@@ -355,10 +549,59 @@ class MainApp:
         
         self.process_button = ttk.Button(frm, text='PROCESS', command=self.start_processing_thread, state=tk.DISABLED); self.process_button.pack(fill=tk.X, ipady=8, pady=(5, 0)); self.status_bar = ttk.Label(frm, text="Welcome! Authenticate to load existing videos.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
     
-    def auto_set_start_time(self):
+    def _read_interval_delta(self):
         try: hours = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get())
         except ValueError: hours, mins = 2, 24
-        interval_delta = timedelta(hours=hours, minutes=mins); latest_scheduled_dt = None
+        return timedelta(hours=hours, minutes=mins)
+
+    def _get_latest_scheduled_dt(self, filter_type="all"):
+        latest_scheduled_dt = None
+        if self.app_mode != "update":
+            return None
+
+        for vd in self.videos_to_process:
+            if not isinstance(vd, VideoData):
+                continue
+
+            if filter_type == "regular" and vd.is_likely_short():
+                continue
+            if filter_type == "shorts" and not vd.is_likely_short():
+                continue
+
+            raw_time = vd.video_status.get('publishAt')
+            if not raw_time:
+                continue
+            try:
+                dt = datetime.fromisoformat(raw_time.replace('Z', '+00:00'))
+                if latest_scheduled_dt is None or dt > latest_scheduled_dt:
+                    latest_scheduled_dt = dt
+            except ValueError:
+                pass
+        return latest_scheduled_dt
+
+    def _auto_set_start_time(self, filter_type="all", label="selected videos"):
+        interval_delta = self._read_interval_delta()
+        latest_scheduled_dt = self._get_latest_scheduled_dt(filter_type=filter_type)
+
+        if latest_scheduled_dt:
+            new_start_time = latest_scheduled_dt.astimezone() + interval_delta
+            self.update_status(f"Found latest schedule for {label}. Setting start to {new_start_time.strftime('%Y-%m-%d %H:%M')}")
+        else:
+            new_start_time = datetime.now() + interval_delta
+            self.update_status(f"No previous schedule found for {label}. Setting start to Now + Interval.")
+
+        self.start_ent.delete(0, tk.END)
+        self.start_ent.insert(0, new_start_time.strftime('%Y-%m-%d %H:%M'))
+
+    def auto_set_start_time_regular(self):
+        self._auto_set_start_time(filter_type="regular", label="regular videos")
+
+    def auto_set_start_time_shorts(self):
+        self._auto_set_start_time(filter_type="shorts", label="short videos")
+
+    def auto_set_start_time(self):
+        # Backward-compatible fallback if any older code path still calls this.
+        interval_delta = self._read_interval_delta(); latest_scheduled_dt = None
         if self.app_mode == "update":
             for vd in self.videos_to_process:
                 if isinstance(vd, VideoData):
@@ -529,13 +772,20 @@ class MainApp:
 
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
-                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails").execute()
+                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails,contentDetails").execute()
                 
                 for item in videos_resp.get("items", []):
                     video_id = item["id"]
                     if video_id in all_video_data_map: continue
 
-                    vd_obj = VideoData(video_id, item["snippet"]["title"], item["snippet"], item["status"], item.get("fileDetails"))
+                    vd_obj = VideoData(
+                        video_id,
+                        item["snippet"]["title"],
+                        item["snippet"],
+                        item["status"],
+                        item.get("fileDetails"),
+                        item.get("contentDetails")
+                    )
                     logger.info(f"\n[Processing Video]: {vd_obj.current_title[:60]}...")
                     
                     yt_timestamps = set()
