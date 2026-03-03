@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.0 (CLI Args & Custom Threads)
+VERSION: 6.2 (Path-Only MD5 Verification)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,16 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-03-03] VERSION 6.2 UPDATE
+   - MODIFIED: MD5 is now computed only when the same normalized path exists remotely.
+   - REMOVED: Cross-path smart content matching during scan (MOVED/SMART checks).
+   - MODIFIED: Orphan detection simplified to pure path-based comparison.
+
+[2026-03-03] VERSION 6.1 UPDATE
+   - ADDED: Support for metadata prefills from `metadata.json`.
+   - ADDED: Unified metadata prefill loader for XML/JSON.
+   - MODIFIED: Prefill source selection now checks XML first, then JSON.
+
 [2026-01-19] VERSION 6.0 UPDATE
    - ADDED: 'argparse' library integration.
    - ADDED: '-t' / '--threads' flag to customize upload concurrency.
@@ -61,6 +71,7 @@ import threading
 import time
 import argparse
 import re
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -163,7 +174,7 @@ def collect_metadata(default_title, prefills=None):
     print("Description: Short summary of the item contents and context (optional).")
     print("Tags: Comma-separated keywords for search and discovery (optional).")
     if prefills:
-        print("Found metadata.xml: fields are prefilled where available. Press Enter to keep defaults.")
+        print("Found metadata file: fields are prefilled where available. Press Enter to keep defaults.")
     
     title_default = prefills.get("title") if prefills else None
     if not title_default:
@@ -235,6 +246,78 @@ def load_metadata_xml(folder_path):
     if tags: prefills["tags"] = tags
 
     return prefills or None
+
+def load_metadata_json(folder_path):
+    json_path = folder_path / "metadata.json"
+    if not json_path.exists():
+        return None
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("metadata"), dict):
+        data = data["metadata"]
+
+    def get_str(keys):
+        for key in keys:
+            val = data.get(key)
+            if isinstance(val, str):
+                cleaned = val.strip()
+                if cleaned:
+                    return cleaned
+        return None
+
+    title = get_str(["title", "Title"])
+    mediatype = get_str(["mediatype", "Mediatype"])
+    creator = None
+    creator_val = data.get("creator")
+    if isinstance(creator_val, list):
+        creators = [str(c).strip() for c in creator_val if str(c).strip()]
+        if creators:
+            creator = "; ".join(creators)
+    elif isinstance(creator_val, str) and creator_val.strip():
+        creator = creator_val.strip()
+    if not creator:
+        creator = get_str(["Creator"])
+    description = get_str(["description", "Description"])
+
+    tags = None
+    subjects_val = data.get("subject")
+    if isinstance(subjects_val, list):
+        subjects = [str(s).strip() for s in subjects_val if str(s).strip()]
+        if subjects:
+            tags = ", ".join(subjects)
+    elif isinstance(subjects_val, str) and subjects_val.strip():
+        tags = subjects_val.strip()
+
+    if not tags:
+        tags_val = data.get("tags")
+        if isinstance(tags_val, list):
+            tag_list = [str(s).strip() for s in tags_val if str(s).strip()]
+            if tag_list:
+                tags = ", ".join(tag_list)
+        elif isinstance(tags_val, str) and tags_val.strip():
+            tags = tags_val.strip()
+
+    prefills = {}
+    if title: prefills["title"] = title
+    if mediatype: prefills["mediatype"] = mediatype
+    if creator: prefills["creator"] = creator
+    if description: prefills["description"] = description
+    if tags: prefills["tags"] = tags
+
+    return prefills or None
+
+def load_metadata_prefills(folder_path):
+    # Prefer XML when both files exist to preserve existing behavior.
+    prefills = load_metadata_xml(folder_path)
+    if prefills:
+        return prefills
+    return load_metadata_json(folder_path)
 
 def sanitize_identifier(raw_identifier):
     # Normalize to ASCII, replace spaces with underscores, and strip invalid chars
@@ -458,17 +541,17 @@ def main():
         item = get_item(identifier)
         metadata = {}
         is_new_item = False
-        xml_prefills = load_metadata_xml(folder_path)
+        metadata_prefills = load_metadata_prefills(folder_path)
 
         if item.exists:
             # Only ask update question if -m flag is provided
             if args.metadata:
                 if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                    metadata = collect_metadata(identifier, prefills=xml_prefills)
+                    metadata = collect_metadata(identifier, prefills=metadata_prefills)
         else:
             print(f"  > New item detected.")
             is_new_item = True
-            metadata = collect_metadata(identifier, prefills=xml_prefills)
+            metadata = collect_metadata(identifier, prefills=metadata_prefills)
 
         # 3. MD5 Scanning Phase
         print("\n" + "="*30)
@@ -488,8 +571,6 @@ def main():
 
         # 3b. Index Remote Files
         remote_map = {} # normalized_path -> md5
-        remote_content_map = {} # (filename, md5) -> set(normalized_paths)
-        remote_pure_md5_map = {} # md5 -> set(normalized_paths)
         total_remote_files = 0
         total_remote_originals = 0
         
@@ -504,28 +585,12 @@ def main():
                         f_md5 = f.get('md5')
                         
                         remote_map[norm_path] = f_md5
-                        
-                        # Populate content map for smart matching
-                        if f_md5:
-                            f_name = os.path.basename(norm_path)
-                            key = (f_name, f_md5)
-                            if key not in remote_content_map:
-                                remote_content_map[key] = set()
-                            remote_content_map[key].add(norm_path)
-
-                            # Populate pure md5 map for loose smart matching (different identifier/name)
-                            if f_md5 not in remote_pure_md5_map:
-                                remote_pure_md5_map[f_md5] = set()
-                            remote_pure_md5_map[f_md5].add(norm_path)
 
         # 3c. Comparison
         files_to_upload = [] 
         orphaned_files = [] # List of remote keys to delete
-        accounted_for_remotes = set() # Remote paths that are "kept" due to smart match
         
         matched_count = 0
-        moved_count = 0
-        smart_count = 0
         upload_new_count = 0
         upload_update_count = 0
         
@@ -546,42 +611,10 @@ def main():
                 status_msg = ""
                 
                 if norm_name not in remote_map:
-                    # Path doesn't exist. Check for Smart Match (if NOT strict mode)
-                    is_smart_match = False
-                    
-                    # Strict mode = -s OR -o. If either is set, we strictly enforce structure (re-upload).
-                    if not args.sync and not args.orphan_deletion:
-                        local_md5 = calculate_md5(local_file)
-                        if local_md5:
-                            f_name = os.path.basename(norm_name)
-                            key = (f_name, local_md5)
-                            
-                            # 1. MOVED Check (Same Name, Same Content)
-                            if key in remote_content_map:
-                                matches = remote_content_map[key]
-                                match_path = next(iter(matches))
-                                
-                                is_smart_match = True
-                                status_msg = f"[MOVED]   Found at {match_path} (Skipping)"
-                                accounted_for_remotes.add(match_path)
-                                moved_count += 1
-                            
-                            # 2. SMART Check (Different Name, Same Content)
-                            elif local_md5 in remote_pure_md5_map:
-                                matches = remote_pure_md5_map[local_md5]
-                                match_path = next(iter(matches))
-
-                                is_smart_match = True
-                                status_msg = f"[SMART]   Found at {match_path} (Skipping)"
-                                accounted_for_remotes.add(match_path)
-                                smart_count += 1
-
-                    if not is_smart_match:
-                        should_upload = True
-                        status_msg = f"[NEW]    {rel_path}"
-                        upload_new_count += 1
-                    else:
-                        tqdm.write(status_msg)
+                    # New path: no MD5 needed because there is no same-path remote file to compare against.
+                    should_upload = True
+                    status_msg = f"[NEW]    {rel_path}"
+                    upload_new_count += 1
 
                 else:
                     # Check MD5
@@ -604,21 +637,13 @@ def main():
             
             scan_bar.set_description("Scan Complete")
 
-        # Detect Orphans
-        for r_norm, r_md5 in remote_map.items():
-            if r_norm not in local_file_map:
-                if r_norm not in accounted_for_remotes:
-                     pass
-        
-        # Re-pass for orphans to get correct casing key
+        # Detect Orphans (path-based)
         if item.exists:
             for f in item.files:
                  if f['source'] == 'original' and f['name'] != script_name:
                      norm = normalize_path(f['name'])
                      
                      if norm in local_file_map:
-                         continue 
-                     if norm in accounted_for_remotes:
                          continue 
                          
                      orphaned_files.append(f['name'])
@@ -640,8 +665,6 @@ def main():
         print(f"Total Remote Originals:  {total_remote_originals} (of {total_remote_files} total items)")
         print("-" * 40)
         print(f"Matched (Exact):         {matched_count}")
-        print(f"Matched (Moved):         {moved_count}")
-        print(f"Matched (Smart):         {smart_count}")
         print(f"To Upload (New):         {upload_new_count}")
         print(f"To Upload (Update):      {upload_update_count}")
         print(f"Orphans (To Delete):     {orphan_count}")
