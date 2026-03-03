@@ -6,6 +6,7 @@ import platform
 import argparse
 import glob
 import re
+from pathlib import Path
 
 def get_gs_executable(custom_gs=None):
     """
@@ -113,11 +114,29 @@ def compress_pdf(input_pdf, output_pdf, quality, resolution, compatibility,
     except FileNotFoundError as fnf_error:
         print(f"Ghostscript executable not found. Please ensure it is installed and in your PATH. Error: {fnf_error}")
 
+def discover_pdf_files(root_dir, suffix):
+    """
+    Recursively discover PDF files under root_dir.
+    Files that already look like compressed output (ending with suffix + .pdf)
+    are skipped to avoid repeatedly recompressing generated files.
+    """
+    discovered = []
+    suffix_lower = suffix.lower()
+    for path in Path(root_dir).rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() != ".pdf":
+            continue
+        if suffix_lower and path.stem.lower().endswith(suffix_lower):
+            continue
+        discovered.append(str(path))
+    return discovered
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compress PDF files using Ghostscript with various options."
     )
-    parser.add_argument("pdf_files", nargs="+", help="PDF files to compress")
+    parser.add_argument("pdf_files", nargs="*", help="PDF files to compress")
     parser.add_argument("-q", "--quality", default="/screen", choices=["/screen", "/ebook", "/printer", "/prepress", "/default"],
                         help="Ghostscript PDF settings for quality (default: /screen)")
     parser.add_argument("-r", "--resolution", type=int, default=72, 
@@ -130,8 +149,8 @@ def main():
                         help="JPEG quality (0-100) for rasterized images (default: 50, lower means higher compression)")
     parser.add_argument("-g", "--gs", default=None, 
                         help="Path to Ghostscript executable. If not provided, the default for the OS is used")
-    parser.add_argument("-S", "--suffix", default="_compressed", 
-                        help="Suffix to add to the output file name (default: _compressed)")
+    parser.add_argument("-S", "--suffix", default="_s", 
+                        help="Suffix to add to the output file name (default: _s)")
     parser.add_argument("-s", "--scale", default=None,
                         help="Scale the image. Can be a percentage (e.g., 50%%), a factor (e.g., 0.5), or a bounding box (e.g., 1024x768)")
     
@@ -139,15 +158,23 @@ def main():
     
     gs_executable = get_gs_executable(args.gs)
     
-    # Expand glob patterns (e.g., *.pdf) into actual file names
+    # Expand glob patterns (e.g., *.pdf) into actual file names.
+    # If no input paths are provided, recursively discover PDFs from CWD.
     expanded_files = []
-    for pattern in args.pdf_files:
-        matches = glob.glob(pattern)
-        if matches:
-            expanded_files.extend(matches)
-        else:
-            # If no matches, keep the original (might be a literal filename)
-            expanded_files.append(pattern)
+    if args.pdf_files:
+        for pattern in args.pdf_files:
+            matches = glob.glob(pattern, recursive=True)
+            if matches:
+                expanded_files.extend(matches)
+            else:
+                # If no matches, keep the original (might be a literal filename)
+                expanded_files.append(pattern)
+    else:
+        expanded_files = discover_pdf_files(os.getcwd(), args.suffix)
+        if not expanded_files:
+            print("No eligible PDF files found in current directory tree.")
+            return
+        print(f"No input files provided. Found {len(expanded_files)} PDF(s) recursively under '{os.getcwd()}'.")
     
     for input_pdf in expanded_files:
         if not os.path.isfile(input_pdf):
