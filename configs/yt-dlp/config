@@ -1,26 +1,25 @@
-# Format: best combined MP4 (video+audio)
--f "best[ext=mp4]"
-
-# Merge separate streams if any (usually not needed with combined formats)
+# Format: best separate video+audio (supports 1080p+), fallback to best MP4
+-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+# Merge into MP4
 --merge-output-format mp4
 
-# Thumbnails
+# Thumbnails (embedded only — remove --write-thumbnail if you don't want loose image files)
 --embed-thumbnail
 --write-thumbnail
 
 # Metadata
 --add-metadata
 
-# Subtitles
+# Subtitles (en + auto-generated fallback)
 --write-subs
 --write-auto-subs
---sub-lang auto
+--sub-lang "en.*,en"
 --embed-subs
 
 # Download progress
 --progress
 
-# Audio conversion
+# Audio conversion (only applies when using -x for audio-only extraction, ignored for video downloads)
 --audio-format aac
 
 # Retry and resume
@@ -28,15 +27,14 @@
 --fragment-retries 10
 --continue
 
-# Request pacing to avoid temporary 403s
-# --sleep-requests 2
+# Request pacing (recommended — reduces 403 errors)
+--sleep-requests 2
 
-# Optional: avoid errors for DASH/unavailable streams
+# Avoid errors for unavailable streams
 --compat-options no-youtube-unavailable-videos
 
-# Optional: emulate browser for extra safety
---user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+# Updated user-agent
+--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-# File naming
-# Naming: Channel - Date - Title - ID
+# File naming: Channel - Date - Title - ID - ViewCount
 --output "%(channel)s - %(upload_date)s - %(title)s [%(id)s] [%(view_count)s].%(ext)s"
