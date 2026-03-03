@@ -37,6 +37,11 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-03-04] VERSION 6.3 UPDATE
+   - ADDED: `--md5-verify` flag to enable same-path MD5 comparison during scan.
+   - MODIFIED: Default scan now uses path-only matching unless MD5 flag is provided.
+   - VERIFIED: `-h` / `--help` CLI help output works with argparse.
+
 [2026-03-03] VERSION 6.2 UPDATE
    - MODIFIED: MD5 is now computed only when the same normalized path exists remotely.
    - REMOVED: Cross-path smart content matching during scan (MOVED/SMART checks).
@@ -482,12 +487,14 @@ def main():
     parser.add_argument("-s", "--sync", action="store_true", help="Sync mode (Upload/Update only)")
     parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
     parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")
+    parser.add_argument("--md5-verify", action="store_true", help="Enable MD5 comparison for files that already exist remotely by path")
     args = parser.parse_args()
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.0) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.3) ---")
     print(f"--- Threads: {max_workers} ---")
+    print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if args.sync:
         print("--- Mode: SYNC (Uploads) ---")
     if args.orphan_deletion:
@@ -555,7 +562,7 @@ def main():
 
         # 3. MD5 Scanning Phase
         print("\n" + "="*30)
-        print("PHASE 1: CONTENT VERIFICATION")
+        print("PHASE 1: CONTENT VERIFICATION" if args.md5_verify else "PHASE 1: PATH VERIFICATION")
         print("="*30)
         
         script_name = Path(sys.argv[0]).name
@@ -617,16 +624,21 @@ def main():
                     upload_new_count += 1
 
                 else:
-                    # Check MD5
-                    local_md5 = calculate_md5(local_file)
-                    if not local_md5: break 
-                        
-                    remote_md5 = remote_map[norm_name]
-                    if local_md5 != remote_md5:
-                        should_upload = True
-                        status_msg = f"[UPDATE] {rel_path}"
-                        upload_update_count += 1
+                    if args.md5_verify:
+                        # Same-path compare by content hash only when enabled.
+                        local_md5 = calculate_md5(local_file)
+                        if not local_md5:
+                            break
+
+                        remote_md5 = remote_map[norm_name]
+                        if local_md5 != remote_md5:
+                            should_upload = True
+                            status_msg = f"[UPDATE] {rel_path}"
+                            upload_update_count += 1
+                        else:
+                            matched_count += 1
                     else:
+                        # Path-only mode treats existing same-path files as matched.
                         matched_count += 1
                 
                 if should_upload:
@@ -664,7 +676,8 @@ def main():
         print(f"Total Local Files:       {total_local}")
         print(f"Total Remote Originals:  {total_remote_originals} (of {total_remote_files} total items)")
         print("-" * 40)
-        print(f"Matched (Exact):         {matched_count}")
+        matched_label = "Matched (MD5 Exact)" if args.md5_verify else "Matched (Path Exists)"
+        print(f"{matched_label}:".ljust(28) + f"{matched_count}")
         print(f"To Upload (New):         {upload_new_count}")
         print(f"To Upload (Update):      {upload_update_count}")
         print(f"Orphans (To Delete):     {orphan_count}")
