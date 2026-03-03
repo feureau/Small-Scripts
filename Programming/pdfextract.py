@@ -5,13 +5,24 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+def _safe_folder_name(name: str) -> str:
+    """Return a filesystem-safe folder component for auto-generated output folders."""
+    # Windows-disallowed characters in file/folder names.
+    invalid_chars = '<>:"/\\|?*'
+    cleaned = "".join("_" if ch in invalid_chars else ch for ch in name)
+    # Trim control chars and trailing dots/spaces (invalid on Windows).
+    cleaned = "".join(ch for ch in cleaned if ord(ch) >= 32).rstrip(" .")
+    return cleaned or "output"
+
+
 def get_output_path(pdf_path, output_dir=None, multiple_pdfs=False):
     """Resolve output directory for a given PDF."""
+    safe_stem = _safe_folder_name(pdf_path.stem)
     if output_dir:
         if multiple_pdfs:
-            return output_dir / pdf_path.stem
+            return output_dir / safe_stem
         return output_dir
-    return pdf_path.parent / pdf_path.stem
+    return pdf_path.parent / safe_stem
 
 
 def process_single_pdf(pdf_path, output_dir=None, multiple_pdfs=False, index=None, total=None):
