@@ -473,12 +473,9 @@ def looks_like_vision_model(model_name):
     return any(h in mn for h in hints)
 
 def prompt_expects_image(prompt_text):
-    txt = (prompt_text or "").lower()
-    cues = [
-        "image", "photo", "picture", "ocr", "scan", "screenshot", "transcribe the text from",
-        "extract text from", "look at the image", "analyze the image"
-    ]
-    return any(c in txt for c in cues)
+    # Keyword-based image intent detection is intentionally disabled.
+    # Returning False prevents guardrail warnings/failures for text-only workflows.
+    return False
 
 def build_anti_echo_followup_prompt(original_prompt):
     p = (original_prompt or "").strip()
