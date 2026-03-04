@@ -145,6 +145,7 @@ DEFAULT_GOOGLE_MODEL = "models/gemini-1.5-flash"
 
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_API_URL}/api/tags"
+OLLAMA_CHAT_COMPLETIONS_ENDPOINT = f"{OLLAMA_API_URL}/v1/chat/completions"
 
 LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
@@ -369,6 +370,7 @@ class QuotaExhaustedError(Exception): pass
 class FatalProcessingError(Exception): pass
 class CancellationError(Exception): pass
 last_request_time = None
+VERBOSE_DIAGNOSTICS = True
 
 def console_log(msg, type="INFO"):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -380,6 +382,180 @@ def console_log(msg, type="INFO"):
     elif type == "UPLOAD": icon = "☁️"
     elif type == "STREAM": icon = "🌊"
     print(f"[{timestamp}] {icon} {msg}")
+
+def human_bytes(num):
+    try:
+        n = float(num)
+    except Exception:
+        return str(num)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024.0 or unit == "GB":
+            return f"{n:.1f}{unit}"
+        n /= 1024.0
+    return f"{num}B"
+
+def short_sha256_bytes(data):
+    try:
+        return hashlib.sha256(data).hexdigest()[:12]
+    except Exception:
+        return "unknown"
+
+def preview_text(text, max_chars=180):
+    if not text:
+        return ""
+    one_line = re.sub(r"\s+", " ", str(text)).strip()
+    return one_line if len(one_line) <= max_chars else one_line[:max_chars] + "..."
+
+def is_likely_prompt_echo(prompt_text, response_text):
+    prompt_norm = re.sub(r"\s+", " ", (prompt_text or "")).strip().lower()
+    resp_norm = re.sub(r"\s+", " ", (response_text or "")).strip().lower()
+    if not prompt_norm or not resp_norm:
+        return False
+    if resp_norm == prompt_norm:
+        return True
+    probe = prompt_norm[: min(260, len(prompt_norm))]
+    if probe and resp_norm.startswith(probe):
+        return True
+    # Many failures return a large copied chunk of the instruction prompt.
+    if len(prompt_norm) > 120 and len(resp_norm) > 120 and prompt_norm[:120] in resp_norm[:500]:
+        return True
+    # Line-overlap heuristic: if multiple long instruction lines from prompt
+    # appear verbatim in response, the model likely echoed instructions.
+    prompt_lines = []
+    for line in (prompt_text or "").splitlines():
+        ln = line.strip()
+        if len(ln) >= 28:
+            prompt_lines.append(re.sub(r"\s+", " ", ln).lower())
+    overlap = 0
+    for ln in prompt_lines[:40]:
+        if ln in resp_norm:
+            overlap += 1
+            if overlap >= 3:
+                return True
+    return False
+
+def is_unusable_vision_response(prompt_text, response_text):
+    resp = (response_text or "").strip()
+    if not resp:
+        return True
+    if is_likely_prompt_echo(prompt_text, resp):
+        return True
+
+    low = resp.lower()
+    # Catch instruction-like outputs that are not actual OCR content.
+    bad_phrases = [
+        "transcribe the text from the image",
+        "do not replicate the instructions",
+        "do not repeat instructions",
+        "output only transcription",
+        "your task is to transcribe"
+    ]
+    if any(p in low for p in bad_phrases):
+        return True
+
+    # If prompt expects OCR/image analysis, extremely short single-line outputs
+    # are usually failure artifacts, not useful transcription.
+    if prompt_expects_image(prompt_text):
+        if len(resp) < 120 and ("\n" not in resp):
+            return True
+
+    return False
+
+def looks_like_vision_model(model_name):
+    if not model_name:
+        return False
+    mn = model_name.lower()
+    hints = [
+        "vision", "vl", "ocr", "llava", "bakllava", "moondream", "minicpm-v",
+        "qwen2-vl", "qwen2.5-vl", "qwen-vl", "glm-4v", "internvl", "pixtral",
+        "phi-3.5-vision", "gemma3"
+    ]
+    return any(h in mn for h in hints)
+
+def prompt_expects_image(prompt_text):
+    txt = (prompt_text or "").lower()
+    cues = [
+        "image", "photo", "picture", "ocr", "scan", "screenshot", "transcribe the text from",
+        "extract text from", "look at the image", "analyze the image"
+    ]
+    return any(c in txt for c in cues)
+
+def build_anti_echo_followup_prompt(original_prompt):
+    p = (original_prompt or "").strip()
+    if len(p) > 2400:
+        p = p[:2400]
+    return (
+        "Use the attached image as the primary source.\n"
+        "Do the requested task, but do NOT repeat, quote, or restate the instructions.\n"
+        "Return only the final result content.\n\n"
+        f"Task instructions:\n{p}"
+    )
+
+def get_ollama_model_capability(model_name):
+    """
+    Best-effort capability probe using Ollama /api/show metadata.
+    Returns dict with keys:
+      - vision_hint: bool
+      - keys: list[str]
+      - detail: short string
+    """
+    try:
+        url = f"{OLLAMA_API_URL}/api/show"
+        resp = requests.post(url, json={"model": model_name}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        raw = json.dumps(data).lower()
+        keys = sorted(list(data.keys())) if isinstance(data, dict) else []
+        vision_hint = any(tok in raw for tok in ["vision", "projector", "clip", "mmproj", "image"])
+        detail = ""
+        if isinstance(data, dict):
+            details = data.get("details")
+            if isinstance(details, dict):
+                fam = details.get("family") or details.get("families")
+                if fam:
+                    detail = f"family={fam}"
+        return {"vision_hint": vision_hint, "keys": keys, "detail": detail}
+    except Exception as e:
+        return {"vision_hint": None, "keys": [], "detail": f"probe failed: {e}"}
+
+def pick_ollama_vision_fallback(current_model):
+    preferred = [
+        "gemma3:12b-it-qat",
+        "gemma3:4b-it-qat",
+        "llava",
+        "bakllava",
+        "minicpm-v",
+        "qwen2.5-vl",
+    ]
+    try:
+        resp = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=8)
+        resp.raise_for_status()
+        models = [m.get("name", "") for m in resp.json().get("models", [])]
+        lower_map = {m.lower(): m for m in models}
+        cur = (current_model or "").lower()
+        for hint in preferred:
+            for lm, orig in lower_map.items():
+                if hint in lm and lm != cur:
+                    return orig
+    except Exception:
+        return None
+    return None
+
+def pick_lmstudio_vision_fallback(current_model):
+    preferred_hints = ["glm-ocr", "gemma-3", "gemma3", "vl", "vision", "llava", "minicpm-v"]
+    try:
+        resp = requests.get(LMSTUDIO_MODELS_ENDPOINT, timeout=8)
+        resp.raise_for_status()
+        models = [m.get("id", "") for m in resp.json().get("data", []) if m.get("id")]
+        cur = (current_model or "").lower()
+        for hint in preferred_hints:
+            for m in models:
+                lm = m.lower()
+                if hint in lm and lm != cur:
+                    return m
+    except Exception:
+        return None
+    return None
 
 def load_presets():
     """Loads presets from PRESET_JSON_FILE."""
@@ -615,6 +791,9 @@ def fetch_ollama_models():
         response = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=5)
         response.raise_for_status()
         models = sorted([m.get("name") for m in response.json().get("models", []) if m.get("name")])
+        console_log(f"Ollama endpoint: {OLLAMA_API_URL} | models: {len(models)}", "INFO")
+        if VERBOSE_DIAGNOSTICS and models:
+            console_log(f"DEBUG OLLAMA MODELS: {models[:12]}", "DEBUG")
         return models, None
     except Exception as e: return [], str(e)
 
@@ -624,6 +803,9 @@ def fetch_lmstudio_models():
         response = requests.get(LMSTUDIO_MODELS_ENDPOINT, timeout=5)
         response.raise_for_status()
         models = sorted([m.get("id") for m in response.json().get("data", []) if m.get("id")])
+        console_log(f"LM Studio endpoint: {LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT} | models: {len(models)}", "INFO")
+        if VERBOSE_DIAGNOSTICS and models:
+            console_log(f"DEBUG LMSTUDIO MODELS: {models[:12]}", "DEBUG")
         return models, None
     except Exception as e: return [], str(e)
 
@@ -668,6 +850,19 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     
     response_text = ""
     error_msg = None
+    images_count = len(kwargs.get('images_data_list') or [])
+    if VERBOSE_DIAGNOSTICS:
+        console_log(
+            f"DEBUG REQUEST: engine={engine} model={model_name} stream={kwargs.get('stream_output', False)} images={images_count} prompt_chars={len(prompt_text or '')}",
+            "DEBUG"
+        )
+        if prompt_text:
+            console_log(f"DEBUG PROMPT PREVIEW: {preview_text(prompt_text)}", "DEBUG")
+    if images_count > 0 and engine in ("ollama", "lmstudio") and not looks_like_vision_model(model_name):
+        console_log(
+            f"Model '{model_name}' may be text-only (no obvious vision tag). If output ignores images, try a VL/vision model.",
+            "WARN"
+        )
 
     if engine == "google": 
         response_text = call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
@@ -681,6 +876,15 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     # Check for error strings returned by wrappers
     if response_text and str(response_text).startswith("Error:"):
         return response_text
+
+    if VERBOSE_DIAGNOSTICS:
+        console_log(f"DEBUG RESPONSE: chars={len(response_text or '')}", "DEBUG")
+        norm_prompt = re.sub(r"\s+", " ", (prompt_text or "")).strip().lower()
+        norm_resp = re.sub(r"\s+", " ", (response_text or "")).strip().lower()
+        if norm_prompt and norm_resp:
+            probe = norm_prompt[: min(180, len(norm_prompt))]
+            if probe and (norm_resp.startswith(probe) or norm_resp == norm_prompt):
+                console_log("Response looks like prompt echo (possible missing/ignored image context).", "WARN")
 
     if clean_output:
         return sanitize_api_response(response_text)
@@ -825,184 +1029,322 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
     except FatalProcessingError: raise 
     except Exception as e: raise e
 
-def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, stream_output=False, cancellation_event=None, **kwargs):
-    try:
-        message = {'role': 'user', 'content': prompt_text}
-        if images_data_list:
-            # Prefer passing paths to Ollama (handles loading/encoding info better)
-            # Fallback to bytes if path is missing (though our new logic adds it)
-            message['images'] = [img.get('path', img['bytes']) for img in images_data_list]
+def _build_openai_content_variant(prompt_text, images_data_list, variant_name):
+    if not images_data_list:
+        return prompt_text
 
-        tools_list = [ollama.web_search] if enable_web_search else []
+    # Canonical OpenAI-compatible multimodal message format.
+    content = [{"type": "text", "text": prompt_text}]
+    for img_data in images_data_list:
+        b64 = base64.b64encode(img_data["bytes"]).decode("utf-8")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{img_data['mime_type']};base64,{b64}"}
+        })
+    return content
 
-        if stream_output:
-            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before Ollama generation.")
-            stream = ollama.chat(
-                model=model_name,
-                messages=[message],
-                tools=tools_list,
-                stream=True
+def _extract_openai_message_text(resp_json):
+    msg_content = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if isinstance(msg_content, str):
+        return msg_content
+    if isinstance(msg_content, list):
+        out = []
+        for part in msg_content:
+            if isinstance(part, dict):
+                txt = part.get("text") or part.get("content") or ""
+                if txt:
+                    out.append(txt)
+        return "".join(out)
+    return str(msg_content) if msg_content is not None else ""
+
+def _call_openai_compatible_chat(
+    engine_label,
+    endpoint,
+    prompt_text,
+    model_name,
+    images_data_list=None,
+    stream_output=False,
+    cancellation_event=None,
+    enable_thinking=False
+):
+    headers = {"Content-Type": "application/json"}
+    images_data_list = images_data_list or []
+
+    console_log(
+        f"DEBUG {engine_label.upper()} REQUEST: endpoint={endpoint} model={model_name} stream={stream_output} images={len(images_data_list)}",
+        "DEBUG"
+    )
+
+    if images_data_list:
+        first = images_data_list[0]
+        first_sz = len(first.get("bytes", b""))
+        first_mime = first.get("mime_type", "unknown")
+        first_hash = short_sha256_bytes(first.get("bytes", b""))
+        console_log(
+            f"DEBUG {engine_label.upper()} IMAGE[0]: mime={first_mime} size={human_bytes(first_sz)} sha256={first_hash}",
+            "DEBUG"
+        )
+
+    variants = ["text_only"]
+    if images_data_list:
+        # Keep only the known-good format + anti-echo wording pass.
+        variants = ["openai_chat", "openai_chat_anti_echo"]
+
+    # Honor user stream setting for all cases, including image jobs.
+    effective_stream = bool(stream_output)
+
+    last_error = None
+    best_candidate = ""
+    for variant in variants:
+        try:
+            base_variant = variant.replace("_anti_echo", "")
+            use_anti_echo = variant.endswith("_anti_echo")
+            effective_prompt = build_anti_echo_followup_prompt(prompt_text) if use_anti_echo else prompt_text
+            final_content = _build_openai_content_variant(effective_prompt, images_data_list, base_variant)
+
+            messages = [{"role": "user", "content": final_content}]
+            if use_anti_echo:
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "Use the attached image as source. Do not repeat instructions. Return only final OCR/transcription result."
+                    },
+                    {"role": "user", "content": final_content}
+                ]
+
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "stream": effective_stream
+            }
+            if enable_thinking:
+                # Best-effort hint for local servers that expose reasoning/thinking.
+                payload["think"] = True
+
+            if images_data_list:
+                console_log(f"DEBUG {engine_label.upper()}: trying variant '{variant}'", "DEBUG")
+                if VERBOSE_DIAGNOSTICS and isinstance(final_content, list):
+                    content_types = [p.get("type", "?") for p in final_content if isinstance(p, dict)]
+                    console_log(f"DEBUG {engine_label.upper()} CONTENT TYPES: {content_types}", "DEBUG")
+
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                stream=effective_stream,
+                timeout=600
             )
-            full_text = ""
-            thinking_active = False
-            thinking_started = False
-            thinking_ended = False
-            output_started = False
-            for chunk in stream:
-                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during Ollama streaming.")
-                msg = chunk.get('message', {})
-                part = msg.get('content', "") or chunk.get('response', "")
-                thinking_part = msg.get('thinking', "")
-                
-                # Stream model "thinking" if provided by Ollama (kept out of final output)
-                if thinking_part:
-                    if not thinking_started:
-                        print("\n--- [THINKING START] ---\n", end="", flush=True)
-                        thinking_started = True
-                    print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
+            response.raise_for_status()
 
-                # Simple Thinking Tag Handling
-                to_print = part
-                if "<think>" in to_print:
-                    thinking_active = True
-                    if not thinking_started:
-                        print("\n--- [THINKING START] ---\n", end="", flush=True)
-                        thinking_started = True
-                    # If tag is strictly present, try to colorize what's after it
-                    to_print = to_print.replace("<think>", "\033[90m<think>")
-                
-                if "</think>" in to_print:
-                    to_print = to_print.replace("</think>", "</think>\033[0m")
-                    # We only toggle off after printing the closing tag
-                    # Note: This simple logic assumes tags usually don't split awkwardly in a way that breaks ANSI too badly.
-                
-                if thinking_active and "<think>" not in part:
-                     # If we are in thinking mode and no new tag, color whole part (unless closing tag appeared)
-                     if "</think>" not in part:
-                         to_print = f"\033[90m{part}\033[0m"
-                     else:
-                         # Closing tag is present, regex replace handled the reset
-                         pass
+            if effective_stream:
+                full_text = ""
+                thinking_text = ""
+                thinking_started = False
+                thinking_ended = False
+                print(f"\n--- [STREAM] {engine_label} ({model_name}) ---\n", end="", flush=True)
+                for line in response.iter_lines():
+                    if cancellation_event and cancellation_event.is_set():
+                        raise CancellationError(f"Cancelled during {engine_label} streaming.")
+                    if not line:
+                        continue
+                    decoded = line.decode("utf-8").strip()
+                    if not decoded.startswith("data: "):
+                        continue
+                    body = decoded[6:]
+                    if body == "[DONE]":
+                        break
+                    try:
+                        chunk_json = json.loads(body)
+                    except json.JSONDecodeError:
+                        continue
 
-                if "</think>" in part:
-                    thinking_active = False
-                    if not thinking_ended:
-                        print("\n--- [THINKING END] ---\n", end="", flush=True)
-                        thinking_ended = True
-                
-                if part:
-                    if not output_started and not thinking_active:
+                    delta = chunk_json.get("choices", [{}])[0].get("delta", {})
+                    # Common reasoning/thinking fields across local OpenAI-compatible servers.
+                    thinking_part = (
+                        delta.get("thinking")
+                        or delta.get("reasoning")
+                        or delta.get("reasoning_content")
+                        or ""
+                    )
+                    if isinstance(thinking_part, list):
+                        stitched_think = []
+                        for part in thinking_part:
+                            if isinstance(part, dict):
+                                t = part.get("text") or part.get("content") or ""
+                                if t:
+                                    stitched_think.append(t)
+                        thinking_part = "".join(stitched_think)
+                    if thinking_part and enable_thinking:
+                        if not thinking_started:
+                            print("\n--- [THINKING START] ---\n", end="", flush=True)
+                            thinking_started = True
+                        print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
+                        thinking_text += thinking_part
+
+                    content = delta.get("content", "")
+                    if isinstance(content, list):
+                        stitched = []
+                        for part in content:
+                            if isinstance(part, dict):
+                                txt = part.get("text") or part.get("content") or ""
+                                if txt:
+                                    stitched.append(txt)
+                        content = "".join(stitched)
+                    if content:
                         if thinking_started and not thinking_ended:
                             print("\n--- [THINKING END] ---\n", end="", flush=True)
                             thinking_ended = True
-                        print("\n--- [OUTPUT START] ---\n", end="", flush=True)
-                        output_started = True
-                    print(to_print, end="", flush=True)
-                    full_text += part
-            if output_started:
-                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
-            print("\n---------------------------------------\n", flush=True)
-            return full_text
-        else:
-            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before Ollama generation.")
-            response = ollama.chat(
-                model=model_name,
-                messages=[message],
-                tools=tools_list, 
+                        print(content, end="", flush=True)
+                        full_text += content
+
+                print("\n\n-----------------------------------------\n", flush=True)
+                if VERBOSE_DIAGNOSTICS:
+                    console_log(f"DEBUG {engine_label.upper()} STREAM RESPONSE: chars={len(full_text)}", "DEBUG")
+                    if enable_thinking and thinking_text:
+                        console_log(f"DEBUG {engine_label.upper()} THINKING STREAM: chars={len(thinking_text)}", "DEBUG")
+                return full_text
+
+            out = _extract_openai_message_text(response.json())
+            if VERBOSE_DIAGNOSTICS:
+                console_log(f"DEBUG {engine_label.upper()} RESPONSE: chars={len(out or '')}", "DEBUG")
+            if out and len(out) > len(best_candidate):
+                best_candidate = out
+            if images_data_list and is_unusable_vision_response(prompt_text, out):
+                console_log(
+                    f"{engine_label} variant '{variant}' returned empty/prompt-like output. Trying next variant...",
+                    "WARN"
+                )
+                continue
+            return out
+
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            details = ""
+            try:
+                details = e.response.text if getattr(e, "response", None) is not None else str(e)
+            except Exception:
+                details = str(e)
+            if images_data_list:
+                console_log(f"{engine_label} variant '{variant}' failed: {details}", "WARN")
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            if images_data_list:
+                console_log(f"{engine_label} variant '{variant}' failed: {e}", "WARN")
+                continue
+            raise
+
+    if best_candidate:
+        console_log(
+            f"{engine_label}: all variants looked prompt-like; returning best non-empty candidate instead of hard failure.",
+            "WARN"
+        )
+        return best_candidate
+    raise Exception(f"{engine_label} API: all OpenAI-compatible image payload variants failed. Last error: {last_error}")
+
+def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, stream_output=False, cancellation_event=None, **kwargs):
+    try:
+        if enable_web_search:
+            console_log("Ollama web_search tools are not used in OpenAI-compatible mode.", "WARN")
+        enable_thinking = kwargs.get("enable_thinking", False)
+        if images_data_list:
+            cap = get_ollama_model_capability(model_name)
+            console_log(
+                f"DEBUG OLLAMA MODEL CAPS: vision_hint={cap.get('vision_hint')} detail={cap.get('detail','')} keys={cap.get('keys', [])[:8]}",
+                "DEBUG"
             )
-            return response['message']['content']
-    except ollama.ResponseError as e:
-        status = getattr(e, 'status_code', 'Unknown Status')
-        return f"Error: Ollama API: {e.error} (Status Code: {status})"
+        out = _call_openai_compatible_chat(
+            engine_label="Ollama",
+            endpoint=OLLAMA_CHAT_COMPLETIONS_ENDPOINT,
+            prompt_text=prompt_text,
+            model_name=model_name,
+            images_data_list=images_data_list,
+            stream_output=stream_output,
+            cancellation_event=cancellation_event,
+            enable_thinking=enable_thinking
+        )
+        if images_data_list and is_unusable_vision_response(prompt_text, out):
+            fallback_model = pick_ollama_vision_fallback(model_name)
+            if fallback_model:
+                console_log(
+                    f"Ollama output appears unusable for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
+                    "WARN"
+                )
+                fb_out = _call_openai_compatible_chat(
+                    engine_label="Ollama",
+                    endpoint=OLLAMA_CHAT_COMPLETIONS_ENDPOINT,
+                    prompt_text=prompt_text,
+                    model_name=fallback_model,
+                    images_data_list=images_data_list,
+                    stream_output=stream_output,
+                    cancellation_event=cancellation_event,
+                    enable_thinking=enable_thinking
+                )
+                if fb_out and not is_unusable_vision_response(prompt_text, fb_out):
+                    console_log(f"Ollama fallback model '{fallback_model}' produced usable output.", "SUCCESS")
+                    return fb_out
+        return out
     except Exception as e:
         return f"Error: Ollama API: {str(e)}"
 
 def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_output=False, cancellation_event=None, **kwargs):
-    headers = {"Content-Type": "application/json"}
-    if images_data_list:
-        message_content = [{"type": "text", "text": prompt_text}]
-        for img_data in images_data_list:
-            b64 = base64.b64encode(img_data['bytes']).decode('utf-8')
-            message_content.append({
-                "type": "image_url", 
-                "image_url": {"url": f"data:{img_data['mime_type']};base64,{b64}"}
-            })
-        final_content = message_content
-    else:
-        final_content = prompt_text
-    
-    payload = {
-        "model": model_name, 
-        "messages": [{"role": "user", "content": final_content}], 
-        "stream": stream_output
-    }
-    
     try:
-        response = requests.post(LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT, headers=headers, json=payload, stream=stream_output, timeout=600)
-        response.raise_for_status()
-        
-        if stream_output:
-            print(f"\n--- [STREAM] LM Studio ({model_name}) ---\n", end="", flush=True)
-            full_text = ""
-            thinking_active = False
-            thinking_started = False
-            thinking_ended = False
-            output_started = False
-            for line in response.iter_lines():
-                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during LMStudio streaming.")
-                if line:
-                    decoded_line = line.decode('utf-8').strip()
-                    if decoded_line.startswith("data: "):
-                        json_str = decoded_line[6:] # Skip "data: "
-                        if json_str == "[DONE]": break
-                        try:
-                            chunk_json = json.loads(json_str)
-                            content = chunk_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                            if content:
-                                full_text += content
-                                to_print = content
-                                
-                                # Thinking Logic
-                                if "<think>" in to_print:
-                                    thinking_active = True
-                                    if not thinking_started:
-                                        print("\n--- [THINKING START] ---\n", end="", flush=True)
-                                        thinking_started = True
-                                    to_print = to_print.replace("<think>", "\033[90m<think>")
-                                
-                                if "</think>" in to_print:
-                                    to_print = to_print.replace("</think>", "</think>\033[0m")
-                                
-                                if thinking_active and "<think>" not in content:
-                                     if "</think>" not in content:
-                                         to_print = f"\033[90m{content}\033[0m"
-
-                                if "</think>" in content:
-                                    thinking_active = False
-                                    if not thinking_ended:
-                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
-                                        thinking_ended = True
-
-                                if not output_started and not thinking_active:
-                                    if thinking_started and not thinking_ended:
-                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
-                                        thinking_ended = True
-                                    print("\n--- [OUTPUT START] ---\n", end="", flush=True)
-                                    output_started = True
-                                print(to_print, end="", flush=True)
-                        except json.JSONDecodeError: pass
-            if output_started:
-                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
-            print("\n-----------------------------------------\n", flush=True)
-            return full_text
-        else:
-            return response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-
-
-    except requests.exceptions.HTTPError as e:
-        if 'response' in locals() and response is not None:
-             print(f"LM Studio Error Details: {response.text}")
-        raise e
+        enable_thinking = kwargs.get("enable_thinking", False)
+        out = _call_openai_compatible_chat(
+            engine_label="LM Studio",
+            endpoint=LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT,
+            prompt_text=prompt_text,
+            model_name=model_name,
+            images_data_list=images_data_list,
+            stream_output=stream_output,
+            cancellation_event=cancellation_event,
+            enable_thinking=enable_thinking
+        )
+        if images_data_list and is_unusable_vision_response(prompt_text, out):
+            fallback_model = pick_lmstudio_vision_fallback(model_name)
+            if fallback_model:
+                console_log(
+                    f"LM Studio output appears unusable for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
+                    "WARN"
+                )
+                fb_out = _call_openai_compatible_chat(
+                    engine_label="LM Studio",
+                    endpoint=LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT,
+                    prompt_text=prompt_text,
+                    model_name=fallback_model,
+                    images_data_list=images_data_list,
+                    stream_output=stream_output,
+                    cancellation_event=cancellation_event,
+                    enable_thinking=enable_thinking
+                )
+                if fb_out and not is_unusable_vision_response(prompt_text, fb_out):
+                    console_log(f"LM Studio fallback model '{fallback_model}' produced usable output.", "SUCCESS")
+                    return fb_out
+        return out
+    except Exception as e:
+        # Retry once with a likely vision-capable fallback model when image calls fail.
+        if images_data_list:
+            fallback_model = pick_lmstudio_vision_fallback(model_name)
+            if fallback_model:
+                try:
+                    console_log(
+                        f"LM Studio call failed for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
+                        "WARN"
+                    )
+                    return _call_openai_compatible_chat(
+                        engine_label="LM Studio",
+                        endpoint=LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT,
+                        prompt_text=prompt_text,
+                        model_name=fallback_model,
+                        images_data_list=images_data_list,
+                        stream_output=stream_output,
+                        cancellation_event=cancellation_event,
+                        enable_thinking=enable_thinking
+                    )
+                except Exception:
+                    pass
+        return f"Error: LM Studio API: {str(e)}"
 
 def save_output_files(api_response, log_data, raw_path, log_path=None):
     try:
@@ -1145,6 +1487,9 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
     base_name = generate_group_base_name(filepaths_group)
     log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name}
     console_log(f"Processing group: {base_name} ({len(filepaths_group)} files)...")
+    if VERBOSE_DIAGNOSTICS:
+        console_log(f"DEBUG JOB: engine={engine} model={model_name}", "DEBUG")
+        console_log(f"DEBUG JOB FILES: {[os.path.basename(p) for p in filepaths_group]}", "DEBUG")
 
     # --- CHECK FOR EMPTY FILES ---
     for fp in filepaths_group:
@@ -1183,6 +1528,17 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
         
         # DEBUG: Log file order after splitting
         console_log(f"DEBUG ORDER: image_files order: {[os.path.basename(f) for f in image_files]}", "DEBUG")
+        if VERBOSE_DIAGNOSTICS:
+            console_log(f"DEBUG SPLIT: images={len(image_files)} text={len(text_files)}", "DEBUG")
+
+        # Guardrail: if user prompt clearly expects image input, fail fast when no image is selected.
+        if len(image_files) == 0 and prompt_expects_image(user_prompt):
+            selected_names = [os.path.basename(p) for p in filepaths_group]
+            raise FatalProcessingError(
+                "Fatal: Prompt expects image input, but this job has 0 image files. "
+                f"Selected files: {selected_names}. "
+                "Choose the .png/.jpg file(s) in the left list (not generated .md output files)."
+            )
         
         images_data_legacy = [] # For Ollama/LMStudio (Base64)
         google_file_objects = [] # For Gemini (Files API)
@@ -1251,8 +1607,19 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                         content, mime, _, err = read_file_content(safe_path)
                         if not err:
                             images_data_legacy.append({"bytes": content, "mime_type": mime, "path": safe_path})
+                            if VERBOSE_DIAGNOSTICS:
+                                console_log(
+                                    f"DEBUG IMAGE PAYLOAD: {os.path.basename(img_path)} mime={mime} size={human_bytes(len(content))} sha256={short_sha256_bytes(content)} safe={os.path.basename(safe_path)}",
+                                    "DEBUG"
+                                )
                         else:
                             console_log(f"Skipping failed image {os.path.basename(img_path)}: {err}", "WARN")
+                if VERBOSE_DIAGNOSTICS and images_data_legacy:
+                    total_img_bytes = sum(len(i.get("bytes", b"")) for i in images_data_legacy)
+                    console_log(
+                        f"DEBUG IMAGE PAYLOAD SUMMARY: count={len(images_data_legacy)} total={human_bytes(total_img_bytes)}",
+                        "DEBUG"
+                    )
 
             # 2. Handle Text Files
             for filepath in text_files:
@@ -1275,6 +1642,11 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
             else:
                 chunks = [file_content_all]
 
+            if VERBOSE_DIAGNOSTICS:
+                console_log(
+                    f"DEBUG PROMPT BUILD: resolved_prompt_chars={len(resolved_user_prompt or '')} text_chars={len(file_content_all)} chunks={len(chunks)}",
+                    "DEBUG"
+                )
                 
             log_data['prompt_sent'] = resolved_user_prompt + file_content_all
             if len(chunks) > 1:
@@ -2350,6 +2722,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         else:
             files = list(self.files_var.get())
             if not files: tkinter.messagebox.showwarning("Input", "No files in list."); return
+        
+        if VERBOSE_DIAGNOSTICS:
+            ext_counts = {}
+            for f in files:
+                ext = os.path.splitext(f)[1].lower() or "<noext>"
+                ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            preview = [os.path.basename(f) for f in files[:8]]
+            console_log(f"DEBUG QUEUE INPUT: total={len(files)} ext_counts={ext_counts}", "DEBUG")
+            console_log(f"DEBUG QUEUE INPUT FILES (first {len(preview)}): {preview}", "DEBUG")
 
         # --- INCOMPATIBLE FILE CHECK ---
         if not self.enable_img_conversion_var.get():
@@ -2369,6 +2750,18 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         mod = self.model_var.get()
         if not mod or "Error" in mod: tkinter.messagebox.showwarning("Error", "Invalid Model."); return
         if self.engine_var.get() == 'google' and not self.api_key: tkinter.messagebox.showwarning("Error", "No API Key."); return
+        
+        prompt_text = self.prompt_text.get("1.0", tk.END).strip()
+        if prompt_expects_image(prompt_text):
+            has_image = any(os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS for f in files)
+            if not has_image:
+                msg = (
+                    "Prompt appears to require image input, but no image files are selected.\n\n"
+                    "You currently selected text/output files (for example .md).\n"
+                    "Do you want to continue anyway?"
+                )
+                if not tkinter.messagebox.askyesno("No Image Selected", msg):
+                    return
 
         base_group_size = self.group_size_var.get()
         if self.overwrite_var.get() or not self.group_files_var.get():
@@ -2410,7 +2803,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             jid = self.job_id_counter
             job_data = {
                 'job_id': jid, 'filepaths_group': batch, 
-                'user_prompt': self.prompt_text.get("1.0", tk.END).strip(),
+                'user_prompt': prompt_text,
                 'engine': self.engine_var.get(), 'model_name': mod, 'api_key': self.api_key,
                 'output_folder': self.output_dir_var.get(), 'output_suffix': self.suffix_var.get(),
                 'output_under_input': self.output_under_input_var.get(),
