@@ -10,7 +10,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageColor
 import glob
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -20,13 +20,6 @@ try:
 except ImportError:
     pass
 
-# Optional Webcolors support
-try:
-    import webcolors
-    HAS_WEBCOLORS = True
-except ImportError:
-    HAS_WEBCOLORS = False
-
 # --- Constants ---
 DEFAULT_TARGET_WIDTH = 1920
 DEFAULT_TARGET_HEIGHT = 1080
@@ -35,6 +28,7 @@ DEFAULT_OUTPUT_FORMAT = 'jpg'
 DEFAULT_QUALITY = 85
 DEFAULT_OUTPUT_SUBFOLDER = 'cropped_output'
 DEFAULT_BORDER_WIDTH = 60
+DEFAULT_BORDER_COLOR = 'red'
 
 try:
     RESAMPLING_FILTER = Image.Resampling.LANCZOS
@@ -44,15 +38,17 @@ except AttributeError:
 # --- Helpers ---
 
 def validate_color_string(color_str: str) -> bool:
-    if color_str.startswith('#'):
+    try:
+        ImageColor.getrgb(color_str)
         return True
-    if HAS_WEBCOLORS:
-        try:
-            webcolors.name_to_rgb(color_str.lower())
-            return True
-        except ValueError:
-            return False
-    return True
+    except ValueError:
+        return False
+
+def looks_like_file_token(token: str) -> bool:
+    t = token.strip()
+    if any(ch in t for ch in ('*', '?', '[', ']')):
+        return True
+    return Path(t).suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
 
 def calculate_dynamic_dimensions(img_width, img_height, rw, rh, box):
     in_ratio = img_width / img_height
@@ -140,8 +136,8 @@ def process_image(path_str, output_dir, args, border_color, border_width):
             iw = tw - (2 * border_width)
             ih = th - (2 * border_width)
             if iw > 0 and ih > 0:
-                content = final.copy()
-                content.thumbnail((iw, ih), RESAMPLING_FILTER)
+                # Fill the inner area exactly; may crop slightly to preserve uniform border width.
+                content = ImageOps.fit(final, (iw, ih), RESAMPLING_FILTER)
                 canvas = Image.new(final.mode, (tw, th), border_color)
                 px = (tw - content.width) // 2
                 py = (th - content.height) // 2
@@ -197,7 +193,12 @@ def main():
     parser.add_argument('-f', '--output-format', default=DEFAULT_OUTPUT_FORMAT,
                         choices=['jpg','png','webp','tiff','bmp','avif'])
     parser.add_argument('-q', '--quality', type=int, default=DEFAULT_QUALITY)
-    parser.add_argument('-b', '--border', nargs='*', help="Color [Width]")
+    parser.add_argument(
+        '-b', '--border',
+        nargs='?',
+        const=DEFAULT_BORDER_COLOR,
+        help="Border spec: COLOR or COLOR:WIDTH (e.g. black or #ffffff:40). If value omitted, defaults to black."
+    )
 
     dim = parser.add_argument_group('Dimensions')
     dim.add_argument('-d', '--fixed', type=int, nargs=2, help="Fixed W H")
@@ -212,6 +213,12 @@ def main():
     dim.add_argument('-S', '--scale-percent', type=int)
 
     args = parser.parse_args()
+
+    # Compatibility: allow patterns like `-b *.png`.
+    # If -b consumed a file token, treat it as an input file and keep border enabled with default color.
+    if args.border and not validate_color_string(args.border.split(':', 1)[0].strip()) and looks_like_file_token(args.border):
+        args.files.insert(0, args.border)
+        args.border = DEFAULT_BORDER_COLOR
 
     # --- Validation ---
     if args.crop_percent and args.zoom_percent:
@@ -242,10 +249,21 @@ def main():
     border_color = None
     border_width = DEFAULT_BORDER_WIDTH
     if args.border:
-        if len(args.border) > 0 and validate_color_string(args.border[0]):
-            border_color = args.border[0]
-            if len(args.border) > 1 and args.border[1].isdigit():
-                border_width = int(args.border[1])
+        spec = args.border.strip()
+        color_candidate = spec
+        width_candidate = None
+        if ':' in spec:
+            color_candidate, width_candidate = spec.rsplit(':', 1)
+            color_candidate = color_candidate.strip()
+            width_candidate = width_candidate.strip()
+
+        if validate_color_string(color_candidate):
+            border_color = color_candidate
+            if width_candidate:
+                if width_candidate.isdigit():
+                    border_width = int(width_candidate)
+                else:
+                    print(f"[Warning] Invalid border width '{width_candidate}'. Using default {DEFAULT_BORDER_WIDTH}.")
         else:
             print("[Warning] Invalid border color. Skipping border.")
 
