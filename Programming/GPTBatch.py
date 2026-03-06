@@ -112,6 +112,7 @@ import mimetypes
 import queue
 import re
 import shutil
+import atexit
 import signal
 import sys
 import threading
@@ -163,6 +164,34 @@ except ImportError:
 # Stores { "sha256_hash": types.File }
 UPLOADED_FILE_CACHE = {}
 UPLOAD_LOCK = threading.Lock()
+
+# --- GLOBAL TEMP FOLDER TRACKING ---
+GLOBAL_TEMP_DIRS = set()
+TEMP_DIRS_LOCK = threading.Lock()
+
+
+def register_temp_dir(path):
+    with TEMP_DIRS_LOCK:
+        GLOBAL_TEMP_DIRS.add(os.path.abspath(path))
+
+
+def cleanup_all_temp_folders():
+    """Iterates through all registered temp directories and removes them."""
+    with TEMP_DIRS_LOCK:
+        to_cleanup = list(GLOBAL_TEMP_DIRS)
+        GLOBAL_TEMP_DIRS.clear()
+
+    for temp_dir in to_cleanup:
+        if os.path.exists(temp_dir):
+            try:
+                # console_log is used if possible, but keep it minimal to avoid issues during exit
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+
+# Register global cleanup for normal/unhandled exits
+atexit.register(cleanup_all_temp_folders)
 
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
 DEFAULT_GOOGLE_MODEL = "models/gemini-1.5-flash"
@@ -472,6 +501,7 @@ class InputFileSanitizer:
                     # ENSURE DIRECTORY EXISTS (Fix for FileNotFoundError)
                     os.makedirs(local_batch_dir, exist_ok=True)
                     self.temp_dirs.add(local_temp_base)
+                    register_temp_dir(local_temp_base)
 
                     safe_name = f"safe_{file_hash}{self.target_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
@@ -539,6 +569,7 @@ class InputFileSanitizer:
                     # ENSURE DIRECTORY EXISTS
                     os.makedirs(local_batch_dir, exist_ok=True)
                     self.temp_dirs.add(local_temp_base)
+                    register_temp_dir(local_temp_base)
 
                     safe_name = f"safe_{file_hash}{orig_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
@@ -2697,6 +2728,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         signal.signal(signal.SIGINT, self._handle_sigint)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, self._handle_sigint)
         self._check_signal()
 
         self.api_key = initial_api_key
@@ -2816,7 +2849,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.after(500, self._check_signal)
 
     def _handle_sigint(self, signum, frame):
-        console_log("Received Ctrl+C. Exiting gracefully...", "WARN")
+        console_log(f"Received signal {signum}. Exiting and cleaning up...", "WARN")
+        cleanup_all_temp_folders()
         self._on_closing()
 
     def create_widgets(self):
@@ -3739,6 +3773,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if self.worker_thread and self.worker_thread.is_alive():
             self.processing_cancelled.set()
             self.worker_thread.join(timeout=1.0)
+        cleanup_all_temp_folders()
         self.destroy()
         sys.exit(0)
 
@@ -4812,10 +4847,16 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                     )
                                     self.processing_cancelled.set()
                                 break
-                            console_log(
-                                "User cancelled model switch. Retrying normally...",
-                                "WARN",
-                            )
+                            else:
+                                console_log(
+                                    "User cancelled model switch for quota error. Stopping batch job.",
+                                    "WARN",
+                                )
+                                self.result_queue.put(
+                                    {"job_id": jid, "status": "Cancelled"}
+                                )
+                                self.processing_cancelled.set()
+                                break
 
                     console_log(
                         f"Job {jid} Error (Attempt {attempt}/{MAX_RETRIES}): {e}",
