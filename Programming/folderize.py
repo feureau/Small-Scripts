@@ -4,6 +4,7 @@ import json
 import sys
 import re
 import subprocess
+import glob
 from collections import defaultdict
 
 try:
@@ -414,6 +415,7 @@ def main():
     parser.add_argument("--no-metadata", action="store_true", help="Disable metadata extraction for prompts.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print verbose debug output (prompts, payloads, metadata).")
     parser.add_argument("--raw-stream", action="store_true", help="Print raw streaming lines from the model (very noisy).")
+    parser.add_argument("inputs", nargs="*", help="Optional filenames/globs to include (e.g. *.pdf). If omitted, all files in current directory are used.")
     args = parser.parse_args()
 
     cur_dir = os.getcwd()
@@ -446,12 +448,36 @@ def main():
         print(f" > Model Context: ~{ctx} tokens")
         print(f" > Auto-Calculated Batch Size: {chunk_size} files")
 
-    # Get and SORT all files to keep series together
-    all_files = [f for f in os.listdir(cur_dir) if os.path.isfile(os.path.join(cur_dir, f))]
-    all_files = sorted([f for f in all_files if f != script_name and not f.lower().startswith('flatten')])
+    # Get and SORT files to keep series together.
+    # If user passed patterns/filenames, resolve them against the current directory.
+    if args.inputs:
+        cwd_abs = os.path.abspath(cur_dir)
+        selected = []
+        seen = set()
+        for pattern in args.inputs:
+            matches = glob.glob(pattern)
+            for m in matches:
+                abs_path = os.path.abspath(m)
+                if not os.path.isfile(abs_path):
+                    continue
+                if os.path.dirname(abs_path) != cwd_abs:
+                    continue
+                name = os.path.basename(abs_path)
+                if name == script_name or name.lower().startswith('flatten'):
+                    continue
+                if name not in seen:
+                    selected.append(name)
+                    seen.add(name)
+        all_files = sorted(selected)
+    else:
+        all_files = [f for f in os.listdir(cur_dir) if os.path.isfile(os.path.join(cur_dir, f))]
+        all_files = sorted([f for f in all_files if f != script_name and not f.lower().startswith('flatten')])
     
     if not all_files:
-        print("No files found to organize.")
+        if args.inputs:
+            print("No matching files found for the provided inputs.")
+        else:
+            print("No files found to organize.")
         return
 
     # 1. AI Analysis Phase
