@@ -824,6 +824,15 @@ import shlex
 import re
 import queue
 import time
+from collections import deque
+
+# ================== USER CONFIGURABLE VARIABLES ==================
+YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
+GALLERYDL_PATH = "gallery-dl"
+OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s")
+PARALLEL_DOWNLOADS = 6
+# ================================================================
+
 
 # ================== USER CONFIGURABLE VARIABLES ==================
 YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
@@ -837,12 +846,153 @@ running_processes = set()
 process_lock = threading.Lock()
 print_lock = threading.Lock()
 log_lock = threading.Lock()
-failed_urls = set()
+failed_urls = []
 failed_urls_lock = threading.Lock()
+success_urls = []
+success_urls_lock = threading.Lock()
 
 YTDLP_TASK = "yt-dlp"
 GALLERYDL_TASK = "gallery-dl"
 HEARTBEAT_SECONDS = 20
+
+# --- Live UI state ---
+task_status_lock = threading.Lock()
+task_statuses = {}
+ui_events = deque(maxlen=60)
+ui_stop_event = threading.Event()
+ui_render_thread = None
+ui_enabled = False
+ui_dirty_event = threading.Event()
+
+def emit_message(message):
+    """Prints normally, or appends to live UI event stream."""
+    if ui_enabled:
+        with task_status_lock:
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+            ui_events.append(f"[{timestamp}] {message}")
+        ui_dirty_event.set()
+        return
+    with print_lock:
+        print(message, flush=True)
+
+def update_task_status(task_id, **updates):
+    """Thread-safe task status update for live UI."""
+    if not task_id:
+        return
+    with task_status_lock:
+        current = task_statuses.get(task_id, {})
+        current.update(updates)
+        if 'last_update' not in current:
+            current['last_update'] = time.monotonic()
+        current['last_update'] = time.monotonic()
+        task_statuses[task_id] = current
+    ui_dirty_event.set()
+
+def parse_progress_line(line):
+    """Parses yt-dlp [download] progress lines."""
+    pattern = (
+        r'^\[download\]\s+'
+        r'(?P<pct>\d+(?:\.\d+)?)%\s+of\s+'
+        r'(?P<size>.+?)\s+at\s+'
+        r'(?P<speed>.+?)\s+ETA\s+'
+        r'(?P<eta>.+)$'
+    )
+    match = re.search(pattern, line.strip())
+    if not match:
+        return None
+    return {
+        'percent': match.group('pct'),
+        'size': match.group('size'),
+        'speed': match.group('speed'),
+        'eta': match.group('eta'),
+    }
+
+def supports_live_ui(args):
+    return sys.stdout.isatty() and not getattr(args, 'no_live_ui', False)
+
+def render_live_ui(total_urls):
+    """Continuously renders live task status."""
+    spinner = ['|', '/', '-', '\\']
+    spin_index = 0
+
+    while not ui_stop_event.is_set():
+        ui_dirty_event.wait(timeout=0.35)
+        ui_dirty_event.clear()
+        spin_index = (spin_index + 1) % len(spinner)
+
+        with task_status_lock:
+            statuses = list(task_statuses.items())
+            events = list(ui_events)[-12:]
+
+        total_tasks = len(statuses)
+        done = sum(1 for _, s in statuses if s.get('state') == 'SUCCESS')
+        failed = sum(1 for _, s in statuses if s.get('state') == 'FAILURE')
+        active = [s for _, s in statuses if s.get('state') not in ('SUCCESS', 'FAILURE')]
+        recent_done = [s for _, s in statuses if s.get('state') in ('SUCCESS', 'FAILURE')]
+        recent_done.sort(key=lambda s: s.get('last_update', 0), reverse=True)
+        recent_done = recent_done[:4]
+
+        lines = []
+        lines.append(f"{spinner[spin_index]} URLs: {total_urls} | Tasks: {total_tasks} | Done: {done} | Failed: {failed} | Active: {len(active)}")
+        lines.append("-" * 110)
+        lines.append("Active Downloads")
+
+        if active:
+            for s in active[:8]:
+                slot = s.get('slot', '--/--')
+                title = (s.get('title', 'Untitled') or 'Untitled').replace('\n', ' ')
+                title = title[:56]
+                phase = s.get('phase', 'working')
+                pct = s.get('percent', '--')
+                speed = s.get('speed', '--')
+                eta = s.get('eta', '--')
+                lines.append(f"[{slot}] {pct:>6}% | {speed:>12} | ETA {eta:>8} | {phase:<12} | {title}")
+        else:
+            lines.append("(no active tasks)")
+
+        lines.append("-" * 110)
+        lines.append("Recent Results")
+        if recent_done:
+            for s in recent_done:
+                slot = s.get('slot', '--/--')
+                state = s.get('state', 'UNKNOWN')
+                title = (s.get('title', 'Untitled') or 'Untitled').replace('\n', ' ')[:80]
+                lines.append(f"[{slot}] {state:<7} {title}")
+        else:
+            lines.append("(no finished tasks yet)")
+
+        lines.append("-" * 110)
+        lines.append("Recent Logs")
+        lines.extend(events if events else ["(no log lines yet)"])
+
+        with print_lock:
+            sys.stdout.write("\x1b[H\x1b[J")
+            sys.stdout.write("\n".join(lines) + "\n")
+            sys.stdout.flush()
+
+def start_live_ui(total_urls, args):
+    global ui_enabled, ui_render_thread
+    ui_enabled = supports_live_ui(args)
+    if not ui_enabled:
+        return
+    ui_stop_event.clear()
+    ui_dirty_event.set()
+    ui_render_thread = threading.Thread(target=render_live_ui, args=(total_urls,), daemon=True)
+    ui_render_thread.start()
+
+def stop_live_ui():
+    global ui_render_thread, ui_enabled
+    if not ui_enabled:
+        return
+    ui_stop_event.set()
+    ui_dirty_event.set()
+    if ui_render_thread:
+        ui_render_thread.join(timeout=1.5)
+    with print_lock:
+        sys.stdout.write("\x1b[H\x1b[J")
+        sys.stdout.flush()
+    ui_enabled = False
+    ui_render_thread = None
 
 def should_echo_live_line(line, args):
     """Controls how much child-process output is shown in real time."""
@@ -945,6 +1095,77 @@ def process_json3_subtitle(json3_path):
     except Exception as e:
         return f"Error processing JSON3: {e}"
 
+def extract_subtitle_paths_from_output(output_text):
+    """Extract subtitle file paths from yt-dlp output."""
+    subtitle_exts = ('.json3', '.srt', '.vtt', '.ass', '.lrc')
+    patterns = [
+        r'Writing video subtitles to:\s*(.+)$',
+        r'Destination:\s*(.+)$',
+    ]
+    paths = set()
+
+    for raw_line in output_text.splitlines():
+        line = raw_line.strip()
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if not match:
+                continue
+            candidate = match.group(1).strip().strip('"').strip("'")
+            if candidate.lower().endswith(subtitle_exts):
+                paths.add(candidate)
+
+    return sorted(paths)
+
+def process_text_subtitle(subtitle_path):
+    """Converts SRT/VTT/ASS/LRC subtitle files to plaintext .txt."""
+    ext = os.path.splitext(subtitle_path)[1].lower()
+    if ext == '.json3':
+        return process_json3_subtitle(subtitle_path)
+
+    if not os.path.exists(subtitle_path):
+        return f"Subtitle file not found: {os.path.basename(subtitle_path)}"
+
+    try:
+        with open(subtitle_path, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+
+        paragraphs = []
+        current_chunk = []
+        skip_prefixes = ('WEBVTT', 'NOTE', 'STYLE', 'REGION', 'Kind:', 'Language:')
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                if current_chunk:
+                    paragraphs.append(" ".join(current_chunk))
+                    current_chunk = []
+                continue
+
+            if line.startswith(skip_prefixes):
+                continue
+            if re.fullmatch(r'\d+', line):
+                continue
+            if '-->' in line:
+                continue
+
+            # Strip lightweight subtitle markup tags.
+            clean = re.sub(r'<[^>]+>', '', line)
+            clean = re.sub(r'{\\[^}]+}', '', clean)
+            clean = re.sub(r'\s+', ' ', clean).strip()
+            if clean:
+                current_chunk.append(clean)
+
+        if current_chunk:
+            paragraphs.append(" ".join(current_chunk))
+
+        txt_path = f"{os.path.splitext(subtitle_path)[0]}.txt"
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write("\n\n".join(paragraphs).strip())
+
+        return f"Created {os.path.basename(txt_path)}"
+    except Exception as e:
+        return f"Error converting subtitle to plaintext ({os.path.basename(subtitle_path)}): {e}"
+
 def log_message(log_file, status, url, message=""):
     """Thread-safe function to write a formatted message to the log file."""
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -983,7 +1204,7 @@ def run_updates():
     print("\n--- ✅ Update process finished ---")
     sys.exit(0)
 
-def run_download_task(task_type, identifier, title, args, original_url):
+def run_download_task(task_type, identifier, title, args, original_url, task_id=None, slot_label=None):
     """Dispatches and runs a single media download task."""
     command_list, display_title, tool_name = None, "", ""
     
@@ -999,11 +1220,12 @@ def run_download_task(task_type, identifier, title, args, original_url):
         return ("FAILURE", f"Unknown task type '{task_type}'")
 
     if args.verbose:
-        with print_lock:
-            print(f"  [DEBUG] Executing {tool_name} command: {' '.join(shlex.quote(c) for c in command_list)}")
+        emit_message(f"[DEBUG] Executing {tool_name} command: {' '.join(shlex.quote(c) for c in command_list)}")
     
     process = None
     try:
+        update_task_status(task_id, slot=slot_label or "--/--", title=display_title, tool=tool_name, state="STARTING", phase="starting")
+
         process = subprocess.Popen(
             command_list,
             stdout=subprocess.PIPE,
@@ -1043,8 +1265,8 @@ def run_download_task(task_type, identifier, title, args, original_url):
                 now = time.monotonic()
                 if now - last_output_ts >= HEARTBEAT_SECONDS:
                     elapsed = int(now - start_ts)
-                    with print_lock:
-                        print(f"  [DEBUG] {tool_name} still running for {elapsed}s with no new output (title: {display_title})")
+                    update_task_status(task_id, phase=f"idle {elapsed}s")
+                    emit_message(f"[DEBUG] {tool_name} still running for {elapsed}s (title: {display_title})")
                     last_output_ts = now
                 continue
 
@@ -1058,9 +1280,30 @@ def run_download_task(task_type, identifier, title, args, original_url):
             else:
                 stderr_chunks.append(line)
 
+            if task_type == YTDLP_TASK:
+                prog = parse_progress_line(line)
+                if prog:
+                    update_task_status(
+                        task_id,
+                        state="RUNNING",
+                        phase="downloading",
+                        percent=prog['percent'],
+                        speed=prog['speed'],
+                        eta=prog['eta'],
+                    )
+                elif "[Merger]" in line:
+                    update_task_status(task_id, state="RUNNING", phase="merging")
+                elif "[ExtractAudio]" in line:
+                    update_task_status(task_id, state="RUNNING", phase="audio")
+                elif "[download] Destination:" in line:
+                    update_task_status(task_id, state="RUNNING", phase="fetching", percent="0.0", speed="--", eta="--")
+                elif "[info] Downloading subtitles" in line:
+                    update_task_status(task_id, state="RUNNING", phase="subtitles")
+
             if should_echo_live_line(line, args):
-                with print_lock:
-                    print(f"  [{tool_name}] {line}")
+                is_progress_spam = line.startswith("[download]") and parse_progress_line(line) is not None
+                if not (ui_enabled and not args.verbose and is_progress_spam):
+                    emit_message(f"[{tool_name}] {line}")
 
         process.wait()
         out_t.join(timeout=1)
@@ -1069,23 +1312,53 @@ def run_download_task(task_type, identifier, title, args, original_url):
         stderr = "\n".join(stderr_chunks)
         
         if process.returncode == 0:
-            if args.json3:
-                # Look for the subtitle file in the output
-                # Output format: "[info] Writing video subtitles to: filename.json3"
-                match = re.search(r'Writing video subtitles to: (.+\.json3)', stdout)
-                if match:
-                    json3_file = match.group(1).strip()
-                    if os.path.exists(json3_file):
-                        proc_msg = process_json3_subtitle(json3_file)
-                        if args.verbose:
-                             with print_lock:
-                                  print(f"  [JSON3] {proc_msg}")
-                    else:
-                        # Sometimes paths are relative or weird, try to resolve? 
-                        # But usually yt-dlp prints the relative path used for writing.
-                        pass
+            update_task_status(task_id, state="POST", phase="post-processing", percent="100.0", eta="00:00")
+            subtitle_mode = getattr(args, 'default_download', False) or args.srt or args.json3
+            subtitle_msgs = []
+            if task_type == YTDLP_TASK and subtitle_mode:
+                subtitle_candidates = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
+                for subtitle_file in subtitle_candidates:
+                    subtitle_msgs.append(process_text_subtitle(subtitle_file))
+                if args.verbose and subtitle_msgs:
+                    for msg in subtitle_msgs:
+                        emit_message(f"[SUBTITLE] {msg}")
 
-            return ("SUCCESS", f"Finished {tool_name}: {display_title}")
+            # Extract downloaded filetypes from stdout
+            downloaded_exts = set()
+            for line in stdout.splitlines() + stderr.splitlines():
+                # Extract extensions from various yt-dlp successful lines
+                # Examples:
+                # [info] Writing video description to: NA - NA - #peteknows ... [7434960151893200896].description
+                # [info] Writing video metadata as JSON to: NA - NA ... [7434960151893200896].info.json
+                # [info] Writing video thumbnail 56 to: NA - NA - ... [7434960151893200896].webp
+                # [download] Destination: NA - NA - #peteknows ... [7434960151893200896].mp4
+                # [download] NA - NA... [7434960151893200896].mp4 has already been downloaded
+                # [Merger] Merging formats into "NA - NA... [7434960151893200896].mkv"
+                # [info] Writing video subtitles to: NA - NA... [7434960151893200896].en.srt
+                match = re.search(r'(?:into "|Destination: |to: |(?:has already been downloaded).*\.\s*)(.+?\.)([a-zA-Z0-9.]+)(?:"|$)', line)
+                if match:
+                    ext = match.group(2).lower()
+                    if '.' in ext: # e.g. info.json or en.srt
+                        ext = ext.split('.')[-1]
+                    downloaded_exts.add(ext)
+
+                match = re.search(r'has already been downloaded(?:.*?\.([a-zA-Z0-9]+))?', line)
+                if match and match.group(1): downloaded_exts.add(match.group(1).lower())
+                
+                # gallery-dl specific lines
+                match = re.search(r'^# .+\.([a-zA-Z0-9]+)$', line)
+                if match: downloaded_exts.add(match.group(1).lower())
+
+            ext_str = ""
+            if downloaded_exts:
+                ext_str = f" [{', '.join(sorted(downloaded_exts))}]"
+
+            if subtitle_msgs:
+                update_task_status(task_id, state="SUCCESS", phase="done", percent="100.0", speed="--", eta="00:00")
+                return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str} ({len(subtitle_msgs)} subtitle text file(s) created)")
+            
+            update_task_status(task_id, state="SUCCESS", phase="done", percent="100.0", speed="--", eta="00:00")
+            return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str}")
         else:
             error_message = stderr.strip().replace('\n', ' ')
             
@@ -1106,11 +1379,14 @@ def run_download_task(task_type, identifier, title, args, original_url):
             
             # A non-fatal error is only a "SUCCESS with warnings" if a file was actually created.
             if is_non_fatal_error and download_successful:
+                update_task_status(task_id, state="SUCCESS", phase="done-with-warnings", percent="100.0", speed="--", eta="00:00")
                 return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}")
             else:
+                update_task_status(task_id, state="FAILURE", phase="failed", speed="--", eta="--")
                 return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}")
 
     except Exception as e:
+        update_task_status(task_id, state="FAILURE", phase="exception", speed="--", eta="--")
         return ("FAILURE", f"Error running {tool_name} for {display_title}: {e}")
     finally:
         if process:
@@ -1261,75 +1537,55 @@ def build_ytdlp_command(target_url, args):
     if args.verbose:
         command_list.append('-v')
 
-    # This is the custom format and options block based on your config.
-    # It will be applied for default downloads (--default_download) or explicit video downloads (--video).
-    if getattr(args, 'default_download', False) or args.video:
-        # Optimized configuration for non-cookie downloads (especially TikTok)
-        # Using a more flexible format and standardizing on mp4 merge
-        # Prioritize avc1 (H.264) for better compatibility, falling back to best available if not found.
+    wants_video = getattr(args, 'default_download', False) or args.video
+    wants_audio_only = args.audio_only
+    wants_subtitles = getattr(args, 'default_download', False) or args.srt or args.json3
+    wants_metadata = getattr(args, 'default_download', False) or args.metadata
+    wants_description = getattr(args, 'default_download', False) or args.description
+    wants_thumbnail = args.thumbnail
+    wants_comments = args.comments
+
+    if wants_video:
+        # Keep a broad but compatibility-first format strategy.
         custom_format_string = "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b[vcodec^=avc1] / bv*+ba/b"
-        
         command_list.extend([
             '-f', custom_format_string,
             '--merge-output-format', 'mp4',
-
-            # User Agent (Updated to be more modern)
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
-
-            # Extractor specific workarounds
             '--extractor-args', 'tiktok:api_hostname=api16-normal-c-useast1a.tiktokv.com',
-
-            # Thumbnails (write only, do not embed to avoid audio stripping)
-            '--write-thumbnail',
-
-            # Metadata & Description (Default)
-            '--add-metadata',
-            '--write-description',
-            '--write-info-json',
-            '--write-comments',
-
-            # Subtitles
-            '--write-subs',
-            '--write-auto-subs',
-            '--sub-lang', 'auto',
-            '--embed-subs',
-
-            # Audio Preference
-            '--audio-format', 'aac',
-
-            # Progress
             '--progress',
-
-            # Retry and Resume
             '--retries', '10',
             '--fragment-retries', '10',
             '--continue',
-
-            # Compatibility
             '--compat-options', 'no-youtube-unavailable-videos',
         ])
-    
-    # The original logic for other specific flags remains, in case you use them separately.
-    else:
-        if args.audio_only:
-            lang_code = args.language if args.language else ''
-            command_list.extend(['-f', f'ba[language={lang_code}]/ba' if lang_code else 'ba', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
-        if args.srt:
-            sub_lang = args.language if args.language else 'en'
-            command_list.extend(['--write-auto-subs', '--sub-langs', sub_lang, '--convert-subs', 'srt', '--ignore-errors'])
-            if not any([args.video, args.audio_only]): command_list.append("--skip-download")
-        if args.thumbnail: 
-            command_list.extend(["--write-thumbnail", "--skip-download"])
-        if args.metadata: 
-            command_list.extend(["--write-info-json", "--skip-download"])
-        if args.description:
-            command_list.extend(["--write-description", "--skip-download"])
-        if args.comments:
-            command_list.extend(["--write-comments", "--write-info-json", "--skip-download"])
+
+    if wants_audio_only:
+        lang_code = args.language if args.language else ''
+        command_list.extend(['-f', f'ba[language={lang_code}]/ba' if lang_code else 'ba', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
+
+    if wants_thumbnail:
+        command_list.append("--write-thumbnail")
+
+    if wants_metadata:
+        command_list.append("--write-info-json")
+
+    if wants_description:
+        command_list.append("--write-description")
+
+    if wants_comments:
+        command_list.extend(["--write-comments", "--write-info-json"])
+
+    if wants_subtitles:
+        sub_lang = args.language if args.language else 'en'
+        command_list.extend(['--write-subs', '--write-auto-subs', '--sub-langs', sub_lang, '--ignore-errors'])
         if args.json3:
-            sub_lang = args.language if args.language else 'en'
-            command_list.extend(['--write-auto-subs', '--sub-langs', sub_lang, '--sub-format', 'json3', '--ignore-errors'])
-            if not any([args.video, args.audio_only]): command_list.append("--skip-download")
+            command_list.extend(['--sub-format', 'json3'])
+        else:
+            command_list.extend(['--sub-format', 'srt/best', '--convert-subs', 'srt'])
+
+    if not wants_video and not wants_audio_only:
+        command_list.append("--skip-download")
 
     command_list.append(video_url)
     return command_list
@@ -1349,8 +1605,8 @@ def build_gallerydl_command(url, args):
 def process_url(url, index, total_urls, args):
     """Encapsulates the entire workflow for a single URL."""
     url = normalize_url(url)
-    with print_lock:
-        print(f"[{index:>{len(str(total_urls))}}/{total_urls}]▶️ Starting processing for: {url}")
+    slot_label = f"{index:>{len(str(total_urls))}}/{total_urls}"
+    emit_message(f"[{slot_label}]▶️ Starting processing for: {url}")
     
     try:
         if args.extract_text:
@@ -1358,42 +1614,44 @@ def process_url(url, index, total_urls, args):
             log_message(args.log_file, status, url, message)
             if status == "FAILURE":
                 with failed_urls_lock:
-                    failed_urls.add(url)
-            with print_lock:
-                print(f"[{index:>{len(str(total_urls))}}/{total_urls}] { '✅' if status == 'SUCCESS' else '❌'} Finished: {url} :: {message}")
+                    failed_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
+            elif status == "SUCCESS":
+                with success_urls_lock:
+                    success_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
+            emit_message(f"[{slot_label}] {'✅' if status == 'SUCCESS' else '❌'} Finished: {url} :: {message}")
         else: # Download Mode
             tasks = get_tasks_from_url(url)
             if not tasks:
                 log_message(args.log_file, "SKIPPED", url, "No downloadable content found during discovery.")
-                with print_lock:
-                    print(f"[{index:>{len(str(total_urls))}}/{total_urls}] ⏩ Skipped: {url} (No content found)")
+                emit_message(f"[{slot_label}] ⏩ Skipped: {url} (No content found)")
                 return
 
-            with print_lock:
-                print(f"  [{index:>{len(str(total_urls))}}/{total_urls}] Found {len(tasks)} item(s) to download.")
+            emit_message(f"[{slot_label}] Found {len(tasks)} item(s) to download.")
 
             for i, (task_type, target_url, title, original_url) in enumerate(tasks, 1):
-                status, message = run_download_task(task_type, target_url, title, args, original_url)
+                task_id = f"{index}:{i}:{int(time.time() * 1000)}"
+                status, message = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label)
                 log_message(args.log_file, status, original_url, message)
                 if status == "FAILURE":
                     with failed_urls_lock:
-                        failed_urls.add(original_url)
-                with print_lock:
-                    print(f"    [{i}/{len(tasks)}] {'✅' if status == 'SUCCESS' else '❌'} {message}")
+                        failed_urls.append({'original_url': original_url, 'target_url': target_url, 'title': title, 'message': message})
+                elif status == "SUCCESS":
+                    with success_urls_lock:
+                        success_urls.append({'original_url': original_url, 'target_url': target_url, 'title': title, 'message': message})
+                emit_message(f"[{slot_label} #{i}/{len(tasks)}] {'✅' if status == 'SUCCESS' else '❌'} {message}")
             
-            with print_lock:
-                print(f"[{index:>{len(str(total_urls))}}/{total_urls}] ✅ Finished processing URL: {url}")
+            emit_message(f"[{slot_label}] ✅ Finished processing URL: {url}")
             
     except Exception as e:
         message = f"An unexpected error occurred: {e}"
         log_message(args.log_file, "CRITICAL FAILURE", url, message)
         with failed_urls_lock:
-            failed_urls.add(url)
-        with print_lock:
-            print(f"[{index:>{len(str(total_urls))}}/{total_urls}] ❌ CRITICAL FAILURE for {url} :: {message}")
+            failed_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
+        emit_message(f"[{slot_label}] ❌ CRITICAL FAILURE for {url} :: {message}")
 
 def signal_handler(sig, frame):
     """Handles Ctrl-C by shutting down the executor and terminating child processes."""
+    stop_live_ui()
     with print_lock:
         print("\n\n⚠️ Ctrl-C detected! Forcing shutdown...", flush=True)
     if 'executor' in globals() and executor:
@@ -1425,15 +1683,16 @@ def main():
     general_group.add_argument("-L", "--log-file", type=str, default="processing_log.txt", help="File to save a verbose, timestamped log (default: processing_log.txt).")
     general_group.add_argument("-oE", "--output-errors", type=str, default="errors.txt", help="File to save the clean list of URLs that failed (default: errors.txt).")
     general_group.add_argument("-V", "--verbose", action="store_true", help="Show all underlying output for debugging.")
+    general_group.add_argument("--no-live-ui", action="store_true", help="Disable dynamic terminal status UI and use plain scrolling logs.")
     
     ytdlp_group = parser.add_argument_group('yt-dlp Options (for video content in Download Mode)')
     ytdlp_group.add_argument("-v", "--video", action="store_true", help="Download video (MP4).")
     ytdlp_group.add_argument("-a", "--audio-only", dest="audio_only", action="store_true", help="Download audio-only (MP3).")
-    ytdlp_group.add_argument("-s", "--srt", action="store_true", help="Download subtitles (SRT).")
+    ytdlp_group.add_argument("-s", "--srt", action="store_true", help="Download subtitles and generate plaintext transcript files.")
     ytdlp_group.add_argument("-t", "--thumbnail", action="store_true", help="Download video thumbnail.")
-    ytdlp_group.add_argument("-d", "--description", action="store_true", help="Download video description (.description) (default).")
-    ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json) (default).")
-    ytdlp_group.add_argument("-C", "--comments", action="store_true", help="Download video comments into the metadata file (default).")
+    ytdlp_group.add_argument("-d", "--description", action="store_true", help="Download video description (.description).")
+    ytdlp_group.add_argument("-m", "--metadata", action="store_true", help="Download video metadata (.json).")
+    ytdlp_group.add_argument("-C", "--comments", action="store_true", help="Download video comments into the metadata file.")
     ytdlp_group.add_argument("-l", "--language", type=str, help="Language code for audio/subs (e.g., 'id', 'es').")
     ytdlp_group.add_argument("-j", "--json3", action="store_true", help="Download json3 subtitles (word-level timing).")
     
@@ -1461,18 +1720,22 @@ def main():
                 with open(item, 'r', encoding='utf-8') as f:
                     urls_to_process.extend([line.strip() for line in f if line.strip() and not line.strip().startswith(('#', ';', ']'))])
             except Exception as e:
-                print(f"❌ Error reading batch file '{item}': {e}", file=sys.stderr)
+                emit_message(f"❌ Error reading batch file '{item}': {e}")
         else:
             urls_to_process.append(item)
     
     if not urls_to_process:
-        print("❌ No valid URLs were found from the provided inputs. Exiting.", file=sys.stderr)
+        emit_message("❌ No valid URLs were found from the provided inputs. Exiting.")
         sys.exit(1)
     
-    is_any_specific_flag = any([args.video, args.audio_only, args.srt, args.thumbnail, args.description, args.metadata, args.comments, args.g_write_metadata, args.json3])
+    is_any_specific_flag = any([
+        args.video, args.audio_only, args.srt, args.thumbnail, args.description,
+        args.metadata, args.comments, args.g_write_metadata, args.json3
+    ])
     args.default_download = not is_any_specific_flag
     
-    print(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...\n")
+    start_live_ui(len(urls_to_process), args)
+    emit_message(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...")
 
     with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOADS) as exec:
         executor = exec
@@ -1489,18 +1752,72 @@ def main():
                 message = f"A critical error occurred while processing {url}: {exc}"
                 log_message(args.log_file, "CRITICAL FAILURE", url, message)
                 with failed_urls_lock:
-                    failed_urls.add(url)
-                with print_lock:
-                    print(message)
+                    failed_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
+                emit_message(message)
+
+    stop_live_ui()
+    print("🎉 All tasks completed.")
     
-    print("\n🎉 All tasks completed.")
-    
+    if success_urls:
+        with print_lock:
+            print("\n" + "="*80)
+            print("✅ SUCCESSFUL TASKS SUMMARY")
+            print("="*80)
+            for succ in success_urls:
+                print(f"- Title: {succ.get('title', 'Unknown')}")
+                print(f"  URL:   {succ.get('target_url', 'Unknown')}")
+                msg = succ.get('message', 'Completed')
+                print(f"  Info:  {msg}\n")
+            print("="*80 + "\n")
+            
+        try:
+            with open(args.log_file, "a", encoding="utf-8") as f:
+                f.write("\n" + "="*80 + "\n")
+                f.write("✅ SUCCESSFUL TASKS SUMMARY\n")
+                f.write("="*80 + "\n")
+                for succ in success_urls:
+                    f.write(f"- Title: {succ.get('title', 'Unknown')}\n")
+                    f.write(f"  URL:   {succ.get('target_url', 'Unknown')}\n")
+                    msg = succ.get('message', 'Completed')
+                    f.write(f"  Info:  {msg}\n\n")
+                f.write("="*80 + "\n\n")
+        except Exception as e:
+            pass
+    elif not failed_urls:
+        with print_lock:
+            print("\n" + "="*80)
+            print(f"✅ ALL {len(urls_to_process)} TASKS COMPLETED SUCCESSFULLY (No items processed)")
+            print("="*80 + "\n")
+
     if failed_urls:
-        unique_failed_urls = sorted(list(failed_urls))
-        print(f"\n- Writing {len(unique_failed_urls)} failed URL(s) to '{args.output_errors}'...")
+        with print_lock:
+            print("\n" + "="*80)
+            print("❌ FAILED TASKS SUMMARY")
+            print("="*80)
+            for fail in failed_urls:
+                print(f"- Title: {fail.get('title', 'Unknown')}")
+                print(f"  URL:   {fail.get('target_url', 'Unknown')}")
+                print(f"  Error: {fail.get('message', 'Unknown Error')}\n")
+            print("="*80 + "\n")
+            
+        try:
+            with open(args.log_file, "a", encoding="utf-8") as f:
+                f.write("\n" + "="*80 + "\n")
+                f.write("❌ FAILED TASKS SUMMARY\n")
+                f.write("="*80 + "\n")
+                for fail in failed_urls:
+                    f.write(f"- Title: {fail.get('title', 'Unknown')}\n")
+                    f.write(f"  URL:   {fail.get('target_url', 'Unknown')}\n")
+                    f.write(f"  Error: {fail.get('message', 'Unknown Error')}\n\n")
+                f.write("="*80 + "\n\n")
+        except Exception as e:
+            pass
+
+        unique_failed_target_urls = sorted(list(set(f.get('target_url', '') for f in failed_urls if f.get('target_url'))))
+        print(f"- Writing {len(unique_failed_target_urls)} unique failed target URL(s) to '{args.output_errors}'...")
         with open(args.output_errors, "w", encoding="utf-8") as f:
-            for url in unique_failed_urls:
-                f.write(url + "\n")
+            for u in unique_failed_target_urls:
+                f.write(u + "\n")
 
 if __name__ == "__main__":
     main()
