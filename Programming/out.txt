@@ -1,0 +1,116 @@
+43: - ✅ **IMPROVEMENT**: Model-switch popup now auto-resizes to fit long error text and keeps action buttons visible (screen-bounded and centered).
+47: - ✅ **FEATURE**: Added compact refresh (`⟳`) button in model-switch dialog next to model dropdown.
+48: - ✅ **FEATURE**: Added compact refresh (`⟳`) button in main Configuration tab next to model dropdown.
+51: - ✅ **FEATURE**: Added global toggle: auto-stop remaining queue when current model is unavailable and no replacement model is selected.
+78: - ✅ **FEATURE**: Added "Upload Mode" (Parallel/Sequential) radio buttons.
+113: import queue
+483: 'stop_queue_on_model_unavailable': True,
+529: "stop_queue_on_model_unavailable": bool(effective['stop_queue_on_model_unavailable'])
+1964: ttk.Button(grid_frame, text="⟳", width=3, command=self.refresh_models).grid(row=1, column=2, sticky="w", pady=5)
+1970: ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(side=tk.RIGHT, padx=5)
+1971: ttk.Button(btn_frame, text="Apply to Remaining Jobs", command=self.on_ok).pack(side=tk.RIGHT, padx=5)
+2063: self.job_queue = queue.Queue()
+2064: self.result_queue = queue.Queue()
+2111: self.stop_queue_on_model_unavailable_var = tk.BooleanVar(
+2112: value=getattr(self.args, 'stop_queue_on_model_unavailable', True)
+2147: self.after(100, self._check_result_queue)
+2168: ttk.Button(toolbar, text="➕ New", width=6, command=self.create_new_preset).pack(side=tk.LEFT, padx=(5, 1))
+2169: ttk.Button(toolbar, text="💾 Save", width=6, command=self.save_current_preset).pack(side=tk.LEFT, padx=1)
+2170: ttk.Button(toolbar, text="✏️ Ren", width=6, command=self.rename_preset).pack(side=tk.LEFT, padx=1)
+2171: ttk.Button(toolbar, text="🗑️ Del", width=6, command=self.delete_preset).pack(side=tk.LEFT, padx=1)
+2175: ttk.Button(toolbar, text="Update Key", command=self.prompt_for_api_key).pack(side=tk.RIGHT)
+2196: ttk.Button(btn_f, text="Add", command=self.add_files).pack(fill=tk.X, pady=2)
+2197: ttk.Button(btn_f, text="Remove", command=self.remove_files).pack(fill=tk.X, pady=2)
+2198: ttk.Button(btn_f, text="Clear", command=self.clear_files).pack(fill=tk.X, pady=2)
+2199: ttk.Button(btn_f, text="Exp List", command=self.export_files_list).pack(fill=tk.X, pady=2)
+2200: ttk.Button(btn_f, text="Ld List", command=self.load_files_list).pack(fill=tk.X, pady=2)
+2224: ttk.Button(tab_ai, text="⟳", width=3, command=self.refresh_model_list).grid(row=1, column=2, sticky="w", pady=5)
+2226: ttk.Checkbutton(tab_ai, text="Stream Output", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky="w")
+2227: ttk.Checkbutton(tab_ai, text="Enable Thinking (Supported Models)", variable=self.thinking_var).grid(row=3, column=0, columnspan=2, sticky="w")
+2228: ttk.Checkbutton(tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var).grid(row=4, column=0, columnspan=2, sticky="w")
+2234: ttk.Checkbutton(chunk_f, text="Enable Text Chunking", variable=self.enable_chunking_var, command=self.toggle_chunking).grid(row=0, column=0, columnspan=2, sticky="w")
+2243: self.overlap_check = ttk.Checkbutton(grid_c, text="Enable Overlap:", variable=self.enable_overlap_var, command=self.toggle_chunking)
+2248: self.force_cut_check = ttk.Checkbutton(chunk_f, text="Force Cutoff (End at sentence boundary .!?)", variable=self.force_cutoff_var)
+2254: self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
+2257: ttk.Checkbutton(
+2264: ttk.Button(tab_ai, text="Insert Context", command=self.insert_context_placeholder).grid(row=8, column=1, sticky="e", pady=(6, 3))
+2277: ttk.Button(tab_out, text="...", width=3, command=self.browse_out).grid(row=0, column=2)
+2278: self.model_prefix_check = ttk.Checkbutton(
+2298: self.group_check = ttk.Checkbutton(tab_out, text="Group Files:", variable=self.group_files_var, command=self.toggle_grouping)
+2304: self.over_check = ttk.Checkbutton(tab_out, text="Overwrite Original", variable=self.overwrite_var, command=self.toggle_overwrite)
+2307: self.out_under_input_check = ttk.Checkbutton(
+2314: self.merge_outputs_check = ttk.Checkbutton(
+2322: self.clean_md_check = ttk.Checkbutton(tab_out, text="Clean Markdown Fences (```)", variable=self.clean_markdown_var)
+2325: self.json_check = ttk.Checkbutton(tab_out, text="Validate JSON Output", variable=self.validate_json_var)
+2329: self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
+2332: self.save_log_check = ttk.Checkbutton(tab_out, text="Save Processing Logs", variable=self.save_log_var)
+2336: self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
+2342: ttk.Radiobutton(self.rename_opts_frame, text="Full Rename", variable=self.rename_method_var, value="full").pack(side=tk.LEFT)
+2343: ttk.Radiobutton(self.rename_opts_frame, text="Prefix", variable=self.rename_method_var, value="prefix").pack(side=tk.LEFT, padx=10)
+2344: ttk.Radiobutton(self.rename_opts_frame, text="Suffix", variable=self.rename_method_var, value="suffix").pack(side=tk.LEFT)
+2346: # Upload Mode Radio Buttons
+2350: ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
+2351: ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
+2353: self.stop_on_unavailable_check = ttk.Checkbutton(
+2355: text="Auto-stop queue if model unavailable and switch is cancelled",
+2356: variable=self.stop_queue_on_model_unavailable_var
+2375: self.convert_check = ttk.Checkbutton(tab_img, text="Enable Image Pre-processing / Conversion", variable=self.enable_img_conversion_var, command=self.toggle_img_settings)
+2389: ttk.Radiobutton(fmt_frame, text=fmt, variable=self.temp_img_fmt_var, value=fmt).pack(side=tk.LEFT, padx=(0, 10))
+2409: ttk.Checkbutton(self.img_settings_frame, text="Force Conversion for Native Types", variable=self.force_conversion_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+2413: ttk.Checkbutton(self.img_settings_frame, text="Save Processed Image to Output Folder", variable=self.save_img_to_output_var).grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
+2420: ttk.Checkbutton(tab_safe, text="Enable Filters", variable=self.enable_safety_var, command=self.toggle_safety).pack(anchor="w")
+2430: # --- COLUMN 3 (RIGHT): QUEUE & STATUS ---
+2432: q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5); q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+2445: self.btn_add_sel = ttk.Button(btn_area, text="Add Sel", width=8, command=lambda: self.add_to_queue(True)); self.btn_add_sel.pack(side=tk.LEFT, padx=2)
+2446: self.btn_add_all = ttk.Button(btn_area, text="Add All", width=8, command=lambda: self.add_to_queue(False)); self.btn_add_all.pack(side=tk.LEFT, padx=2)
+2447: self.start_btn = ttk.Button(btn_area, text="START PROCESSING", command=self.start_processing, style="Accent.TButton"); self.start_btn.pack(side=tk.RIGHT, padx=5, ipadx=10)
+2448: self.pause_btn = ttk.Button(btn_area, text="Pause", command=self.toggle_pause, state="disabled"); self.pause_btn.pack(side=tk.RIGHT, padx=5)
+2449: self.clear_btn = ttk.Button(btn_area, text="Clear", command=self.clear_queue); self.clear_btn.pack(side=tk.RIGHT, padx=5)
+2450: self.btn_export = ttk.Button(btn_area, text="Export Jobs", command=self.export_job_list); self.btn_export.pack(side=tk.LEFT, padx=2)
+2451: self.btn_load = ttk.Button(btn_area, text="Load Jobs", command=self.load_job_list); self.btn_load.pack(side=tk.LEFT, padx=2)
+2452: self.btn_requeue = ttk.Button(btn_area, text="Retry Failed", command=self.requeue_failed); self.btn_requeue.pack(side=tk.RIGHT, padx=5)
+2453: self.btn_undo = ttk.Button(btn_area, text="Undo Rename", command=self.undo_rename); self.btn_undo.pack(side=tk.RIGHT, padx=5)
+2454: ttk.Style().configure("Accent.TButton", font=('Helvetica', 10, 'bold'), foreground="black")
+2465: self.tree.bind("<Button-3>", self.show_context_menu)
+2624: set_var(self.stop_queue_on_model_unavailable_var, 'stop_queue_on_model_unavailable', True)
+2666: 'stop_queue_on_model_unavailable': self.stop_queue_on_model_unavailable_var.get(),
+2820: # Handle drag-and-drop files into Job Queue (Add to list + Add Job)
+2838: self.add_to_queue(files_override=processed_files) # Create Job safely
+2926: def add_to_queue(self, only_selected=False, files_override=None):
+2942: console_log(f"DEBUG QUEUE INPUT: total={len(files)} ext_counts={ext_counts}", "DEBUG")
+2943: console_log(f"DEBUG QUEUE INPUT FILES (first {len(preview)}): {preview}", "DEBUG")
+3032: 'stop_queue_on_model_unavailable': self.stop_queue_on_model_unavailable_var.get(),
+3052: self.job_queue.put(job_data)
+3055: def requeue_failed(self):
+3066: self.job_registry[new_id] = new_data; self.job_queue.put(new_data)
+3069: console_log(f"Requeued {count} jobs.", "INFO")
+3128: # We cannot remove from self.job_queue easily.
+3134: console_log(f"Removed {count} jobs from queue.", "ACTION")
+3152: self.job_queue.put(new_data)
+3191: if not self.job_queue.empty() and (not self.worker_thread or not self.worker_thread.is_alive()):
+3201: tkinter.messagebox.showinfo("Export", "Job queue is empty.")
+3278: self.job_queue.put(job)
+3297: def clear_queue(self):
+3303: with self.job_queue.mutex: self.job_queue.queue.clear()
+3304: self.job_registry.clear(); console_log("Queue cleared.", "INFO")
+3310: def _check_result_queue(self):
+3312: while not self.result_queue.empty():
+3313: res = self.result_queue.get_nowait()
+3324: except queue.Empty: pass
+3325: finally: self.after(100, self._check_result_queue)
+3384: while not self.job_queue.empty():
+3388: try: job = self.job_queue.get_nowait()
+3389: except queue.Empty: break
+3417: self.result_queue.put({'job_id': jid, 'status': 'Running'})
+3447: self.result_queue.put({'job_id': jid, 'status': 'Completed'})
+3452: self.result_queue.put({'job_id': jid, 'status': 'Cancelled'})
+3458: self.result_queue.put({'job_id': jid, 'status': f"Fail: {err_msg}"})
+3477: self.result_queue.put({'job_id': jid, 'status': 'Waiting for User...'})
+3512: self.result_queue.put({'job_id': jid, 'status': 'Running'})
+3519: self.result_queue.put({'job_id': jid, 'status': 'Failed'})
+3520: if params.get('stop_queue_on_model_unavailable', True):
+3521: console_log("Auto-stop enabled: stopping remaining queue after model-unavailable cancellation.", "WARN")
+3529: self.result_queue.put({'job_id': jid, 'status': f"Retrying ({attempt})"})
+3534: self.result_queue.put({'job_id': jid, 'status': 'Failed'})
+3554: help="Do not auto-stop remaining queue when model is unavailable and model switch is cancelled."
+3561: args.stop_queue_on_model_unavailable = not args.no_auto_stop_on_model_unavailable
