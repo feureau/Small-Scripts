@@ -1535,7 +1535,10 @@ def call_google_gemini_api(
                                     output_started = True
                                 print(text_part, end="", flush=True)
 
-                            full_text += text_part
+                            # Strip <think>...</think> tags before accumulating
+                            clean_part = re.sub(r"<think>.*?</think>", "", text_part, flags=re.DOTALL)
+                            clean_part = clean_part.replace("<think>", "").replace("</think>", "")
+                            full_text += clean_part
             if output_started:
                 print("\n--- [OUTPUT END] ---\n", end="", flush=True)
             print("\n----------------------------------------------\n", flush=True)
@@ -1908,6 +1911,55 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
 
     try:
         encoding = tiktoken.get_encoding("cl100k_base")
+
+        # --- TIKTOKEN LOGIC ---
+        tokens = encoding.encode(text)
+        if len(tokens) <= max_tokens:
+            return [text]
+
+        chunks = []
+        current_token_idx = 0
+
+        while current_token_idx < len(tokens):
+            # 1. Get raw candidate end
+            end_token_idx = min(current_token_idx + max_tokens, len(tokens))
+            chunk_tokens = tokens[current_token_idx:end_token_idx]
+            decoded_text = encoding.decode(chunk_tokens)
+
+            # 2. Handle Force Cutoff
+            if force_cutoff and end_token_idx < len(tokens):
+                last_t_idx = -1
+                for t in terminators:
+                    found = decoded_text.rfind(t)
+                    if found > last_t_idx:
+                        last_t_idx = found
+
+                if last_t_idx != -1:
+                    # Truncate string to terminator
+                    truncated_text = decoded_text[: last_t_idx + 1]
+                    # Re-encode to find the EXACT token count for this visual cut
+                    truncated_tokens = encoding.encode(truncated_text)
+
+                    if len(truncated_tokens) > 0:
+                        decoded_text = truncated_text
+                        end_token_idx = current_token_idx + len(truncated_tokens)
+
+            chunks.append(decoded_text)
+
+            # 3. Advance.
+            # For disjoint chunks (overlap=0), new start should be exactly current end.
+            current_token_idx = end_token_idx - overlap
+
+            # Safety checks
+            if current_token_idx >= len(tokens):
+                break
+            if current_token_idx < 0:
+                current_token_idx = 0
+            if len(chunks) > 5000:
+                break
+
+        return chunks
+
     except Exception as e:
         console_log(
             f"Error getting tiktoken encoding: {e}. Falling back to character-based splitting.",
@@ -1960,54 +2012,6 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
                 break  # Safety limit
 
         return chunks
-
-    # --- TIKTOKEN LOGIC ---
-    tokens = encoding.encode(text)
-    if len(tokens) <= max_tokens:
-        return [text]
-
-    chunks = []
-    current_token_idx = 0
-
-    while current_token_idx < len(tokens):
-        # 1. Get raw candidate end
-        end_token_idx = min(current_token_idx + max_tokens, len(tokens))
-        chunk_tokens = tokens[current_token_idx:end_token_idx]
-        decoded_text = encoding.decode(chunk_tokens)
-
-        # 2. Handle Force Cutoff
-        if force_cutoff and end_token_idx < len(tokens):
-            last_t_idx = -1
-            for t in terminators:
-                found = decoded_text.rfind(t)
-                if found > last_t_idx:
-                    last_t_idx = found
-
-            if last_t_idx != -1:
-                # Truncate string to terminator
-                truncated_text = decoded_text[: last_t_idx + 1]
-                # Re-encode to find the EXACT token count for this visual cut
-                truncated_tokens = encoding.encode(truncated_text)
-
-                if len(truncated_tokens) > 0:
-                    decoded_text = truncated_text
-                    end_token_idx = current_token_idx + len(truncated_tokens)
-
-        chunks.append(decoded_text)
-
-        # 3. Advance.
-        # For disjoint chunks (overlap=0), new start should be exactly current end.
-        current_token_idx = end_token_idx - overlap
-
-        # Safety checks
-        if current_token_idx >= len(tokens):
-            break
-        if current_token_idx < 0:
-            current_token_idx = 0
-        if len(chunks) > 5000:
-            break
-
-    return chunks
 
 
 def apply_context_to_prompt(user_prompt, context_text):
@@ -3587,7 +3591,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.temp_img_fmt_var, "temp_img_fmt", "PNG")
             set_var(self.img_quality_var, "img_quality", 100)
             set_var(self.img_max_dim_var, "img_max_dim", 0)
-            set_var(self.img_max_dim_var, "img_max_dim", 0)
             set_var(self.force_conversion_var, "force_conversion", False)
             set_var(self.save_img_to_output_var, "save_img_to_output", False)
 
@@ -3597,7 +3600,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.validate_json_var, "validate_json", False)
             set_var(self.validate_keys_var, "validate_json_keys", False)
             set_var(self.clean_markdown_var, "clean_markdown", True)
-            set_var(self.save_log_var, "save_log", True)
+            set_var(self.save_log_var, "save_log", False)
 
             # Delay & Mode
             set_var(self.delay_min_var, "delay_min", 0)
@@ -3664,7 +3667,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "img_quality": self.img_quality_var.get(),
             "img_max_dim": self.img_max_dim_var.get(),
             "force_conversion": self.force_conversion_var.get(),
-            "save_img_to_output": self.save_img_to_output_var.get(),
             "save_img_to_output": self.save_img_to_output_var.get(),
             "rename_mode": self.rename_mode_var.get(),
             "rename_method": self.rename_method_var.get(),
@@ -4056,7 +4058,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             for i in range(0, len(files), final_batch_size)
         ]
 
-        safe = {}
+        safe = []
         if self.engine_var.get() == "google":
             if self.enable_safety_var.get():
                 safe = [
@@ -4149,6 +4151,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 else 0,
                 "force_cutoff": self.force_cutoff_var.get(),
                 "model_prefix": self.model_prefix_var.get(),
+                "enable_thinking": self.thinking_var.get(),
                 "result_metadata": {},  # Mutable container for returning data
             }
 
@@ -4648,7 +4651,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.result_queue.put({"job_id": jid, "status": "Running"})
             params = job.copy()
             params.pop("job_id")
-            params["enable_thinking"] = self.thinking_var.get()  # Pass GUI state
             if params.get("use_persistent_context"):
                 params["context_text"] = self.global_context_text_value
 
