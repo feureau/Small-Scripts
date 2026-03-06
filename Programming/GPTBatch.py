@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.1
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.7
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -11,10 +11,10 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 - **🖼️ Multimodal Power**: Batch upload images and documents for analysis, OCR, or creative tasks.
 - **📦 Intelligent Grouping**: Process files individually or group them (e.g., 3 images per prompt) to save tokens and context.
 - **✂️ Text Chunking**: Automatically split massive text files into manageable pieces for AI processing and piece them back together.
-- **🔄 Upload Modes**: 
+- **🔄 Upload Modes**:
   - **Parallel**: High-speed multi-threaded uploads (internal ordering preserved).
   - **Sequential**: Strict one-by-one uploading for reliable logging and order.
-- **🎯 Precision Control**: 
+- **🎯 Precision Control**:
   - **JSON Validation**: Enforce valid JSON output with optional schema checks.
   - **Markdown Cleanup**: Automatically strip ```json wrappers for clean raw data.
   - **Prompt Templates**: Save and switch between custom processing presets.
@@ -34,6 +34,28 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.7
+- ✅ **FEATURE**: Added "Add Model Name as Prefix to Folder" option in Output & Batch tab.
+- ✅ **BUGFIX**: Fixed `AttributeError` in UI initialization.
+
+### v26.6
+- ✅ **IMPROVEMENT**: Model-switch popup now auto-resizes to fit long error text and keeps action buttons visible (screen-bounded and centered).
+
+### v26.5
+- ✅ **IMPROVEMENT**: Model-switch dialog now shows issue-specific messaging (quota exhausted vs model unavailable/load failure).
+- ✅ **FEATURE**: Added compact refresh (`⟳`) button in model-switch dialog next to model dropdown.
+- ✅ **FEATURE**: Added compact refresh (`⟳`) button in main Configuration tab next to model dropdown.
+
+### v26.4
+- ✅ **FEATURE**: Added global toggle: auto-stop remaining queue when current model is unavailable and no replacement model is selected.
+- ✅ **IMPROVEMENT**: Reuses the existing quota model-switch dialog flow for model-unavailable handling.
+
+### v26.3
+- ✅ **IMPROVEMENT**: Added a full per-job console configuration snapshot (JSON) so all effective settings are visible for debugging, including disabled options.
+
+### v26.2
+- ✅ **IMPROVEMENT**: Renamed the "Enable Thinking (Gemini)" checkbox to "Enable Thinking (Supported Models)" to match actual cross-engine behavior.
 
 ### v25.9
 - ✅ **FEATURE**: Added "Text Chunking" option to AI Engine tab. Handles massive text by splitting into token-based chunks and reassembling the AI output.
@@ -70,63 +92,65 @@ Developed by Feureau. Designed for efficiency, reliability, and precision in AI-
 > This documentation block is a core part of the script and **must** be updated with every feature addition, bug fix, or logic change.
 """
 
-
 ################################################################################
 # --- Configuration & Imports ---
 ################################################################################
 import os
+
 # --- SUPPRESS GOOGLE/GRPC LOGGING NOISE ---
-os.environ['GRPC_VERBOSITY'] = 'ERROR'
-os.environ['GLOG_minloglevel'] = '2'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-import sys
-import json
-import requests
-import glob
-import time
-import datetime
-import hashlib 
-import threading
-import queue
-import signal
-import base64
-import mimetypes
-import traceback
-import re
-import shutil
-import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-
-from google import genai
-from google.genai import types
-from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, PermissionDenied
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import argparse
+import base64
+import datetime
+import glob
+import hashlib
+import json
+import mimetypes
+import queue
+import re
+import shutil
+import signal
+import sys
+import threading
+import time
 import tkinter as tk
-from tkinter import ttk
-from tkinter import scrolledtext
-from tkinter import filedialog
 import tkinter.messagebox
 import tkinter.simpledialog
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tkinter import filedialog, scrolledtext, ttk
 
-import tkinter.simpledialog
+import requests
+from google import genai
+from google.api_core.exceptions import (
+    GoogleAPIError,
+    PermissionDenied,
+    ResourceExhausted,
+)
+from google.genai import types
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
+
     DND_AVAILABLE = True
 except ImportError:
     DND_AVAILABLE = False
 
 try:
     from PIL import Image
+
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-    print("⚠️ Pillow (PIL) not found. Image conversions (e.g. .tif -> .png) will be disabled.")
+    print(
+        "⚠️ Pillow (PIL) not found. Image conversions (e.g. .tif -> .png) will be disabled."
+    )
 
-import ollama 
+import ollama
 import tiktoken
 
 # --- OPTIONAL: JSON REPAIR ---
@@ -157,33 +181,182 @@ CONTEXT_PROMPT_PLACEHOLDER = "{{CONTEXT_TEXT}}"
 # --- AUTO-LOAD SETTINGS ---
 AUTO_LOAD_EXTENSIONS = [
     # Text / Code / Data
-    '.txt', '.md', '.srt', '.vtt', '.py', '.js', '.html', '.css', '.json', '.csv', 
-    '.xml', '.yaml', '.yml', '.ini', '.log', '.bat', '.sh', '.r', '.c', '.cpp', '.h', 
-    '.java', '.php', '.sql', '.rb', '.go', '.rs', '.swift', '.kt', '.ts', '.tsx', '.jsx',
+    ".txt",
+    ".md",
+    ".srt",
+    ".vtt",
+    ".py",
+    ".js",
+    ".html",
+    ".css",
+    ".json",
+    ".csv",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".log",
+    ".bat",
+    ".sh",
+    ".r",
+    ".c",
+    ".cpp",
+    ".h",
+    ".java",
+    ".php",
+    ".sql",
+    ".rb",
+    ".go",
+    ".rs",
+    ".swift",
+    ".kt",
+    ".ts",
+    ".tsx",
+    ".jsx",
     # Images (Native & Convertible)
-    '.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.bmp', '.tiff', '.tif', '.gif',
-    '.apng', '.avif', '.avifs', '.blp', '.bufr', '.bw', '.cur', '.dcx', '.dds', '.dib', 
-    '.emf', '.eps', '.fit', '.fits', '.flc', '.fli', '.ftc', '.ftu', '.gbr', '.grib', 
-    '.h5', '.hdf', '.icb', '.icns', '.ico', '.iim', '.im', '.j2c', '.j2k', '.jfif', 
-    '.jp2', '.jpc', '.jpe', '.jpf', '.jpx', '.mpo', '.msp', '.palm', '.pbm', '.pcd', 
-    '.pcx', '.pfm', '.pgm', '.pnm', '.ppm', '.ps', '.psd', '.pxr', '.qoi', '.ras', 
-    '.rgb', '.rgba', '.sgi', '.tga', '.vda', '.vst', '.wmf', '.xbm', '.xpm'
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".gif",
+    ".apng",
+    ".avif",
+    ".avifs",
+    ".blp",
+    ".bufr",
+    ".bw",
+    ".cur",
+    ".dcx",
+    ".dds",
+    ".dib",
+    ".emf",
+    ".eps",
+    ".fit",
+    ".fits",
+    ".flc",
+    ".fli",
+    ".ftc",
+    ".ftu",
+    ".gbr",
+    ".grib",
+    ".h5",
+    ".hdf",
+    ".icb",
+    ".icns",
+    ".ico",
+    ".iim",
+    ".im",
+    ".j2c",
+    ".j2k",
+    ".jfif",
+    ".jp2",
+    ".jpc",
+    ".jpe",
+    ".jpf",
+    ".jpx",
+    ".mpo",
+    ".msp",
+    ".palm",
+    ".pbm",
+    ".pcd",
+    ".pcx",
+    ".pfm",
+    ".pgm",
+    ".pnm",
+    ".ppm",
+    ".ps",
+    ".psd",
+    ".pxr",
+    ".qoi",
+    ".ras",
+    ".rgb",
+    ".rgba",
+    ".sgi",
+    ".tga",
+    ".vda",
+    ".vst",
+    ".wmf",
+    ".xbm",
+    ".xpm",
 ]
 
 # Google/Ollama/LMStudio usually handle these natively (or we want to preserve them like GIFs)
-NATIVE_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.gif']
+NATIVE_IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".gif"]
 
 # These should be converted to PNG for better compatibility
 CONVERTIBLE_IMAGE_EXTENSIONS = [
-    '.apng', '.avif', '.avifs', '.blp', '.bmp', '.bufr', '.bw', '.cur', '.dcx', '.dds', '.dib', 
-    '.emf', '.eps', '.fit', '.fits', '.flc', '.fli', '.ftc', '.ftu', '.gbr', '.grib', '.h5', 
-    '.hdf', '.icb', '.icns', '.ico', '.iim', '.im', '.j2c', '.j2k', '.jfif', '.jp2', '.jpc', 
-    '.jpe', '.jpf', '.jpx', '.mpo', '.msp', '.palm', '.pbm', '.pcd', '.pcx', '.pfm', '.pgm', 
-    '.pnm', '.ppm', '.ps', '.psd', '.pxr', '.qoi', '.ras', '.rgb', '.rgba', '.sgi', '.tga', 
-    '.tif', '.tiff', '.vda', '.vst', '.wmf', '.xbm', '.xpm'
+    ".apng",
+    ".avif",
+    ".avifs",
+    ".blp",
+    ".bmp",
+    ".bufr",
+    ".bw",
+    ".cur",
+    ".dcx",
+    ".dds",
+    ".dib",
+    ".emf",
+    ".eps",
+    ".fit",
+    ".fits",
+    ".flc",
+    ".fli",
+    ".ftc",
+    ".ftu",
+    ".gbr",
+    ".grib",
+    ".h5",
+    ".hdf",
+    ".icb",
+    ".icns",
+    ".ico",
+    ".iim",
+    ".im",
+    ".j2c",
+    ".j2k",
+    ".jfif",
+    ".jp2",
+    ".jpc",
+    ".jpe",
+    ".jpf",
+    ".jpx",
+    ".mpo",
+    ".msp",
+    ".palm",
+    ".pbm",
+    ".pcd",
+    ".pcx",
+    ".pfm",
+    ".pgm",
+    ".pnm",
+    ".ppm",
+    ".ps",
+    ".psd",
+    ".pxr",
+    ".qoi",
+    ".ras",
+    ".rgb",
+    ".rgba",
+    ".sgi",
+    ".tga",
+    ".tif",
+    ".tiff",
+    ".vda",
+    ".vst",
+    ".wmf",
+    ".xbm",
+    ".xpm",
 ]
 
-SUPPORTED_IMAGE_EXTENSIONS = list(set(NATIVE_IMAGE_EXTENSIONS + CONVERTIBLE_IMAGE_EXTENSIONS))
+SUPPORTED_IMAGE_EXTENSIONS = list(
+    set(NATIVE_IMAGE_EXTENSIONS + CONVERTIBLE_IMAGE_EXTENSIONS)
+)
 
 DEFAULT_RAW_OUTPUT_SUFFIX = ""
 RAW_OUTPUT_FILE_EXTENSION = ".txt"
@@ -192,75 +365,108 @@ DEFAULT_ENGINE = "google"
 REQUESTS_PER_MINUTE = 15
 REQUEST_INTERVAL_SECONDS = 60 / REQUESTS_PER_MINUTE
 
-PRESET_JSON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GPTBatch.py.preset.json")
+PRESET_JSON_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "GPTBatch.py.preset.json"
+)
 DEFAULT_OUTPUT_SUBFOLDER_NAME = ""
 LOG_SUBFOLDER_NAME = "processing_logs"
 FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
 
+
 def sanitize_filename(name):
     # Strip illegal chars and typical markdown noise
     keep = (" ", ".", "_", "-")
     clean = "".join(c for c in name if c.isalnum() or c in keep).strip()
-    return clean[:250] # Truncate to safe length
+    return clean[:250]  # Truncate to safe length
+
 
 class InputFileSanitizer:
     """
-    Context manager that creates temporary, safely-named copies of files 
+    Context manager that creates temporary, safely-named copies of files
     Inside a 'gptbatch_temp' subfolder within the SAME DIRECTORY as the original file.
     This ensures better locality and avoids cross-drive issues.
     """
-    def __init__(self, filepaths, target_fmt="PNG", quality=100, max_dim=0, force_convert=False, enable_conversion=False, cancellation_event=None, **kwargs):
+
+    def __init__(
+        self,
+        filepaths,
+        target_fmt="PNG",
+        quality=100,
+        max_dim=0,
+        force_convert=False,
+        enable_conversion=False,
+        cancellation_event=None,
+        **kwargs,
+    ):
         self.filepaths = filepaths
         self.batch_id = uuid.uuid4().hex[:8]
-        self.temp_dirs = set() # Track all created temp dirs for cleanup
-        self.file_map = {} # { original_path: safe_path }
+        self.temp_dirs = set()  # Track all created temp dirs for cleanup
+        self.file_map = {}  # { original_path: safe_path }
         self.created_files = []
         self.cancellation_event = cancellation_event
-        
+
         # Image Processing Settings
         self.target_fmt = target_fmt.upper()
         self.quality = quality
         self.max_dim = max_dim
         self.force_convert = force_convert
-        self.enable_conversion = enable_conversion # Use the explicit param, not kwargs.get
-        
+        self.enable_conversion = (
+            enable_conversion  # Use the explicit param, not kwargs.get
+        )
+
         # Extensions mapping for target format
-        self.fmt_ext_map = {'PNG': '.png', 'JPEG': '.jpg', 'WEBP': '.webp'}
-        self.target_ext = self.fmt_ext_map.get(self.target_fmt, '.png')
+        self.fmt_ext_map = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
+        self.target_ext = self.fmt_ext_map.get(self.target_fmt, ".png")
 
     def __enter__(self):
         for original_path in self.filepaths:
             if self.cancellation_event and self.cancellation_event.is_set():
-                raise CancellationError("Processing cancelled during file sanitization.")
-            
+                raise CancellationError(
+                    "Processing cancelled during file sanitization."
+                )
+
             if not os.path.exists(original_path):
-                console_log(f"Skipping sanitization for missing file: {original_path}", "WARN")
-                self.file_map[original_path] = original_path 
+                console_log(
+                    f"Skipping sanitization for missing file: {original_path}", "WARN"
+                )
+                self.file_map[original_path] = original_path
                 continue
 
             try:
                 # Determine local temp dir: original_dir/gptbatch_temp/batch_ID/
                 source_dir = os.path.dirname(os.path.abspath(original_path))
                 local_temp_base = os.path.join(source_dir, "gptbatch_temp_safe")
-                local_batch_dir = os.path.join(local_temp_base, f"batch_{self.batch_id}")
-                
+                local_batch_dir = os.path.join(
+                    local_temp_base, f"batch_{self.batch_id}"
+                )
+
                 # Generate safe name
-                file_hash = hashlib.md5(original_path.encode('utf-8')).hexdigest()[:8]
+                file_hash = hashlib.md5(original_path.encode("utf-8")).hexdigest()[:8]
                 orig_ext = os.path.splitext(original_path)[1].lower()
-                
+
                 # DECISION LOGIC:
                 # Convert IF: Enable Conversion AND (PIL Available) AND (Force Convert OR Not Native OR Resizing Needed)
-                
+
                 should_convert = False
-                if self.enable_conversion and PIL_AVAILABLE and orig_ext in SUPPORTED_IMAGE_EXTENSIONS:
-                     if self.force_convert: should_convert = True
-                     elif orig_ext in (CONVERTIBLE_IMAGE_EXTENSIONS + ['.tif', '.tiff']): should_convert = True # Explicitly check TIF
-                     elif self.max_dim > 0: should_convert = True # Even native files might need resize
-                
+                if (
+                    self.enable_conversion
+                    and PIL_AVAILABLE
+                    and orig_ext in SUPPORTED_IMAGE_EXTENSIONS
+                ):
+                    if self.force_convert:
+                        should_convert = True
+                    elif orig_ext in (CONVERTIBLE_IMAGE_EXTENSIONS + [".tif", ".tiff"]):
+                        should_convert = True  # Explicitly check TIF
+                    elif self.max_dim > 0:
+                        should_convert = True  # Even native files might need resize
+
                 # DEBUG LOG
-                console_log(f"DEBUG Sanitizer: {os.path.basename(original_path)} | En={self.enable_conversion} | Fmt={self.target_fmt} | Force={self.force_convert} | Should={should_convert}", "DEBUG")
+                console_log(
+                    f"DEBUG Sanitizer: {os.path.basename(original_path)} | En={self.enable_conversion} | Fmt={self.target_fmt} | Force={self.force_convert} | Should={should_convert}",
+                    "DEBUG",
+                )
 
                 if should_convert:
                     # ENSURE DIRECTORY EXISTS (Fix for FileNotFoundError)
@@ -269,46 +475,62 @@ class InputFileSanitizer:
 
                     safe_name = f"safe_{file_hash}{self.target_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
-                    
+
                     try:
                         with Image.open(original_path) as img:
                             # 1. Resize if needed
                             if self.max_dim > 0:
                                 w, h = img.size
                                 if w > self.max_dim or h > self.max_dim:
-                                    img.thumbnail((self.max_dim, self.max_dim), Image.Resampling.LANCZOS)
-                            
+                                    img.thumbnail(
+                                        (self.max_dim, self.max_dim),
+                                        Image.Resampling.LANCZOS,
+                                    )
+
                             # 2. Convert Color Mode (JPEG doesn't support RGBA)
-                            if self.target_fmt == 'JPEG':
-                                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                                    bg = Image.new('RGB', img.size, (255, 255, 255))
-                                    if img.mode == 'P': img = img.convert('RGBA')
-                                    bg.paste(img.convert('RGBA'), mask=img.convert('RGBA').split()[3])
+                            if self.target_fmt == "JPEG":
+                                if img.mode in ("RGBA", "LA") or (
+                                    img.mode == "P" and "transparency" in img.info
+                                ):
+                                    bg = Image.new("RGB", img.size, (255, 255, 255))
+                                    if img.mode == "P":
+                                        img = img.convert("RGBA")
+                                    bg.paste(
+                                        img.convert("RGBA"),
+                                        mask=img.convert("RGBA").split()[3],
+                                    )
                                     img = bg
                                 else:
-                                    img = img.convert('RGB')
-                            elif self.target_fmt == 'WEBP':
-                                if img.mode == 'P': img = img.convert('RGBA')
+                                    img = img.convert("RGB")
+                            elif self.target_fmt == "WEBP":
+                                if img.mode == "P":
+                                    img = img.convert("RGBA")
 
                             # 3. Save
                             save_args = {}
-                            if self.target_fmt in ['JPEG', 'WEBP']:
-                                save_args['quality'] = self.quality
-                            
+                            if self.target_fmt in ["JPEG", "WEBP"]:
+                                save_args["quality"] = self.quality
+
                             img.save(safe_path, format=self.target_fmt, **save_args)
-                        
-                        console_log(f"Processed image: {os.path.basename(original_path)} -> {self.target_fmt} ({self.target_ext})", "INFO")
-                        
+
+                        console_log(
+                            f"Processed image: {os.path.basename(original_path)} -> {self.target_fmt} ({self.target_ext})",
+                            "INFO",
+                        )
+
                         self.file_map[original_path] = safe_path
                         self.created_files.append(safe_path)
 
                     except Exception as e:
-                        console_log(f"Failed to process {original_path}: {e}. Falling back to copy.", "WARN")
+                        console_log(
+                            f"Failed to process {original_path}: {e}. Falling back to copy.",
+                            "WARN",
+                        )
                         # Fallback
                         safe_name = f"safe_{file_hash}{orig_ext}"
                         safe_path = os.path.join(local_batch_dir, safe_name)
                         shutil.copy2(original_path, safe_path)
-                        
+
                         self.file_map[original_path] = safe_path
                         self.created_files.append(safe_path)
 
@@ -317,12 +539,12 @@ class InputFileSanitizer:
                     # ENSURE DIRECTORY EXISTS
                     os.makedirs(local_batch_dir, exist_ok=True)
                     self.temp_dirs.add(local_temp_base)
-                    
+
                     safe_name = f"safe_{file_hash}{orig_ext}"
                     safe_path = os.path.join(local_batch_dir, safe_name)
-                    
+
                     shutil.copy2(original_path, safe_path)
-                    
+
                     self.file_map[original_path] = safe_path
                     self.created_files.append(safe_path)
 
@@ -335,22 +557,27 @@ class InputFileSanitizer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Cleanup: Remove the specific batch directories created
         for original_path in self.filepaths:
-             if original_path in self.file_map:
-                 safe_path = self.file_map[original_path]
-                 # If we created a safe file, it's inside a batch dir we want to remove
-                 # safe_path = .../gptbatch_temp_safe/batch_ID/safe_file.ext
-                 try:
-                     batch_dir = os.path.dirname(safe_path)
-                     if os.path.exists(batch_dir) and "batch_" in os.path.basename(batch_dir):
-                         shutil.rmtree(batch_dir, ignore_errors=True)
-                 except Exception: pass
-        
+            if original_path in self.file_map:
+                safe_path = self.file_map[original_path]
+                # If we created a safe file, it's inside a batch dir we want to remove
+                # safe_path = .../gptbatch_temp_safe/batch_ID/safe_file.ext
+                try:
+                    batch_dir = os.path.dirname(safe_path)
+                    if os.path.exists(batch_dir) and "batch_" in os.path.basename(
+                        batch_dir
+                    ):
+                        shutil.rmtree(batch_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
         # Optional: Try to remove the parent 'gptbatch_temp_safe' if empty
         for temp_base in self.temp_dirs:
             try:
                 if os.path.exists(temp_base) and not os.listdir(temp_base):
                     os.rmdir(temp_base)
-            except Exception: pass
+            except Exception:
+                pass
+
 
 def cleanup_stale_temp_files():
     """Scans for and removes stale 'gptbatch_temp_safe' folders in CWD or known locations if needed."""
@@ -360,28 +587,48 @@ def cleanup_stale_temp_files():
     pass
 
 
-
-
 ################################################################################
 # --- Core Logic & Helpers ---
 ################################################################################
 
-class QuotaExhaustedError(Exception): pass
-class FatalProcessingError(Exception): pass
-class CancellationError(Exception): pass
+
+class QuotaExhaustedError(Exception):
+    pass
+
+
+class ModelUnavailableError(Exception):
+    pass
+
+
+class FatalProcessingError(Exception):
+    pass
+
+
+class CancellationError(Exception):
+    pass
+
+
 last_request_time = None
 VERBOSE_DIAGNOSTICS = True
+
 
 def console_log(msg, type="INFO"):
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
     icon = "ℹ️"
-    if type == "ERROR": icon = "❌"
-    elif type == "SUCCESS": icon = "✅"
-    elif type == "WARN": icon = "⚠️"
-    elif type == "ACTION": icon = "👉"
-    elif type == "UPLOAD": icon = "☁️"
-    elif type == "STREAM": icon = "🌊"
+    if type == "ERROR":
+        icon = "❌"
+    elif type == "SUCCESS":
+        icon = "✅"
+    elif type == "WARN":
+        icon = "⚠️"
+    elif type == "ACTION":
+        icon = "👉"
+    elif type == "UPLOAD":
+        icon = "☁️"
+    elif type == "STREAM":
+        icon = "🌊"
     print(f"[{timestamp}] {icon} {msg}")
+
 
 def human_bytes(num):
     try:
@@ -394,17 +641,152 @@ def human_bytes(num):
         n /= 1024.0
     return f"{num}B"
 
+
 def short_sha256_bytes(data):
     try:
         return hashlib.sha256(data).hexdigest()[:12]
     except Exception:
         return "unknown"
 
+
 def preview_text(text, max_chars=180):
     if not text:
         return ""
     one_line = re.sub(r"\s+", " ", str(text)).strip()
     return one_line if len(one_line) <= max_chars else one_line[:max_chars] + "..."
+
+
+def to_loggable(value):
+    """Best-effort conversion of nested values into JSON-serializable structures."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    if isinstance(value, (list, tuple, set)):
+        return [to_loggable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): to_loggable(v) for k, v in value.items()}
+    return str(value)
+
+
+def build_job_config_snapshot(
+    filepaths_group,
+    engine,
+    model_name,
+    api_key,
+    user_prompt,
+    add_filename_to_prompt,
+    overwrite_original,
+    source_dir,
+    raw_path,
+    log_path,
+    kwargs,
+):
+    known_defaults = {
+        "output_folder": "",
+        "output_under_input": False,
+        "output_extension": "",
+        "output_suffix": "",
+        "stream_output": False,
+        "enable_thinking": False,
+        "save_log": False,
+        "sequential_upload": False,
+        "job_delay_seconds": 0,
+        "enable_web_search": False,
+        "validate_json": False,
+        "validate_json_keys": False,
+        "clean_markdown": True,
+        "rename_mode": False,
+        "rename_method": "full",
+        "enable_img_conversion": False,
+        "temp_img_fmt": "PNG",
+        "img_quality": 100,
+        "img_max_dim": 0,
+        "force_conversion": False,
+        "save_img_to_output": False,
+        "enable_chunking": False,
+        "chunk_size": 4000,
+        "chunk_overlap": 0,
+        "force_cutoff": False,
+        "stop_queue_on_model_unavailable": True,
+        "context_text": "",
+        "use_persistent_context": False,
+        "model_prefix": False,
+        "safety_settings": [],
+    }
+    effective = {k: kwargs.get(k, d) for k, d in known_defaults.items()}
+    extra_keys = sorted(
+        [k for k in kwargs.keys() if k not in known_defaults and k != "result_metadata"]
+    )
+
+    return {
+        "job_identity": {
+            "group_name": generate_group_base_name(filepaths_group),
+            "engine": engine,
+            "model_name": model_name,
+            "api_key_configured": bool(api_key),
+            "file_count": len(filepaths_group),
+            "files": [os.path.basename(p) for p in filepaths_group],
+        },
+        "paths": {
+            "source_dir": source_dir,
+            "raw_output_path": raw_path,
+            "log_output_path": log_path,
+        },
+        "prompt": {
+            "user_prompt_chars": len(user_prompt or ""),
+            "user_prompt_preview": preview_text(user_prompt or "", 220),
+            "add_filename_to_prompt": bool(add_filename_to_prompt),
+            "context_chars": len(effective["context_text"] or ""),
+            "context_preview": preview_text(effective["context_text"] or "", 180),
+            "use_persistent_context": bool(effective["use_persistent_context"]),
+        },
+        "output_behavior": {
+            "overwrite_original": bool(overwrite_original),
+            "output_folder": effective["output_folder"],
+            "output_under_input": bool(effective["output_under_input"]),
+            "output_extension": effective["output_extension"],
+            "output_suffix": effective["output_suffix"],
+            "model_prefix": bool(effective["model_prefix"]),
+            "save_log": bool(effective["save_log"]),
+        },
+        "runtime_flags": {
+            "stream_output": bool(effective["stream_output"]),
+            "enable_thinking": bool(effective["enable_thinking"]),
+            "job_delay_seconds": effective["job_delay_seconds"],
+            "sequential_upload": bool(effective["sequential_upload"]),
+            "enable_web_search": bool(effective["enable_web_search"]),
+            "stop_queue_on_model_unavailable": bool(
+                effective["stop_queue_on_model_unavailable"]
+            ),
+        },
+        "validation": {
+            "validate_json": bool(effective["validate_json"]),
+            "validate_json_keys": bool(effective["validate_json_keys"]),
+            "clean_markdown": bool(effective["clean_markdown"]),
+            "safety_settings": to_loggable(effective["safety_settings"]),
+        },
+        "rename_mode": {
+            "enabled": bool(effective["rename_mode"]),
+            "method": effective["rename_method"],
+        },
+        "image_processing": {
+            "enable_img_conversion": bool(effective["enable_img_conversion"]),
+            "temp_img_fmt": effective["temp_img_fmt"],
+            "img_quality": effective["img_quality"],
+            "img_max_dim": effective["img_max_dim"],
+            "force_conversion": bool(effective["force_conversion"]),
+            "save_img_to_output": bool(effective["save_img_to_output"]),
+        },
+        "chunking": {
+            "enabled": bool(effective["enable_chunking"]),
+            "chunk_size": effective["chunk_size"],
+            "chunk_overlap": effective["chunk_overlap"],
+            "force_cutoff": bool(effective["force_cutoff"]),
+        },
+        "extra_kwargs_keys": extra_keys,
+    }
+
 
 def is_likely_prompt_echo(prompt_text, response_text):
     prompt_norm = re.sub(r"\s+", " ", (prompt_text or "")).strip().lower()
@@ -417,7 +799,11 @@ def is_likely_prompt_echo(prompt_text, response_text):
     if probe and resp_norm.startswith(probe):
         return True
     # Many failures return a large copied chunk of the instruction prompt.
-    if len(prompt_norm) > 120 and len(resp_norm) > 120 and prompt_norm[:120] in resp_norm[:500]:
+    if (
+        len(prompt_norm) > 120
+        and len(resp_norm) > 120
+        and prompt_norm[:120] in resp_norm[:500]
+    ):
         return True
     # Line-overlap heuristic: if multiple long instruction lines from prompt
     # appear verbatim in response, the model likely echoed instructions.
@@ -434,6 +820,7 @@ def is_likely_prompt_echo(prompt_text, response_text):
                 return True
     return False
 
+
 def is_unusable_vision_response(prompt_text, response_text):
     resp = (response_text or "").strip()
     if not resp:
@@ -448,7 +835,7 @@ def is_unusable_vision_response(prompt_text, response_text):
         "do not replicate the instructions",
         "do not repeat instructions",
         "output only transcription",
-        "your task is to transcribe"
+        "your task is to transcribe",
     ]
     if any(p in low for p in bad_phrases):
         return True
@@ -461,21 +848,51 @@ def is_unusable_vision_response(prompt_text, response_text):
 
     return False
 
+
+def is_model_unavailable_error_message(err_text):
+    msg = (err_text or "").lower()
+    needles = [
+        "failed to load model",
+        "error loading model",
+        "invalid_request_error",
+        'param": "model"',
+        "param: model",
+        "model not found",
+        "unknown model",
+        "no such model",
+    ]
+    return any(n in msg for n in needles)
+
+
 def looks_like_vision_model(model_name):
     if not model_name:
         return False
     mn = model_name.lower()
     hints = [
-        "vision", "vl", "ocr", "llava", "bakllava", "moondream", "minicpm-v",
-        "qwen2-vl", "qwen2.5-vl", "qwen-vl", "glm-4v", "internvl", "pixtral",
-        "phi-3.5-vision", "gemma3"
+        "vision",
+        "vl",
+        "ocr",
+        "llava",
+        "bakllava",
+        "moondream",
+        "minicpm-v",
+        "qwen2-vl",
+        "qwen2.5-vl",
+        "qwen-vl",
+        "glm-4v",
+        "internvl",
+        "pixtral",
+        "phi-3.5-vision",
+        "gemma3",
     ]
     return any(h in mn for h in hints)
+
 
 def prompt_expects_image(prompt_text):
     # Keyword-based image intent detection is intentionally disabled.
     # Returning False prevents guardrail warnings/failures for text-only workflows.
     return False
+
 
 def build_anti_echo_followup_prompt(original_prompt):
     p = (original_prompt or "").strip()
@@ -487,6 +904,7 @@ def build_anti_echo_followup_prompt(original_prompt):
         "Return only the final result content.\n\n"
         f"Task instructions:\n{p}"
     )
+
 
 def get_ollama_model_capability(model_name):
     """
@@ -503,7 +921,9 @@ def get_ollama_model_capability(model_name):
         data = resp.json() if resp.content else {}
         raw = json.dumps(data).lower()
         keys = sorted(list(data.keys())) if isinstance(data, dict) else []
-        vision_hint = any(tok in raw for tok in ["vision", "projector", "clip", "mmproj", "image"])
+        vision_hint = any(
+            tok in raw for tok in ["vision", "projector", "clip", "mmproj", "image"]
+        )
         detail = ""
         if isinstance(data, dict):
             details = data.get("details")
@@ -515,44 +935,6 @@ def get_ollama_model_capability(model_name):
     except Exception as e:
         return {"vision_hint": None, "keys": [], "detail": f"probe failed: {e}"}
 
-def pick_ollama_vision_fallback(current_model):
-    preferred = [
-        "gemma3:12b-it-qat",
-        "gemma3:4b-it-qat",
-        "llava",
-        "bakllava",
-        "minicpm-v",
-        "qwen2.5-vl",
-    ]
-    try:
-        resp = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=8)
-        resp.raise_for_status()
-        models = [m.get("name", "") for m in resp.json().get("models", [])]
-        lower_map = {m.lower(): m for m in models}
-        cur = (current_model or "").lower()
-        for hint in preferred:
-            for lm, orig in lower_map.items():
-                if hint in lm and lm != cur:
-                    return orig
-    except Exception:
-        return None
-    return None
-
-def pick_lmstudio_vision_fallback(current_model):
-    preferred_hints = ["glm-ocr", "gemma-3", "gemma3", "vl", "vision", "llava", "minicpm-v"]
-    try:
-        resp = requests.get(LMSTUDIO_MODELS_ENDPOINT, timeout=8)
-        resp.raise_for_status()
-        models = [m.get("id", "") for m in resp.json().get("data", []) if m.get("id")]
-        cur = (current_model or "").lower()
-        for hint in preferred_hints:
-            for m in models:
-                lm = m.lower()
-                if hint in lm and lm != cur:
-                    return m
-    except Exception:
-        return None
-    return None
 
 def load_presets():
     """Loads presets from PRESET_JSON_FILE."""
@@ -560,29 +942,45 @@ def load_presets():
         console_log(f"Preset file not found: {PRESET_JSON_FILE}", "WARN")
         return {}
     try:
-        with open(PRESET_JSON_FILE, 'r', encoding='utf-8') as f:
+        with open(PRESET_JSON_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         console_log(f"Error loading presets from JSON: {e}", "ERROR")
-        return {"Error - Backup": {"prompt": "Data Corrupt", "engine": "google", "model": "", "output_suffix": ""}}
+        return {
+            "Error - Backup": {
+                "prompt": "Data Corrupt",
+                "engine": "google",
+                "model": "",
+                "output_suffix": "",
+            }
+        }
+
 
 def save_presets(new_presets_dict):
     """Saves presets to PRESET_JSON_FILE."""
     try:
-        with open(PRESET_JSON_FILE, 'w', encoding='utf-8') as f:
+        with open(PRESET_JSON_FILE, "w", encoding="utf-8") as f:
             json.dump(new_presets_dict, f, indent=4)
         console_log(f"Presets saved to {PRESET_JSON_FILE}.", "SUCCESS")
     except Exception as e:
         console_log(f"Failed to save presets to JSON: {e}", "ERROR")
 
+
 def natural_sort_key(s):
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+    return [
+        int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)
+    ]
+
 
 def generate_group_base_name(filepaths_group):
-    if not filepaths_group: return "empty_group"
+    if not filepaths_group:
+        return "empty_group"
     base_names = [os.path.splitext(os.path.basename(fp)) for fp in filepaths_group]
-    if len(base_names) == 1: return base_names[0][0]
-    else: return f"{base_names[0][0]}_to_{base_names[-1][0]}"
+    if len(base_names) == 1:
+        return base_names[0][0]
+    else:
+        return f"{base_names[0][0]}_to_{base_names[-1][0]}"
+
 
 # --- FILE HASHING FOR DEDUPLICATION ---
 def hash_file(path, chunk_size=1024 * 1024):
@@ -594,6 +992,7 @@ def hash_file(path, chunk_size=1024 * 1024):
                 break
             h.update(chunk)
     return h.hexdigest()
+
 
 def find_unique(folder, base, extension):
     """
@@ -608,25 +1007,42 @@ def find_unique(folder, base, extension):
         counter += 1
     return full_path
 
-def determine_unique_output_paths(base_name, suffix, out_folder, log_folder, ext=RAW_OUTPUT_FILE_EXTENSION):
+
+def determine_unique_output_paths(
+    base_name, suffix, out_folder, log_folder, ext=RAW_OUTPUT_FILE_EXTENSION
+):
     """
     Determines unique output paths for raw response and log files.
     """
     out_base = f"{base_name}{suffix}"
     raw_path = find_unique(out_folder, out_base, ext)
-    log_path = find_unique(log_folder, out_base, LOG_FILE_EXTENSION) if log_folder else None
+    log_path = (
+        find_unique(log_folder, out_base, LOG_FILE_EXTENSION) if log_folder else None
+    )
     return raw_path, log_path
 
-def resolve_output_folder(source_dir, output_folder_value, output_under_input_folder=False):
+
+def resolve_output_folder(
+    source_dir, output_folder_value, output_under_input_folder=False, prefix=""
+):
     """
     Resolves final output folder for a job.
     """
     output_folder_value = (output_folder_value or "").strip()
-    if not output_folder_value:
+
+    final_name = output_folder_value
+    if prefix:
+        if final_name:
+            final_name = f"{prefix}_{final_name}"
+        else:
+            final_name = prefix
+
+    if not final_name:
         return source_dir
-    if output_under_input_folder and not os.path.isabs(output_folder_value):
-        return os.path.join(source_dir, output_folder_value)
-    return output_folder_value
+    if output_under_input_folder and not os.path.isabs(final_name):
+        return os.path.join(source_dir, final_name)
+    return final_name
+
 
 def build_merged_output_basename(filepaths, max_len=96):
     """
@@ -634,7 +1050,10 @@ def build_merged_output_basename(filepaths, max_len=96):
     """
     if not filepaths:
         return "merged_output"
-    names = sorted([os.path.splitext(os.path.basename(p))[0] for p in filepaths], key=natural_sort_key)
+    names = sorted(
+        [os.path.splitext(os.path.basename(p))[0] for p in filepaths],
+        key=natural_sort_key,
+    )
     if len(names) == 1:
         base = f"merged_{names[0]}"
     else:
@@ -644,6 +1063,7 @@ def build_merged_output_basename(filepaths, max_len=96):
         base = base[:max_len].rstrip(" ._-") or "merged_output"
     return base
 
+
 def merge_output_text_files(filepaths, output_path):
     """
     Merge text outputs using the same core method as mergetext.py:
@@ -652,14 +1072,15 @@ def merge_output_text_files(filepaths, output_path):
     files_sorted = sorted(list(set(filepaths)), key=natural_sort_key)
     if not files_sorted:
         return None
-    with open(output_path, 'w', encoding='utf-8') as outfile:
+    with open(output_path, "w", encoding="utf-8") as outfile:
         for idx, path in enumerate(files_sorted):
-            with open(path, 'r', encoding='utf-8') as infile:
+            with open(path, "r", encoding="utf-8") as infile:
                 content = sanitize_api_response(infile.read())
                 outfile.write(content)
             if idx < len(files_sorted) - 1:
                 outfile.write("\n")
     return output_path
+
 
 # --- GEMINI FILES API UPLOADER (Cached & Robust) ---
 def upload_image_file(path, client, retries=3, display_name=None):
@@ -678,28 +1099,34 @@ def upload_image_file(path, client, retries=3, display_name=None):
         try:
             mime_type = mimetypes.guess_type(path)[0] or "image/png"
             uploaded_file = client.files.upload(
-                file=path, 
-                config={'mime_type': mime_type, 'display_name': display_name or os.path.basename(path)}
+                file=path,
+                config={
+                    "mime_type": mime_type,
+                    "display_name": display_name or os.path.basename(path),
+                },
             )
-            
+
             while uploaded_file.state == "PROCESSING":
                 time.sleep(1)
                 uploaded_file = client.files.get(name=uploaded_file.name)
-                
+
             if uploaded_file.state == "FAILED":
                 raise ValueError("Google says file processing failed.")
 
             with UPLOAD_LOCK:
                 UPLOADED_FILE_CACHE[file_hash] = uploaded_file
-                
+
             console_log(f"Uploaded: {os.path.basename(path)}", "UPLOAD")
-            return uploaded_file, False 
+            return uploaded_file, False
 
         except Exception as e:
             last_error = e
             if attempt <= retries:
-                wait_time = 2 * attempt 
-                console_log(f"Retry {attempt}/{retries} for {os.path.basename(path)}: {e}", "WARN")
+                wait_time = 2 * attempt
+                console_log(
+                    f"Retry {attempt}/{retries} for {os.path.basename(path)}: {e}",
+                    "WARN",
+                )
                 time.sleep(wait_time)
             else:
                 pass
@@ -707,7 +1134,10 @@ def upload_image_file(path, client, retries=3, display_name=None):
     console_log(f"❌ [UPLOAD FAILED] {path}: {last_error}", "ERROR")
     return None, False
 
-def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=False, cancellation_event=None):
+
+def upload_images_parallel(
+    image_paths_map, client, max_workers=4, sequential=False, cancellation_event=None
+):
     """
     image_paths_map: dict { safe_path: display_name } or list of paths (if list, display_name=basename)
     """
@@ -718,11 +1148,14 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
         items = list(image_paths_map.items())
 
     uploaded_files = [None] * len(items)
-    if not items: return []
-    
+    if not items:
+        return []
+
     # DEBUG: Log input order
-    console_log(f"DEBUG ORDER: upload input order: {[name for (path, name) in items]}", "DEBUG")
-        
+    console_log(
+        f"DEBUG ORDER: upload input order: {[name for (path, name) in items]}", "DEBUG"
+    )
+
     console_log(f"Preparing {len(items)} images...", "INFO")
     cached_count = 0
     new_upload_count = 0
@@ -730,47 +1163,67 @@ def upload_images_parallel(image_paths_map, client, max_workers=4, sequential=Fa
     if sequential:
         files_list = []
         for i, (path, name) in enumerate(items):
-             if cancellation_event and cancellation_event.is_set():
-                 raise CancellationError("Processing cancelled during sequential upload.")
-             file_obj, was_cached = upload_image_file(path, client, display_name=name)
-             if file_obj:
-                 files_list.append(file_obj)
-                 if was_cached: cached_count += 1
-                 else: new_upload_count += 1
+            if cancellation_event and cancellation_event.is_set():
+                raise CancellationError(
+                    "Processing cancelled during sequential upload."
+                )
+            file_obj, was_cached = upload_image_file(path, client, display_name=name)
+            if file_obj:
+                files_list.append(file_obj)
+                if was_cached:
+                    cached_count += 1
+                else:
+                    new_upload_count += 1
         uploaded_files = files_list
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {executor.submit(upload_image_file, p, client, display_name=n): i for i, (p, n) in enumerate(items)}
+            future_to_index = {
+                executor.submit(upload_image_file, p, client, display_name=n): i
+                for i, (p, n) in enumerate(items)
+            }
             for future in as_completed(future_to_index):
                 if cancellation_event and cancellation_event.is_set():
                     executor.shutdown(wait=False, cancel_futures=True)
-                    raise CancellationError("Processing cancelled during parallel upload.")
+                    raise CancellationError(
+                        "Processing cancelled during parallel upload."
+                    )
                 index = future_to_index[future]
                 try:
                     file_obj, was_cached = future.result()
                     if file_obj:
                         uploaded_files[index] = file_obj
-                        if was_cached: cached_count += 1
-                        else: new_upload_count += 1
+                        if was_cached:
+                            cached_count += 1
+                        else:
+                            new_upload_count += 1
                 except Exception as e:
                     console_log(f"Error uploading image at index {index}: {e}", "ERROR")
-        
+
         # Filter out Nones (failed uploads)
         uploaded_files = [f for f in uploaded_files if f is not None]
-    
+
     msg = f"Ready: {len(uploaded_files)} images."
     details = []
-    if new_upload_count > 0: details.append(f"{new_upload_count} uploaded")
-    if cached_count > 0: details.append(f"{cached_count} from cache")
-    if details: console_log(f"{msg} ({', '.join(details)})", "SUCCESS")
-    elif len(uploaded_files) > 0: console_log(msg, "SUCCESS")
-    
+    if new_upload_count > 0:
+        details.append(f"{new_upload_count} uploaded")
+    if cached_count > 0:
+        details.append(f"{cached_count} from cache")
+    if details:
+        console_log(f"{msg} ({', '.join(details)})", "SUCCESS")
+    elif len(uploaded_files) > 0:
+        console_log(msg, "SUCCESS")
+
     # DEBUG: Log output order
-    console_log(f"DEBUG ORDER: upload output order: {[getattr(f, 'display_name', getattr(f, 'name', 'unknown')) for f in uploaded_files]}", "DEBUG")
+    console_log(
+        f"DEBUG ORDER: upload output order: {[getattr(f, 'display_name', getattr(f, 'name', 'unknown')) for f in uploaded_files]}",
+        "DEBUG",
+    )
     return uploaded_files
 
+
 def fetch_google_models(api_key):
-    if not api_key: return [], "API key not available."
+    if not api_key:
+        return [], "API key not available."
     try:
         console_log("Fetching Google models...", "INFO")
         client = genai.Client(api_key=api_key)
@@ -778,33 +1231,54 @@ def fetch_google_models(api_key):
         models = [m.name for m in client.models.list()]
         # Filter for models that likely support generation (not strictly necessary but good)
         models = [m for m in models if "gemini" in m]
-        models.sort(key=lambda x: (0 if 'latest' in x else 1 if '2.5' in x else 2 if '2.0' in x else 3, 0 if 'pro' in x else 1 if 'flash' in x else 2, x))
+        models.sort(
+            key=lambda x: (
+                0 if "latest" in x else 1 if "2.5" in x else 2 if "2.0" in x else 3,
+                0 if "pro" in x else 1 if "flash" in x else 2,
+                x,
+            )
+        )
         return models, None
-    except Exception as e: return [], str(e)
+    except Exception as e:
+        return [], str(e)
+
 
 def fetch_ollama_models():
     try:
         console_log("Fetching Ollama models...", "INFO")
         response = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=5)
         response.raise_for_status()
-        models = sorted([m.get("name") for m in response.json().get("models", []) if m.get("name")])
-        console_log(f"Ollama endpoint: {OLLAMA_API_URL} | models: {len(models)}", "INFO")
+        models = sorted(
+            [m.get("name") for m in response.json().get("models", []) if m.get("name")]
+        )
+        console_log(
+            f"Ollama endpoint: {OLLAMA_API_URL} | models: {len(models)}", "INFO"
+        )
         if VERBOSE_DIAGNOSTICS and models:
             console_log(f"DEBUG OLLAMA MODELS: {models[:12]}", "DEBUG")
         return models, None
-    except Exception as e: return [], str(e)
+    except Exception as e:
+        return [], str(e)
+
 
 def fetch_lmstudio_models():
     try:
         console_log("Fetching LM Studio models...", "INFO")
         response = requests.get(LMSTUDIO_MODELS_ENDPOINT, timeout=5)
         response.raise_for_status()
-        models = sorted([m.get("id") for m in response.json().get("data", []) if m.get("id")])
-        console_log(f"LM Studio endpoint: {LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT} | models: {len(models)}", "INFO")
+        models = sorted(
+            [m.get("id") for m in response.json().get("data", []) if m.get("id")]
+        )
+        console_log(
+            f"LM Studio endpoint: {LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT} | models: {len(models)}",
+            "INFO",
+        )
         if VERBOSE_DIAGNOSTICS and models:
             console_log(f"DEBUG LMSTUDIO MODELS: {models[:12]}", "DEBUG")
         return models, None
-    except Exception as e: return [], str(e)
+    except Exception as e:
+        return [], str(e)
+
 
 def read_file_content(filepath):
     _, extension = os.path.splitext(filepath)
@@ -812,16 +1286,17 @@ def read_file_content(filepath):
     try:
         if ext in SUPPORTED_IMAGE_EXTENSIONS:
             mime_type, _ = mimetypes.guess_type(filepath)
-            with open(filepath, 'rb') as f:
-                return f.read(), mime_type or 'application/octet-stream', True, None
+            with open(filepath, "rb") as f:
+                return f.read(), mime_type or "application/octet-stream", True, None
         else:
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    return f.read(), 'text/plain', False, None
+                with open(filepath, "r", encoding="utf-8") as f:
+                    return f.read(), "text/plain", False, None
             except UnicodeDecodeError:
                 return None, None, False, f"File binary/unsupported: {filepath}"
     except Exception as e:
         return None, None, False, f"Error reading file {filepath}: {e}"
+
 
 def sanitize_api_response(text):
     """
@@ -829,47 +1304,55 @@ def sanitize_api_response(text):
     Works for ```json, ```xml, ```markdown, or just ```.
     Handles partial fences (start only or end only).
     """
-    if not text: return ""
+    if not text:
+        return ""
     text = text.strip()
-    
+
     # Remove leading fence line (e.g., ```json\n)
     # This matches ``` followed by optional word characters and optional whitespace
     text = re.sub(r"^```\w*\s*", "", text, count=1)
-    
+
     # Remove trailing fence (e.g., \n```)
     # This matches optional whitespace followed by ``` at the end of the string
     text = re.sub(r"\s*```$", "", text, count=1)
-    
+
     return text.strip()
 
+
 def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
-    clean_output = kwargs.get('clean_markdown', True)
-    
+    clean_output = kwargs.get("clean_markdown", True)
+
     response_text = ""
     error_msg = None
-    images_count = len(kwargs.get('images_data_list') or [])
+    images_count = len(kwargs.get("images_data_list") or [])
     if VERBOSE_DIAGNOSTICS:
         console_log(
             f"DEBUG REQUEST: engine={engine} model={model_name} stream={kwargs.get('stream_output', False)} images={images_count} prompt_chars={len(prompt_text or '')}",
-            "DEBUG"
+            "DEBUG",
         )
         if prompt_text:
             console_log(f"DEBUG PROMPT PREVIEW: {preview_text(prompt_text)}", "DEBUG")
-    if images_count > 0 and engine in ("ollama", "lmstudio") and not looks_like_vision_model(model_name):
+    if (
+        images_count > 0
+        and engine in ("ollama", "lmstudio")
+        and not looks_like_vision_model(model_name)
+    ):
         console_log(
             f"Model '{model_name}' may be text-only (no obvious vision tag). If output ignores images, try a VL/vision model.",
-            "WARN"
+            "WARN",
         )
 
-    if engine == "google": 
-        response_text = call_google_gemini_api(prompt_text, api_key, model_name, **kwargs)
-    elif engine == "ollama": 
+    if engine == "google":
+        response_text = call_google_gemini_api(
+            prompt_text, api_key, model_name, **kwargs
+        )
+    elif engine == "ollama":
         response_text = call_ollama_api(prompt_text, model_name, **kwargs)
-    elif engine == "lmstudio": 
+    elif engine == "lmstudio":
         response_text = call_lmstudio_api(prompt_text, model_name, **kwargs)
-    else: 
+    else:
         return f"Error: Unknown engine '{engine}'"
-    
+
     # Check for error strings returned by wrappers
     if response_text and str(response_text).startswith("Error:"):
         return response_text
@@ -881,111 +1364,189 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
         if norm_prompt and norm_resp:
             probe = norm_prompt[: min(180, len(norm_prompt))]
             if probe and (norm_resp.startswith(probe) or norm_resp == norm_prompt):
-                console_log("Response looks like prompt echo (possible missing/ignored image context).", "WARN")
+                console_log(
+                    "Response looks like prompt echo (possible missing/ignored image context).",
+                    "WARN",
+                )
 
     if clean_output:
         return sanitize_api_response(response_text)
     return response_text
 
-def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google_file_objects=None, stream_output=False, safety_settings=None, cancellation_event=None, **kwargs):
+
+def call_google_gemini_api(
+    prompt_text,
+    api_key,
+    model_name,
+    client=None,
+    google_file_objects=None,
+    stream_output=False,
+    safety_settings=None,
+    cancellation_event=None,
+    **kwargs,
+):
     global last_request_time
-    if not api_key: return "Error: Google API Key not configured."
+    if not api_key:
+        return "Error: Google API Key not configured."
     try:
         if not client:
-             client = genai.Client(api_key=api_key)
-             
-        if last_request_time and (time.time() - last_request_time < REQUEST_INTERVAL_SECONDS):
+            client = genai.Client(api_key=api_key)
+
+        if last_request_time and (
+            time.time() - last_request_time < REQUEST_INTERVAL_SECONDS
+        ):
             time.sleep(REQUEST_INTERVAL_SECONDS - (time.time() - last_request_time))
         last_request_time = time.time()
-        
+
         # Prepare contents
         contents = []
         if google_file_objects:
             # New SDK can take types.File directly or 'file' objects
-            console_log(f"DEBUG API: Received {len(google_file_objects)} file objects for submission", "INFO")
+            console_log(
+                f"DEBUG API: Received {len(google_file_objects)} file objects for submission",
+                "INFO",
+            )
             for f in google_file_objects:
-                 contents.append(f)
-                 console_log(f"DEBUG API: Added file to contents: {getattr(f, 'display_name', getattr(f, 'name', 'unknown'))}", "INFO")
+                contents.append(f)
+                console_log(
+                    f"DEBUG API: Added file to contents: {getattr(f, 'display_name', getattr(f, 'name', 'unknown'))}",
+                    "INFO",
+                )
         else:
             # Logic: If no images, we're likely processing text which is appended next.
-            console_log("DEBUG API: google_file_objects is empty. Proceeding with prompt text only.", "INFO")
-        
+            console_log(
+                "DEBUG API: google_file_objects is empty. Proceeding with prompt text only.",
+                "INFO",
+            )
+
         contents.append(prompt_text)
         # DEBUG: Final order summary for API submission
-        file_names_order = [getattr(f, 'display_name', getattr(f, 'name', 'unknown')) for f in google_file_objects] if google_file_objects else []
+        file_names_order = (
+            [
+                getattr(f, "display_name", getattr(f, "name", "unknown"))
+                for f in google_file_objects
+            ]
+            if google_file_objects
+            else []
+        )
         console_log(f"DEBUG ORDER: API submission order: {file_names_order}", "DEBUG")
-        console_log(f"DEBUG API: Total contents list size: {len(contents)} (Prompt + {(len(google_file_objects) if google_file_objects else 0)} files)", "INFO")
-        
+        console_log(
+            f"DEBUG API: Total contents list size: {len(contents)} (Prompt + {(len(google_file_objects) if google_file_objects else 0)} files)",
+            "INFO",
+        )
+
         # Configuration
-        enable_thinking = kwargs.get('enable_thinking', False)
-        thinking_config = types.ThinkingConfig(include_thoughts=True) if enable_thinking else None
-        
+        enable_thinking = kwargs.get("enable_thinking", False)
+        thinking_config = (
+            types.ThinkingConfig(include_thoughts=True) if enable_thinking else None
+        )
+
         config = types.GenerateContentConfig(
-             safety_settings=safety_settings,
-             thinking_config=thinking_config
+            safety_settings=safety_settings, thinking_config=thinking_config
         )
 
         if stream_output:
-            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before generation.")
-            response = client.models.generate_content_stream(model=model_name, contents=contents, config=config)
+            if cancellation_event and cancellation_event.is_set():
+                raise CancellationError("Cancelled before generation.")
+            response = client.models.generate_content_stream(
+                model=model_name, contents=contents, config=config
+            )
         else:
-            if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled before generation.")
-            response = client.models.generate_content(model=model_name, contents=contents, config=config)
-        
+            if cancellation_event and cancellation_event.is_set():
+                raise CancellationError("Cancelled before generation.")
+            response = client.models.generate_content(
+                model=model_name, contents=contents, config=config
+            )
+
         if stream_output:
             full_text = ""
-            print(f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True)
+            thinking_text = ""
+            print(
+                f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True
+            )
             thinking_active = False
             thinking_started = False
             thinking_ended = False
             output_started = False
             for chunk in response:
-                if cancellation_event and cancellation_event.is_set(): raise CancellationError("Cancelled during streaming.")
-                
+                if cancellation_event and cancellation_event.is_set():
+                    raise CancellationError("Cancelled during streaming.")
+
                 # Each chunk can have multiple parts
-                if hasattr(chunk, 'candidates') and chunk.candidates:
+                if hasattr(chunk, "candidates") and chunk.candidates:
                     for part in chunk.candidates[0].content.parts:
                         # 1. Handle Thinking Content (dedicated attribute)
-                        if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                        if (
+                            getattr(part, "thought", False)
+                            and hasattr(part, "text")
+                            and part.text
+                        ):
                             if not thinking_started:
-                                print("\n--- [THINKING START] ---\n", end="", flush=True)
+                                print(
+                                    "\n--- [THINKING START] ---\n", end="", flush=True
+                                )
                                 thinking_started = True
                             thinking_active = True
                             # Print thought in gray (ANSI 90m)
                             print(f"\033[90m{part.text}\033[0m", end="", flush=True)
-                        
+                            thinking_text += part.text
+
                         # 2. Handle Regular Text (can also contain <think> tags from some models)
-                        elif hasattr(part, 'text') and part.text:
+                        elif hasattr(part, "text") and part.text:
                             text_part = part.text
-                            # Fallback: check if the text itself contains <think> tags 
+                            # Fallback: check if the text itself contains <think> tags
                             # (Some models might not use the dedicated 'thought' part yet)
                             if "<think>" in text_part or "</think>" in text_part:
                                 if "<think>" in text_part:
                                     thinking_active = True
                                     if not thinking_started:
-                                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                                        print(
+                                            "\n--- [THINKING START] ---\n",
+                                            end="",
+                                            flush=True,
+                                        )
                                         thinking_started = True
                                 # Simple colorization for tags within a text part
-                                colored_text = text_part.replace("<think>", "\033[90m<think>").replace("</think>", "</think>\033[0m")
+                                colored_text = text_part.replace(
+                                    "<think>", "\033[90m<think>"
+                                ).replace("</think>", "</think>\033[0m")
                                 print(colored_text, end="", flush=True)
                                 if "</think>" in text_part:
                                     thinking_active = False
                                     if not thinking_ended:
-                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        print(
+                                            "\n--- [THINKING END] ---\n",
+                                            end="",
+                                            flush=True,
+                                        )
                                         thinking_ended = True
                             else:
                                 if not output_started and not thinking_active:
                                     if thinking_started and not thinking_ended:
-                                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                                        print(
+                                            "\n--- [THINKING END] ---\n",
+                                            end="",
+                                            flush=True,
+                                        )
                                         thinking_ended = True
-                                    print("\n--- [OUTPUT START] ---\n", end="", flush=True)
+                                    print(
+                                        "\n--- [OUTPUT START] ---\n", end="", flush=True
+                                    )
                                     output_started = True
                                 print(text_part, end="", flush=True)
-                            
+
                             full_text += text_part
             if output_started:
                 print("\n--- [OUTPUT END] ---\n", end="", flush=True)
             print("\n----------------------------------------------\n", flush=True)
+            # Fallback: if model returned only thinking with no output text
+            if not full_text.strip() and thinking_text.strip():
+                console_log(
+                    "Model returned only thinking content with no output text. "
+                    "Saving thinking content as output.",
+                    "WARN",
+                )
+                full_text = thinking_text
             return full_text
         else:
             # Check finish reason
@@ -994,37 +1555,47 @@ def call_google_gemini_api(prompt_text, api_key, model_name, client=None, google
             candidate = response.candidates[0] if response.candidates else None
             if not candidate:
                 if response.prompt_feedback:
-                    raise FatalProcessingError(f"Fatal: Blocked by Prompt Filter. Reason: {response.prompt_feedback.block_reason}")
+                    raise FatalProcessingError(
+                        f"Fatal: Blocked by Prompt Filter. Reason: {response.prompt_feedback.block_reason}"
+                    )
                 raise FatalProcessingError("Fatal: No candidates returned.")
 
             # Assuming finish_reason is convertible to str or comparable
             # New SDK finish reasons are strings like "STOP", "MAX_TOKENS", "SAFETY"
             # It might return "FinishReason.STOP" (Enum string) so we need to be careful.
             raw_reason = str(candidate.finish_reason)
-            
+
             # Normalize: "FinishReason.STOP" -> "STOP"
-            reason = raw_reason.split('.')[-1].upper() if '.' in raw_reason else raw_reason.upper()
-            
+            reason = (
+                raw_reason.split(".")[-1].upper()
+                if "." in raw_reason
+                else raw_reason.upper()
+            )
+
             if reason != "STOP":
-                 # Map new string reasons to readable descriptions
-                 reason_map = {
-                     "SAFETY": "Safety Filter Triggered",
-                     "RECITATION": "Copyright/Recitation Check Failed",
-                     "MAX_TOKENS": "Max Token Limit Reached (Incomplete Output)",
-                     "OTHER": "Unknown Google Error",
-                     "BLOCKLIST": "Blocked by Terminology Blocklist",
-                     "PROHIBITED_CONTENT": "Prohibited Content Filter"
-                 }
-                 
-                 readable_reason = reason_map.get(reason, raw_reason)
-                 msg = f"Fatal: Blocked by Google. Reason: {readable_reason}"
-                 raise FatalProcessingError(msg)
-                 
+                # Map new string reasons to readable descriptions
+                reason_map = {
+                    "SAFETY": "Safety Filter Triggered",
+                    "RECITATION": "Copyright/Recitation Check Failed",
+                    "MAX_TOKENS": "Max Token Limit Reached (Incomplete Output)",
+                    "OTHER": "Unknown Google Error",
+                    "BLOCKLIST": "Blocked by Terminology Blocklist",
+                    "PROHIBITED_CONTENT": "Prohibited Content Filter",
+                }
+
+                readable_reason = reason_map.get(reason, raw_reason)
+                msg = f"Fatal: Blocked by Google. Reason: {readable_reason}"
+                raise FatalProcessingError(msg)
+
             return response.text
-            
-    except ResourceExhausted: raise QuotaExhaustedError(f"Quota exhausted for model {model_name}")
-    except FatalProcessingError: raise 
-    except Exception as e: raise e
+
+    except ResourceExhausted:
+        raise QuotaExhaustedError(f"Quota exhausted for model {model_name}")
+    except FatalProcessingError:
+        raise
+    except Exception as e:
+        raise e
+
 
 def _build_openai_content_variant(prompt_text, images_data_list, variant_name):
     if not images_data_list:
@@ -1034,14 +1605,19 @@ def _build_openai_content_variant(prompt_text, images_data_list, variant_name):
     content = [{"type": "text", "text": prompt_text}]
     for img_data in images_data_list:
         b64 = base64.b64encode(img_data["bytes"]).decode("utf-8")
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{img_data['mime_type']};base64,{b64}"}
-        })
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{img_data['mime_type']};base64,{b64}"},
+            }
+        )
     return content
 
+
 def _extract_openai_message_text(resp_json):
-    msg_content = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+    msg_content = (
+        resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
     if isinstance(msg_content, str):
         return msg_content
     if isinstance(msg_content, list):
@@ -1054,6 +1630,7 @@ def _extract_openai_message_text(resp_json):
         return "".join(out)
     return str(msg_content) if msg_content is not None else ""
 
+
 def _call_openai_compatible_chat(
     engine_label,
     endpoint,
@@ -1062,14 +1639,14 @@ def _call_openai_compatible_chat(
     images_data_list=None,
     stream_output=False,
     cancellation_event=None,
-    enable_thinking=False
+    enable_thinking=False,
 ):
     headers = {"Content-Type": "application/json"}
     images_data_list = images_data_list or []
 
     console_log(
         f"DEBUG {engine_label.upper()} REQUEST: endpoint={endpoint} model={model_name} stream={stream_output} images={len(images_data_list)}",
-        "DEBUG"
+        "DEBUG",
     )
 
     if images_data_list:
@@ -1079,177 +1656,177 @@ def _call_openai_compatible_chat(
         first_hash = short_sha256_bytes(first.get("bytes", b""))
         console_log(
             f"DEBUG {engine_label.upper()} IMAGE[0]: mime={first_mime} size={human_bytes(first_sz)} sha256={first_hash}",
-            "DEBUG"
+            "DEBUG",
         )
-
-    variants = ["text_only"]
-    if images_data_list:
-        # Keep only the known-good format + anti-echo wording pass.
-        variants = ["openai_chat", "openai_chat_anti_echo"]
 
     # Honor user stream setting for all cases, including image jobs.
     effective_stream = bool(stream_output)
 
-    last_error = None
-    best_candidate = ""
-    for variant in variants:
-        try:
-            base_variant = variant.replace("_anti_echo", "")
-            use_anti_echo = variant.endswith("_anti_echo")
-            effective_prompt = build_anti_echo_followup_prompt(prompt_text) if use_anti_echo else prompt_text
-            final_content = _build_openai_content_variant(effective_prompt, images_data_list, base_variant)
-
-            messages = [{"role": "user", "content": final_content}]
-            if use_anti_echo:
-                messages = [
-                    {
-                        "role": "system",
-                        "content": "Use the attached image as source. Do not repeat instructions. Return only final OCR/transcription result."
-                    },
-                    {"role": "user", "content": final_content}
-                ]
-
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "stream": effective_stream
-            }
-            if enable_thinking:
-                # Best-effort hint for local servers that expose reasoning/thinking.
-                payload["think"] = True
-
-            if images_data_list:
-                console_log(f"DEBUG {engine_label.upper()}: trying variant '{variant}'", "DEBUG")
-                if VERBOSE_DIAGNOSTICS and isinstance(final_content, list):
-                    content_types = [p.get("type", "?") for p in final_content if isinstance(p, dict)]
-                    console_log(f"DEBUG {engine_label.upper()} CONTENT TYPES: {content_types}", "DEBUG")
-
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                stream=effective_stream,
-                timeout=600
-            )
-            response.raise_for_status()
-
-            if effective_stream:
-                full_text = ""
-                thinking_text = ""
-                thinking_started = False
-                thinking_ended = False
-                print(f"\n--- [STREAM] {engine_label} ({model_name}) ---\n", end="", flush=True)
-                for line in response.iter_lines():
-                    if cancellation_event and cancellation_event.is_set():
-                        raise CancellationError(f"Cancelled during {engine_label} streaming.")
-                    if not line:
-                        continue
-                    decoded = line.decode("utf-8").strip()
-                    if not decoded.startswith("data: "):
-                        continue
-                    body = decoded[6:]
-                    if body == "[DONE]":
-                        break
-                    try:
-                        chunk_json = json.loads(body)
-                    except json.JSONDecodeError:
-                        continue
-
-                    delta = chunk_json.get("choices", [{}])[0].get("delta", {})
-                    # Common reasoning/thinking fields across local OpenAI-compatible servers.
-                    thinking_part = (
-                        delta.get("thinking")
-                        or delta.get("reasoning")
-                        or delta.get("reasoning_content")
-                        or ""
-                    )
-                    if isinstance(thinking_part, list):
-                        stitched_think = []
-                        for part in thinking_part:
-                            if isinstance(part, dict):
-                                t = part.get("text") or part.get("content") or ""
-                                if t:
-                                    stitched_think.append(t)
-                        thinking_part = "".join(stitched_think)
-                    if thinking_part and enable_thinking:
-                        if not thinking_started:
-                            print("\n--- [THINKING START] ---\n", end="", flush=True)
-                            thinking_started = True
-                        print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
-                        thinking_text += thinking_part
-
-                    content = delta.get("content", "")
-                    if isinstance(content, list):
-                        stitched = []
-                        for part in content:
-                            if isinstance(part, dict):
-                                txt = part.get("text") or part.get("content") or ""
-                                if txt:
-                                    stitched.append(txt)
-                        content = "".join(stitched)
-                    if content:
-                        if thinking_started and not thinking_ended:
-                            print("\n--- [THINKING END] ---\n", end="", flush=True)
-                            thinking_ended = True
-                        print(content, end="", flush=True)
-                        full_text += content
-
-                print("\n\n-----------------------------------------\n", flush=True)
-                if VERBOSE_DIAGNOSTICS:
-                    console_log(f"DEBUG {engine_label.upper()} STREAM RESPONSE: chars={len(full_text)}", "DEBUG")
-                    if enable_thinking and thinking_text:
-                        console_log(f"DEBUG {engine_label.upper()} THINKING STREAM: chars={len(thinking_text)}", "DEBUG")
-                return full_text
-
-            out = _extract_openai_message_text(response.json())
-            if VERBOSE_DIAGNOSTICS:
-                console_log(f"DEBUG {engine_label.upper()} RESPONSE: chars={len(out or '')}", "DEBUG")
-            if out and len(out) > len(best_candidate):
-                best_candidate = out
-            if images_data_list and is_unusable_vision_response(prompt_text, out):
-                console_log(
-                    f"{engine_label} variant '{variant}' returned empty/prompt-like output. Trying next variant...",
-                    "WARN"
-                )
-                continue
-            return out
-
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            details = ""
-            try:
-                details = e.response.text if getattr(e, "response", None) is not None else str(e)
-            except Exception:
-                details = str(e)
-            if images_data_list:
-                console_log(f"{engine_label} variant '{variant}' failed: {details}", "WARN")
-                continue
-            raise
-        except Exception as e:
-            last_error = e
-            if images_data_list:
-                console_log(f"{engine_label} variant '{variant}' failed: {e}", "WARN")
-                continue
-            raise
-
-    if best_candidate:
-        console_log(
-            f"{engine_label}: all variants looked prompt-like; returning best non-empty candidate instead of hard failure.",
-            "WARN"
+    try:
+        if images_data_list:
+            variant_name = "openai_chat"
+        else:
+            variant_name = "text_only"
+            
+        final_content = _build_openai_content_variant(
+            prompt_text, images_data_list, variant_name
         )
-        return best_candidate
-    raise Exception(f"{engine_label} API: all OpenAI-compatible image payload variants failed. Last error: {last_error}")
 
-def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_search=False, stream_output=False, cancellation_event=None, **kwargs):
+        messages = [{"role": "user", "content": final_content}]
+        
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": effective_stream,
+        }
+        if enable_thinking:
+            # Best-effort hint for local servers that expose reasoning/thinking.
+            payload["think"] = True
+
+        if images_data_list:
+            if VERBOSE_DIAGNOSTICS and isinstance(final_content, list):
+                content_types = [
+                    p.get("type", "?") for p in final_content if isinstance(p, dict)
+                ]
+                console_log(
+                    f"DEBUG {engine_label.upper()} CONTENT TYPES: {content_types}",
+                    "DEBUG",
+                )
+
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            stream=effective_stream,
+            timeout=600,
+        )
+        response.raise_for_status()
+
+        if effective_stream:
+            full_text = ""
+            thinking_text = ""
+            thinking_started = False
+            thinking_ended = False
+            print(
+                f"\n--- [STREAM] {engine_label} ({model_name}) ---\n",
+                end="",
+                flush=True,
+            )
+            for line in response.iter_lines():
+                if cancellation_event and cancellation_event.is_set():
+                    raise CancellationError(
+                        f"Cancelled during {engine_label} streaming."
+                    )
+                if not line:
+                    continue
+                decoded = line.decode("utf-8").strip()
+                if not decoded.startswith("data: "):
+                    continue
+                body = decoded[6:]
+                if body == "[DONE]":
+                    break
+                try:
+                    chunk_json = json.loads(body)
+                except json.JSONDecodeError:
+                    continue
+
+                delta = chunk_json.get("choices", [{}])[0].get("delta", {})
+                # Common reasoning/thinking fields across local OpenAI-compatible servers.
+                thinking_part = (
+                    delta.get("thinking")
+                    or delta.get("reasoning")
+                    or delta.get("reasoning_content")
+                    or ""
+                )
+                if isinstance(thinking_part, list):
+                    stitched_think = []
+                    for part in thinking_part:
+                        if isinstance(part, dict):
+                            t = part.get("text") or part.get("content") or ""
+                            if t:
+                                stitched_think.append(t)
+                    thinking_part = "".join(stitched_think)
+                if thinking_part and enable_thinking:
+                    if not thinking_started:
+                        print("\n--- [THINKING START] ---\n", end="", flush=True)
+                        thinking_started = True
+                    print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
+                    thinking_text += thinking_part
+
+                content = delta.get("content", "")
+                if isinstance(content, list):
+                    stitched = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            txt = part.get("text") or part.get("content") or ""
+                            if txt:
+                                stitched.append(txt)
+                    content = "".join(stitched)
+                if content:
+                    if thinking_started and not thinking_ended:
+                        print("\n--- [THINKING END] ---\n", end="", flush=True)
+                        thinking_ended = True
+                    print(content, end="", flush=True)
+                    full_text += content
+
+            print("\n\n-----------------------------------------\n", flush=True)
+            if VERBOSE_DIAGNOSTICS:
+                console_log(
+                    f"DEBUG {engine_label.upper()} STREAM RESPONSE: chars={len(full_text)}",
+                    "DEBUG",
+                )
+                if enable_thinking and thinking_text:
+                    console_log(
+                        f"DEBUG {engine_label.upper()} THINKING STREAM: chars={len(thinking_text)}",
+                        "DEBUG",
+                    )
+            
+            return full_text
+
+        out = _extract_openai_message_text(response.json())
+        if VERBOSE_DIAGNOSTICS:
+            console_log(
+                f"DEBUG {engine_label.upper()} RESPONSE: chars={len(out or '')}",
+                "DEBUG",
+            )
+        return out
+
+    except requests.exceptions.HTTPError as e:
+        details = ""
+        try:
+            details = (
+                e.response.text
+                if getattr(e, "response", None) is not None
+                else str(e)
+            )
+        except Exception:
+            details = str(e)
+        raise Exception(f"{engine_label} API HTTP Error: {details}")
+    except Exception as e:
+        raise Exception(f"{engine_label} API Error: {str(e)}")
+
+
+def call_ollama_api(
+    prompt_text,
+    model_name,
+    images_data_list=None,
+    enable_web_search=False,
+    stream_output=False,
+    cancellation_event=None,
+    **kwargs,
+):
     try:
         if enable_web_search:
-            console_log("Ollama web_search tools are not used in OpenAI-compatible mode.", "WARN")
+            console_log(
+                "Ollama web_search tools are not used in OpenAI-compatible mode.",
+                "WARN",
+            )
         enable_thinking = kwargs.get("enable_thinking", False)
         if images_data_list:
             cap = get_ollama_model_capability(model_name)
             console_log(
-                f"DEBUG OLLAMA MODEL CAPS: vision_hint={cap.get('vision_hint')} detail={cap.get('detail','')} keys={cap.get('keys', [])[:8]}",
-                "DEBUG"
+                f"DEBUG OLLAMA MODEL CAPS: vision_hint={cap.get('vision_hint')} detail={cap.get('detail', '')} keys={cap.get('keys', [])[:8]}",
+                "DEBUG",
             )
         out = _call_openai_compatible_chat(
             engine_label="Ollama",
@@ -1259,33 +1836,21 @@ def call_ollama_api(prompt_text, model_name, images_data_list=None, enable_web_s
             images_data_list=images_data_list,
             stream_output=stream_output,
             cancellation_event=cancellation_event,
-            enable_thinking=enable_thinking
+            enable_thinking=enable_thinking,
         )
-        if images_data_list and is_unusable_vision_response(prompt_text, out):
-            fallback_model = pick_ollama_vision_fallback(model_name)
-            if fallback_model:
-                console_log(
-                    f"Ollama output appears unusable for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
-                    "WARN"
-                )
-                fb_out = _call_openai_compatible_chat(
-                    engine_label="Ollama",
-                    endpoint=OLLAMA_CHAT_COMPLETIONS_ENDPOINT,
-                    prompt_text=prompt_text,
-                    model_name=fallback_model,
-                    images_data_list=images_data_list,
-                    stream_output=stream_output,
-                    cancellation_event=cancellation_event,
-                    enable_thinking=enable_thinking
-                )
-                if fb_out and not is_unusable_vision_response(prompt_text, fb_out):
-                    console_log(f"Ollama fallback model '{fallback_model}' produced usable output.", "SUCCESS")
-                    return fb_out
         return out
     except Exception as e:
         return f"Error: Ollama API: {str(e)}"
 
-def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_output=False, cancellation_event=None, **kwargs):
+
+def call_lmstudio_api(
+    prompt_text,
+    model_name,
+    images_data_list=None,
+    stream_output=False,
+    cancellation_event=None,
+    **kwargs,
+):
     try:
         enable_thinking = kwargs.get("enable_thinking", False)
         out = _call_openai_compatible_chat(
@@ -1296,72 +1861,38 @@ def call_lmstudio_api(prompt_text, model_name, images_data_list=None, stream_out
             images_data_list=images_data_list,
             stream_output=stream_output,
             cancellation_event=cancellation_event,
-            enable_thinking=enable_thinking
+            enable_thinking=enable_thinking,
         )
-        if images_data_list and is_unusable_vision_response(prompt_text, out):
-            fallback_model = pick_lmstudio_vision_fallback(model_name)
-            if fallback_model:
-                console_log(
-                    f"LM Studio output appears unusable for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
-                    "WARN"
-                )
-                fb_out = _call_openai_compatible_chat(
-                    engine_label="LM Studio",
-                    endpoint=LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT,
-                    prompt_text=prompt_text,
-                    model_name=fallback_model,
-                    images_data_list=images_data_list,
-                    stream_output=stream_output,
-                    cancellation_event=cancellation_event,
-                    enable_thinking=enable_thinking
-                )
-                if fb_out and not is_unusable_vision_response(prompt_text, fb_out):
-                    console_log(f"LM Studio fallback model '{fallback_model}' produced usable output.", "SUCCESS")
-                    return fb_out
         return out
     except Exception as e:
-        # Retry once with a likely vision-capable fallback model when image calls fail.
-        if images_data_list:
-            fallback_model = pick_lmstudio_vision_fallback(model_name)
-            if fallback_model:
-                try:
-                    console_log(
-                        f"LM Studio call failed for '{model_name}'. Retrying with fallback model '{fallback_model}'.",
-                        "WARN"
-                    )
-                    return _call_openai_compatible_chat(
-                        engine_label="LM Studio",
-                        endpoint=LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT,
-                        prompt_text=prompt_text,
-                        model_name=fallback_model,
-                        images_data_list=images_data_list,
-                        stream_output=stream_output,
-                        cancellation_event=cancellation_event,
-                        enable_thinking=enable_thinking
-                    )
-                except Exception:
-                    pass
         return f"Error: LM Studio API: {str(e)}"
+
 
 def save_output_files(api_response, log_data, raw_path, log_path=None):
     try:
-        with open(raw_path, 'w', encoding='utf-8') as f: f.write(api_response if api_response is not None else "[Empty Response]")
+        with open(raw_path, "w", encoding="utf-8") as f:
+            f.write(api_response if api_response is not None else "[Empty Response]")
         if log_path:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write("="*20 + " Processing Log " + "="*20 + "\n")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("=" * 20 + " Processing Log " + "=" * 20 + "\n")
                 for k, v in log_data.items():
-                    if isinstance(v, datetime.datetime): v = v.strftime("%Y-%m-%d %H:%M:%S")
+                    if isinstance(v, datetime.datetime):
+                        v = v.strftime("%Y-%m-%d %H:%M:%S")
                     f.write(f"{k}: {v}\n")
-                f.write("="*50 + "\n")
-    except Exception as e: console_log(f"Error saving files: {e}", "ERROR")
+                f.write("=" * 50 + "\n")
+    except Exception as e:
+        console_log(f"Error saving files: {e}", "ERROR")
+
 
 def copy_failed_file(filepath):
     try:
         failed_dir = os.path.join(os.path.dirname(filepath), FAILED_SUBFOLDER_NAME)
         os.makedirs(failed_dir, exist_ok=True)
         shutil.copy2(filepath, os.path.join(failed_dir, os.path.basename(filepath)))
-    except Exception: pass
+    except Exception:
+        pass
+
 
 def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
     """
@@ -1369,39 +1900,44 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
     Uses tiktoken for precise tokenization.
     If force_cutoff is True, attempts to end chunks at sentence boundaries (. ! ?)
     """
-    if not text: return []
-    
+    if not text:
+        return []
+
     # Sentence terminators for backtracking
-    terminators = ('.', '!', '?', '\n')
+    terminators = (".", "!", "?", "\n")
 
     try:
         encoding = tiktoken.get_encoding("cl100k_base")
     except Exception as e:
-        console_log(f"Error getting tiktoken encoding: {e}. Falling back to character-based splitting.", "WARN")
+        console_log(
+            f"Error getting tiktoken encoding: {e}. Falling back to character-based splitting.",
+            "WARN",
+        )
         # Fallback: ~4 chars per token
         chars_per_token = 4
         chunk_size_chars = max_tokens * chars_per_token
         overlap_chars = overlap * chars_per_token
-        
+
         chunks = []
         current_pos = 0
         while current_pos < len(text):
             end_pos = min(current_pos + chunk_size_chars, len(text))
             chunk_content = text[current_pos:end_pos]
-            
+
             if force_cutoff and end_pos < len(text):
                 last_t_idx = -1
                 for t in terminators:
                     found = chunk_content.rfind(t)
-                    if found > last_t_idx: last_t_idx = found
-                
+                    if found > last_t_idx:
+                        last_t_idx = found
+
                 if last_t_idx != -1:
                     actual_end = current_pos + last_t_idx + 1
                     chunk_content = text[current_pos:actual_end]
                     end_pos = actual_end
-            
+
             chunks.append(chunk_content)
-            
+
             # Advancement logic
             if force_cutoff:
                 # If we're forcing cutoff, we don't really support 'overlap' in the traditional sense
@@ -1410,14 +1946,18 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
                 current_pos = end_pos - overlap_chars
             else:
                 current_pos = end_pos - overlap_chars
-            
+
             # Safety break to avoid infinite loop
-            if current_pos >= len(text) or (current_pos <= 0 and len(chunks) > 0 and len(text) > 0):
+            if current_pos >= len(text) or (
+                current_pos <= 0 and len(chunks) > 0 and len(text) > 0
+            ):
                 if current_pos < len(text) and len(chunks) > 0:
-                   # This should only happen if overlap >= chunk_size
-                   current_pos = end_pos
-                else: break
-            if len(chunks) > 5000: break # Safety limit
+                    # This should only happen if overlap >= chunk_size
+                    current_pos = end_pos
+                else:
+                    break
+            if len(chunks) > 5000:
+                break  # Safety limit
 
         return chunks
 
@@ -1428,41 +1968,45 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
 
     chunks = []
     current_token_idx = 0
-    
+
     while current_token_idx < len(tokens):
         # 1. Get raw candidate end
         end_token_idx = min(current_token_idx + max_tokens, len(tokens))
         chunk_tokens = tokens[current_token_idx:end_token_idx]
         decoded_text = encoding.decode(chunk_tokens)
-        
+
         # 2. Handle Force Cutoff
         if force_cutoff and end_token_idx < len(tokens):
             last_t_idx = -1
             for t in terminators:
                 found = decoded_text.rfind(t)
-                if found > last_t_idx: last_t_idx = found
-            
+                if found > last_t_idx:
+                    last_t_idx = found
+
             if last_t_idx != -1:
                 # Truncate string to terminator
-                truncated_text = decoded_text[:last_t_idx + 1]
+                truncated_text = decoded_text[: last_t_idx + 1]
                 # Re-encode to find the EXACT token count for this visual cut
                 truncated_tokens = encoding.encode(truncated_text)
-                
+
                 if len(truncated_tokens) > 0:
                     decoded_text = truncated_text
                     end_token_idx = current_token_idx + len(truncated_tokens)
 
         chunks.append(decoded_text)
-        
-        # 3. Advance. 
+
+        # 3. Advance.
         # For disjoint chunks (overlap=0), new start should be exactly current end.
         current_token_idx = end_token_idx - overlap
-        
+
         # Safety checks
-        if current_token_idx >= len(tokens): break
-        if current_token_idx < 0: current_token_idx = 0
-        if len(chunks) > 5000: break
-            
+        if current_token_idx >= len(tokens):
+            break
+        if current_token_idx < 0:
+            current_token_idx = 0
+        if len(chunks) > 5000:
+            break
+
     return chunks
 
 
@@ -1477,56 +2021,129 @@ def apply_context_to_prompt(user_prompt, context_text):
     return prompt
 
 
-
-
-def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name, add_filename_to_prompt=False, overwrite_original=False, cancellation_event=None, **kwargs):
+def process_file_group(
+    filepaths_group,
+    api_key,
+    engine,
+    user_prompt,
+    model_name,
+    add_filename_to_prompt=False,
+    overwrite_original=False,
+    cancellation_event=None,
+    **kwargs,
+):
     start_time = datetime.datetime.now()
     base_name = generate_group_base_name(filepaths_group)
-    log_data = {'input_filepaths': filepaths_group, 'start_time': start_time, 'engine': engine, 'model_name': model_name}
+    log_data = {
+        "input_filepaths": filepaths_group,
+        "start_time": start_time,
+        "engine": engine,
+        "model_name": model_name,
+    }
     console_log(f"Processing group: {base_name} ({len(filepaths_group)} files)...")
     if VERBOSE_DIAGNOSTICS:
         console_log(f"DEBUG JOB: engine={engine} model={model_name}", "DEBUG")
-        console_log(f"DEBUG JOB FILES: {[os.path.basename(p) for p in filepaths_group]}", "DEBUG")
+        console_log(
+            f"DEBUG JOB FILES: {[os.path.basename(p) for p in filepaths_group]}",
+            "DEBUG",
+        )
 
     # --- CHECK FOR EMPTY FILES ---
     for fp in filepaths_group:
-         if os.path.exists(fp) and os.path.getsize(fp) == 0:
-             raise FatalProcessingError(f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}")
+        if os.path.exists(fp) and os.path.getsize(fp) == 0:
+            raise FatalProcessingError(
+                f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}"
+            )
 
-    save_log = kwargs.get('save_log', False)
+    save_log = kwargs.get("save_log", False)
 
     source_dir = os.path.dirname(filepaths_group[0])
-    if not source_dir: source_dir = "."
+    if not source_dir:
+        source_dir = "."
 
-    output_under_input = kwargs.get('output_under_input', False)
+    output_under_input = kwargs.get("output_under_input", False)
+    model_prefix_enabled = kwargs.get("model_prefix", False)
+    prefix_str = ""
+    if model_prefix_enabled and model_name:
+        # Avoid splitting by colon to keep the full model name in Ollama (e.g. qwen:7b -> qwen-7b)
+        clean_model = model_name.split("/")[-1].replace(":", "-")
+
+        # Format as: provider - model (e.g. google - gemini-1.5-flash)
+        raw_prefix = f"{engine} - {clean_model}"
+        prefix_str = sanitize_filename(raw_prefix)
 
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
         log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME) if save_log else None
 
-        _, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), log_dir, log_dir)
+        _, log_path = determine_unique_output_paths(
+            base_name, kwargs.get("output_suffix", ""), log_dir, log_dir
+        )
     else:
-        out_folder = resolve_output_folder(source_dir, kwargs.get('output_folder'), output_under_input)
+        out_folder = resolve_output_folder(
+            source_dir,
+            kwargs.get("output_folder"),
+            output_under_input,
+            prefix=prefix_str,
+        )
         log_folder = os.path.join(out_folder, LOG_SUBFOLDER_NAME) if save_log else None
         os.makedirs(out_folder, exist_ok=True)
 
-        requested_ext = kwargs.get('output_extension', '').strip()
-        ext = ('.' + requested_ext.lstrip('.')) if requested_ext else RAW_OUTPUT_FILE_EXTENSION
-        raw_path, log_path = determine_unique_output_paths(base_name, kwargs.get('output_suffix', ''), out_folder, log_folder, ext)
+        requested_ext = kwargs.get("output_extension", "").strip()
+        ext = (
+            ("." + requested_ext.lstrip("."))
+            if requested_ext
+            else RAW_OUTPUT_FILE_EXTENSION
+        )
+        raw_path, log_path = determine_unique_output_paths(
+            base_name, kwargs.get("output_suffix", ""), out_folder, log_folder, ext
+        )
 
-    if 'result_metadata' in kwargs:
-        kwargs['result_metadata']['raw_output_path'] = raw_path
-        kwargs['result_metadata']['resolved_output_folder'] = os.path.dirname(raw_path)
+    if "result_metadata" in kwargs:
+        kwargs["result_metadata"]["raw_output_path"] = raw_path
+        kwargs["result_metadata"]["resolved_output_folder"] = os.path.dirname(raw_path)
+
+    snapshot = build_job_config_snapshot(
+        filepaths_group=filepaths_group,
+        engine=engine,
+        model_name=model_name,
+        api_key=api_key,
+        user_prompt=user_prompt,
+        add_filename_to_prompt=add_filename_to_prompt,
+        overwrite_original=overwrite_original,
+        source_dir=source_dir,
+        raw_path=raw_path,
+        log_path=log_path,
+        kwargs=kwargs,
+    )
+    console_log(
+        "JOB CONFIG SNAPSHOT:\n" + json.dumps(to_loggable(snapshot), indent=2), "INFO"
+    )
 
     try:
         # --- SPLIT TEXT vs IMAGES (with defensive sorting) ---
-        image_files = sorted([f for f in filepaths_group if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS], key=natural_sort_key)
-        text_files = sorted([f for f in filepaths_group if f not in image_files], key=natural_sort_key)
-        
+        image_files = sorted(
+            [
+                f
+                for f in filepaths_group
+                if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+            ],
+            key=natural_sort_key,
+        )
+        text_files = sorted(
+            [f for f in filepaths_group if f not in image_files], key=natural_sort_key
+        )
+
         # DEBUG: Log file order after splitting
-        console_log(f"DEBUG ORDER: image_files order: {[os.path.basename(f) for f in image_files]}", "DEBUG")
+        console_log(
+            f"DEBUG ORDER: image_files order: {[os.path.basename(f) for f in image_files]}",
+            "DEBUG",
+        )
         if VERBOSE_DIAGNOSTICS:
-            console_log(f"DEBUG SPLIT: images={len(image_files)} text={len(text_files)}", "DEBUG")
+            console_log(
+                f"DEBUG SPLIT: images={len(image_files)} text={len(text_files)}",
+                "DEBUG",
+            )
 
         # Guardrail: if user prompt clearly expects image input, fail fast when no image is selected.
         if len(image_files) == 0 and prompt_expects_image(user_prompt):
@@ -1536,56 +2153,67 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                 f"Selected files: {selected_names}. "
                 "Choose the .png/.jpg file(s) in the left list (not generated .md output files)."
             )
-        
-        images_data_legacy = [] # For Ollama/LMStudio (Base64)
-        google_file_objects = [] # For Gemini (Files API)
+
+        images_data_legacy = []  # For Ollama/LMStudio (Base64)
+        google_file_objects = []  # For Gemini (Files API)
         prompt_parts = []
         client = None
 
         if engine == "google":
-             client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key)
 
         # --- SANITIZATION WRAPPER ---
         # Map { original_path: safe_path }
         # All reads/uploads use safe_path. All logic/prompts refer to Os.basename(original_path).
         with InputFileSanitizer(
-            filepaths_group, 
-            target_fmt=kwargs.get('temp_img_fmt', 'PNG'),
-            quality=kwargs.get('img_quality', 100),
-            max_dim=kwargs.get('img_max_dim', 0),
-            force_convert=kwargs.get('force_conversion', False),
-            enable_conversion=kwargs.get('enable_img_conversion', False),
-            cancellation_event=cancellation_event
+            filepaths_group,
+            target_fmt=kwargs.get("temp_img_fmt", "PNG"),
+            quality=kwargs.get("img_quality", 100),
+            max_dim=kwargs.get("img_max_dim", 0),
+            force_convert=kwargs.get("force_conversion", False),
+            enable_conversion=kwargs.get("enable_img_conversion", False),
+            cancellation_event=cancellation_event,
         ) as file_map:
-            
             # 1. Handle Images
             if image_files:
-                save_processed = kwargs.get('save_img_to_output', False)
-                output_folder_defined = kwargs.get('output_folder')
-                overwrite = kwargs.get('overwrite_original', False)
+                save_processed = kwargs.get("save_img_to_output", False)
+                output_folder_defined = kwargs.get("output_folder")
+                overwrite = kwargs.get("overwrite_original", False)
 
                 if engine == "google":
-                    sequential_upload = kwargs.get('sequential_upload', False)
+                    sequential_upload = kwargs.get("sequential_upload", False)
                     # Prepare map: { safe_path: original_basename } for display names
                     upload_map = {file_map[f]: os.path.basename(f) for f in image_files}
-                    google_file_objects = upload_images_parallel(upload_map, client, sequential=sequential_upload, cancellation_event=cancellation_event)
-                
+                    google_file_objects = upload_images_parallel(
+                        upload_map,
+                        client,
+                        sequential=sequential_upload,
+                        cancellation_event=cancellation_event,
+                    )
+
                 # Logic for other engines OR for Saving Processed Images (Universal)
                 for img_path in image_files:
                     safe_path = file_map[img_path]
-                    
+
                     # --- SAVE PROCESSED IMAGE FEATURE ---
                     if save_processed:
                         try:
                             # 1. Determine Dest Dir
                             if output_folder_defined:
-                                dest_dir = resolve_output_folder(source_dir, output_folder_defined, output_under_input)
+                                dest_dir = resolve_output_folder(
+                                    source_dir,
+                                    output_folder_defined,
+                                    output_under_input,
+                                    prefix=prefix_str,
+                                )
                             else:
                                 dest_dir = os.path.dirname(img_path)
                             os.makedirs(dest_dir, exist_ok=True)
-                            
+
                             # 2. Determine Dest Filename (Original Name + New Extension)
-                            orig_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
+                            orig_name_no_ext = os.path.splitext(
+                                os.path.basename(img_path)
+                            )[0]
                             safe_ext = os.path.splitext(safe_path)[1]
                             dest_filename = f"{orig_name_no_ext}{safe_ext}"
                             dest_path = os.path.join(dest_dir, dest_filename)
@@ -1593,303 +2221,427 @@ def process_file_group(filepaths_group, api_key, engine, user_prompt, model_name
                             # 3. Check Overwrite
                             if not os.path.exists(dest_path) or overwrite:
                                 shutil.copy2(safe_path, dest_path)
-                                console_log(f"Saved processed image: {dest_filename}", "INFO")
+                                console_log(
+                                    f"Saved processed image: {dest_filename}", "INFO"
+                                )
                             else:
-                                console_log(f"Skipped saving image (exists): {dest_filename}", "WARN")
+                                console_log(
+                                    f"Skipped saving image (exists): {dest_filename}",
+                                    "WARN",
+                                )
 
                         except Exception as e:
-                            console_log(f"Failed to save processed image {os.path.basename(img_path)}: {e}", "ERROR")
+                            console_log(
+                                f"Failed to save processed image {os.path.basename(img_path)}: {e}",
+                                "ERROR",
+                            )
 
                     if engine != "google":
                         content, mime, _, err = read_file_content(safe_path)
                         if not err:
-                            images_data_legacy.append({"bytes": content, "mime_type": mime, "path": safe_path})
+                            images_data_legacy.append(
+                                {"bytes": content, "mime_type": mime, "path": safe_path}
+                            )
                             if VERBOSE_DIAGNOSTICS:
                                 console_log(
                                     f"DEBUG IMAGE PAYLOAD: {os.path.basename(img_path)} mime={mime} size={human_bytes(len(content))} sha256={short_sha256_bytes(content)} safe={os.path.basename(safe_path)}",
-                                    "DEBUG"
+                                    "DEBUG",
                                 )
                         else:
-                            console_log(f"Skipping failed image {os.path.basename(img_path)}: {err}", "WARN")
+                            console_log(
+                                f"Skipping failed image {os.path.basename(img_path)}: {err}",
+                                "WARN",
+                            )
                 if VERBOSE_DIAGNOSTICS and images_data_legacy:
-                    total_img_bytes = sum(len(i.get("bytes", b"")) for i in images_data_legacy)
+                    total_img_bytes = sum(
+                        len(i.get("bytes", b"")) for i in images_data_legacy
+                    )
                     console_log(
                         f"DEBUG IMAGE PAYLOAD SUMMARY: count={len(images_data_legacy)} total={human_bytes(total_img_bytes)}",
-                        "DEBUG"
+                        "DEBUG",
                     )
 
             # 2. Handle Text Files
             for filepath in text_files:
                 safe_path = file_map[filepath]
                 content, _, _, err = read_file_content(safe_path)
-                if err: raise ValueError(f"Error reading {os.path.basename(filepath)}: {err}")
-                if add_filename_to_prompt: prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
+                if err:
+                    raise ValueError(
+                        f"Error reading {os.path.basename(filepath)}: {err}"
+                    )
+                if add_filename_to_prompt:
+                    prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
                 prompt_parts.append(f"\n{content}\n")
-            
-            
-            file_content_all = "".join(prompt_parts)
-            
-            resolved_user_prompt = apply_context_to_prompt(user_prompt, kwargs.get('context_text', ''))
 
-            if kwargs.get('enable_chunking', False):
-                max_tok = kwargs.get('chunk_size', 4000)
-                overlap = kwargs.get('chunk_overlap', 200)
-                force_cut = kwargs.get('force_cutoff', False)
-                chunks = chunk_text(file_content_all, max_tok, overlap, force_cutoff=force_cut)
+            file_content_all = "".join(prompt_parts)
+
+            resolved_user_prompt = apply_context_to_prompt(
+                user_prompt, kwargs.get("context_text", "")
+            )
+
+            if kwargs.get("enable_chunking", False):
+                max_tok = kwargs.get("chunk_size", 4000)
+                overlap = kwargs.get("chunk_overlap", 200)
+                force_cut = kwargs.get("force_cutoff", False)
+                chunks = chunk_text(
+                    file_content_all, max_tok, overlap, force_cutoff=force_cut
+                )
             else:
                 chunks = [file_content_all]
 
             if VERBOSE_DIAGNOSTICS:
                 console_log(
                     f"DEBUG PROMPT BUILD: resolved_prompt_chars={len(resolved_user_prompt or '')} text_chars={len(file_content_all)} chunks={len(chunks)}",
-                    "DEBUG"
+                    "DEBUG",
                 )
-                
-            log_data['prompt_sent'] = resolved_user_prompt + file_content_all
+
+            log_data["prompt_sent"] = resolved_user_prompt + file_content_all
             if len(chunks) > 1:
-                log_data['chunk_count'] = len(chunks)
-            
+                log_data["chunk_count"] = len(chunks)
+
             # --- API CALL LOOP ---
             chunk_responses = []
             for idx, chunk_content in enumerate(chunks):
                 if cancellation_event and cancellation_event.is_set():
-                    raise CancellationError("Processing cancelled during chunked processing.")
+                    raise CancellationError(
+                        "Processing cancelled during chunked processing."
+                    )
 
                 if len(chunks) > 1:
-                    console_log(f"Processing chunk {idx+1}/{len(chunks)} for {base_name}...", "INFO")
-                
+                    console_log(
+                        f"Processing chunk {idx + 1}/{len(chunks)} for {base_name}...",
+                        "INFO",
+                    )
+
                 full_chunk_prompt = resolved_user_prompt + chunk_content
-                
+
                 resp = call_generative_ai_api(
-                    engine, 
-                    full_chunk_prompt, 
-                    api_key, 
+                    engine,
+                    full_chunk_prompt,
+                    api_key,
                     model_name,
                     client=client,
-                    images_data_list=images_data_legacy, 
-                    google_file_objects=google_file_objects, 
-                    stream_output=kwargs.get('stream_output', False), 
-                    safety_settings=kwargs.get('safety_settings'),
-                    enable_web_search=kwargs.get('enable_web_search', False),
-                    enable_thinking=kwargs.get('enable_thinking', False),
-                    clean_markdown=kwargs.get('clean_markdown', True),
-                    cancellation_event=cancellation_event
+                    images_data_list=images_data_legacy,
+                    google_file_objects=google_file_objects,
+                    stream_output=kwargs.get("stream_output", False),
+                    safety_settings=kwargs.get("safety_settings"),
+                    enable_web_search=kwargs.get("enable_web_search", False),
+                    enable_thinking=kwargs.get("enable_thinking", False),
+                    clean_markdown=kwargs.get("clean_markdown", True),
+                    cancellation_event=cancellation_event,
                 )
-                
+
                 if resp and str(resp).strip().startswith("Error"):
                     # For chunks, we might want to fail the whole group or just this chunk?
                     # Usually if one chunk fails, the reassembled output is broken.
                     raise Exception(resp)
-                
+
                 chunk_responses.append(resp or "")
 
             response = "\n".join(chunk_responses)
 
-        
-        if response and str(response).strip().startswith("Error"): 
+        if response and str(response).strip().startswith("Error"):
             raise Exception(response)
 
         # --- RENAME MODE LOGIC ---
-        if kwargs.get('rename_mode', False):
+        if kwargs.get("rename_mode", False):
             # 1. Sanitize
             new_stem = sanitize_filename(response)
-            if not new_stem: raise ValueError("LLM returned empty or invalid filename.")
-            
+            if not new_stem:
+                raise ValueError("LLM returned empty or invalid filename.")
+
             # 2. Collision Handling
-            if len(filepaths_group) > 1: raise ValueError("Rename Mode requires single file groups.")
+            if len(filepaths_group) > 1:
+                raise ValueError("Rename Mode requires single file groups.")
             original_path = filepaths_group[0]
-            
+
             directory = os.path.dirname(original_path)
             orig_base = os.path.basename(original_path)
             orig_stem, ext = os.path.splitext(orig_base)
-            
-            method = kwargs.get('rename_method', 'full')
-            
-            if method == 'prefix':
+
+            method = kwargs.get("rename_method", "full")
+
+            if method == "prefix":
                 base_candidate = f"{new_stem}{orig_stem}"
-            elif method == 'suffix':
+            elif method == "suffix":
                 base_candidate = f"{orig_stem}{new_stem}"
             else:
                 base_candidate = new_stem
 
             new_filename = f"{base_candidate}{ext}"
             new_path = os.path.join(directory, new_filename)
-            
+
             counter = 1
-            while os.path.exists(new_path) and os.path.normpath(new_path) != os.path.normpath(original_path):
-                 new_path = os.path.join(directory, f"{base_candidate}_{counter}{ext}")
-                 counter += 1
-            
+            while os.path.exists(new_path) and os.path.normpath(
+                new_path
+            ) != os.path.normpath(original_path):
+                new_path = os.path.join(directory, f"{base_candidate}_{counter}{ext}")
+                counter += 1
+
             # 3. Rename
             if os.path.normpath(new_path) != os.path.normpath(original_path):
                 os.rename(original_path, new_path)
-                console_log(f"Renamed: {os.path.basename(original_path)} -> {os.path.basename(new_path)}", "ACTION")
-                
-                if 'result_metadata' in kwargs:
-                    kwargs['result_metadata']['rename_from'] = original_path
-                    kwargs['result_metadata']['rename_to'] = new_path
-                else: 
-                     console_log("Warning: result_metadata missing, Undo unavailable.", "WARN")
+                console_log(
+                    f"Renamed: {os.path.basename(original_path)} -> {os.path.basename(new_path)}",
+                    "ACTION",
+                )
+
+                if "result_metadata" in kwargs:
+                    kwargs["result_metadata"]["rename_from"] = original_path
+                    kwargs["result_metadata"]["rename_to"] = new_path
+                else:
+                    console_log(
+                        "Warning: result_metadata missing, Undo unavailable.", "WARN"
+                    )
             else:
-                 console_log(f"Filename unchanged: {os.path.basename(original_path)}", "WARN")
-            
-            return None        
+                console_log(
+                    f"Filename unchanged: {os.path.basename(original_path)}", "WARN"
+                )
+
+            return None
 
         # --- JSON VALIDITY CHECK ---
-        if kwargs.get('validate_json', False):
+        if kwargs.get("validate_json", False):
             # Already mostly sanitized by clean_markdown if enabled, but good to ensure
             response = sanitize_api_response(response)
             parsed_json = None
             validation_error = None
             if json_repair:
-                try: parsed_json = json_repair.loads(response)
-                except Exception as e: validation_error = f"json_repair failed: {e}"
+                try:
+                    parsed_json = json_repair.loads(response)
+                except Exception as e:
+                    validation_error = f"json_repair failed: {e}"
             if parsed_json is None:
-                match = re.search(r'(\{.*\}|\[.*\])', response, re.DOTALL)
+                match = re.search(r"(\{.*\}|\[.*\])", response, re.DOTALL)
                 if match:
-                    try: parsed_json = json.loads(match.group(1))
-                    except json.JSONDecodeError as e: 
-                        if not validation_error: validation_error = f"JSON Validation Failed (Extracted): {e.msg} line {e.lineno}"
-                else:
-                    try: parsed_json = json.loads(response)
+                    try:
+                        parsed_json = json.loads(match.group(1))
                     except json.JSONDecodeError as e:
-                        if not validation_error: validation_error = f"JSON Validation Failed: {e.msg} line {e.lineno}"
+                        if not validation_error:
+                            validation_error = f"JSON Validation Failed (Extracted): {e.msg} line {e.lineno}"
+                else:
+                    try:
+                        parsed_json = json.loads(response)
+                    except json.JSONDecodeError as e:
+                        if not validation_error:
+                            validation_error = (
+                                f"JSON Validation Failed: {e.msg} line {e.lineno}"
+                            )
 
             if parsed_json is not None:
                 # --- NEW: SCHEMA VALIDATION (v25.6) ---
-                if kwargs.get('validate_json_keys', False):
+                if kwargs.get("validate_json_keys", False):
                     if not isinstance(parsed_json, dict):
-                         raise ValueError("JSON Validation Failed: Output is not a JSON Object (Dictionary)")
-                    
+                        raise ValueError(
+                            "JSON Validation Failed: Output is not a JSON Object (Dictionary)"
+                        )
+
                     required_keys = ["title", "description", "hashtags", "tags"]
                     missing_keys = [k for k in required_keys if k not in parsed_json]
-                    
+
                     if missing_keys:
                         # Construct a helpful error message so the LLM knows what it missed if retried
-                        raise ValueError(f"JSON Validation Failed: Missing required keys: {missing_keys}")
-                        
+                        raise ValueError(
+                            f"JSON Validation Failed: Missing required keys: {missing_keys}"
+                        )
+
                 response = json.dumps(parsed_json, indent=4)
             else:
-                log_data['invalid_output_content'] = response 
+                log_data["invalid_output_content"] = response
                 raise ValueError(validation_error or "Unknown JSON validation error")
 
-        log_data.update({'status': 'Success', 'end_time': datetime.datetime.now()})
+        log_data.update({"status": "Success", "end_time": datetime.datetime.now()})
         save_output_files(response, log_data, raw_path, log_path)
-        if 'result_metadata' in kwargs:
-            kwargs['result_metadata']['raw_output_saved'] = True
+        if "result_metadata" in kwargs:
+            kwargs["result_metadata"]["raw_output_saved"] = True
         console_log(f"Saved: {os.path.basename(raw_path)}", "SUCCESS")
         return None
 
     except Exception as e:
-        log_data.update({'status': 'Failure', 'error': str(e)})
-        
+        log_data.update({"status": "Failure", "error": str(e)})
+
         # Check for Quota/429 errors to prevent writing them to file
         error_str = str(e).lower()
-        if isinstance(e, CancellationError): raise
-        if isinstance(e, QuotaExhaustedError) or \
-           "quota exhausted" in error_str or \
-           "429" in error_str or \
-           "limit reached" in error_str or \
-           "content connection error" in error_str:
+        if isinstance(e, CancellationError):
+            raise
+        if (
+            isinstance(e, QuotaExhaustedError)
+            or "quota exhausted" in error_str
+            or "429" in error_str
+            or "limit reached" in error_str
+            or "content connection error" in error_str
+        ):
             raise QuotaExhaustedError(str(e))
+        if is_model_unavailable_error_message(error_str):
+            raise ModelUnavailableError(str(e))
 
-        if isinstance(e, FatalProcessingError): raise
-        
-        is_json_fail = "JSON Validation Failed" in str(e) or "json_repair failed" in str(e)
-        if is_json_fail: console_log(f"Skipping save for {os.path.basename(raw_path)} ({e})", "WARN")
-        else: console_log(f"Skipping save for {os.path.basename(raw_path)} due to error: {e}", "WARN")
+        if isinstance(e, FatalProcessingError):
+            raise
+
+        is_json_fail = "JSON Validation Failed" in str(
+            e
+        ) or "json_repair failed" in str(e)
+        if is_json_fail:
+            console_log(f"Skipping save for {os.path.basename(raw_path)} ({e})", "WARN")
+        else:
+            console_log(
+                f"Skipping save for {os.path.basename(raw_path)} due to error: {e}",
+                "WARN",
+            )
         return str(e)
+
 
 def get_api_key(force_gui=False):
     api_key = os.environ.get(API_KEY_ENV_VAR_NAME)
     if not api_key or force_gui:
-        if not force_gui: console_log(f"{API_KEY_ENV_VAR_NAME} not in environment. Prompting...", "WARN")
-        root = tk.Tk(); root.withdraw()
-        api_key = tk.simpledialog.askstring("API Key", "Enter Google API Key:", show='*')
+        if not force_gui:
+            console_log(
+                f"{API_KEY_ENV_VAR_NAME} not in environment. Prompting...", "WARN"
+            )
+        root = tk.Tk()
+        root.withdraw()
+        api_key = tk.simpledialog.askstring(
+            "API Key", "Enter Google API Key:", show="*"
+        )
         root.destroy()
     return api_key
+
 
 ################################################################################
 # --- GUI Class ---
 ################################################################################
 
+
 class ModelSelectionDialog(tk.Toplevel):
-    def __init__(self, parent, current_engine, current_model, fetch_callback, exhausted_set):
+    def __init__(
+        self,
+        parent,
+        current_engine,
+        current_model,
+        fetch_callback,
+        exhausted_set,
+        issue_type="quota",
+        issue_detail="",
+    ):
         super().__init__(parent)
-        self.title("Quota Exhausted")
+        self.parent = parent
+        self.issue_type = issue_type
+        self.issue_detail = issue_detail or ""
+        self.title("Quota Exhausted" if issue_type == "quota" else "Model Unavailable")
         self.result = None
         self.fetch_callback = fetch_callback
         self.exhausted_set = exhausted_set
-        self.quota_marker = " ⛔ (Quota Hit)"
-        
-        w, h = 450, 200
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - (w // 2)
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - (h // 2)
-        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.issue_marker = (
+            " ⛔ (Quota Hit)" if issue_type == "quota" else " ⚠ (Unavailable)"
+        )
+
+        self.geometry("460x240")
         self.resizable(False, False)
 
         frame = ttk.Frame(self, padding=15)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frame, text=f"Quota exhausted for: {current_model}", foreground="red").pack(pady=(0, 5))
-        ttk.Label(frame, text="Select a new Provider and Model:", font=('Helvetica', 9, 'bold')).pack(pady=(0, 10))
+        top_msg = (
+            f"Quota exhausted for: {current_model}"
+            if issue_type == "quota"
+            else f"Model unavailable: {current_model}"
+        )
+        ttk.Label(frame, text=top_msg, foreground="red").pack(pady=(0, 5))
+        self.detail_label = None
+        if self.issue_detail:
+            self.detail_label = ttk.Label(
+                frame,
+                text=self.issue_detail,
+                foreground="gray",
+                wraplength=410,
+                justify="left",
+            )
+            self.detail_label.pack(pady=(0, 5))
+        ttk.Label(
+            frame,
+            text="Select a new Provider and Model:",
+            font=("Helvetica", 9, "bold"),
+        ).pack(pady=(0, 10))
 
         grid_frame = ttk.Frame(frame)
         grid_frame.pack(fill=tk.X)
 
-        ttk.Label(grid_frame, text="Provider:").grid(row=0, column=0, sticky="w", padx=5)
+        ttk.Label(grid_frame, text="Provider:").grid(
+            row=0, column=0, sticky="w", padx=5
+        )
         self.provider_var = tk.StringVar(value=current_engine)
-        self.provider_combo = ttk.Combobox(grid_frame, textvariable=self.provider_var, 
-                                           values=['google', 'ollama', 'lmstudio'], state="readonly", width=15)
+        self.provider_combo = ttk.Combobox(
+            grid_frame,
+            textvariable=self.provider_var,
+            values=["google", "ollama", "lmstudio"],
+            state="readonly",
+            width=15,
+        )
         self.provider_combo.grid(row=0, column=1, sticky="ew", padx=5)
         self.provider_combo.bind("<<ComboboxSelected>>", self.on_provider_change)
 
-        ttk.Label(grid_frame, text="Model:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(grid_frame, text="Model:").grid(
+            row=1, column=0, sticky="w", padx=5, pady=5
+        )
         self.model_combo_var = tk.StringVar()
-        self.model_combo = ttk.Combobox(grid_frame, textvariable=self.model_combo_var, state="readonly", width=35)
+        self.model_combo = ttk.Combobox(
+            grid_frame, textvariable=self.model_combo_var, state="readonly", width=35
+        )
         self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Button(grid_frame, text="⟳", width=3, command=self.refresh_models).grid(
+            row=1, column=2, sticky="w", pady=5
+        )
 
         self.on_provider_change(None, initial_model=current_model)
 
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(pady=15, fill=tk.X)
-        ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="Apply to Remaining Jobs", command=self.on_ok).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(
+            side=tk.RIGHT, padx=5
+        )
+        ttk.Button(btn_frame, text="Apply to Remaining Jobs", command=self.on_ok).pack(
+            side=tk.RIGHT, padx=5
+        )
 
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         self.transient(parent)
         self.wait_visibility()
+        self._fit_to_content()
         self.grab_set()
         self.wait_window(self)
 
     def on_provider_change(self, event, initial_model=None):
         engine = self.provider_var.get()
         self.model_combo.set("Loading...")
-        self.model_combo['values'] = []
+        self.model_combo["values"] = []
         self.update_idletasks()
-        
+
         models = self.fetch_callback(engine)
-        
+
         display_values = []
         for m in models:
             if m in self.exhausted_set:
-                display_values.append(f"{m}{self.quota_marker}")
+                display_values.append(f"{m}{self.issue_marker}")
             else:
                 display_values.append(m)
-        
-        self.model_combo['values'] = display_values
-        
+
+        self.model_combo["values"] = display_values
+
         if display_values:
             if initial_model and initial_model in models:
-                if initial_model in self.exhausted_set: self.model_combo.set(f"{initial_model}{self.quota_marker}")
-                else: self.model_combo.set(initial_model)
-            else: self.model_combo.current(0)
+                if initial_model in self.exhausted_set:
+                    self.model_combo.set(f"{initial_model}{self.issue_marker}")
+                else:
+                    self.model_combo.set(initial_model)
+            else:
+                self.model_combo.current(0)
         else:
             self.model_combo.set("No models found")
+        self._fit_to_content()
 
     def on_ok(self):
         raw_model = self.model_combo_var.get()
-        clean_model = raw_model.split(self.quota_marker)[0]
+        clean_model = raw_model.split(self.issue_marker)[0]
         self.result = (self.provider_var.get(), clean_model)
         self.destroy()
 
@@ -1897,18 +2649,49 @@ class ModelSelectionDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-        self.result = None
-        self.destroy()
+    def refresh_models(self):
+        current = self.model_combo_var.get()
+        current = current.split(self.issue_marker)[0] if current else None
+        self.on_provider_change(None, initial_model=current)
+
+    def _fit_to_content(self):
+        self.update_idletasks()
+        screen_w = max(640, self.winfo_screenwidth())
+        screen_h = max(480, self.winfo_screenheight())
+        max_w = max(460, screen_w - 120)
+        max_h = max(260, screen_h - 120)
+
+        req_w = max(460, min(self.winfo_reqwidth() + 20, max_w))
+        if self.detail_label is not None:
+            self.detail_label.configure(wraplength=max(320, req_w - 40))
+            self.update_idletasks()
+        req_h = max(240, min(self.winfo_reqheight() + 20, max_h))
+
+        p = self.parent if self.parent and self.parent.winfo_exists() else None
+        if p:
+            px = p.winfo_rootx()
+            py = p.winfo_rooty()
+            pw = p.winfo_width()
+            ph = p.winfo_height()
+            x = px + (pw - req_w) // 2
+            y = py + (ph - req_h) // 2
+        else:
+            x = (screen_w - req_w) // 2
+            y = (screen_h - req_h) // 2
+        x = max(10, min(x, screen_w - req_w - 10))
+        y = max(10, min(y, screen_h - req_h - 10))
+        self.geometry(f"{req_w}x{req_h}+{x}+{y}")
+
 
 class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v26.1 (Gemini Files API Supported)")
+        self.title("Multimodal AI Batch Processor v26.6 (Gemini Files API Supported)")
         self.geometry("1400x800")
 
         self.minsize(1100, 700)
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
-        
+
         signal.signal(signal.SIGINT, self._handle_sigint)
         self._check_signal()
 
@@ -1918,75 +2701,111 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.result_queue = queue.Queue()
         self.job_registry = {}
         self.current_presets = {}
-        self.model_cache = {} 
+        self.model_cache = {}
         self.exhausted_models = set()
-        self.global_runtime_overrides = None 
-        
+        self.global_runtime_overrides = None
+
         self.processing_paused = threading.Event()
         self.processing_cancelled = threading.Event()
         self.worker_thread = None
         self.job_id_counter = 0
 
         self.files_var = tk.Variable(value=list(command_line_files or []))
-        self.engine_var = tk.StringVar(value=getattr(self.args, 'engine', DEFAULT_ENGINE))
+        self.engine_var = tk.StringVar(
+            value=getattr(self.args, "engine", DEFAULT_ENGINE)
+        )
         self.model_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar(value=getattr(self.args, 'output', DEFAULT_OUTPUT_SUBFOLDER_NAME))
-        self.output_under_input_var = tk.BooleanVar(value=getattr(self.args, 'output_under_input', False))
-        self.merge_outputs_var = tk.BooleanVar(value=getattr(self.args, 'merge_outputs', False))
-        self.suffix_var = tk.StringVar(value=getattr(self.args, 'suffix', DEFAULT_RAW_OUTPUT_SUFFIX))
-        self.output_ext_var = tk.StringVar(value=getattr(self.args, 'output_ext', ''))
+        self.output_dir_var = tk.StringVar(
+            value=getattr(self.args, "output", DEFAULT_OUTPUT_SUBFOLDER_NAME)
+        )
+        self.output_under_input_var = tk.BooleanVar(
+            value=getattr(self.args, "output_under_input", False)
+        )
+        self.merge_outputs_var = tk.BooleanVar(
+            value=getattr(self.args, "merge_outputs", False)
+        )
+        self.suffix_var = tk.StringVar(
+            value=getattr(self.args, "suffix", DEFAULT_RAW_OUTPUT_SUFFIX)
+        )
+        self.output_ext_var = tk.StringVar(value=getattr(self.args, "output_ext", ""))
         # --- UPDATE: STREAM ENABLED BY DEFAULT ---
-        self.stream_var = tk.BooleanVar(value=getattr(self.args, 'stream', True))
-        self.thinking_var = tk.BooleanVar(value=False) # New for Gemini (v25.8)
-        self.add_filename_var = tk.BooleanVar(value=getattr(self.args, 'add_filename_to_prompt', False))
-        self.default_context_text = getattr(self.args, 'context_text', '')
+        self.stream_var = tk.BooleanVar(value=getattr(self.args, "stream", True))
+        self.thinking_var = tk.BooleanVar(
+            value=False
+        )  # Used by engines/models that support thinking/reasoning output
+        self.add_filename_var = tk.BooleanVar(
+            value=getattr(self.args, "add_filename_to_prompt", False)
+        )
+        self.default_context_text = getattr(self.args, "context_text", "")
         self.persistent_context_var = tk.BooleanVar(value=False)
         self.global_context_text_value = self.default_context_text
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
         self.validate_json_var = tk.BooleanVar(value=False)
-        self.validate_keys_var = tk.BooleanVar(value=False) # New schema validation var (v25.6)
-        self.clean_markdown_var = tk.BooleanVar(value=True) # Default On
-        self.save_log_var = tk.BooleanVar(value=False) # Default Off
+        self.validate_keys_var = tk.BooleanVar(
+            value=False
+        )  # New schema validation var (v25.6)
+        self.clean_markdown_var = tk.BooleanVar(value=True)  # Default On
+        self.save_log_var = tk.BooleanVar(value=False)  # Default Off
         self.enable_safety_var = tk.BooleanVar(value=False)
-        self.safety_map = {'Off': 'BLOCK_NONE', 'High Only': 'BLOCK_ONLY_HIGH', 'Med+': 'BLOCK_MEDIUM_AND_ABOVE'}
-        self.harassment_var = tk.StringVar(value='Off')
-        self.hate_speech_var = tk.StringVar(value='Off')
-        self.sexually_explicit_var = tk.StringVar(value='Off')
-        self.dangerous_content_var = tk.StringVar(value='Off')
-        
+        self.safety_map = {
+            "Off": "BLOCK_NONE",
+            "High Only": "BLOCK_ONLY_HIGH",
+            "Med+": "BLOCK_MEDIUM_AND_ABOVE",
+        }
+        self.harassment_var = tk.StringVar(value="Off")
+        self.hate_speech_var = tk.StringVar(value="Off")
+        self.sexually_explicit_var = tk.StringVar(value="Off")
+        self.dangerous_content_var = tk.StringVar(value="Off")
+
         # Job Delay Variables
         self.delay_min_var = tk.IntVar(value=0)
         self.delay_sec_var = tk.IntVar(value=0)
 
         # Upload Mode (Parallel vs Sequential)
-        self.upload_mode_var = tk.StringVar(value=getattr(self.args, 'upload_mode', 'parallel'))
-        
+        self.upload_mode_var = tk.StringVar(
+            value=getattr(self.args, "upload_mode", "parallel")
+        )
+        self.stop_queue_on_model_unavailable_var = tk.BooleanVar(
+            value=getattr(self.args, "stop_queue_on_model_unavailable", True)
+        )
+
         # Rename Mode
         self.rename_mode_var = tk.BooleanVar(value=False)
-        self.rename_method_var = tk.StringVar(value='full')
-        
+        self.rename_method_var = tk.StringVar(value="full")
+
         # --- NEW: Image & Format Settings ---
-        self.enable_img_conversion_var = tk.BooleanVar(value=False) # Master Toggle
+        self.enable_img_conversion_var = tk.BooleanVar(value=False)  # Master Toggle
         self.temp_img_fmt_var = tk.StringVar(value="PNG")
         self.img_quality_var = tk.IntVar(value=100)
         self.img_max_dim_var = tk.IntVar(value=0)
         self.force_conversion_var = tk.BooleanVar(value=False)
         self.save_img_to_output_var = tk.BooleanVar(value=False)
-        
+
         # --- NEW: Text Chunking ---
         self.enable_chunking_var = tk.BooleanVar(value=False)
         self.chunk_size_var = tk.IntVar(value=4000)
-        self.enable_overlap_var = tk.BooleanVar(value=False) # Default Off
-        self.chunk_overlap_var = tk.IntVar(value=0) # Default to 0
-        self.force_cutoff_var = tk.BooleanVar(value=True) # Default On as requested
-
+        self.enable_overlap_var = tk.BooleanVar(value=False)  # Default Off
+        self.chunk_overlap_var = tk.IntVar(value=0)  # Default to 0
+        self.force_cutoff_var = tk.BooleanVar(value=True)  # Default On as requested
+        self.model_prefix_var = tk.BooleanVar(
+            value=False
+        )  # New: Prefix output folder with model name
+        self.folder_preview_var = tk.StringVar(
+            value="(Same as Input File)"
+        )  # Dynamic Folder Preview
 
         self.create_widgets()
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
+        self.engine_var.trace_add("write", self._update_folder_preview)
+        self.model_var.trace_add("write", self._update_folder_preview)
+        self.output_dir_var.trace_add("write", self._update_folder_preview)
+        self.model_prefix_var.trace_add("write", self._update_folder_preview)
+
         self.after(200, self.update_models)
+        self.after(300, self._update_folder_preview)
         self.after(100, self._check_result_queue)
 
     def _check_signal(self):
@@ -1997,50 +2816,83 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self._on_closing()
 
     def create_widgets(self):
-        self.style = ttk.Style() # Keep reference
-        
+        self.style = ttk.Style()  # Keep reference
+
         toolbar = ttk.Frame(self, padding=(10, 5))
         toolbar.pack(side=tk.TOP, fill=tk.X)
-        
+
         ttk.Label(toolbar, text="Preset:").pack(side=tk.LEFT, padx=(0, 5))
         self.preset_var = tk.StringVar()
-        self.preset_combo = ttk.Combobox(toolbar, textvariable=self.preset_var, state="readonly", width=30)
+        self.preset_combo = ttk.Combobox(
+            toolbar, textvariable=self.preset_var, state="readonly", width=30
+        )
         self.preset_combo.pack(side=tk.LEFT)
         self.preset_combo.bind("<<ComboboxSelected>>", self.load_preset)
-        
-        ttk.Button(toolbar, text="➕ New", width=6, command=self.create_new_preset).pack(side=tk.LEFT, padx=(5, 1))
-        ttk.Button(toolbar, text="💾 Save", width=6, command=self.save_current_preset).pack(side=tk.LEFT, padx=1)
-        ttk.Button(toolbar, text="✏️ Ren", width=6, command=self.rename_preset).pack(side=tk.LEFT, padx=1)
-        ttk.Button(toolbar, text="🗑️ Del", width=6, command=self.delete_preset).pack(side=tk.LEFT, padx=1)
-        
-        self.api_status_label = ttk.Label(toolbar, text=f"API Key: {'Set' if self.api_key else 'Not Set'}", foreground="blue")
+
+        ttk.Button(
+            toolbar, text="➕ New", width=6, command=self.create_new_preset
+        ).pack(side=tk.LEFT, padx=(5, 1))
+        ttk.Button(
+            toolbar, text="💾 Save", width=6, command=self.save_current_preset
+        ).pack(side=tk.LEFT, padx=1)
+        ttk.Button(toolbar, text="✏️ Ren", width=6, command=self.rename_preset).pack(
+            side=tk.LEFT, padx=1
+        )
+        ttk.Button(toolbar, text="🗑️ Del", width=6, command=self.delete_preset).pack(
+            side=tk.LEFT, padx=1
+        )
+
+        self.api_status_label = ttk.Label(
+            toolbar,
+            text=f"API Key: {'Set' if self.api_key else 'Not Set'}",
+            foreground="blue",
+        )
         self.api_status_label.pack(side=tk.RIGHT, padx=10)
-        ttk.Button(toolbar, text="Update Key", command=self.prompt_for_api_key).pack(side=tk.RIGHT)
+        ttk.Button(toolbar, text="Update Key", command=self.prompt_for_api_key).pack(
+            side=tk.RIGHT
+        )
 
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         left_frame = ttk.Frame(main_pane)
-        main_pane.add(left_frame, weight=1)
-        
+        main_pane.add(left_frame, weight=3)
+
         file_frame = ttk.LabelFrame(left_frame, text="1. Input Files", padding=5)
         file_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
-        self.file_listbox = tk.Listbox(file_frame, listvariable=self.files_var, selectmode=tk.EXTENDED, height=6)
+        self.file_listbox = tk.Listbox(
+            file_frame,
+            listvariable=self.files_var,
+            selectmode=tk.EXTENDED,
+            height=6,
+            exportselection=False,
+        )
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
+
         if DND_AVAILABLE:
             self.file_listbox.drop_target_register(DND_FILES)
-            self.file_listbox.dnd_bind('<<Drop>>', self.handle_drop)
-        sb = ttk.Scrollbar(file_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
-        sb.pack(side=tk.LEFT, fill=tk.Y); self.file_listbox.config(yscrollcommand=sb.set)
-        
+            self.file_listbox.dnd_bind("<<Drop>>", self.handle_drop)
+        sb = ttk.Scrollbar(
+            file_frame, orient=tk.VERTICAL, command=self.file_listbox.yview
+        )
+        sb.pack(side=tk.LEFT, fill=tk.Y)
+        self.file_listbox.config(yscrollcommand=sb.set)
+
         btn_f = ttk.Frame(file_frame)
         btn_f.pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Button(btn_f, text="Add", command=self.add_files).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_f, text="Remove", command=self.remove_files).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_f, text="Clear", command=self.clear_files).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_f, text="Exp List", command=self.export_files_list).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_f, text="Ld List", command=self.load_files_list).pack(fill=tk.X, pady=2)
+        ttk.Button(btn_f, text="Remove", command=self.remove_files).pack(
+            fill=tk.X, pady=2
+        )
+        ttk.Button(btn_f, text="Clear", command=self.clear_files).pack(
+            fill=tk.X, pady=2
+        )
+        ttk.Button(btn_f, text="Exp List", command=self.export_files_list).pack(
+            fill=tk.X, pady=2
+        )
+        ttk.Button(btn_f, text="Ld List", command=self.load_files_list).pack(
+            fill=tk.X, pady=2
+        )
 
         prompt_frame = ttk.LabelFrame(left_frame, text="2. System Prompt", padding=5)
         prompt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -2050,60 +2902,113 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # --- COLUMN 2 (CENTER): CONFIGURATION ---
         mid_frame = ttk.Frame(main_pane)
-        main_pane.add(mid_frame, weight=1)
+        main_pane.add(mid_frame, weight=2)
 
         settings_frame = ttk.LabelFrame(mid_frame, text="3. Configuration", padding=5)
         settings_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.notebook = ttk.Notebook(settings_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
-        
-        tab_ai = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_ai, text="AI Engine")
+
+        tab_ai = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab_ai, text="AI Engine")
         tab_ai.columnconfigure(1, weight=1)
         ttk.Label(tab_ai, text="Provider:").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(tab_ai, textvariable=self.engine_var, values=['google', 'ollama', 'lmstudio'], state="readonly").grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Combobox(
+            tab_ai,
+            textvariable=self.engine_var,
+            values=["google", "ollama", "lmstudio"],
+            state="readonly",
+        ).grid(row=0, column=1, sticky="ew", padx=5)
         ttk.Label(tab_ai, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
-        self.model_combo = ttk.Combobox(tab_ai, textvariable=self.model_var, state="disabled", width=1)
+        self.model_combo = ttk.Combobox(
+            tab_ai, textvariable=self.model_var, state="disabled", width=1
+        )
         self.model_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
-        
-        ttk.Checkbutton(tab_ai, text="Stream Output", variable=self.stream_var).grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(tab_ai, text="Enable Thinking (Gemini)", variable=self.thinking_var).grid(row=3, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var).grid(row=4, column=0, columnspan=2, sticky="w")
+        ttk.Button(tab_ai, text="⟳", width=3, command=self.refresh_model_list).grid(
+            row=1, column=2, sticky="w", pady=5
+        )
+
+        ttk.Checkbutton(tab_ai, text="Stream Output", variable=self.stream_var).grid(
+            row=2, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Checkbutton(
+            tab_ai,
+            text="Enable Thinking (Supported Models)",
+            variable=self.thinking_var,
+        ).grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(
+            tab_ai, text="Add Filename to Prompt", variable=self.add_filename_var
+        ).grid(row=4, column=0, columnspan=2, sticky="w")
 
         # --- Chunking Frame ---
-        chunk_f = ttk.LabelFrame(tab_ai, text="Text Chunking (Process very long text in parts)", padding=5)
+        chunk_f = ttk.LabelFrame(
+            tab_ai, text="Text Chunking (Process very long text in parts)", padding=5
+        )
         chunk_f.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(15, 0))
-        
-        ttk.Checkbutton(chunk_f, text="Enable Text Chunking", variable=self.enable_chunking_var, command=self.toggle_chunking).grid(row=0, column=0, columnspan=2, sticky="w")
-        
+
+        ttk.Checkbutton(
+            chunk_f,
+            text="Enable Text Chunking",
+            variable=self.enable_chunking_var,
+            command=self.toggle_chunking,
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
         grid_c = ttk.Frame(chunk_f)
         grid_c.grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=5)
-        
-        ttk.Label(grid_c, text="Max Tokens per Chunk:").grid(row=0, column=0, sticky="w")
-        self.chunk_size_spin = ttk.Spinbox(grid_c, from_=100, to=1000000, textvariable=self.chunk_size_var, width=10)
+
+        ttk.Label(grid_c, text="Max Tokens per Chunk:").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.chunk_size_spin = ttk.Spinbox(
+            grid_c, from_=100, to=1000000, textvariable=self.chunk_size_var, width=10
+        )
         self.chunk_size_spin.grid(row=0, column=1, sticky="w", padx=5)
-        
-        self.overlap_check = ttk.Checkbutton(grid_c, text="Enable Overlap:", variable=self.enable_overlap_var, command=self.toggle_chunking)
-        self.overlap_check.grid(row=1, column=0, sticky="w", pady=(5,0))
-        self.chunk_overlap_spin = ttk.Spinbox(grid_c, from_=0, to=10000, textvariable=self.chunk_overlap_var, width=10)
-        self.chunk_overlap_spin.grid(row=1, column=1, sticky="w", padx=5, pady=(5,0))
-        
-        self.force_cut_check = ttk.Checkbutton(chunk_f, text="Force Cutoff (End at sentence boundary .!?)", variable=self.force_cutoff_var)
-        self.force_cut_check.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(5,0))
-        
-        self.toggle_chunking() # Init state
+
+        self.overlap_check = ttk.Checkbutton(
+            grid_c,
+            text="Enable Overlap:",
+            variable=self.enable_overlap_var,
+            command=self.toggle_chunking,
+        )
+        self.overlap_check.grid(row=1, column=0, sticky="w", pady=(5, 0))
+        self.chunk_overlap_spin = ttk.Spinbox(
+            grid_c, from_=0, to=10000, textvariable=self.chunk_overlap_var, width=10
+        )
+        self.chunk_overlap_spin.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 0))
+
+        self.force_cut_check = ttk.Checkbutton(
+            chunk_f,
+            text="Force Cutoff (End at sentence boundary .!?)",
+            variable=self.force_cutoff_var,
+        )
+        self.force_cut_check.grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(5, 0)
+        )
+
+        self.toggle_chunking()  # Init state
 
         self.ollama_search_var = tk.BooleanVar(value=False)
-        self.ollama_search_check = ttk.Checkbutton(tab_ai, text="Enable Web Search (Ollama Only)", variable=self.ollama_search_var)
-        self.ollama_search_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5,0))
+        self.ollama_search_check = ttk.Checkbutton(
+            tab_ai,
+            text="Enable Web Search (Ollama Only)",
+            variable=self.ollama_search_var,
+        )
+        self.ollama_search_check.grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(5, 0)
+        )
 
         ttk.Checkbutton(
             tab_ai,
             text="Persistent Context (Global)",
             variable=self.persistent_context_var,
-            command=self.on_persistent_context_toggle
+            command=self.on_persistent_context_toggle,
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        ttk.Label(tab_ai, text="Context Text:").grid(row=8, column=0, sticky="w", pady=(6, 3))
-        ttk.Button(tab_ai, text="Insert Context", command=self.insert_context_placeholder).grid(row=8, column=1, sticky="e", pady=(6, 3))
+        ttk.Label(tab_ai, text="Context Text:").grid(
+            row=8, column=0, sticky="w", pady=(6, 3)
+        )
+        ttk.Button(
+            tab_ai, text="Insert Context", command=self.insert_context_placeholder
+        ).grid(row=8, column=1, sticky="e", pady=(6, 3))
         self.context_text = scrolledtext.ScrolledText(tab_ai, height=4)
         self.context_text.grid(row=9, column=0, columnspan=2, sticky="ew")
         self.context_text.bind("<<Modified>>", self._on_context_text_modified)
@@ -2111,89 +3016,204 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.context_text.insert(tk.END, self.default_context_text)
             self.context_text.edit_modified(False)
 
-
-        tab_out = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_out, text="Output & Batch")
+        tab_out = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab_out, text="Output & Batch")
         tab_out.columnconfigure(1, weight=1)
         ttk.Label(tab_out, text="Folder:").grid(row=0, column=0, sticky="w")
-        self.out_ent = ttk.Entry(tab_out, textvariable=self.output_dir_var, width=15); self.out_ent.grid(row=0, column=1, sticky="ew")
-        ttk.Button(tab_out, text="...", width=3, command=self.browse_out).grid(row=0, column=2)
-        ttk.Label(tab_out, text="Suffix/Ext:").grid(row=1, column=0, sticky="w")
-        f_ext = ttk.Frame(tab_out); f_ext.grid(row=1, column=1, columnspan=2, sticky="ew")
+        self.out_ent = ttk.Entry(tab_out, textvariable=self.output_dir_var, width=15)
+        self.out_ent.grid(row=0, column=1, sticky="ew")
+        ttk.Button(tab_out, text="...", width=3, command=self.browse_out).grid(
+            row=0, column=2
+        )
+        self.model_prefix_check = ttk.Checkbutton(
+            tab_out,
+            text="Add Provider-Model as Prefix to Folder Name",
+            variable=self.model_prefix_var,
+        )
+        self.model_prefix_check.grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(2, 0)
+        )
+
+        # Dynamic Folder Preview
+        f_prev = ttk.Frame(tab_out)
+        f_prev.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+        f_prev.columnconfigure(1, weight=1)
+        ttk.Label(f_prev, text="Preview:").grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
+        self.preview_ent = ttk.Entry(
+            f_prev,
+            textvariable=self.folder_preview_var,
+            state="readonly",
+            font=("Helvetica", 8, "italic"),
+        )
+        self.preview_ent.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(tab_out, text="Suffix/Ext:").grid(row=3, column=0, sticky="w")
+        f_ext = ttk.Frame(tab_out)
+        f_ext.grid(row=3, column=1, columnspan=2, sticky="ew")
         f_ext.columnconfigure(0, weight=1)
-        self.suf_ent = ttk.Entry(f_ext, textvariable=self.suffix_var, width=10); self.suf_ent.grid(row=0, column=0, sticky="ew")
-        self.ext_ent = ttk.Entry(f_ext, textvariable=self.output_ext_var, width=6); self.ext_ent.grid(row=0, column=1, sticky="e", padx=(5, 0))
-        self.group_check = ttk.Checkbutton(tab_out, text="Group Files:", variable=self.group_files_var, command=self.toggle_grouping)
-        self.group_check.grid(row=2, column=0, sticky="w", pady=5)
-        
-        self.group_spin = ttk.Spinbox(tab_out, from_=2, to=5000, textvariable=self.group_size_var, width=5, state="disabled")
-        self.group_spin.grid(row=2, column=1, sticky="w", pady=5)
-        
-        self.over_check = ttk.Checkbutton(tab_out, text="Overwrite Original", variable=self.overwrite_var, command=self.toggle_overwrite)
-        self.over_check.grid(row=3, column=0, columnspan=2, sticky="w")
+        self.suf_ent = ttk.Entry(f_ext, textvariable=self.suffix_var, width=10)
+        self.suf_ent.grid(row=0, column=0, sticky="ew")
+        self.ext_ent = ttk.Entry(f_ext, textvariable=self.output_ext_var, width=6)
+        self.ext_ent.grid(row=0, column=1, sticky="e", padx=(5, 0))
+        self.group_check = ttk.Checkbutton(
+            tab_out,
+            text="Group Files:",
+            variable=self.group_files_var,
+            command=self.toggle_grouping,
+        )
+        self.group_check.grid(row=4, column=0, sticky="w", pady=5)
+
+        self.group_spin = ttk.Spinbox(
+            tab_out,
+            from_=2,
+            to=5000,
+            textvariable=self.group_size_var,
+            width=5,
+            state="disabled",
+        )
+        self.group_spin.grid(row=4, column=1, sticky="w", pady=5)
+
+        self.over_check = ttk.Checkbutton(
+            tab_out,
+            text="Overwrite Original",
+            variable=self.overwrite_var,
+            command=self.toggle_overwrite,
+        )
+        self.over_check.grid(row=5, column=0, columnspan=2, sticky="w")
 
         self.out_under_input_check = ttk.Checkbutton(
             tab_out,
             text="Output Under Each Input Folder",
-            variable=self.output_under_input_var
+            variable=self.output_under_input_var,
         )
-        self.out_under_input_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.out_under_input_check.grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(2, 0)
+        )
 
         self.merge_outputs_check = ttk.Checkbutton(
             tab_out,
             text="Merge Outputs When Done (Per Output Folder)",
-            variable=self.merge_outputs_var
+            variable=self.merge_outputs_var,
         )
-        self.merge_outputs_check.grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        
+        self.merge_outputs_check.grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(2, 0)
+        )
+
         # New Cleanup Option
-        self.clean_md_check = ttk.Checkbutton(tab_out, text="Clean Markdown Fences (```)", variable=self.clean_markdown_var)
-        self.clean_md_check.grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.clean_md_check = ttk.Checkbutton(
+            tab_out,
+            text="Clean Markdown Fences (```)",
+            variable=self.clean_markdown_var,
+        )
+        self.clean_md_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        self.json_check = ttk.Checkbutton(tab_out, text="Validate JSON Output", variable=self.validate_json_var)
-        self.json_check.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        
+        self.json_check = ttk.Checkbutton(
+            tab_out, text="Validate JSON Output", variable=self.validate_json_var
+        )
+        self.json_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
         # New Checkbox for Schema Validation (v25.6)
-        self.json_keys_check = ttk.Checkbutton(tab_out, text="Enforce Schema (Title, Desc, Tags)", variable=self.validate_keys_var)
-        self.json_keys_check.grid(row=8, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2))
+        self.json_keys_check = ttk.Checkbutton(
+            tab_out,
+            text="Enforce Schema (Title, Desc, Tags)",
+            variable=self.validate_keys_var,
+        )
+        self.json_keys_check.grid(
+            row=10, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2)
+        )
 
-        self.save_log_check = ttk.Checkbutton(tab_out, text="Save Processing Logs", variable=self.save_log_var)
-        self.save_log_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        
+        self.save_log_check = ttk.Checkbutton(
+            tab_out, text="Save Processing Logs", variable=self.save_log_var
+        )
+        self.save_log_check.grid(
+            row=11, column=0, columnspan=2, sticky="w", pady=(2, 0)
+        )
+
         # Rename Mode
-        self.rename_check = ttk.Checkbutton(tab_out, text="Rename Input Mode (File System Change)", variable=self.rename_mode_var, command=self.toggle_rename_mode)
-        self.rename_check.grid(row=10, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.rename_check = ttk.Checkbutton(
+            tab_out,
+            text="Rename Input Mode (File System Change)",
+            variable=self.rename_mode_var,
+            command=self.toggle_rename_mode,
+        )
+        self.rename_check.grid(row=12, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Rename Options
         self.rename_opts_frame = ttk.Frame(tab_out)
-        self.rename_opts_frame.grid(row=11, column=0, columnspan=2, sticky="w", padx=(20, 0))
-        ttk.Radiobutton(self.rename_opts_frame, text="Full Rename", variable=self.rename_method_var, value="full").pack(side=tk.LEFT)
-        ttk.Radiobutton(self.rename_opts_frame, text="Prefix", variable=self.rename_method_var, value="prefix").pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(self.rename_opts_frame, text="Suffix", variable=self.rename_method_var, value="suffix").pack(side=tk.LEFT)
+        self.rename_opts_frame.grid(
+            row=13, column=0, columnspan=2, sticky="w", padx=(20, 0)
+        )
+        ttk.Radiobutton(
+            self.rename_opts_frame,
+            text="Full Rename",
+            variable=self.rename_method_var,
+            value="full",
+        ).pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            self.rename_opts_frame,
+            text="Prefix",
+            variable=self.rename_method_var,
+            value="prefix",
+        ).pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(
+            self.rename_opts_frame,
+            text="Suffix",
+            variable=self.rename_method_var,
+            value="suffix",
+        ).pack(side=tk.LEFT)
 
         # Upload Mode Radio Buttons
-        ttk.Label(tab_out, text="Upload Mode:").grid(row=12, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(tab_out, text="Upload Mode:").grid(
+            row=14, column=0, sticky="w", pady=(5, 0)
+        )
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=12, column=1, columnspan=2, sticky="ew", pady=(5, 0))
-        ttk.Radiobutton(u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel").pack(side=tk.LEFT)
-        ttk.Radiobutton(u_frame, text="Sequential", variable=self.upload_mode_var, value="sequential").pack(side=tk.LEFT, padx=10)
+        u_frame.grid(row=14, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        ttk.Radiobutton(
+            u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel"
+        ).pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            u_frame,
+            text="Sequential",
+            variable=self.upload_mode_var,
+            value="sequential",
+        ).pack(side=tk.LEFT, padx=10)
 
-
+        self.stop_on_unavailable_check = ttk.Checkbutton(
+            tab_out,
+            text="Auto-stop queue if model unavailable and switch is cancelled",
+            variable=self.stop_queue_on_model_unavailable_var,
+        )
+        self.stop_on_unavailable_check.grid(
+            row=15, column=0, columnspan=3, sticky="w", pady=(5, 0)
+        )
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=14, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=16, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
-        ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3).pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(
+            delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3
+        ).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
-        ttk.Spinbox(delay_frame, from_=0, to=60, textvariable=self.delay_sec_var, width=3).pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(
+            delay_frame, from_=0, to=60, textvariable=self.delay_sec_var, width=3
+        ).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="s").pack(side=tk.LEFT)
 
         # === TAB: Image & Format ===
-        tab_img = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_img, text="Image & Format")
+        tab_img = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab_img, text="Image & Format")
         tab_img.columnconfigure(0, weight=1)
-        
+
         # Master Toggle
-        self.convert_check = ttk.Checkbutton(tab_img, text="Enable Image Pre-processing / Conversion", variable=self.enable_img_conversion_var, command=self.toggle_img_settings)
+        self.convert_check = ttk.Checkbutton(
+            tab_img,
+            text="Enable Image Pre-processing / Conversion",
+            variable=self.enable_img_conversion_var,
+            command=self.toggle_img_settings,
+        )
         self.convert_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         # Container for sub-settings
@@ -2201,116 +3221,275 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.img_settings_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
         self.img_settings_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(self.img_settings_frame, text="Temporary File Format:", font=('Helvetica', 9, 'bold')).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        ttk.Label(
+            self.img_settings_frame,
+            text="Temporary File Format:",
+            font=("Helvetica", 9, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 5))
         fmt_frame = ttk.Frame(self.img_settings_frame)
         fmt_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        
+
         # Format Radios
         for fmt in ["PNG", "JPEG", "WEBP"]:
-            ttk.Radiobutton(fmt_frame, text=fmt, variable=self.temp_img_fmt_var, value=fmt).pack(side=tk.LEFT, padx=(0, 10))
-            
+            ttk.Radiobutton(
+                fmt_frame, text=fmt, variable=self.temp_img_fmt_var, value=fmt
+            ).pack(side=tk.LEFT, padx=(0, 10))
+
         # Quality
-        ttk.Label(self.img_settings_frame, text="Compression Quality (1-100):").grid(row=2, column=0, sticky="w")
+        ttk.Label(self.img_settings_frame, text="Compression Quality (1-100):").grid(
+            row=2, column=0, sticky="w"
+        )
         q_frame = ttk.Frame(self.img_settings_frame)
         q_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         q_frame.columnconfigure(0, weight=1)
-        self.qual_scale = ttk.Scale(q_frame, from_=1, to=100, variable=self.img_quality_var, orient=tk.HORIZONTAL, length=1, command=lambda s: self.img_quality_var.set(int(float(s))))
+        self.qual_scale = ttk.Scale(
+            q_frame,
+            from_=1,
+            to=100,
+            variable=self.img_quality_var,
+            orient=tk.HORIZONTAL,
+            length=1,
+            command=lambda s: self.img_quality_var.set(int(float(s))),
+        )
         self.qual_scale.grid(row=0, column=0, sticky="ew")
-        ttk.Label(q_frame, textvariable=self.img_quality_var).grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(q_frame, text="(JPEG/WEBP only)", font=('Helvetica', 8, 'italic'), foreground="gray").grid(row=0, column=2, sticky="w")
+        ttk.Label(q_frame, textvariable=self.img_quality_var).grid(
+            row=0, column=1, sticky="w", padx=5
+        )
+        ttk.Label(
+            q_frame,
+            text="(JPEG/WEBP only)",
+            font=("Helvetica", 8, "italic"),
+            foreground="gray",
+        ).grid(row=0, column=2, sticky="w")
 
         # Max Dimension
-        ttk.Label(self.img_settings_frame, text="Max Dimension (px):").grid(row=4, column=0, sticky="w")
+        ttk.Label(self.img_settings_frame, text="Max Dimension (px):").grid(
+            row=4, column=0, sticky="w"
+        )
         dim_frame = ttk.Frame(self.img_settings_frame)
         dim_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        ttk.Spinbox(dim_frame, from_=0, to=8192, textvariable=self.img_max_dim_var, width=6, increment=128).pack(side=tk.LEFT)
-        ttk.Label(dim_frame, text="(0 = No Resize)", font=('Helvetica', 8)).pack(side=tk.LEFT, padx=5)
+        ttk.Spinbox(
+            dim_frame,
+            from_=0,
+            to=8192,
+            textvariable=self.img_max_dim_var,
+            width=6,
+            increment=128,
+        ).pack(side=tk.LEFT)
+        ttk.Label(dim_frame, text="(0 = No Resize)", font=("Helvetica", 8)).pack(
+            side=tk.LEFT, padx=5
+        )
 
         # Force Convert
-        ttk.Checkbutton(self.img_settings_frame, text="Force Conversion for Native Types", variable=self.force_conversion_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        ttk.Label(self.img_settings_frame, text="Force re-encoding even for PNG/JPG inputs\n(Apply compression/resizing to everything)", font=('Helvetica', 8, 'italic'), foreground="gray").grid(row=7, column=0, columnspan=2, sticky="w", padx=20)
+        ttk.Checkbutton(
+            self.img_settings_frame,
+            text="Force Conversion for Native Types",
+            variable=self.force_conversion_var,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Label(
+            self.img_settings_frame,
+            text="Force re-encoding even for PNG/JPG inputs\n(Apply compression/resizing to everything)",
+            font=("Helvetica", 8, "italic"),
+            foreground="gray",
+        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=20)
 
         # Save to Output Checkbox
-        ttk.Checkbutton(self.img_settings_frame, text="Save Processed Image to Output Folder", variable=self.save_img_to_output_var).grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        
-        self.toggle_img_settings() # Init State
+        ttk.Checkbutton(
+            self.img_settings_frame,
+            text="Save Processed Image to Output Folder",
+            variable=self.save_img_to_output_var,
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
+        self.toggle_img_settings()  # Init State
 
-
-        tab_safe = ttk.Frame(self.notebook, padding=10); self.notebook.add(tab_safe, text="Safety")
-        ttk.Checkbutton(tab_safe, text="Enable Filters", variable=self.enable_safety_var, command=self.toggle_safety).pack(anchor="w")
+        tab_safe = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab_safe, text="Safety")
+        ttk.Checkbutton(
+            tab_safe,
+            text="Enable Filters",
+            variable=self.enable_safety_var,
+            command=self.toggle_safety,
+        ).pack(anchor="w")
         self.safety_widgets = []
-        safe_grid = ttk.Frame(tab_safe); safe_grid.pack(fill=tk.X, pady=5)
+        safe_grid = ttk.Frame(tab_safe)
+        safe_grid.pack(fill=tk.X, pady=5)
         safe_grid.columnconfigure(1, weight=1)
-        for i, (txt, var) in enumerate([("Harassment", self.harassment_var), ("Hate Speech", self.hate_speech_var), 
-                                        ("Sexual", self.sexually_explicit_var), ("Dangerous", self.dangerous_content_var)]):
-            l = ttk.Label(safe_grid, text=txt); l.grid(row=i, column=0, sticky="w")
-            c = ttk.Combobox(safe_grid, textvariable=var, values=list(self.safety_map.keys()), state="disabled", width=12)
-            c.grid(row=i, column=1, sticky="ew", padx=5); self.safety_widgets.extend([l, c])
+        for i, (txt, var) in enumerate(
+            [
+                ("Harassment", self.harassment_var),
+                ("Hate Speech", self.hate_speech_var),
+                ("Sexual", self.sexually_explicit_var),
+                ("Dangerous", self.dangerous_content_var),
+            ]
+        ):
+            l = ttk.Label(safe_grid, text=txt)
+            l.grid(row=i, column=0, sticky="w")
+            c = ttk.Combobox(
+                safe_grid,
+                textvariable=var,
+                values=list(self.safety_map.keys()),
+                state="disabled",
+                width=12,
+            )
+            c.grid(row=i, column=1, sticky="ew", padx=5)
+            self.safety_widgets.extend([l, c])
 
         # --- COLUMN 3 (RIGHT): QUEUE & STATUS ---
-        right_frame = ttk.Frame(main_pane); main_pane.add(right_frame, weight=2)
-        q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5); q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(q_frame, columns=('id', 'name', 'status', 'model'), show='headings')
-        self.tree.heading('id', text='ID'); self.tree.column('id', width=30)
-        self.tree.heading('name', text='File/Group'); self.tree.column('name', width=250)
-        self.tree.heading('status', text='Status'); self.tree.column('status', width=100)
-        self.tree.heading('model', text='Model'); self.tree.column('model', width=120)
+        right_frame = ttk.Frame(main_pane)
+        main_pane.add(right_frame, weight=1)
+        q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5)
+        q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.tree = ttk.Treeview(
+            q_frame, columns=("id", "name", "status", "model"), show="headings"
+        )
+        self.tree.heading("id", text="ID")
+        self.tree.column("id", width=30)
+        self.tree.heading("name", text="File/Group")
+        self.tree.column("name", width=250)
+        self.tree.heading("status", text="Status")
+        self.tree.column("status", width=100)
+        self.tree.heading("model", text="Model")
+        self.tree.column("model", width=120)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         if DND_AVAILABLE:
             self.tree.drop_target_register(DND_FILES)
-            self.tree.dnd_bind('<<Drop>>', self.handle_job_drop)
-        sc = ttk.Scrollbar(q_frame, orient=tk.VERTICAL, command=self.tree.yview); sc.pack(side=tk.RIGHT, fill=tk.Y); self.tree.config(yscrollcommand=sc.set)
+            self.tree.dnd_bind("<<Drop>>", self.handle_job_drop)
+        sc = ttk.Scrollbar(q_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        sc.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.config(yscrollcommand=sc.set)
 
-        btn_area = ttk.Frame(right_frame, padding=10); btn_area.pack(side=tk.BOTTOM, fill=tk.X)
-        self.btn_add_sel = ttk.Button(btn_area, text="Add Sel", width=8, command=lambda: self.add_to_queue(True)); self.btn_add_sel.pack(side=tk.LEFT, padx=2)
-        self.btn_add_all = ttk.Button(btn_area, text="Add All", width=8, command=lambda: self.add_to_queue(False)); self.btn_add_all.pack(side=tk.LEFT, padx=2)
-        self.start_btn = ttk.Button(btn_area, text="START PROCESSING", command=self.start_processing, style="Accent.TButton"); self.start_btn.pack(side=tk.RIGHT, padx=5, ipadx=10)
-        self.pause_btn = ttk.Button(btn_area, text="Pause", command=self.toggle_pause, state="disabled"); self.pause_btn.pack(side=tk.RIGHT, padx=5)
-        self.clear_btn = ttk.Button(btn_area, text="Clear", command=self.clear_queue); self.clear_btn.pack(side=tk.RIGHT, padx=5)
-        self.btn_export = ttk.Button(btn_area, text="Export Jobs", command=self.export_job_list); self.btn_export.pack(side=tk.LEFT, padx=2)
-        self.btn_load = ttk.Button(btn_area, text="Load Jobs", command=self.load_job_list); self.btn_load.pack(side=tk.LEFT, padx=2)
-        self.btn_requeue = ttk.Button(btn_area, text="Retry Failed", command=self.requeue_failed); self.btn_requeue.pack(side=tk.RIGHT, padx=5)
-        self.btn_undo = ttk.Button(btn_area, text="Undo Rename", command=self.undo_rename); self.btn_undo.pack(side=tk.RIGHT, padx=5)
-        ttk.Style().configure("Accent.TButton", font=('Helvetica', 10, 'bold'), foreground="black")
+        btn_area = ttk.Frame(right_frame, padding=10)
+        btn_area.pack(side=tk.BOTTOM, fill=tk.X)
+        btn_row1 = ttk.Frame(btn_area)
+        btn_row1.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        btn_row2 = ttk.Frame(btn_area)
+        btn_row2.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        btn_row3 = ttk.Frame(btn_area)
+        btn_row3.pack(side=tk.TOP, fill=tk.X)
+
+        self.start_btn = ttk.Button(
+            btn_row1,
+            text="START PROCESSING",
+            command=self.start_processing,
+            style="Accent.TButton",
+        )
+        self.start_btn.pack(side=tk.LEFT, padx=5, ipadx=10)
+        self.pause_btn = ttk.Button(
+            btn_row1, text="Pause", command=self.toggle_pause, state="disabled"
+        )
+        self.pause_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_btn = ttk.Button(
+            btn_row1, text="Stop", command=self.stop_processing, state="disabled"
+        )
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_btn = ttk.Button(
+            btn_row1, text="Clear Queue", command=self.clear_queue
+        )
+        self.clear_btn.pack(side=tk.RIGHT, padx=5)
+
+        self.btn_add_sel = ttk.Button(
+            btn_row2, text="Add Sel", width=8, command=lambda: self.add_to_queue(True)
+        )
+        self.btn_add_sel.pack(side=tk.LEFT, padx=2)
+        self.btn_add_all = ttk.Button(
+            btn_row2, text="Add All", width=8, command=lambda: self.add_to_queue(False)
+        )
+        self.btn_add_all.pack(side=tk.LEFT, padx=2)
+        self.btn_requeue = ttk.Button(
+            btn_row2, text="Retry Failed", command=self.requeue_failed
+        )
+        self.btn_requeue.pack(side=tk.RIGHT, padx=5)
+
+        self.btn_export = ttk.Button(
+            btn_row3, text="Export Jobs", command=self.export_job_list
+        )
+        self.btn_export.pack(side=tk.LEFT, padx=2)
+        self.btn_load = ttk.Button(
+            btn_row3, text="Load Jobs", command=self.load_job_list
+        )
+        self.btn_load.pack(side=tk.LEFT, padx=2)
+        self.btn_undo = ttk.Button(
+            btn_row3, text="Undo Rename", command=self.undo_rename
+        )
+        self.btn_undo.pack(side=tk.RIGHT, padx=5)
+
+        ttk.Style().configure(
+            "Accent.TButton", font=("Helvetica", 10, "bold"), foreground="black"
+        )
+
+        # --- Keybinds ---
+        self.tree.bind("<Control-a>", self.select_all_jobs)
+        self.tree.bind("<Control-A>", self.select_all_jobs)
+        self.tree.bind("<Delete>", lambda e: self.remove_selected_jobs())
 
         # --- Context Menu ---
         self.context_menu = tk.Menu(self.tree, tearoff=0)
-        self.context_menu.add_command(label="Remove Selected", command=self.remove_selected_jobs)
-        self.context_menu.add_command(label="Retry Selected", command=self.retry_selected_jobs)
+        self.context_menu.add_command(
+            label="Remove Selected", command=self.remove_selected_jobs
+        )
+        self.context_menu.add_command(
+            label="Retry Selected", command=self.retry_selected_jobs
+        )
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="Copy Filepath/Group", command=self.copy_job_name)
+        self.context_menu.add_command(
+            label="Copy Filepath/Group", command=self.copy_job_name
+        )
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="Clear Completed", command=self.clear_completed_jobs)
-        
+        self.context_menu.add_command(
+            label="Clear Completed", command=self.clear_completed_jobs
+        )
+
         self.tree.bind("<Button-3>", self.show_context_menu)
 
     def toggle_img_settings(self):
-        state = 'normal' if self.enable_img_conversion_var.get() else 'disabled'
-        
+        state = "normal" if self.enable_img_conversion_var.get() else "disabled"
+
         def recursive_set_state(widget, state):
             try:
                 widget.configure(state=state)
             except tk.TclError:
-                pass # Widget doesn't support state (e.g., Frame)
-            
+                pass  # Widget doesn't support state (e.g., Frame)
+
             for child in widget.winfo_children():
                 recursive_set_state(child, state)
-        
+
         # Apply to all children of the container
         for child in self.img_settings_frame.winfo_children():
             recursive_set_state(child, state)
 
     def toggle_chunking(self):
         chunk_enabled = self.enable_chunking_var.get()
-        state = 'normal' if chunk_enabled else 'disabled'
+        state = "normal" if chunk_enabled else "disabled"
         self.chunk_size_spin.config(state=state)
         self.force_cut_check.config(state=state)
         self.overlap_check.config(state=state)
-        
+
         # Overlap spinbox is only active if BOTH chunking and overlap are enabled
         overlap_active = chunk_enabled and self.enable_overlap_var.get()
-        self.chunk_overlap_spin.config(state='normal' if overlap_active else 'disabled')
+        self.chunk_overlap_spin.config(state="normal" if overlap_active else "disabled")
+
+    def _update_folder_preview(self, *args):
+        base_folder = self.output_dir_var.get().strip()
+        prefix = ""
+        if self.model_prefix_var.get():
+            engine = self.engine_var.get()
+            model_name = self.model_var.get()
+            if model_name:
+                clean_model = model_name.split("/")[-1].replace(":", "-")
+                raw_prefix = f"{engine} - {clean_model}"
+                prefix = sanitize_filename(raw_prefix)
+
+        final_name = base_folder
+        if prefix:
+            if final_name:
+                final_name = f"{prefix}_{final_name}"
+            else:
+                final_name = prefix
+
+        if not final_name:
+            self.folder_preview_var.set("(Same as Input File)")
+        else:
+            self.folder_preview_var.set(final_name)
 
     def insert_context_placeholder(self):
         self.prompt_text.insert(tk.INSERT, CONTEXT_PROMPT_PLACEHOLDER)
@@ -2340,41 +3519,46 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # When leaving global mode, restore the selected preset's saved local context.
         name = self.preset_var.get()
         if name in self.current_presets:
-            preset_local_context = self.current_presets[name].get('context_text', '')
+            preset_local_context = self.current_presets[name].get("context_text", "")
             self._set_context_text(preset_local_context)
 
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
-        self.preset_combo['values'] = sorted(list(self.current_presets.keys()))
+        self.preset_combo["values"] = sorted(list(self.current_presets.keys()))
 
     def load_preset(self, event=None):
         name = self.preset_var.get()
         console_log(f"User selected preset: {name}", "ACTION")
         if name in self.current_presets:
             data = self.current_presets[name]
-            self.prompt_text.delete("1.0", tk.END); self.prompt_text.insert(tk.END, data.get('prompt', ''))
-            
-            def set_var(var, key, default=None):
-                if key in data: var.set(data[key])
-                elif default is not None: var.set(default)
+            self.prompt_text.delete("1.0", tk.END)
+            self.prompt_text.insert(tk.END, data.get("prompt", ""))
 
-            set_var(self.engine_var, 'engine')
+            def set_var(var, key, default=None):
+                if key in data:
+                    var.set(data[key])
+                elif default is not None:
+                    var.set(default)
+
+            set_var(self.engine_var, "engine")
             self.update_models()
-            set_var(self.model_var, 'model')
-            set_var(self.output_dir_var, 'output_folder') # Missing Key
-            set_var(self.output_under_input_var, 'output_under_input', False)
-            set_var(self.merge_outputs_var, 'merge_outputs', False)
-            set_var(self.suffix_var, 'output_suffix')
-            set_var(self.output_ext_var, 'output_extension', "")
-            set_var(self.overwrite_var, 'overwrite_original', False)
-            set_var(self.stream_var, 'stream_output', True) # Default True
-            set_var(self.thinking_var, 'enable_thinking', False) # Default False
-            set_var(self.add_filename_var, 'add_filename_to_prompt', False)
-            set_var(self.ollama_search_var, 'enable_web_search', False)
-            set_var(self.persistent_context_var, 'persistent_context', False)
-            selected_local_context = data.get('context_text', '')
-            selected_global_context = data.get('global_context_text', selected_local_context)
+            set_var(self.model_var, "model")
+            set_var(self.output_dir_var, "output_folder")  # Missing Key
+            set_var(self.output_under_input_var, "output_under_input", False)
+            set_var(self.merge_outputs_var, "merge_outputs", False)
+            set_var(self.suffix_var, "output_suffix")
+            set_var(self.output_ext_var, "output_extension", "")
+            set_var(self.overwrite_var, "overwrite_original", False)
+            set_var(self.stream_var, "stream_output", True)  # Default True
+            set_var(self.thinking_var, "enable_thinking", False)  # Default False
+            set_var(self.add_filename_var, "add_filename_to_prompt", False)
+            set_var(self.ollama_search_var, "enable_web_search", False)
+            set_var(self.persistent_context_var, "persistent_context", False)
+            selected_local_context = data.get("context_text", "")
+            selected_global_context = data.get(
+                "global_context_text", selected_local_context
+            )
 
             if self.persistent_context_var.get():
                 # Global mode: do not overwrite existing textbox while switching presets.
@@ -2383,55 +3567,61 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 self.global_context_text_value = self._get_context_text()
             else:
                 self._set_context_text(selected_local_context)
-            
+
             # Safety Settings
-            set_var(self.enable_safety_var, 'enable_safety', False)
-            set_var(self.harassment_var, 'safety_harassment', 'Off')
-            set_var(self.hate_speech_var, 'safety_hate_speech', 'Off')
-            set_var(self.sexually_explicit_var, 'safety_sexually_explicit', 'Off')
-            set_var(self.dangerous_content_var, 'safety_dangerous_content', 'Off')
-            
+            set_var(self.enable_safety_var, "enable_safety", False)
+            set_var(self.harassment_var, "safety_harassment", "Off")
+            set_var(self.hate_speech_var, "safety_hate_speech", "Off")
+            set_var(self.sexually_explicit_var, "safety_sexually_explicit", "Off")
+            set_var(self.dangerous_content_var, "safety_dangerous_content", "Off")
+
             # Text Chunking
-            set_var(self.enable_chunking_var, 'enable_chunking', False)
-            set_var(self.chunk_size_var, 'chunk_size', 4000)
-            set_var(self.enable_overlap_var, 'enable_overlap', False)
-            set_var(self.chunk_overlap_var, 'chunk_overlap', 0)
-            set_var(self.force_cutoff_var, 'force_cutoff', True)
-            
+            set_var(self.enable_chunking_var, "enable_chunking", False)
+            set_var(self.chunk_size_var, "chunk_size", 4000)
+            set_var(self.enable_overlap_var, "enable_overlap", False)
+            set_var(self.chunk_overlap_var, "chunk_overlap", 0)
+            set_var(self.force_cutoff_var, "force_cutoff", True)
+
             # Image Settings
-            set_var(self.enable_img_conversion_var, 'enable_img_conversion', False)
-            set_var(self.temp_img_fmt_var, 'temp_img_fmt', 'PNG')
-            set_var(self.img_quality_var, 'img_quality', 100)
-            set_var(self.img_max_dim_var, 'img_max_dim', 0)
-            set_var(self.img_max_dim_var, 'img_max_dim', 0)
-            set_var(self.force_conversion_var, 'force_conversion', False)
-            set_var(self.save_img_to_output_var, 'save_img_to_output', False)
-            
+            set_var(self.enable_img_conversion_var, "enable_img_conversion", False)
+            set_var(self.temp_img_fmt_var, "temp_img_fmt", "PNG")
+            set_var(self.img_quality_var, "img_quality", 100)
+            set_var(self.img_max_dim_var, "img_max_dim", 0)
+            set_var(self.img_max_dim_var, "img_max_dim", 0)
+            set_var(self.force_conversion_var, "force_conversion", False)
+            set_var(self.save_img_to_output_var, "save_img_to_output", False)
+
             # Batching & Validation
-            set_var(self.group_size_var, 'group_size', 1)
-            set_var(self.group_files_var, 'group_files', False)
-            set_var(self.validate_json_var, 'validate_json', False)
-            set_var(self.validate_keys_var, 'validate_json_keys', False)
-            set_var(self.clean_markdown_var, 'clean_markdown', True)
-            set_var(self.save_log_var, 'save_log', True)
-            
+            set_var(self.group_size_var, "group_size", 1)
+            set_var(self.group_files_var, "group_files", False)
+            set_var(self.validate_json_var, "validate_json", False)
+            set_var(self.validate_keys_var, "validate_json_keys", False)
+            set_var(self.clean_markdown_var, "clean_markdown", True)
+            set_var(self.save_log_var, "save_log", True)
+
             # Delay & Mode
-            set_var(self.delay_min_var, 'delay_min', 0)
-            set_var(self.delay_sec_var, 'delay_sec', 0)
-            set_var(self.upload_mode_var, 'upload_mode', 'parallel')
-            set_var(self.rename_mode_var, 'rename_mode', False)
-            set_var(self.rename_method_var, 'rename_method', 'full')
-            
-            self.toggle_safety() # Refresh UI state
+            set_var(self.delay_min_var, "delay_min", 0)
+            set_var(self.delay_sec_var, "delay_sec", 0)
+            set_var(self.upload_mode_var, "upload_mode", "parallel")
+            set_var(
+                self.stop_queue_on_model_unavailable_var,
+                "stop_queue_on_model_unavailable",
+                True,
+            )
+            set_var(self.rename_mode_var, "rename_mode", False)
+            set_var(self.rename_method_var, "rename_method", "full")
+            set_var(self.model_prefix_var, "model_prefix", False)
+
+            self.toggle_safety()  # Refresh UI state
             self.ollama_search_var.set(False)
-            
-            self.toggle_img_settings() # State Change
+
+            self.toggle_img_settings()  # State Change
             self.toggle_rename_mode()
-            
+
             self.toggle_overwrite()
             self.toggle_grouping()
             self.toggle_chunking()
-
+            self._update_folder_preview()  # Update dynamic preview
 
     def get_current_settings_dict(self):
         current_context = self._get_context_text()
@@ -2439,82 +3629,100 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.global_context_text_value = current_context
 
         return {
-            'prompt': self.prompt_text.get("1.0", tk.END).strip(),
-            'engine': self.engine_var.get(),
-            'model': self.model_var.get(),
-            'output_folder': self.output_dir_var.get(), # Missing Key
-            'output_under_input': self.output_under_input_var.get(),
-            'merge_outputs': self.merge_outputs_var.get(),
-            'output_suffix': self.suffix_var.get(),
-            'output_extension': self.output_ext_var.get(),
-            'overwrite_original': self.overwrite_var.get(),
-            'stream_output': self.stream_var.get(),
-            'group_size': self.group_size_var.get(),
-            'group_files': self.group_files_var.get(),
-            'validate_json': self.validate_json_var.get(),
-            'validate_json_keys': self.validate_keys_var.get(), # Save new setting
-            'clean_markdown': self.clean_markdown_var.get(),
-            'save_log': self.save_log_var.get(),
-            'delay_min': self.delay_min_var.get(),
-            'delay_sec': self.delay_sec_var.get(),
-            'upload_mode': self.upload_mode_var.get(),
-            'add_filename_to_prompt': self.add_filename_var.get(),
-            'context_text': current_context,
-            'persistent_context': self.persistent_context_var.get(),
-            'global_context_text': self.global_context_text_value,
-            'enable_web_search': self.ollama_search_var.get(),
-            'enable_safety': self.enable_safety_var.get(),
-            'safety_harassment': self.harassment_var.get(),
-            'safety_hate_speech': self.hate_speech_var.get(),
-            'safety_sexually_explicit': self.sexually_explicit_var.get(),
-            'safety_dangerous_content': self.dangerous_content_var.get(),
-            'enable_img_conversion': self.enable_img_conversion_var.get(),
-            'temp_img_fmt': self.temp_img_fmt_var.get(),
-            'img_quality': self.img_quality_var.get(),
-            'img_max_dim': self.img_max_dim_var.get(),
-            'force_conversion': self.force_conversion_var.get(),
-            'save_img_to_output': self.save_img_to_output_var.get(),
-            'save_img_to_output': self.save_img_to_output_var.get(),
-            'rename_mode': self.rename_mode_var.get(),
-            'rename_method': self.rename_method_var.get(),
-            'enable_thinking': self.thinking_var.get(),
-            'enable_chunking': self.enable_chunking_var.get(),
-            'chunk_size': self.chunk_size_var.get(),
-            'enable_overlap': self.enable_overlap_var.get(),
-            'chunk_overlap': self.chunk_overlap_var.get(),
-            'force_cutoff': self.force_cutoff_var.get()
+            "prompt": self.prompt_text.get("1.0", tk.END).strip(),
+            "engine": self.engine_var.get(),
+            "model": self.model_var.get(),
+            "output_folder": self.output_dir_var.get(),  # Missing Key
+            "output_under_input": self.output_under_input_var.get(),
+            "merge_outputs": self.merge_outputs_var.get(),
+            "output_suffix": self.suffix_var.get(),
+            "output_extension": self.output_ext_var.get(),
+            "overwrite_original": self.overwrite_var.get(),
+            "stream_output": self.stream_var.get(),
+            "group_size": self.group_size_var.get(),
+            "group_files": self.group_files_var.get(),
+            "validate_json": self.validate_json_var.get(),
+            "validate_json_keys": self.validate_keys_var.get(),  # Save new setting
+            "clean_markdown": self.clean_markdown_var.get(),
+            "save_log": self.save_log_var.get(),
+            "delay_min": self.delay_min_var.get(),
+            "delay_sec": self.delay_sec_var.get(),
+            "upload_mode": self.upload_mode_var.get(),
+            "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
+            "add_filename_to_prompt": self.add_filename_var.get(),
+            "context_text": current_context,
+            "persistent_context": self.persistent_context_var.get(),
+            "global_context_text": self.global_context_text_value,
+            "enable_web_search": self.ollama_search_var.get(),
+            "enable_safety": self.enable_safety_var.get(),
+            "safety_harassment": self.harassment_var.get(),
+            "safety_hate_speech": self.hate_speech_var.get(),
+            "safety_sexually_explicit": self.sexually_explicit_var.get(),
+            "safety_dangerous_content": self.dangerous_content_var.get(),
+            "enable_img_conversion": self.enable_img_conversion_var.get(),
+            "temp_img_fmt": self.temp_img_fmt_var.get(),
+            "img_quality": self.img_quality_var.get(),
+            "img_max_dim": self.img_max_dim_var.get(),
+            "force_conversion": self.force_conversion_var.get(),
+            "save_img_to_output": self.save_img_to_output_var.get(),
+            "save_img_to_output": self.save_img_to_output_var.get(),
+            "rename_mode": self.rename_mode_var.get(),
+            "rename_method": self.rename_method_var.get(),
+            "enable_thinking": self.thinking_var.get(),
+            "enable_chunking": self.enable_chunking_var.get(),
+            "chunk_size": self.chunk_size_var.get(),
+            "enable_overlap": self.enable_overlap_var.get(),
+            "chunk_overlap": self.chunk_overlap_var.get(),
+            "force_cutoff": self.force_cutoff_var.get(),
+            "model_prefix": self.model_prefix_var.get(),
         }
-
-
-
 
     def save_current_preset(self):
         name = self.preset_var.get()
-        if not name: tkinter.messagebox.showwarning("Save", "No preset selected."); return
-        if name not in self.current_presets: tkinter.messagebox.showerror("Error", "Preset not found."); return
+        if not name:
+            tkinter.messagebox.showwarning("Save", "No preset selected.")
+            return
+        if name not in self.current_presets:
+            tkinter.messagebox.showerror("Error", "Preset not found.")
+            return
         self.current_presets[name] = self.get_current_settings_dict()
         save_presets(self.current_presets)
         tkinter.messagebox.showinfo("Saved", f"Preset '{name}' updated.")
 
     def create_new_preset(self):
-        new_name = tkinter.simpledialog.askstring("New Preset", "Enter Name for New Preset:")
-        if not new_name: return
+        new_name = tkinter.simpledialog.askstring(
+            "New Preset", "Enter Name for New Preset:"
+        )
+        if not new_name:
+            return
         if new_name in self.current_presets:
-            if not tkinter.messagebox.askyesno("Overwrite", f"Preset '{new_name}' exists. Overwrite?"): return
+            if not tkinter.messagebox.askyesno(
+                "Overwrite", f"Preset '{new_name}' exists. Overwrite?"
+            ):
+                return
         self.current_presets[new_name] = self.get_current_settings_dict()
         save_presets(self.current_presets)
-        self.refresh_presets_combo(); self.preset_var.set(new_name)
+        self.refresh_presets_combo()
+        self.preset_var.set(new_name)
 
     def rename_preset(self):
         old_name = self.preset_var.get()
-        if not old_name or old_name not in self.current_presets: return
-        new_name = tkinter.simpledialog.askstring("Rename Preset", f"Rename '{old_name}' to:", initialvalue=old_name)
-        if not new_name or new_name == old_name: return
+        if not old_name or old_name not in self.current_presets:
+            return
+        new_name = tkinter.simpledialog.askstring(
+            "Rename Preset", f"Rename '{old_name}' to:", initialvalue=old_name
+        )
+        if not new_name or new_name == old_name:
+            return
         if new_name in self.current_presets:
-            if not tkinter.messagebox.askyesno("Overwrite", f"'{new_name}' exists. Overwrite?"): return
+            if not tkinter.messagebox.askyesno(
+                "Overwrite", f"'{new_name}' exists. Overwrite?"
+            ):
+                return
         self.current_presets[new_name] = self.current_presets.pop(old_name)
         save_presets(self.current_presets)
-        self.refresh_presets_combo(); self.preset_var.set(new_name)
+        self.refresh_presets_combo()
+        self.preset_var.set(new_name)
 
     def delete_preset(self):
         name = self.preset_var.get()
@@ -2522,31 +3730,38 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             if tkinter.messagebox.askyesno("Confirm", f"Delete '{name}'?"):
                 del self.current_presets[name]
                 save_presets(self.current_presets)
-                self.refresh_presets_combo(); self.preset_var.set('')
+                self.refresh_presets_combo()
+                self.preset_var.set("")
 
     def _on_closing(self):
         if self.worker_thread and self.worker_thread.is_alive():
             self.processing_cancelled.set()
-            self.worker_thread.join(timeout=1.0) 
-        self.destroy(); sys.exit(0)
+            self.worker_thread.join(timeout=1.0)
+        self.destroy()
+        sys.exit(0)
 
     def toggle_overwrite(self):
         st = "disabled" if self.overwrite_var.get() else "normal"
-        self.group_check.config(state=st); self.group_spin.config(state=st if self.group_files_var.get() else "disabled")
-        self.out_ent.config(state=st); self.suf_ent.config(state=st); self.ext_ent.config(state=st)
+        self.group_check.config(state=st)
+        self.group_spin.config(state=st if self.group_files_var.get() else "disabled")
+        self.out_ent.config(state=st)
+        self.suf_ent.config(state=st)
+        self.ext_ent.config(state=st)
 
     def toggle_grouping(self):
         st = "normal" if self.group_files_var.get() else "disabled"
-        self.group_spin.config(state=st); self.over_check.config(state="disabled" if st=="normal" else "normal")
+        self.group_spin.config(state=st)
+        self.over_check.config(state="disabled" if st == "normal" else "normal")
 
     def toggle_safety(self):
         st = "readonly" if self.enable_safety_var.get() else "disabled"
-        for w in self.safety_widgets: w.config(state=st)
+        for w in self.safety_widgets:
+            w.config(state=st)
 
     def toggle_rename_mode(self):
         is_rename = self.rename_mode_var.get()
         state = "disabled" if is_rename else "normal"
-        
+
         # Disable/Enable Output controls
         self.out_ent.config(state=state)
         self.suf_ent.config(state=state)
@@ -2557,72 +3772,109 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # Rename Options State
         r_state = "normal" if is_rename else "disabled"
         for child in self.rename_opts_frame.winfo_children():
-            try: child.configure(state=r_state)
-            except: pass
-        
+            try:
+                child.configure(state=r_state)
+            except:
+                pass
+
         # Force Grouping to False/1 if Rename Mode is ON
         if is_rename:
             self.group_files_var.set(False)
             self.group_spin.config(state="disabled")
         else:
-            self.toggle_grouping() # Restore correct state based on checkbox
+            self.toggle_grouping()  # Restore correct state based on checkbox
 
     def prompt_for_api_key(self):
         k = get_api_key(True)
-        if k: self.api_key = k; self.api_status_label.config(text="API Key: Set"); self.update_models()
+        if k:
+            self.api_key = k
+            self.api_status_label.config(text="API Key: Set")
+            self.update_models()
 
     def get_models_for_provider(self, provider):
-        if provider in self.model_cache: return self.model_cache[provider]
+        if provider in self.model_cache:
+            return self.model_cache[provider]
         m, err = [], None
-        if provider == "google": m, err = fetch_google_models(self.api_key)
-        elif provider == "ollama": m, err = fetch_ollama_models()
-        elif provider == "lmstudio": m, err = fetch_lmstudio_models()
-        if m: self.model_cache[provider] = m
+        if provider == "google":
+            m, err = fetch_google_models(self.api_key)
+        elif provider == "ollama":
+            m, err = fetch_ollama_models()
+        elif provider == "lmstudio":
+            m, err = fetch_lmstudio_models()
+        if m:
+            self.model_cache[provider] = m
         return m or []
+
+    def refresh_model_list(self):
+        provider = self.engine_var.get()
+        if provider in self.model_cache:
+            del self.model_cache[provider]
+        self.update_models()
 
     def update_models(self, *args):
         e = self.engine_var.get()
-        if e == 'ollama': self.ollama_search_check.grid()
-        else: self.ollama_search_check.grid_remove(); self.ollama_search_var.set(False)
+        if e == "ollama":
+            self.ollama_search_check.grid()
+        else:
+            self.ollama_search_check.grid_remove()
+            self.ollama_search_var.set(False)
 
-        self.model_combo.set('Loading...')
+        self.model_combo.set("Loading...")
         self.model_combo.config(state="disabled")
         self.update_idletasks()
-        
+
         m = self.get_models_for_provider(e)
         if m:
-            self.model_combo['values'] = m
+            self.model_combo["values"] = m
             self.model_combo.config(state="readonly")
             curr = self.model_var.get()
-            if curr and curr in m: self.model_combo.set(curr)
-            else: self.model_combo.set(DEFAULT_GOOGLE_MODEL if e=="google" and DEFAULT_GOOGLE_MODEL in m else m[0])
-        else: self.model_combo.set("No models found")
+            if curr and curr in m:
+                self.model_combo.set(curr)
+            else:
+                self.model_combo.set(
+                    DEFAULT_GOOGLE_MODEL
+                    if e == "google" and DEFAULT_GOOGLE_MODEL in m
+                    else m[0]
+                )
+        else:
+            self.model_combo.set("No models found")
 
     def add_files(self):
-        f = filedialog.askopenfilenames(parent=self, filetypes=[("Supported", " ".join(f"*{e}" for e in SUPPORTED_IMAGE_EXTENSIONS + ['.*']))])
+        f = filedialog.askopenfilenames(
+            parent=self,
+            filetypes=[
+                (
+                    "Supported",
+                    " ".join(f"*{e}" for e in SUPPORTED_IMAGE_EXTENSIONS + [".*"]),
+                )
+            ],
+        )
         if f:
             self._add_filepaths_to_list(f)
 
     def handle_job_drop(self, event):
         # Handle drag-and-drop files into Job Queue (Add to list + Add Job)
         files = self.tk.splitlist(event.data)
-        if not files: return
-        
+        if not files:
+            return
+
         processed_files = []
         for f in files:
-             p = os.path.normpath(f)
-             if os.path.isfile(p):
-                 processed_files.append(p)
-             elif os.path.isdir(p):
+            p = os.path.normpath(f)
+            if os.path.isfile(p):
+                processed_files.append(p)
+            elif os.path.isdir(p):
                 for ext in AUTO_LOAD_EXTENSIONS:
                     found = glob.glob(os.path.join(p, f"**/*{ext}"), recursive=True)
                     processed_files.extend([os.path.normpath(x) for x in found])
-        
+
         processed_files = sorted(list(set(processed_files)), key=natural_sort_key)
-        
+
         if processed_files:
-            self._add_filepaths_to_list(processed_files) # Ensure they are in input list
-            self.add_to_queue(files_override=processed_files) # Create Job safely
+            self._add_filepaths_to_list(
+                processed_files
+            )  # Ensure they are in input list
+            self.add_to_queue(files_override=processed_files)  # Create Job safely
 
     def handle_drop(self, event):
         # Handle drag-and-drop files
@@ -2645,18 +3897,20 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         norm_f = os.path.normpath(find_f)
                         if norm_f not in cur and norm_f not in new:
                             new.append(norm_f)
-                            
+
         if new:
             self.files_var.set(tuple(sorted(cur + new, key=natural_sort_key)))
 
     def remove_files(self):
         sel = self.file_listbox.curselection()
         if sel:
-            l = list(self.files_var.get()); 
-            for i in sorted(sel, reverse=True): l.pop(i)
+            l = list(self.files_var.get())
+            for i in sorted(sel, reverse=True):
+                l.pop(i)
             self.files_var.set(tuple(l))
 
-    def clear_files(self): self.files_var.set([])
+    def clear_files(self):
+        self.files_var.set([])
 
     def export_files_list(self):
         files = list(self.files_var.get())
@@ -2670,13 +3924,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             initialdir=initial_dir,
             title="Export File List",
             defaultextension=".json",
-            filetypes=[("JSON Files", "*.json")]
+            filetypes=[("JSON Files", "*.json")],
         )
         if not file_path:
             return
 
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(files, f, indent=4)
             console_log(f"Exported {len(files)} file paths to {file_path}", "SUCCESS")
         except Exception as e:
@@ -2684,73 +3938,104 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             tkinter.messagebox.showerror("Export Error", str(e))
 
     def load_files_list(self):
-        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        initial_dir = (
+            os.path.dirname(list(self.files_var.get())[0])
+            if self.files_var.get()
+            else os.getcwd()
+        )
         file_path = filedialog.askopenfilename(
             parent=self,
             initialdir=initial_dir,
             title="Load File List",
-            filetypes=[("JSON Files", "*.json")]
+            filetypes=[("JSON Files", "*.json")],
         )
         if not file_path:
             return
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 loaded_files = json.load(f)
-            
+
             if not isinstance(loaded_files, list):
                 raise ValueError("JSON file must contain a list of file paths.")
-            
+
             self._add_filepaths_to_list(loaded_files)
             console_log(f"Loaded file list from {file_path}", "SUCCESS")
         except Exception as e:
             console_log(f"Failed to load file list: {e}", "ERROR")
             tkinter.messagebox.showerror("Load Error", str(e))
+
     def browse_out(self):
         d = filedialog.askdirectory(parent=self)
-        if d: self.output_dir_var.set(d)
+        if d:
+            self.output_dir_var.set(d)
 
     def add_to_queue(self, only_selected=False, files_override=None):
         if files_override:
             files = files_override
         elif only_selected:
-            indices = self.file_listbox.curselection(); all_files = self.files_var.get(); files = [all_files[i] for i in indices]
-            if not files: tkinter.messagebox.showwarning("Selection", "No files selected."); return
+            indices = self.file_listbox.curselection()
+            all_files = self.files_var.get()
+            files = [all_files[i] for i in indices]
+            if not files:
+                tkinter.messagebox.showwarning("Selection", "No files selected.")
+                return
         else:
             files = list(self.files_var.get())
-            if not files: tkinter.messagebox.showwarning("Input", "No files in list."); return
-        
+            if not files:
+                tkinter.messagebox.showwarning("Input", "No files in list.")
+                return
+
         if VERBOSE_DIAGNOSTICS:
             ext_counts = {}
             for f in files:
                 ext = os.path.splitext(f)[1].lower() or "<noext>"
                 ext_counts[ext] = ext_counts.get(ext, 0) + 1
             preview = [os.path.basename(f) for f in files[:8]]
-            console_log(f"DEBUG QUEUE INPUT: total={len(files)} ext_counts={ext_counts}", "DEBUG")
-            console_log(f"DEBUG QUEUE INPUT FILES (first {len(preview)}): {preview}", "DEBUG")
+            console_log(
+                f"DEBUG QUEUE INPUT: total={len(files)} ext_counts={ext_counts}",
+                "DEBUG",
+            )
+            console_log(
+                f"DEBUG QUEUE INPUT FILES (first {len(preview)}): {preview}", "DEBUG"
+            )
 
         # --- INCOMPATIBLE FILE CHECK ---
         if not self.enable_img_conversion_var.get():
             incompatible = []
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
-                if ext in (CONVERTIBLE_IMAGE_EXTENSIONS + ['.tif', '.tiff']) and ext not in NATIVE_IMAGE_EXTENSIONS:
+                if (
+                    ext in (CONVERTIBLE_IMAGE_EXTENSIONS + [".tif", ".tiff"])
+                    and ext not in NATIVE_IMAGE_EXTENSIONS
+                ):
                     incompatible.append(os.path.basename(f))
-            
+
             if incompatible:
-                msg = f"Conversion is OFF, but these files are not native to AI models:\n\n" + ", ".join(incompatible[:5])
-                if len(incompatible) > 5: msg += f" and {len(incompatible)-5} more..."
+                msg = (
+                    f"Conversion is OFF, but these files are not native to AI models:\n\n"
+                    + ", ".join(incompatible[:5])
+                )
+                if len(incompatible) > 5:
+                    msg += f" and {len(incompatible) - 5} more..."
                 msg += "\n\nThey will likely fail. Continue anyway?"
                 if not tkinter.messagebox.askyesno("Incompatible Files", msg):
                     return
 
         mod = self.model_var.get()
-        if not mod or "Error" in mod: tkinter.messagebox.showwarning("Error", "Invalid Model."); return
-        if self.engine_var.get() == 'google' and not self.api_key: tkinter.messagebox.showwarning("Error", "No API Key."); return
-        
+        if not mod or "Error" in mod:
+            tkinter.messagebox.showwarning("Error", "Invalid Model.")
+            return
+        if self.engine_var.get() == "google" and not self.api_key:
+            tkinter.messagebox.showwarning("Error", "No API Key.")
+            return
+
         prompt_text = self.prompt_text.get("1.0", tk.END).strip()
         if prompt_expects_image(prompt_text):
-            has_image = any(os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS for f in files)
+            has_image = any(
+                os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                for f in files
+            )
             if not has_image:
                 msg = (
                     "Prompt appears to require image input, but no image files are selected.\n\n"
@@ -2762,30 +4047,54 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         base_group_size = self.group_size_var.get()
         if self.overwrite_var.get() or not self.group_files_var.get():
-             final_batch_size = 1
+            final_batch_size = 1
         else:
-             final_batch_size = base_group_size
+            final_batch_size = base_group_size
 
-        batches = [files[i:i + final_batch_size] for i in range(0, len(files), final_batch_size)]
+        batches = [
+            files[i : i + final_batch_size]
+            for i in range(0, len(files), final_batch_size)
+        ]
 
         safe = {}
-        if self.engine_var.get() == 'google':
-             if self.enable_safety_var.get():
-                 safe = [
-                    types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold=self.safety_map[self.harassment_var.get()]),
-                    types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold=self.safety_map[self.hate_speech_var.get()]),
-                    types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold=self.safety_map[self.sexually_explicit_var.get()]),
-                    types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold=self.safety_map[self.dangerous_content_var.get()])
-                 ]
-             else:
-                 safe = [
-                     types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                     types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                     types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                     types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                 ]
+        if self.engine_var.get() == "google":
+            if self.enable_safety_var.get():
+                safe = [
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT",
+                        threshold=self.safety_map[self.harassment_var.get()],
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH",
+                        threshold=self.safety_map[self.hate_speech_var.get()],
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold=self.safety_map[self.sexually_explicit_var.get()],
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                        threshold=self.safety_map[self.dangerous_content_var.get()],
+                    ),
+                ]
+            else:
+                safe = [
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold="BLOCK_NONE",
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                        threshold="BLOCK_NONE",
+                    ),
+                ]
 
-        
         # Capture current delay settings when adding jobs
         d_min = self.delay_min_var.get()
         d_sec = self.delay_sec_var.get()
@@ -2799,92 +4108,134 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.job_id_counter += 1
             jid = self.job_id_counter
             job_data = {
-                'job_id': jid, 'filepaths_group': batch, 
-                'user_prompt': prompt_text,
-                'engine': self.engine_var.get(), 'model_name': mod, 'api_key': self.api_key,
-                'output_folder': self.output_dir_var.get(), 'output_suffix': self.suffix_var.get(),
-                'output_under_input': self.output_under_input_var.get(),
-                'output_extension': self.output_ext_var.get(), 'stream_output': self.stream_var.get(),
-                'safety_settings': safe, 'add_filename_to_prompt': self.add_filename_var.get(),
-                'context_text': self.global_context_text_value if use_persistent_context else current_context,
-                'use_persistent_context': use_persistent_context,
-                'overwrite_original': self.overwrite_var.get(),
-                'enable_web_search': self.ollama_search_var.get(), 
-                'validate_json': self.validate_json_var.get(),
-                'validate_json_keys': self.validate_keys_var.get(), # Pass new setting
-                'clean_markdown': self.clean_markdown_var.get(),
-                'save_log': self.save_log_var.get(),
-                'job_delay_seconds': total_delay,
-                'sequential_upload': (self.upload_mode_var.get() == 'sequential'),
-                'rename_mode': self.rename_mode_var.get(),
-                'rename_method': self.rename_method_var.get(),
-                'enable_img_conversion': self.enable_img_conversion_var.get(),
-                'temp_img_fmt': self.temp_img_fmt_var.get(),
-                'img_quality': self.img_quality_var.get(),
-                'img_max_dim': self.img_max_dim_var.get(),
-                'force_conversion': self.force_conversion_var.get(),
-                'save_img_to_output': self.save_img_to_output_var.get(),
-                'enable_chunking': self.enable_chunking_var.get(),
-                'chunk_size': self.chunk_size_var.get(),
-                'chunk_overlap': self.chunk_overlap_var.get() if self.enable_overlap_var.get() else 0,
-                'force_cutoff': self.force_cutoff_var.get(),
-                'result_metadata': {} # Mutable container for returning data
+                "job_id": jid,
+                "filepaths_group": batch,
+                "user_prompt": prompt_text,
+                "engine": self.engine_var.get(),
+                "model_name": mod,
+                "api_key": self.api_key,
+                "output_folder": self.output_dir_var.get(),
+                "output_suffix": self.suffix_var.get(),
+                "output_under_input": self.output_under_input_var.get(),
+                "output_extension": self.output_ext_var.get(),
+                "stream_output": self.stream_var.get(),
+                "safety_settings": safe,
+                "add_filename_to_prompt": self.add_filename_var.get(),
+                "context_text": self.global_context_text_value
+                if use_persistent_context
+                else current_context,
+                "use_persistent_context": use_persistent_context,
+                "overwrite_original": self.overwrite_var.get(),
+                "enable_web_search": self.ollama_search_var.get(),
+                "validate_json": self.validate_json_var.get(),
+                "validate_json_keys": self.validate_keys_var.get(),  # Pass new setting
+                "clean_markdown": self.clean_markdown_var.get(),
+                "save_log": self.save_log_var.get(),
+                "job_delay_seconds": total_delay,
+                "sequential_upload": (self.upload_mode_var.get() == "sequential"),
+                "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
+                "rename_mode": self.rename_mode_var.get(),
+                "rename_method": self.rename_method_var.get(),
+                "enable_img_conversion": self.enable_img_conversion_var.get(),
+                "temp_img_fmt": self.temp_img_fmt_var.get(),
+                "img_quality": self.img_quality_var.get(),
+                "img_max_dim": self.img_max_dim_var.get(),
+                "force_conversion": self.force_conversion_var.get(),
+                "save_img_to_output": self.save_img_to_output_var.get(),
+                "enable_chunking": self.enable_chunking_var.get(),
+                "chunk_size": self.chunk_size_var.get(),
+                "chunk_overlap": self.chunk_overlap_var.get()
+                if self.enable_overlap_var.get()
+                else 0,
+                "force_cutoff": self.force_cutoff_var.get(),
+                "model_prefix": self.model_prefix_var.get(),
+                "result_metadata": {},  # Mutable container for returning data
             }
-
-
 
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
-            self.tree.insert('', tk.END, iid=jid, values=(jid, generate_group_base_name(batch), 'Pending', mod))
+            self.tree.insert(
+                "",
+                tk.END,
+                iid=jid,
+                values=(jid, generate_group_base_name(batch), "Pending", mod),
+            )
 
     def requeue_failed(self):
         failed_ids = []
         for item in self.tree.get_children():
-            vals = self.tree.item(item)['values']
-            if vals[2] == 'Failed': failed_ids.append(vals[0])
-        
-        if not failed_ids: tkinter.messagebox.showinfo("Info", "No failed jobs found."); return
+            vals = self.tree.item(item)["values"]
+            if vals[2] == "Failed":
+                failed_ids.append(vals[0])
+
+        if not failed_ids:
+            tkinter.messagebox.showinfo("Info", "No failed jobs found.")
+            return
         count = 0
         for old_id in failed_ids:
             if old_id in self.job_registry:
-                new_data = self.job_registry[old_id].copy(); self.job_id_counter += 1; new_id = self.job_id_counter; new_data['job_id'] = new_id
-                self.job_registry[new_id] = new_data; self.job_queue.put(new_data)
-                self.tree.insert('', tk.END, iid=new_id, values=(new_id, generate_group_base_name(new_data['filepaths_group']), 'Pending', new_data['model_name']))
+                new_data = self.job_registry[old_id].copy()
+                self.job_id_counter += 1
+                new_id = self.job_id_counter
+                new_data["job_id"] = new_id
+                self.job_registry[new_id] = new_data
+                self.job_queue.put(new_data)
+                self.tree.insert(
+                    "",
+                    tk.END,
+                    iid=new_id,
+                    values=(
+                        new_id,
+                        generate_group_base_name(new_data["filepaths_group"]),
+                        "Pending",
+                        new_data["model_name"],
+                    ),
+                )
                 count += 1
         console_log(f"Requeued {count} jobs.", "INFO")
 
     def undo_rename(self):
         sel_item = self.tree.focus()
-        if not sel_item: return
-        job_id = int(self.tree.item(sel_item)['values'][0])
-        
-        if job_id not in self.job_registry: return
+        if not sel_item:
+            return
+        job_id = int(self.tree.item(sel_item)["values"][0])
+
+        if job_id not in self.job_registry:
+            return
         job = self.job_registry[job_id]
-        
+
         # Check result_metadata first (new way), otherwise fallback or fail
-        history = job.get('result_metadata', {})
-        src = history.get('rename_from')
-        dst = history.get('rename_to')
-        
+        history = job.get("result_metadata", {})
+        src = history.get("rename_from")
+        dst = history.get("rename_to")
+
         # Fallback for older jobs or direct keys if any (not used currently)
         if not src or not dst:
-             src = job.get('rename_from') # direct
-             dst = job.get('rename_to')
-             
+            src = job.get("rename_from")  # direct
+            dst = job.get("rename_to")
+
         if not src or not dst:
-            tkinter.messagebox.showinfo("Undo", "This job currently cannot be undone (No rename history).")
+            tkinter.messagebox.showinfo(
+                "Undo", "This job currently cannot be undone (No rename history)."
+            )
             return
-        
+
         if os.path.exists(dst) and not os.path.exists(src):
             try:
                 os.rename(dst, src)
-                self.tree.set(sel_item, 'status', 'Undone')
-                console_log(f"Undid rename: {os.path.basename(dst)} -> {os.path.basename(src)}", "ACTION")
+                self.tree.set(sel_item, "status", "Undone")
+                console_log(
+                    f"Undid rename: {os.path.basename(dst)} -> {os.path.basename(src)}",
+                    "ACTION",
+                )
             except Exception as e:
                 console_log(f"Undo failed: {e}", "ERROR")
                 tkinter.messagebox.showerror("Undo Failed", str(e))
         else:
-             tkinter.messagebox.showwarning("Undo", "Cannot undo: Target file missing or Source file already exists.")
+            tkinter.messagebox.showwarning(
+                "Undo",
+                "Cannot undo: Target file missing or Source file already exists.",
+            )
 
     def show_context_menu(self, event):
         item_id = self.tree.identify_row(event.y)
@@ -2897,9 +4248,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def remove_selected_jobs(self):
         selected_items = self.tree.selection()
-        if not selected_items: return
+        if not selected_items:
+            return
 
-        # Ask for confirmation if any selected job is running? 
+        # Ask for confirmation if any selected job is running?
         # For simplicity, we just delete. If running, the worker check will handle it (eventually) or it finishes.
         # Ideally we shouldn't delete 'Running' jobs effortlessly, but let's allow it with the registry check.
 
@@ -2910,18 +4262,20 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 job_id = int(item)
                 if job_id in self.job_registry:
                     del self.job_registry[job_id]
-                    # We cannot remove from self.job_queue easily. 
+                    # We cannot remove from self.job_queue easily.
                     # The worker will pop it, see it's missing from registry, and skip.
                 self.tree.delete(item)
                 count += 1
-            except ValueError: pass # fast mode header or something? shouldn't happen with stored IDs
-        
+            except ValueError:
+                pass  # fast mode header or something? shouldn't happen with stored IDs
+
         console_log(f"Removed {count} jobs from queue.", "ACTION")
 
     def retry_selected_jobs(self):
         selected_items = self.tree.selection()
-        if not selected_items: return
-        
+        if not selected_items:
+            return
+
         count = 0
         for item in selected_items:
             try:
@@ -2931,28 +4285,40 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     new_data = self.job_registry[old_id].copy()
                     self.job_id_counter += 1
                     new_id = self.job_id_counter
-                    new_data['job_id'] = new_id
-                    
+                    new_data["job_id"] = new_id
+
                     self.job_registry[new_id] = new_data
                     self.job_queue.put(new_data)
-                    
-                    self.tree.insert('', tk.END, iid=new_id, values=(new_id, generate_group_base_name(new_data['filepaths_group']), 'Pending', new_data['model_name']))
+
+                    self.tree.insert(
+                        "",
+                        tk.END,
+                        iid=new_id,
+                        values=(
+                            new_id,
+                            generate_group_base_name(new_data["filepaths_group"]),
+                            "Pending",
+                            new_data["model_name"],
+                        ),
+                    )
                     count += 1
-            except Exception: pass
+            except Exception:
+                pass
         if count > 0:
             console_log(f"Retrying {count} selected jobs...", "ACTION")
 
     def copy_job_name(self):
         selected = self.tree.selection()
-        if not selected: return
+        if not selected:
+            return
         # Copy the first selected item's name/group
         # Or all of them newline separated? Let's do newline separated.
         texts = []
         for item in selected:
-            vals = self.tree.item(item)['values']
+            vals = self.tree.item(item)["values"]
             if vals and len(vals) > 1:
                 texts.append(str(vals[1]))
-        
+
         if texts:
             self.clipboard_clear()
             self.clipboard_append("\n".join(texts))
@@ -2963,36 +4329,57 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         children = self.tree.get_children()
         count = 0
         for item in children:
-            vals = self.tree.item(item)['values']
+            vals = self.tree.item(item)["values"]
             status = vals[2]
-            if status == 'Completed':
+            if status == "Completed":
                 job_id = int(vals[0])
-                if job_id in self.job_registry: del self.job_registry[job_id]
+                if job_id in self.job_registry:
+                    del self.job_registry[job_id]
                 self.tree.delete(item)
                 count += 1
-        if count > 0: console_log(f"Cleared {count} completed jobs.", "INFO")
+        if count > 0:
+            console_log(f"Cleared {count} completed jobs.", "INFO")
 
     def start_processing(self):
-        if not self.job_queue.empty() and (not self.worker_thread or not self.worker_thread.is_alive()):
+        if not self.job_queue.empty() and (
+            not self.worker_thread or not self.worker_thread.is_alive()
+        ):
             self.current_run_merge_outputs = self.merge_outputs_var.get()
-            self.processing_cancelled.clear(); self.processing_paused.clear()
+            self.processing_cancelled.clear()
+            self.processing_paused.clear()
             self.worker_thread = threading.Thread(target=self._worker, daemon=True)
             self.worker_thread.start()
-            self.start_btn.config(state="disabled"); self.pause_btn.config(state="normal", text="Pause")
-            self.clear_btn.config(text="Stop")
+            self.start_btn.config(state="disabled")
+            self.pause_btn.config(state="normal", text="Pause")
+            self.stop_btn.config(state="normal")
+            self.clear_btn.config(state="disabled")
+
+    def stop_processing(self):
+        if self.worker_thread and self.worker_thread.is_alive():
+            if tkinter.messagebox.askokcancel("Stop", "Cancel current processing?"):
+                self.processing_cancelled.set()
+                self.stop_btn.config(state="disabled")
+
+    def select_all_jobs(self, event=None):
+        self.tree.selection_set(self.tree.get_children())
+        return "break"
 
     def export_job_list(self):
         if not self.job_registry:
             tkinter.messagebox.showinfo("Export", "Job queue is empty.")
             return
 
-        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        initial_dir = (
+            os.path.dirname(list(self.files_var.get())[0])
+            if self.files_var.get()
+            else os.getcwd()
+        )
         file_path = filedialog.asksaveasfilename(
             parent=self,
             initialdir=initial_dir,
             title="Export Job List",
             defaultextension=".json",
-            filetypes=[("JSON Files", "*.json")]
+            filetypes=[("JSON Files", "*.json")],
         )
         if not file_path:
             return
@@ -3002,25 +4389,30 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             for jid, job in self.job_registry.items():
                 job_copy = job.copy()
                 # Handle Google Safety Settings (types.SafetySetting objects)
-                if 'safety_settings' in job_copy and job_copy['safety_settings']:
-                    if isinstance(job_copy['safety_settings'], list):
+                if "safety_settings" in job_copy and job_copy["safety_settings"]:
+                    if isinstance(job_copy["safety_settings"], list):
                         new_settings = []
-                        for s in job_copy['safety_settings']:
-                            if hasattr(s, 'category'): # types.SafetySetting
-                                new_settings.append({'category': str(s.category), 'threshold': str(s.threshold)})
+                        for s in job_copy["safety_settings"]:
+                            if hasattr(s, "category"):  # types.SafetySetting
+                                new_settings.append(
+                                    {
+                                        "category": str(s.category),
+                                        "threshold": str(s.threshold),
+                                    }
+                                )
                             else:
                                 new_settings.append(s)
-                        job_copy['safety_settings'] = new_settings
-                
+                        job_copy["safety_settings"] = new_settings
+
                 # result_metadata is used to store mutable state like rename history
                 # We should ensure it's serializable if not empty
-                if 'result_metadata' in job_copy:
+                if "result_metadata" in job_copy:
                     # It's usually a dict of strings/bools, so it should be fine.
                     pass
 
                 export_data[str(jid)] = job_copy
 
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=4)
             console_log(f"Exported {len(export_data)} jobs to {file_path}", "SUCCESS")
         except Exception as e:
@@ -3028,101 +4420,150 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             tkinter.messagebox.showerror("Export Error", str(e))
 
     def load_job_list(self):
-        initial_dir = os.path.dirname(list(self.files_var.get())[0]) if self.files_var.get() else os.getcwd()
+        initial_dir = (
+            os.path.dirname(list(self.files_var.get())[0])
+            if self.files_var.get()
+            else os.getcwd()
+        )
         file_path = filedialog.askopenfilename(
             parent=self,
             initialdir=initial_dir,
             title="Load Job List",
-            filetypes=[("JSON Files", "*.json")]
+            filetypes=[("JSON Files", "*.json")],
         )
         if not file_path:
             return
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 loaded_data = json.load(f)
-            
+
             count = 0
             for _, job in loaded_data.items():
                 # Reconstruct SafetySetting for Google
-                if job.get('engine') == 'google' and job.get('safety_settings'):
+                if job.get("engine") == "google" and job.get("safety_settings"):
                     reconstructed = []
-                    for s in job['safety_settings']:
-                        if isinstance(s, dict) and 'category' in s:
-                            reconstructed.append(types.SafetySetting(category=s['category'], threshold=s['threshold']))
+                    for s in job["safety_settings"]:
+                        if isinstance(s, dict) and "category" in s:
+                            reconstructed.append(
+                                types.SafetySetting(
+                                    category=s["category"], threshold=s["threshold"]
+                                )
+                            )
                         else:
                             reconstructed.append(s)
-                    job['safety_settings'] = reconstructed
-                
+                    job["safety_settings"] = reconstructed
+
                 # Assign new ID to avoid collisions
                 self.job_id_counter += 1
                 new_id = self.job_id_counter
-                job['job_id'] = new_id
-                
+                job["job_id"] = new_id
+
                 self.job_registry[new_id] = job
                 self.job_queue.put(job)
-                
-                self.tree.insert('', tk.END, iid=new_id, values=(
-                    new_id, 
-                    generate_group_base_name(job['filepaths_group']), 
-                    'Pending', 
-                    job['model_name']
-                ))
+
+                self.tree.insert(
+                    "",
+                    tk.END,
+                    iid=new_id,
+                    values=(
+                        new_id,
+                        generate_group_base_name(job["filepaths_group"]),
+                        "Pending",
+                        job["model_name"],
+                    ),
+                )
                 count += 1
-            
+
             console_log(f"Loaded {count} jobs from {file_path}", "SUCCESS")
         except Exception as e:
             console_log(f"Failed to load jobs: {e}", "ERROR")
             tkinter.messagebox.showerror("Load Error", str(e))
 
     def toggle_pause(self):
-        if self.processing_paused.is_set(): self.processing_paused.clear(); self.pause_btn.config(text="Pause")
-        else: self.processing_paused.set(); self.pause_btn.config(text="Resume")
+        if self.processing_paused.is_set():
+            self.processing_paused.clear()
+            self.pause_btn.config(text="Pause")
+        else:
+            self.processing_paused.set()
+            self.pause_btn.config(text="Resume")
 
     def clear_queue(self):
-        if self.worker_thread and self.worker_thread.is_alive():
-            if tkinter.messagebox.askokcancel("Stop", "Cancel current processing?"):
-                self.processing_cancelled.set()
-        else:
-            self.tree.delete(*self.tree.get_children()); 
-            with self.job_queue.mutex: self.job_queue.queue.clear()
-            self.job_registry.clear(); console_log("Queue cleared.", "INFO")
+        self.tree.delete(*self.tree.get_children())
+        with self.job_queue.mutex:
+            self.job_queue.queue.clear()
+        self.job_registry.clear()
+        console_log("Queue cleared.", "INFO")
 
     def _reset_gui(self):
-        self.start_btn.config(state="normal"); self.pause_btn.config(state="disabled")
-        self.clear_btn.config(text="Clear"); self.btn_add_sel.config(state="normal"); self.btn_add_all.config(state="normal")
+        self.start_btn.config(state="normal")
+        self.pause_btn.config(state="disabled")
+        self.stop_btn.config(state="disabled")
+        self.clear_btn.config(state="normal")
+        self.btn_add_sel.config(state="normal")
+        self.btn_add_all.config(state="normal")
 
     def _check_result_queue(self):
         try:
             while not self.result_queue.empty():
                 res = self.result_queue.get_nowait()
-                jid, status = res['job_id'], res['status']
+                jid, status = res["job_id"], res["status"]
                 if self.tree.exists(jid):
-                    self.tree.set(jid, 'status', status)
-                    tag = 'success' if status=='Completed' else 'fail' if status=='Failed' else 'retry' if 'Retrying' in status else 'wait' if 'Waiting' in status else ''
-                    if tag: 
-                        self.tree.tag_configure('success', background='#ccffcc')
-                        self.tree.tag_configure('fail', background='#ffcccc')
-                        self.tree.tag_configure('retry', background='#fff5cc')
-                        self.tree.tag_configure('wait', background='#ffe0b2')
-                    if tag: self.tree.item(jid, tags=(tag,))
-        except queue.Empty: pass
-        finally: self.after(100, self._check_result_queue)
+                    self.tree.set(jid, "status", status)
+                    tag = (
+                        "success"
+                        if status == "Completed"
+                        else "fail"
+                        if status == "Failed"
+                        else "retry"
+                        if "Retrying" in status
+                        else "wait"
+                        if "Waiting" in status
+                        else ""
+                    )
+                    if tag:
+                        self.tree.tag_configure("success", background="#ccffcc")
+                        self.tree.tag_configure("fail", background="#ffcccc")
+                        self.tree.tag_configure("retry", background="#fff5cc")
+                        self.tree.tag_configure("wait", background="#ffe0b2")
+                    if tag:
+                        self.tree.item(jid, tags=(tag,))
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self._check_result_queue)
 
     def update_tree_models(self, new_model_name):
         for child in self.tree.get_children():
-            status = self.tree.set(child, 'status')
-            if status in ('Pending', 'Running', 'Waiting for User...', 'Retrying'):
-                self.tree.set(child, 'model', new_model_name)
+            status = self.tree.set(child, "status")
+            if status in ("Pending", "Running", "Waiting for User...", "Retrying"):
+                self.tree.set(child, "model", new_model_name)
 
-    def _ask_user_for_new_model(self, current_engine, current_model, event_container):
-        dialog = ModelSelectionDialog(self, current_engine, current_model, self.get_models_for_provider, self.exhausted_models)
-        event_container['result'] = dialog.result
-        event_container['event'].set()
+    def _ask_user_for_new_model(
+        self,
+        current_engine,
+        current_model,
+        event_container,
+        issue_type="quota",
+        issue_detail="",
+    ):
+        dialog = ModelSelectionDialog(
+            self,
+            current_engine,
+            current_model,
+            self.get_models_for_provider,
+            self.exhausted_models,
+            issue_type=issue_type,
+            issue_detail=issue_detail,
+        )
+        event_container["result"] = dialog.result
+        event_container["event"].set()
 
     def _merge_completed_outputs_by_folder(self, output_paths):
         if not output_paths:
-            console_log("Merge Outputs: no completed output files found for this run.", "WARN")
+            console_log(
+                "Merge Outputs: no completed output files found for this run.", "WARN"
+            )
             return
 
         folder_map = {}
@@ -3147,165 +4588,298 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             try:
                 merge_output_text_files(files_sorted, merged_path)
                 merged_count += 1
-                console_log(f"Merged {len(files_sorted)} files -> {os.path.basename(merged_path)}", "SUCCESS")
+                console_log(
+                    f"Merged {len(files_sorted)} files -> {os.path.basename(merged_path)}",
+                    "SUCCESS",
+                )
             except Exception as e:
                 console_log(f"Merge failed in folder '{folder}': {e}", "ERROR")
 
         if merged_count > 0:
-            console_log(f"Merge Outputs complete: created {merged_count} merged file(s).", "SUCCESS")
+            console_log(
+                f"Merge Outputs complete: created {merged_count} merged file(s).",
+                "SUCCESS",
+            )
 
     def _worker(self):
         console_log("Worker thread started.", "INFO")
         first_job = True
         successful_output_paths = []
         while not self.job_queue.empty():
-            if self.processing_cancelled.is_set(): break
-            if self.processing_paused.is_set(): time.sleep(0.5); continue
-            
-            try: job = self.job_queue.get_nowait()
-            except queue.Empty: break
-            
+            if self.processing_cancelled.is_set():
+                break
+            if self.processing_paused.is_set():
+                time.sleep(0.5)
+                continue
+
+            try:
+                job = self.job_queue.get_nowait()
+            except queue.Empty:
+                break
+
             # --- Delay Logic ---
-            delay_sec = job.get('job_delay_seconds', 0)
+            delay_sec = job.get("job_delay_seconds", 0)
             if not first_job and delay_sec > 0:
                 console_log(f"Waiting {delay_sec}s before next job...", "INFO")
                 # Sleep in small chunks to remain responsive to pause/cancel
                 elapsed = 0
                 step = 0.5
                 while elapsed < delay_sec:
-                    if self.processing_cancelled.is_set(): break
-                    if self.processing_paused.is_set(): 
+                    if self.processing_cancelled.is_set():
+                        break
+                    if self.processing_paused.is_set():
                         time.sleep(0.5)
-                        continue 
+                        continue
                     time.sleep(step)
                     elapsed += step
-                if self.processing_cancelled.is_set(): break
-            
+                if self.processing_cancelled.is_set():
+                    break
+
             first_job = False
             # -------------------
 
-            jid = job['job_id']
-            
+            jid = job["job_id"]
+
             # --- CHECK IF JOB WAS REMOVED FROM REGISTRY (Cancelled by User) ---
             if jid not in self.job_registry:
                 # Silently skip
                 continue
 
-            self.result_queue.put({'job_id': jid, 'status': 'Running'})
-            params = job.copy(); params.pop('job_id')
-            params['enable_thinking'] = self.thinking_var.get() # Pass GUI state
-            if params.get('use_persistent_context'):
-                params['context_text'] = self.global_context_text_value
-            
+            self.result_queue.put({"job_id": jid, "status": "Running"})
+            params = job.copy()
+            params.pop("job_id")
+            params["enable_thinking"] = self.thinking_var.get()  # Pass GUI state
+            if params.get("use_persistent_context"):
+                params["context_text"] = self.global_context_text_value
+
             if self.global_runtime_overrides:
-                params['engine'] = self.global_runtime_overrides['engine']
-                params['model_name'] = self.global_runtime_overrides['model_name']
-                if params['engine'] == 'google':
-                    if not params.get('api_key'): params['api_key'] = self.api_key
-                    if isinstance(params.get('safety_settings'), dict):
-                        params['safety_settings'] = [
-                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                params["engine"] = self.global_runtime_overrides["engine"]
+                params["model_name"] = self.global_runtime_overrides["model_name"]
+                if params["engine"] == "google":
+                    if not params.get("api_key"):
+                        params["api_key"] = self.api_key
+                    if isinstance(params.get("safety_settings"), dict):
+                        params["safety_settings"] = [
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HARASSMENT",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HATE_SPEECH",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                                threshold="BLOCK_NONE",
+                            ),
                         ]
 
             attempt = 0
             while attempt < MAX_RETRIES:
                 attempt += 1
-                if self.processing_cancelled.is_set(): break
+                if self.processing_cancelled.is_set():
+                    break
                 try:
-                    err = process_file_group(**params, cancellation_event=self.processing_cancelled)
+                    err = process_file_group(
+                        **params, cancellation_event=self.processing_cancelled
+                    )
                     if not err:
-                        meta = job.get('result_metadata', {})
-                        out_path = meta.get('raw_output_path') if isinstance(meta, dict) else None
+                        meta = job.get("result_metadata", {})
+                        out_path = (
+                            meta.get("raw_output_path")
+                            if isinstance(meta, dict)
+                            else None
+                        )
                         if out_path and os.path.isfile(out_path):
                             successful_output_paths.append(out_path)
-                        self.result_queue.put({'job_id': jid, 'status': 'Completed'})
+                        self.result_queue.put({"job_id": jid, "status": "Completed"})
                         break
-                    else: raise Exception(err)
+                    else:
+                        raise Exception(err)
                 except CancellationError:
                     console_log(f"⏹️ Job {jid} Cancelled.", "WARN")
-                    self.result_queue.put({'job_id': jid, 'status': 'Cancelled'})
+                    self.result_queue.put({"job_id": jid, "status": "Cancelled"})
                     break
                 except Exception as e:
                     if isinstance(e, FatalProcessingError) or "Fatal:" in str(e):
                         console_log(f"❌ Job {jid} Failed: {e}", "ERROR")
                         err_msg = str(e).replace("Fatal:", "").strip()
-                        self.result_queue.put({'job_id': jid, 'status': f"Fail: {err_msg}"})
+                        self.result_queue.put(
+                            {"job_id": jid, "status": f"Fail: {err_msg}"}
+                        )
                         break
 
                     err_str = str(e)
-                    is_quota = (isinstance(e, QuotaExhaustedError) or 
-                                "Quota exhausted" in err_str or 
-                                "429" in err_str or 
-                                "503" in err_str or
-                                "Service Temporarily Unavailable" in err_str or
-                                "Open WebUI: Server Connection Error" in err_str)
-                    if is_quota:
-                        console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
-                        self.result_queue.put({'job_id': jid, 'status': 'Waiting for User...'})
-                        self.exhausted_models.add(params['model_name'])
-                        event_container = {'event': threading.Event(), 'result': None}
-                        self.after(0, lambda: self._ask_user_for_new_model(params['engine'], params['model_name'], event_container))
-                        event_container['event'].wait() 
-                        user_result = event_container['result']
+                    is_quota = (
+                        isinstance(e, QuotaExhaustedError)
+                        or "Quota exhausted" in err_str
+                        or "429" in err_str
+                        or "503" in err_str
+                        or "Service Temporarily Unavailable" in err_str
+                        or "Open WebUI: Server Connection Error" in err_str
+                    )
+                    is_model_unavailable = isinstance(
+                        e, ModelUnavailableError
+                    ) or is_model_unavailable_error_message(err_str)
+                    if is_quota or is_model_unavailable:
+                        if is_model_unavailable:
+                            console_log(
+                                f"Job {jid} Model Unavailable. Asking user to switch model...",
+                                "WARN",
+                            )
+                        else:
+                            console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
+                        self.result_queue.put(
+                            {"job_id": jid, "status": "Waiting for User..."}
+                        )
+                        self.exhausted_models.add(params["model_name"])
+                        event_container = {"event": threading.Event(), "result": None}
+                        issue_type = (
+                            "model_unavailable" if is_model_unavailable else "quota"
+                        )
+                        issue_detail = ""
+                        if is_model_unavailable:
+                            issue_detail = preview_text(err_str, 240)
+                        self.after(
+                            0,
+                            lambda: self._ask_user_for_new_model(
+                                params["engine"],
+                                params["model_name"],
+                                event_container,
+                                issue_type=issue_type,
+                                issue_detail=issue_detail,
+                            ),
+                        )
+                        event_container["event"].wait()
+                        user_result = event_container["result"]
                         if user_result:
                             new_engine, new_model = user_result
-                            console_log(f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)", "ACTION")
-                            self.global_runtime_overrides = {'engine': new_engine, 'model_name': new_model}
-                            params['engine'] = new_engine
-                            params['model_name'] = new_model
-                            if new_engine == 'google': 
-                                params['api_key'] = self.api_key
-                                if isinstance(params.get('safety_settings'), dict):
-                                    params['safety_settings'] = [
-                                        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                                        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                                        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                                        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                            console_log(
+                                f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)",
+                                "ACTION",
+                            )
+                            self.global_runtime_overrides = {
+                                "engine": new_engine,
+                                "model_name": new_model,
+                            }
+                            params["engine"] = new_engine
+                            params["model_name"] = new_model
+                            if new_engine == "google":
+                                params["api_key"] = self.api_key
+                                if isinstance(params.get("safety_settings"), dict):
+                                    params["safety_settings"] = [
+                                        types.SafetySetting(
+                                            category="HARM_CATEGORY_HARASSMENT",
+                                            threshold="BLOCK_NONE",
+                                        ),
+                                        types.SafetySetting(
+                                            category="HARM_CATEGORY_HATE_SPEECH",
+                                            threshold="BLOCK_NONE",
+                                        ),
+                                        types.SafetySetting(
+                                            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                            threshold="BLOCK_NONE",
+                                        ),
+                                        types.SafetySetting(
+                                            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                                            threshold="BLOCK_NONE",
+                                        ),
                                     ]
                             self.after(0, lambda: self.update_tree_models(new_model))
-                            self.result_queue.put({'job_id': jid, 'status': 'Running'})
-                            attempt -= 1 
-                            continue 
+                            self.result_queue.put({"job_id": jid, "status": "Running"})
+                            attempt -= 1
+                            continue
                         else:
-                            console_log("User cancelled model switch. Retrying normally...", "WARN")
+                            if is_model_unavailable:
+                                console_log(
+                                    "User cancelled model switch for unavailable model. Marking job as failed.",
+                                    "WARN",
+                                )
+                                [copy_failed_file(fp) for fp in job["filepaths_group"]]
+                                self.result_queue.put(
+                                    {"job_id": jid, "status": "Failed"}
+                                )
+                                if params.get("stop_queue_on_model_unavailable", True):
+                                    console_log(
+                                        "Auto-stop enabled: stopping remaining queue after model-unavailable cancellation.",
+                                        "WARN",
+                                    )
+                                    self.processing_cancelled.set()
+                                break
+                            console_log(
+                                "User cancelled model switch. Retrying normally...",
+                                "WARN",
+                            )
 
-                    console_log(f"Job {jid} Error (Attempt {attempt}/{MAX_RETRIES}): {e}", "ERROR")
+                    console_log(
+                        f"Job {jid} Error (Attempt {attempt}/{MAX_RETRIES}): {e}",
+                        "ERROR",
+                    )
                     if attempt < MAX_RETRIES:
                         wait_time = 60 if is_quota else 5
-                        self.result_queue.put({'job_id': jid, 'status': f"Retrying ({attempt})"})
+                        self.result_queue.put(
+                            {"job_id": jid, "status": f"Retrying ({attempt})"}
+                        )
                         time.sleep(wait_time)
                     else:
-                        traceback.print_exc()
-                        [copy_failed_file(fp) for fp in job['filepaths_group']]
-                        self.result_queue.put({'job_id': jid, 'status': 'Failed'})
+                        console_log(
+                            f"Job {jid} reached max retries. Marking as failed.",
+                            "ERROR",
+                        )
+                        [copy_failed_file(fp) for fp in job["filepaths_group"]]
+                        self.result_queue.put({"job_id": jid, "status": "Failed"})
                         break
 
-        if getattr(self, 'current_run_merge_outputs', False) and not self.processing_cancelled.is_set():
+        if (
+            getattr(self, "current_run_merge_outputs", False)
+            and not self.processing_cancelled.is_set()
+        ):
             self._merge_completed_outputs_by_folder(successful_output_paths)
         console_log("Worker thread finished.", "INFO")
         self.after(0, self._reset_gui)
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="*")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_SUBFOLDER_NAME)
-    parser.add_argument("--output-under-input", action='store_true', help="Resolve relative output folder under each input file's folder.")
-    parser.add_argument("--merge-outputs", action='store_true', help="Merge completed outputs per output folder when run finishes.")
+    parser.add_argument(
+        "--output-under-input",
+        action="store_true",
+        help="Resolve relative output folder under each input file's folder.",
+    )
+    parser.add_argument(
+        "--merge-outputs",
+        action="store_true",
+        help="Merge completed outputs per output folder when run finishes.",
+    )
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX)
     parser.add_argument("--output-ext", default="")
-    parser.add_argument("--stream", action='store_true')
-    parser.add_argument("-e", "--engine", default=DEFAULT_ENGINE, choices=['google', 'ollama', 'lmstudio'])
+    parser.add_argument("--stream", action="store_true")
+    parser.add_argument(
+        "--no-auto-stop-on-model-unavailable",
+        action="store_true",
+        help="Do not auto-stop remaining queue when model is unavailable and model switch is cancelled.",
+    )
+    parser.add_argument(
+        "-e",
+        "--engine",
+        default=DEFAULT_ENGINE,
+        choices=["google", "ollama", "lmstudio"],
+    )
     parser.add_argument("-m", "--model")
-    parser.add_argument("--add-filename-to-prompt", action='store_true')
+    parser.add_argument("--add-filename-to-prompt", action="store_true")
     parser.add_argument("--context-text", default="")
     args = parser.parse_args()
+    args.stop_queue_on_model_unavailable = not args.no_auto_stop_on_model_unavailable
 
     # --- STARTUP CLEANUP ---
     cleanup_stale_temp_files()
-    
+
     fps = []
     if args.files:
         for p in args.files:
@@ -3316,21 +4890,31 @@ def main():
                 # Fall back to glob expansion for wildcards
                 fps.extend(glob.glob(p, recursive=True))
     else:
-        console_log("No files specified. Scanning current directory for supported formats...", "INFO")
+        console_log(
+            "No files specified. Scanning current directory for supported formats...",
+            "INFO",
+        )
         cwd = os.getcwd()
         for ext in AUTO_LOAD_EXTENSIONS:
             found = glob.glob(os.path.join(cwd, f"**/*{ext}"), recursive=True)
             for f in found:
-                if LOG_SUBFOLDER_NAME in f or FAILED_SUBFOLDER_NAME in f or os.path.basename(f) == os.path.basename(__file__):
+                if (
+                    LOG_SUBFOLDER_NAME in f
+                    or FAILED_SUBFOLDER_NAME in f
+                    or os.path.basename(f) == os.path.basename(__file__)
+                ):
                     continue
                 fps.append(f)
-    
+
     fps = sorted(list(set(f for f in fps if os.path.isfile(f))), key=natural_sort_key)
-    if fps: console_log(f"Found {len(fps)} files.", "INFO")
-    else: console_log("No supported files found in this folder.", "WARN")
-    
+    if fps:
+        console_log(f"Found {len(fps)} files.", "INFO")
+    else:
+        console_log("No supported files found in this folder.", "WARN")
+
     app = AppGUI(get_api_key(), fps, args)
     app.mainloop()
+
 
 if __name__ == "__main__":
     main()
