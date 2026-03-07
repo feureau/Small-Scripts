@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageTk
 import re
+import io
+import ctypes
 
 # ==========================================
 # CONFIGURATION
@@ -51,6 +53,7 @@ class TranscriptionReviewer:
         self.image_ref = None 
         self.original_image = None
         self.current_txt_path = None
+        self.current_file_loaded_empty = False
         self.needs_fit = False
         
         self.all_versions = set()
@@ -166,6 +169,10 @@ class TranscriptionReviewer:
         style_btn(self.btn_refresh)
         self.btn_refresh.config(bg="#4a4a4a")
         self.btn_refresh.pack(side=tk.RIGHT, padx=10)
+        self.btn_copy_image = tk.Button(self.control_frame, text="Copy Image (Ctrl+C)", command=self.copy_current_image_to_clipboard)
+        style_btn(self.btn_copy_image)
+        self.btn_copy_image.config(bg="#3b3b3b")
+        self.btn_copy_image.pack(side=tk.RIGHT)
 
         # Bindings
         self.root.bind('<Control-s>', lambda e: self.save_current_text())
@@ -186,7 +193,9 @@ class TranscriptionReviewer:
         self.image_canvas.bind('<Control-MouseWheel>', self._on_image_zoom)
         self.image_canvas.bind('<Button-3>', self._on_pan_start)
         self.image_canvas.bind('<B3-Motion>', self._on_pan_drag)
-        
+        self.image_canvas.bind('<Button-1>', self._focus_image_canvas)
+        self.image_canvas.bind('<Control-c>', self._on_copy_image_shortcut)
+        self.image_canvas.configure(takefocus=1)        
         # Zoom for Text
         self.text_editor.bind('<Control-MouseWheel>', self._on_text_zoom)
 
@@ -317,26 +326,36 @@ class TranscriptionReviewer:
                 with open(txt_path, 'r', encoding='utf-8') as f:
                     content = f.read()
 
-                if not content:
-                    content = "[File is empty]"
-
                 self.text_editor.delete('1.0', tk.END)
                 self.text_editor.insert('1.0', content)
                 self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
+                self.text_editor.edit_modified(False)
 
                 # FOCUS TEXT EDITOR
                 self.text_editor.focus_set()
                 self.current_txt_path = txt_path
+                self.current_file_loaded_empty = (content == "")
 
+            except FileNotFoundError:
+                # File was deleted after initial scan: treat as blank and allow recreating on save.
+                self.text_editor.delete('1.0', tk.END)
+                self.text_editor.config(state=tk.NORMAL, bg=COLORS["input_bg"])
+                self.text_editor.edit_modified(False)
+                self.current_txt_path = txt_path
+                self.current_file_loaded_empty = True
             except Exception as e:
                 self.text_editor.delete('1.0', tk.END)
                 self.text_editor.insert('1.0', f"Error: {e}")
+                self.text_editor.edit_modified(False)
                 self.current_txt_path = None
+                self.current_file_loaded_empty = False
         else:
              self.lbl_filename.config(text=f"{selected_ver}: (Not Found)")
              self.text_editor.delete('1.0', tk.END)
              self.text_editor.insert('1.0', f"[No text file found for version '{selected_ver}' for this image]")
+             self.text_editor.edit_modified(False)
              self.current_txt_path = None
+             self.current_file_loaded_empty = False
 
 
         try:
@@ -455,6 +474,98 @@ class TranscriptionReviewer:
         
         self._display_image()
 
+    def _focus_image_canvas(self, event=None):
+        self.image_canvas.focus_set()
+
+    def _on_copy_image_shortcut(self, event=None):
+        self.copy_current_image_to_clipboard()
+        return "break"
+
+    def copy_current_image_to_clipboard(self):
+        if self.original_image is None:
+            messagebox.showwarning("Copy Image", "No image loaded to copy.")
+            return
+
+        if sys.platform != "win32":
+            messagebox.showwarning("Copy Image", "Image clipboard copy is currently implemented for Windows only.")
+            return
+
+        try:
+            image = self.original_image
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA")
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+
+            output = io.BytesIO()
+            image.save(output, "BMP")
+            data = output.getvalue()[14:]  # CF_DIB expects BMP without file header.
+
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            SIZE_T = ctypes.c_size_t
+            HANDLE = ctypes.c_void_p
+            LPVOID = ctypes.c_void_p
+            UINT = ctypes.c_uint
+
+            kernel32.GlobalAlloc.argtypes = [UINT, SIZE_T]
+            kernel32.GlobalAlloc.restype = HANDLE
+            kernel32.GlobalLock.argtypes = [HANDLE]
+            kernel32.GlobalLock.restype = LPVOID
+            kernel32.GlobalUnlock.argtypes = [HANDLE]
+            kernel32.GlobalUnlock.restype = ctypes.c_int
+            kernel32.GlobalFree.argtypes = [HANDLE]
+            kernel32.GlobalFree.restype = HANDLE
+
+            user32.OpenClipboard.argtypes = [HANDLE]
+            user32.OpenClipboard.restype = ctypes.c_int
+            user32.EmptyClipboard.argtypes = []
+            user32.EmptyClipboard.restype = ctypes.c_int
+            user32.SetClipboardData.argtypes = [UINT, HANDLE]
+            user32.SetClipboardData.restype = HANDLE
+            user32.CloseClipboard.argtypes = []
+            user32.CloseClipboard.restype = ctypes.c_int
+
+            hglobal = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            if not hglobal:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            pglobal = kernel32.GlobalLock(hglobal)
+            if not pglobal:
+                kernel32.GlobalFree(hglobal)
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            ctypes.memmove(pglobal, data, len(data))
+            kernel32.GlobalUnlock(hglobal)
+
+            if not user32.OpenClipboard(None):
+                kernel32.GlobalFree(hglobal)
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            try:
+                if not user32.EmptyClipboard():
+                    kernel32.GlobalFree(hglobal)
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not user32.SetClipboardData(CF_DIB, hglobal):
+                    kernel32.GlobalFree(hglobal)
+                    raise ctypes.WinError(ctypes.get_last_error())
+                # Ownership transferred to the clipboard on success.
+                hglobal = None
+            finally:
+                user32.CloseClipboard()
+                if hglobal:
+                    kernel32.GlobalFree(hglobal)
+
+            orig_bg = self.btn_copy_image.cget("background")
+            self.btn_copy_image.config(bg="#44aa44", text="Copied!")
+            self.root.after(700, lambda: self.btn_copy_image.config(bg=orig_bg, text="Copy Image (Ctrl+C)"))
+        except Exception as e:
+            messagebox.showerror("Copy Image Error", str(e))
+
     def _on_text_zoom(self, event):
         if event.delta > 0:
             self.text_font_size += 1
@@ -464,20 +575,49 @@ class TranscriptionReviewer:
         self.text_editor.configure(font=("Consolas", self.text_font_size))
         return "break" # Prevent double processing if any
 
+    def _infer_missing_txt_path(self, selected_ver):
+        img_path, _ = self.pairs[self.current_index]
+        img_basename = os.path.splitext(os.path.basename(img_path))[0]
+        filename = f"{img_basename}.txt"
+
+        if selected_ver == "Default":
+            return os.path.join(self.working_dir, filename)
+
+        subdir = selected_ver
+        suffix_match = re.match(r"^(.*)_(\d+)$", selected_ver)
+        if suffix_match:
+            subdir = suffix_match.group(1)
+
+        return os.path.join(self.working_dir, subdir, filename)
+
     def save_current_text(self):
         if not self.pairs:
             return False
         _, versions = self.pairs[self.current_index]
         selected_ver = self.current_version_var.get()
         txt_path = versions.get(selected_ver)
-        
-        if not txt_path:
-            messagebox.showerror("Save Error", f"No file exists for version '{selected_ver}' to save to.")
-            return False
 
         content = self.text_editor.get('1.0', 'end-1c')
+
+        # If the loaded file was already empty and untouched, don't rewrite it (when file still exists).
+        if txt_path and os.path.exists(txt_path) and self.current_file_loaded_empty and content == "" and not self.text_editor.edit_modified():
+            return True
+
+        if not txt_path:
+            txt_path = self._infer_missing_txt_path(selected_ver)
+            versions[selected_ver] = txt_path
+            self.current_txt_path = txt_path
+            self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
+
+        # Never persist the informational placeholder as file content.
+        if content.startswith("[No text file found for version '") and content.endswith("for this image]"):
+            content = ""
+
         try:
+            os.makedirs(os.path.dirname(txt_path), exist_ok=True)
             with open(txt_path, 'w', encoding='utf-8') as f: f.write(content)
+            self.current_file_loaded_empty = (content == "")
+            self.text_editor.edit_modified(False)
             orig_bg = self.btn_save.cget("background")
             self.btn_save.config(bg="#44aa44", text="Saved!")
             self.root.after(500, lambda: self.btn_save.config(bg=orig_bg, text="Save (Ctrl+S)"))
@@ -574,3 +714,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TranscriptionReviewer(root, target_dir)
     root.mainloop()
+
+
+

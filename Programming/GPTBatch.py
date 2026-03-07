@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.7
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.11
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -35,11 +35,21 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
-### v26.7
-- ✅ **FEATURE**: Added "Add Model Name as Prefix to Folder" option in Output & Batch tab.
-- ✅ **BUGFIX**: Fixed `AttributeError` in UI initialization.
+### v26.11
+- ✅ **IMPROVEMENT**: Job config snapshot now logs both raw prompt and resolved prompt (after `{{CONTEXT_TEXT}}` substitution) to make context injection behavior explicit.
+- ✅ **IMPROVEMENT**: Snapshot now shows whether the context placeholder exists before and after resolution.
 
-### v26.6
+### v26.10
+- ✅ **BUGFIX**: Fixed overwrite mode crash when processing logs are disabled (`save_log=False`).
+- ✅ **BUGFIX**: "Retry Failed" now also captures fatal statuses formatted as `Fail: ...`.
+- ✅ **IMPROVEMENT**: CLI streaming flags now support explicit `--stream` / `--no-stream`, with streaming default enabled.
+- ✅ **DOCS**: Clarified maintenance policy for this header block: update required for **any** script change.
+
+### v26.9
+- ✅ **FEATURE**: Added "Add Context as Suffix" option in Output & Batch tab. Appends sanitized context text to output filenames.
+- ✅ **IMPROVEMENT**: This setting is fully integrated into the preset system.
+
+### v26.8
 - ✅ **IMPROVEMENT**: Model-switch popup now auto-resizes to fit long error text and keeps action buttons visible (screen-bounded and centered).
 
 ### v26.5
@@ -89,7 +99,7 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 Developed by Feureau. Designed for efficiency, reliability, and precision in AI-assisted workflows.
 
 > [!IMPORTANT]
-> This documentation block is a core part of the script and **must** be updated with every feature addition, bug fix, or logic change.
+> This documentation block is a core part of the script and **must** be updated whenever **any change** is made to this script (including features, bug fixes, refactors, config changes, or text-only edits).
 """
 
 ################################################################################
@@ -712,6 +722,7 @@ def build_job_config_snapshot(
     raw_path,
     log_path,
     kwargs,
+    resolved_user_prompt=None,
 ):
     known_defaults = {
         "output_folder": "",
@@ -765,8 +776,16 @@ def build_job_config_snapshot(
             "log_output_path": log_path,
         },
         "prompt": {
-            "user_prompt_chars": len(user_prompt or ""),
-            "user_prompt_preview": preview_text(user_prompt or "", 220),
+            "raw_user_prompt_chars": len(user_prompt or ""),
+            "raw_user_prompt_preview": preview_text(user_prompt or "", 220),
+            "resolved_user_prompt_chars": len(resolved_user_prompt or ""),
+            "resolved_user_prompt_preview": preview_text(resolved_user_prompt or "", 220),
+            "placeholder_in_raw_prompt": (
+                CONTEXT_PROMPT_PLACEHOLDER in (user_prompt or "")
+            ),
+            "placeholder_in_resolved_prompt": (
+                CONTEXT_PROMPT_PLACEHOLDER in (resolved_user_prompt or "")
+            ),
             "add_filename_to_prompt": bool(add_filename_to_prompt),
             "context_chars": len(effective["context_text"] or ""),
             "context_preview": preview_text(effective["context_text"] or "", 180),
@@ -2109,11 +2128,11 @@ def process_file_group(
 
     if overwrite_original and len(filepaths_group) == 1:
         raw_path = filepaths_group[0]
-        log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME) if save_log else None
-
-        _, log_path = determine_unique_output_paths(
-            base_name, kwargs.get("output_suffix", ""), log_dir, log_dir
-        )
+        log_path = None
+        if save_log:
+            log_dir = os.path.join(source_dir, LOG_SUBFOLDER_NAME)
+            out_base = f"{base_name}{kwargs.get('output_suffix', '')}"
+            log_path = find_unique(log_dir, out_base, LOG_FILE_EXTENSION)
     else:
         out_folder = resolve_output_folder(
             source_dir,
@@ -2138,6 +2157,11 @@ def process_file_group(
         kwargs["result_metadata"]["raw_output_path"] = raw_path
         kwargs["result_metadata"]["resolved_output_folder"] = os.path.dirname(raw_path)
 
+    context_text_for_job = kwargs.get("context_text", "")
+    resolved_user_prompt_for_snapshot = apply_context_to_prompt(
+        user_prompt, context_text_for_job
+    )
+
     snapshot = build_job_config_snapshot(
         filepaths_group=filepaths_group,
         engine=engine,
@@ -2150,6 +2174,7 @@ def process_file_group(
         raw_path=raw_path,
         log_path=log_path,
         kwargs=kwargs,
+        resolved_user_prompt=resolved_user_prompt_for_snapshot,
     )
     console_log(
         "JOB CONFIG SNAPSHOT:\n" + json.dumps(to_loggable(snapshot), indent=2), "INFO"
@@ -2310,9 +2335,7 @@ def process_file_group(
 
             file_content_all = "".join(prompt_parts)
 
-            resolved_user_prompt = apply_context_to_prompt(
-                user_prompt, kwargs.get("context_text", "")
-            )
+            resolved_user_prompt = resolved_user_prompt_for_snapshot
 
             if kwargs.get("enable_chunking", False):
                 max_tok = kwargs.get("chunk_size", 4000)
@@ -2833,6 +2856,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             value="(Same as Input File)"
         )  # Dynamic Folder Preview
 
+        self.hibernate_var = tk.BooleanVar(
+            value=False
+        )  # Hibernate after all processing (excluded from presets)
+        self.add_context_as_suffix_var = tk.BooleanVar(value=False)
+
         self.create_widgets()
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
@@ -3095,13 +3123,22 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.suf_ent.grid(row=0, column=0, sticky="ew")
         self.ext_ent = ttk.Entry(f_ext, textvariable=self.output_ext_var, width=6)
         self.ext_ent.grid(row=0, column=1, sticky="e", padx=(5, 0))
+        self.add_context_suffix_check = ttk.Checkbutton(
+            tab_out,
+            text="Add Context as Suffix",
+            variable=self.add_context_as_suffix_var,
+        )
+        self.add_context_suffix_check.grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(2, 0)
+        )
+
         self.group_check = ttk.Checkbutton(
             tab_out,
             text="Group Files:",
             variable=self.group_files_var,
             command=self.toggle_grouping,
         )
-        self.group_check.grid(row=4, column=0, sticky="w", pady=5)
+        self.group_check.grid(row=5, column=0, sticky="w", pady=5)
 
         self.group_spin = ttk.Spinbox(
             tab_out,
@@ -3111,7 +3148,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             width=5,
             state="disabled",
         )
-        self.group_spin.grid(row=4, column=1, sticky="w", pady=5)
+        self.group_spin.grid(row=5, column=1, sticky="w", pady=5)
 
         self.over_check = ttk.Checkbutton(
             tab_out,
@@ -3119,7 +3156,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.overwrite_var,
             command=self.toggle_overwrite,
         )
-        self.over_check.grid(row=5, column=0, columnspan=2, sticky="w")
+        self.over_check.grid(row=6, column=0, columnspan=2, sticky="w")
 
         self.out_under_input_check = ttk.Checkbutton(
             tab_out,
@@ -3127,7 +3164,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.output_under_input_var,
         )
         self.out_under_input_check.grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(2, 0)
+            row=7, column=0, columnspan=2, sticky="w", pady=(2, 0)
         )
 
         self.merge_outputs_check = ttk.Checkbutton(
@@ -3136,7 +3173,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.merge_outputs_var,
         )
         self.merge_outputs_check.grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=(2, 0)
+            row=8, column=0, columnspan=2, sticky="w", pady=(2, 0)
         )
 
         # New Cleanup Option
@@ -3145,12 +3182,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             text="Clean Markdown Fences (```)",
             variable=self.clean_markdown_var,
         )
-        self.clean_md_check.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.clean_md_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         self.json_check = ttk.Checkbutton(
             tab_out, text="Validate JSON Output", variable=self.validate_json_var
         )
-        self.json_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.json_check.grid(row=10, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         # New Checkbox for Schema Validation (v25.6)
         self.json_keys_check = ttk.Checkbutton(
@@ -3159,14 +3196,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.validate_keys_var,
         )
         self.json_keys_check.grid(
-            row=10, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2)
+            row=11, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=(0, 2)
         )
 
         self.save_log_check = ttk.Checkbutton(
             tab_out, text="Save Processing Logs", variable=self.save_log_var
         )
         self.save_log_check.grid(
-            row=11, column=0, columnspan=2, sticky="w", pady=(2, 0)
+            row=12, column=0, columnspan=2, sticky="w", pady=(2, 0)
         )
 
         # Rename Mode
@@ -3176,12 +3213,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.rename_mode_var,
             command=self.toggle_rename_mode,
         )
-        self.rename_check.grid(row=12, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.rename_check.grid(row=13, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Rename Options
         self.rename_opts_frame = ttk.Frame(tab_out)
         self.rename_opts_frame.grid(
-            row=13, column=0, columnspan=2, sticky="w", padx=(20, 0)
+            row=14, column=0, columnspan=2, sticky="w", padx=(20, 0)
         )
         ttk.Radiobutton(
             self.rename_opts_frame,
@@ -3204,10 +3241,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # Upload Mode Radio Buttons
         ttk.Label(tab_out, text="Upload Mode:").grid(
-            row=14, column=0, sticky="w", pady=(5, 0)
+            row=15, column=0, sticky="w", pady=(5, 0)
         )
         u_frame = ttk.Frame(tab_out)
-        u_frame.grid(row=14, column=1, columnspan=2, sticky="ew", pady=(5, 0))
+        u_frame.grid(row=15, column=1, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Radiobutton(
             u_frame, text="Parallel", variable=self.upload_mode_var, value="parallel"
         ).pack(side=tk.LEFT)
@@ -3224,12 +3261,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.stop_queue_on_model_unavailable_var,
         )
         self.stop_on_unavailable_check.grid(
-            row=15, column=0, columnspan=3, sticky="w", pady=(5, 0)
+            row=16, column=0, columnspan=3, sticky="w", pady=(5, 0)
         )
 
         # --- Delay Controls ---
         delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=16, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        delay_frame.grid(row=17, column=0, columnspan=3, sticky="w", pady=(5, 0))
         ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
         ttk.Spinbox(
             delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3
@@ -3451,6 +3488,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )
         self.btn_undo.pack(side=tk.RIGHT, padx=5)
 
+        btn_row4 = ttk.Frame(btn_area)
+        btn_row4.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+
+        # This option is intentionally excluded from presets
+        self.hibernate_check = ttk.Checkbutton(
+            btn_row4,
+            text="Hibernate after all processing is complete",
+            variable=self.hibernate_var,
+        )
+        self.hibernate_check.pack(side=tk.LEFT, padx=5)
+
         ttk.Style().configure(
             "Accent.TButton", font=("Helvetica", 10, "bold"), foreground="black"
         )
@@ -3648,6 +3696,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.rename_mode_var, "rename_mode", False)
             set_var(self.rename_method_var, "rename_method", "full")
             set_var(self.model_prefix_var, "model_prefix", False)
+            set_var(self.add_context_as_suffix_var, "add_context_as_suffix", False)
 
             self.toggle_safety()  # Refresh UI state
             self.ollama_search_var.set(False)
@@ -3711,6 +3760,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "chunk_overlap": self.chunk_overlap_var.get(),
             "force_cutoff": self.force_cutoff_var.get(),
             "model_prefix": self.model_prefix_var.get(),
+            "add_context_as_suffix": self.add_context_as_suffix_var.get(),
         }
 
     def save_current_preset(self):
@@ -4152,22 +4202,27 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 "model_name": mod,
                 "api_key": self.api_key,
                 "output_folder": self.output_dir_var.get(),
-                "output_suffix": self.suffix_var.get(),
-                "output_under_input": self.output_under_input_var.get(),
-                "output_extension": self.output_ext_var.get(),
-                "stream_output": self.stream_var.get(),
-                "safety_settings": safe,
                 "add_filename_to_prompt": self.add_filename_var.get(),
+                "output_suffix": self.suffix_var.get()
+                + (
+                    sanitize_filename(current_context)
+                    if self.add_context_as_suffix_var.get() and current_context
+                    else ""
+                ),
                 "context_text": self.global_context_text_value
                 if use_persistent_context
                 else current_context,
                 "use_persistent_context": use_persistent_context,
                 "overwrite_original": self.overwrite_var.get(),
+                "output_under_input": self.output_under_input_var.get(),
+                "output_extension": self.output_ext_var.get(),
+                "stream_output": self.stream_var.get(),
                 "enable_web_search": self.ollama_search_var.get(),
                 "validate_json": self.validate_json_var.get(),
                 "validate_json_keys": self.validate_keys_var.get(),  # Pass new setting
                 "clean_markdown": self.clean_markdown_var.get(),
                 "save_log": self.save_log_var.get(),
+                "safety_settings": safe,
                 "job_delay_seconds": total_delay,
                 "sequential_upload": (self.upload_mode_var.get() == "sequential"),
                 "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
@@ -4203,7 +4258,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         failed_ids = []
         for item in self.tree.get_children():
             vals = self.tree.item(item)["values"]
-            if vals[2] == "Failed":
+            status = str(vals[2])
+            if status == "Failed" or status.startswith("Fail:"):
                 failed_ids.append(vals[0])
 
         if not failed_ids:
@@ -4882,6 +4938,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             and not self.processing_cancelled.is_set()
         ):
             self._merge_completed_outputs_by_folder(successful_output_paths)
+
+        # Check for hibernation request (if not cancelled by user)
+        if self.hibernate_var.get() and not self.processing_cancelled.is_set():
+            console_log("Hibernating system as requested by user...", "WARN")
+            os.system("shutdown /h")
+
         console_log("Worker thread finished.", "INFO")
         self.after(0, self._reset_gui)
 
@@ -4902,7 +4964,20 @@ def main():
     )
     parser.add_argument("-s", "--suffix", default=DEFAULT_RAW_OUTPUT_SUFFIX)
     parser.add_argument("--output-ext", default="")
-    parser.add_argument("--stream", action="store_true")
+    stream_group = parser.add_mutually_exclusive_group()
+    stream_group.add_argument(
+        "--stream",
+        dest="stream",
+        action="store_true",
+        help="Enable streaming output (default).",
+    )
+    stream_group.add_argument(
+        "--no-stream",
+        dest="stream",
+        action="store_false",
+        help="Disable streaming output.",
+    )
+    parser.set_defaults(stream=True)
     parser.add_argument(
         "--no-auto-stop-on-model-unavailable",
         action="store_true",
