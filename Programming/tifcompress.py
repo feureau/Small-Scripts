@@ -59,6 +59,24 @@ DEFAULT_PREDICTOR = 1
 DEFAULT_LEVEL = 6
 ALLOWED_EXTENSIONS = (".tif", ".tiff")
 VERBOSE_OUTPUT = True
+
+# Mapping of Pillow compression names to TIFF tags
+COMPRESSION_NAME_TO_TAG = {
+    "tiff_lzw": 5,
+    "tiff_deflate": 32946,
+    "tiff_adobe_deflate": 8,
+    "packbits": 32773,
+    "jpeg": 7,
+    "raw": 1
+}
+
+def get_tiff_info(img):
+    """Extracts compression (259) and predictor (317) tags from a TIFF image."""
+    if not hasattr(img, 'tag_v2'):
+        return None, None
+    comp = img.tag_v2.get(259, 1)  # Default to 1 (raw)
+    pred = img.tag_v2.get(317, 1)  # Default to 1 (none)
+    return comp, pred
 # ==========================================
 
 # --- ANSI Constants ---
@@ -223,6 +241,8 @@ def process_file_worker(payload):
     try:
         with Image.open(in_path) as img:
             dpi = img.info.get('dpi')
+            curr_comp, curr_pred = get_tiff_info(img)
+            
             os.makedirs(out_path.parent, exist_ok=True)
             
             if args.best:
@@ -249,9 +269,19 @@ def process_file_worker(payload):
                 img.save(out_path, **sp)
                 log.write(f"    Winner: {best_cfg[0]} | P{best_cfg[1]} | L{best_cfg[2] if best_cfg[2]>0 else 'N/A'}\n")
             else:
+                target_comp = args.compression or DEFAULT_COMPRESSION
+                target_pred = args.predictor or DEFAULT_PREDICTOR
+                target_tag = COMPRESSION_NAME_TO_TAG.get(target_comp.lower())
+                
+                # Check if we can skip
+                if not args.force and target_tag == curr_comp and target_pred == curr_pred:
+                    log.write(f"    [SKIP] Already matches target: {target_comp} | P{target_pred}\n")
+                    shared_state[w_id] = f"SKIPPED: {in_path.name}"
+                    return True, o_sz, o_sz, log.getvalue()
+                
                 shared_state[w_id] = f"COMPRESSING: {in_path.name}"
-                img.save(out_path, compression=args.compression or DEFAULT_COMPRESSION, 
-                         predictor=args.predictor or DEFAULT_PREDICTOR, 
+                img.save(out_path, compression=target_comp, 
+                         predictor=target_pred, 
                          compress_level=args.level or DEFAULT_LEVEL, dpi=dpi)
 
             n_sz = os.path.getsize(out_path)
@@ -278,6 +308,7 @@ def main():
     parser.add_argument("-r", "--predictor", type=int)
     parser.add_argument("-l", "--level", type=int)
     parser.add_argument("-j", "--jobs", default="auto")
+    parser.add_argument("-f", "--force", action="store_true", help="Force compression even if target matches current")
     args = parser.parse_args()
 
     # Environmental Check
