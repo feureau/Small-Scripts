@@ -58,6 +58,7 @@ class TranscriptionReviewer:
         
         self.all_versions = set()
         self.current_version_var = tk.StringVar()
+        self.last_mtime = None  # Track modification time for auto-reload
 
         # UI State
         self.zoom_factor = 1.0
@@ -78,6 +79,7 @@ class TranscriptionReviewer:
         self._update_version_dropdown()
         
         if self.pairs:
+            self._update_page_dropdown()
             self.load_pair(0)
         else:
             messagebox.showinfo("No Files", f"No matching pairs found in:\n{self.working_dir}")
@@ -88,6 +90,9 @@ class TranscriptionReviewer:
         # Keep trying briefly during startup until the panes have real size.
         self.root.after(100, self._schedule_split_enforce)
         self.root.bind('<Map>', lambda e: self._schedule_split_enforce())
+
+        # Start auto-reload check loop
+        self.root.after(1000, self._check_file_modifications)
 
     def _setup_ui(self):
         # 1. Paned Window
@@ -142,8 +147,12 @@ class TranscriptionReviewer:
         style_btn(self.btn_prev)
         self.btn_prev.pack(side=tk.LEFT)
         
-        self.lbl_status = tk.Label(self.control_frame, text="0 / 0", font=("Segoe UI", 11, "bold"), bg=COLORS["bg"], fg=COLORS["fg"])
-        self.lbl_status.pack(side=tk.LEFT, padx=20)
+        self.combo_page = ttk.Combobox(self.control_frame, state="readonly", width=5)
+        self.combo_page.pack(side=tk.LEFT, padx=(20, 0))
+        self.combo_page.bind("<<ComboboxSelected>>", self._on_page_selected)
+        
+        self.lbl_page_total = tk.Label(self.control_frame, text=" / 0", font=("Segoe UI", 11, "bold"), bg=COLORS["bg"], fg=COLORS["fg"])
+        self.lbl_page_total.pack(side=tk.LEFT, padx=(0, 20))
         
         self.btn_next = tk.Button(self.control_frame, text="Next >> (PgDn)", command=self.next_pair)
         style_btn(self.btn_next)
@@ -174,6 +183,11 @@ class TranscriptionReviewer:
         self.btn_copy_image.config(bg="#3b3b3b")
         self.btn_copy_image.pack(side=tk.RIGHT)
 
+        self.btn_open_ext = tk.Button(self.control_frame, text="Open Ext", command=self.open_external_editor)
+        style_btn(self.btn_open_ext)
+        self.btn_open_ext.config(bg="#4a4a4a")
+        self.btn_open_ext.pack(side=tk.RIGHT, padx=(0, 10))
+
         # Bindings
         self.root.bind('<Control-s>', lambda e: self.save_current_text())
         self.root.bind('<Prior>', lambda e: self.prev_pair(jump_set=False)) 
@@ -198,6 +212,46 @@ class TranscriptionReviewer:
         self.image_canvas.configure(takefocus=1)        
         # Zoom for Text
         self.text_editor.bind('<Control-MouseWheel>', self._on_text_zoom)
+
+    def _check_file_modifications(self):
+        """Periodically checks if the current text file has been modified externally."""
+        if self.current_txt_path and os.path.exists(self.current_txt_path):
+            try:
+                new_mtime = os.path.getmtime(self.current_txt_path)
+                if self.last_mtime is not None and new_mtime != self.last_mtime:
+                    # If local editor is not modified, reload silently
+                    if not self.text_editor.edit_modified():
+                        print(f"File {self.current_txt_path} modified externally. Reloading...")
+                        with open(self.current_txt_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        self.text_editor.delete('1.0', tk.END)
+                        self.text_editor.insert('1.0', content)
+                        self.text_editor.edit_modified(False)
+                        self.current_file_loaded_empty = (content == "")
+                        self.last_mtime = new_mtime
+                    else:
+                        # Editor is dirty, just acknowledge the new mtime but don't overwrite local changes
+                        # This prevents constant "modified externally" logic if user keeps it dirty.
+                        self.last_mtime = new_mtime
+            except Exception as e:
+                print(f"Error checking file modification: {e}")
+        
+        # Schedule next check
+        self.root.after(1000, self._check_file_modifications)
+
+    def _on_page_selected(self, event=None):
+        try:
+            new_index = int(self.combo_page.get()) - 1
+            if 0 <= new_index < len(self.pairs):
+                self.load_pair(new_index)
+        except ValueError:
+            pass
+
+    def _update_page_dropdown(self):
+        total_pages = len(self.pairs)
+        self.combo_page['values'] = [str(i + 1) for i in range(total_pages)]
+        self.lbl_page_total.config(text=f" / {total_pages}")
 
     def _force_50_split(self):
         if self.split_attempts <= 0:
@@ -317,7 +371,8 @@ class TranscriptionReviewer:
         txt_path = versions.get(selected_ver)
 
         self.root.title(f"Reviewing: {os.path.basename(img_path)}")
-        self.lbl_status.config(text=f"{index + 1} / {len(self.pairs)}")
+        self.combo_page.set(str(index + 1))
+        self.lbl_page_total.config(text=f" / {len(self.pairs)}")
         
         if txt_path:
             self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
@@ -335,6 +390,10 @@ class TranscriptionReviewer:
                 self.text_editor.focus_set()
                 self.current_txt_path = txt_path
                 self.current_file_loaded_empty = (content == "")
+                if os.path.exists(txt_path):
+                    self.last_mtime = os.path.getmtime(txt_path)
+                else:
+                    self.last_mtime = None
 
             except FileNotFoundError:
                 # File was deleted after initial scan: treat as blank and allow recreating on save.
@@ -575,6 +634,28 @@ class TranscriptionReviewer:
         self.text_editor.configure(font=("Consolas", self.text_font_size))
         return "break" # Prevent double processing if any
 
+    def open_external_editor(self):
+        """Opens the current text file in the system's default application."""
+        if not self.current_txt_path:
+            messagebox.showwarning("Open External", "No text file found for this version.")
+            return
+            
+        # Optional: Save current changes before opening externally so the editor sees them
+        if self.text_editor.edit_modified():
+            self.save_current_text()
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(self.current_txt_path)
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.call(["open", self.current_txt_path])
+            else:
+                import subprocess
+                subprocess.call(["xdg-open", self.current_txt_path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file: {e}")
+
     def _infer_missing_txt_path(self, selected_ver):
         img_path, _ = self.pairs[self.current_index]
         img_basename = os.path.splitext(os.path.basename(img_path))[0]
@@ -593,15 +674,17 @@ class TranscriptionReviewer:
     def save_current_text(self):
         if not self.pairs:
             return False
+            
+        # If the editor is not modified, skip saving.
+        # This handles unchanged files and avoids redundant writes on navigation.
+        if not self.text_editor.edit_modified():
+            return True
+
         _, versions = self.pairs[self.current_index]
         selected_ver = self.current_version_var.get()
         txt_path = versions.get(selected_ver)
 
         content = self.text_editor.get('1.0', 'end-1c')
-
-        # If the loaded file was already empty and untouched, don't rewrite it (when file still exists).
-        if txt_path and os.path.exists(txt_path) and self.current_file_loaded_empty and content == "" and not self.text_editor.edit_modified():
-            return True
 
         if not txt_path:
             txt_path = self._infer_missing_txt_path(selected_ver)
@@ -613,9 +696,14 @@ class TranscriptionReviewer:
         if content.startswith("[No text file found for version '") and content.endswith("for this image]"):
             content = ""
 
+        # Blank file protection: If the file doesn't exist and the content is empty, don't create it.
+        if not os.path.exists(txt_path) and content.strip() == "":
+            return True
+
         try:
             os.makedirs(os.path.dirname(txt_path), exist_ok=True)
             with open(txt_path, 'w', encoding='utf-8') as f: f.write(content)
+            self.last_mtime = os.path.getmtime(txt_path) # Update mtime after internal save
             self.current_file_loaded_empty = (content == "")
             self.text_editor.edit_modified(False)
             orig_bg = self.btn_save.cget("background")
@@ -699,6 +787,7 @@ class TranscriptionReviewer:
             self.current_version_var.set(old_version)
             
         if self.pairs:
+            self._update_page_dropdown()
             # Try to stay on the same image index
             new_index = min(old_index, len(self.pairs) - 1)
             self.load_pair(new_index)
@@ -714,6 +803,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TranscriptionReviewer(root, target_dir)
     root.mainloop()
-
-
-
