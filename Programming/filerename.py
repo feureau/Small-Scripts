@@ -38,8 +38,8 @@ Date: 2025-08-15
 *   STRING REMOVAL: To remove a piece of a filename, simply provide an empty
     string ("") as the replacement string.
 
-*   SHALLOW SEARCH OPTION: For cases where you only want to search the current
-    directory (and not subdirectories), a special flag (`-s`) is available.
+*   NON-RECURSIVE SEARCH OPTION: For cases where you only want to search the
+    current directory (and not subdirectories), use `-n` / `--non-recursive`.
 
 *   CROSS-PLATFORM: Works on Windows, macOS, and Linux.
 
@@ -69,9 +69,12 @@ python filerename.py [file_pattern] [old_string] [new_string] [options]
 
 --- OPTIONS ---
 
-  -s, --shallow
+  -n, --non-recursive
     Disables the default recursive behavior and performs a "shallow" search,
     meaning it will ONLY look for files in the current working directory.
+
+  -s, --suffix
+    Appends a suffix to filenames before the extension.
 
   -h, --help
     Displays this help message and exits.
@@ -98,7 +101,7 @@ python filerename.py [file_pattern] [old_string] [new_string] [options]
    Rename files ONLY in the current directory. Do not touch any subfolders.
    Here, we change "temp_" to "final_" in all 'data-*.csv' files.
 
-   > python filerename.py data-*.csv "temp_" "final_" -s
+   > python filerename.py data-*.csv "temp_" "final_" -n
 
 4. FILENAMES WITH SPACES:
    Recursively rename files, replacing "Final Report" with "Official Document".
@@ -135,11 +138,13 @@ def display_help():
     print("  old_string     The string (or regex pattern) to be replaced. (Optional if using --order)")
     print("  new_string     The string to replace with. (Optional if using --order)")
     print("\nOptions:")
-    print("  -s, --shallow    Disables recursion and searches ONLY the current directory.")
+    print("  -n, --non-recursive  Disables recursion and searches ONLY the current directory.")
+    print("  -s, --suffix         Appends a suffix before file extension.")
     print("  -r, --regex      Treats old_string as a Regular Expression.")
     print("  -p, --prefix     Prepends a string to the filenames.")
     print("  -o, --order      Apply a sequence/ordering (e.g., 'reverse' or 'r').")
     print("  -e, --extension  Changes file extension (e.g., 'jpg' or '.jpg').")
+    print("  --replay-format  Converts Replay_YYYY-MM-DD_HH-MM-SS.ext to YYYY-MM-DD_HH-MM-SS_Rec-Replay.ext.")
     print("\nExamples:")
     # ... (existing examples)
     print("  # Reverse the numbering of all .jpg files")
@@ -148,15 +153,19 @@ def display_help():
     print("  # Recursively rename all .txt files in current folder and all subfolders")
     print("  python FileRename.py *.txt draft final")
     print("\n  # Rename .jpg files ONLY in the current folder (shallow search)")
-    print("  python FileRename.py *.jpg vacation holiday -s")
+    print("  python FileRename.py *.jpg vacation holiday -n")
     print("\n  # Use Regex to remove a date pattern (e.g., 20240415) from filenames")
     print("  python FileRename.py * \" - \\d{8}\" \"\" -r")
     print("\n  # Add a prefix to all .jpg files")
     print("  python FileRename.py *.jpg --prefix \"Trip_2023_\"")
+    print("\n  # Add a suffix before extension (e.g., image.jpg -> image_EDIT.jpg)")
+    print("  python FileRename.py *.jpg --suffix \"_EDIT\"")
     print("\n  # Change extension of all .jpeg files to .jpg")
     print("  python FileRename.py *.jpeg --extension jpg")
+    print("\n  # Convert Replay_2026-03-09_04-03-59.mp4 -> 2026-03-09_04-03-59_Rec-Replay.mp4")
+    print("  python FileRename.py Replay_*.mp4 --replay-format")
 
-def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, order=None, extension=None):
+def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, suffix=None, order=None, extension=None, replay_format=False):
     """
     Proposes and executes file renames after user confirmation.
     """
@@ -196,7 +205,12 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
             
             match_found = False
 
-            if old_string is not None and new_string is not None:
+            if replay_format:
+                replay_match = re.match(r'^Replay_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})(\..+)$', original_filename)
+                if replay_match:
+                    new_filename = f"{replay_match.group(1)}_Rec-Replay{replay_match.group(2)}"
+                    match_found = (new_filename != original_filename)
+            elif old_string is not None and new_string is not None:
                 if use_regex:
                     try:
                         if re.search(old_string, original_filename):
@@ -212,6 +226,11 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
 
             if prefix:
                 new_filename = prefix + new_filename
+                match_found = True
+
+            if suffix:
+                base, ext = os.path.splitext(new_filename)
+                new_filename = base + suffix + ext
                 match_found = True
             
             if extension is not None:
@@ -286,12 +305,12 @@ def main():
     print(f"Working Directory: {os.getcwd()}")
     
     # --- LOGIC CHANGE HERE ---
-    # Recursion is now ON by default. The '-s' flag turns it OFF.
+    # Recursion is now ON by default. The '-n' flag turns it OFF.
     recursive = True
-    if '-s' in args or '--shallow' in args:
+    if '-n' in args or '--non-recursive' in args:
         recursive = False
-        if '-s' in args: args.remove('-s')
-        if '--shallow' in args: args.remove('--shallow')
+        if '-n' in args: args.remove('-n')
+        if '--non-recursive' in args: args.remove('--non-recursive')
     
     # Regex support
     use_regex = False
@@ -325,6 +344,19 @@ def main():
             print("\nError: --prefix requires a value.")
             sys.exit(1)
 
+    # Suffix support
+    suffix = None
+    if '-s' in args or '--suffix' in args:
+        try:
+            idx = args.index('-s') if '-s' in args else args.index('--suffix')
+            suffix = args[idx + 1]
+            # Remove flag and value
+            args.pop(idx + 1)
+            args.pop(idx)
+        except (IndexError, ValueError):
+            print("\nError: --suffix requires a value.")
+            sys.exit(1)
+
     # Extension support
     extension = None
     if '-e' in args or '--extension' in args:
@@ -338,7 +370,13 @@ def main():
             print("\nError: --extension requires a value.")
             sys.exit(1)
     
-    if len(args) < 1 or (not prefix and not order and extension is None and len(args) < 3):
+    # Replay format support
+    replay_format = False
+    if '--replay-format' in args:
+        replay_format = True
+        args.remove('--replay-format')
+    
+    if len(args) < 1 or (not prefix and not suffix and not order and extension is None and not replay_format and len(args) < 3):
         print("\nError: Invalid number of arguments.")
         display_help()
         sys.exit(1)
@@ -360,12 +398,16 @@ def main():
         print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
     if prefix:
         print(f"Adding prefix: '{prefix}'")
+    if suffix:
+        print(f"Adding suffix: '{suffix}'")
     if order:
         print(f"Applying order: '{order}'")
     if extension is not None:
         display_ext = extension if extension.startswith(".") or extension == "" else "." + extension
         print(f"Changing extension to: '{display_ext}'")
-    print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-s flag used)'}")
+    if replay_format:
+        print("Applying Replay format conversion: Replay_<timestamp>.<ext> -> <timestamp>_Rec-Replay.<ext>")
+    print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-n flag used)'}")
     print("---------------------------------")
     
     # Use the pattern to search with glob.
@@ -374,7 +416,13 @@ def main():
     files_to_process = glob.glob(pathname, recursive=recursive)
     files_to_process = [f for f in files_to_process if os.path.isfile(f)] # Filter out directories
         
-    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, order=order, extension=extension)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, suffix=suffix, order=order, extension=extension, replay_format=replay_format)
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
