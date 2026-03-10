@@ -501,38 +501,28 @@ def safe_ffprobe(cmd, operation="operation"):
     except Exception as e:
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
-def escape_ffmpeg_filter_path(path, quoted=True):
+def escape_ffmpeg_filter_path(path):
     """
     Escapes a path for use within an FFmpeg filter (e.g., subtitles, lut3d).
-    Replaces backslashes with forward slashes.
-    If quoted=True (default), it handles escaping for a string wrapped in single quotes.
-    FFmpeg filtergraph parser unescapes once, and some filters might unescape again.
+    Uses a double-escaping strategy suitable for UNQUOTED filter arguments,
+    ensuring delimiters like ':', ' ', and ',' survive both filtergraph 
+    and option parsing on Windows.
     """
     if not path:
         return ""
     # Convert \ to /
     p = str(path).replace('\\', '/')
     
-    if quoted:
-        # We need double escaping for FFmpeg filters on Windows because 
-        # both the filtergraph parser and the filter itself unescape.
-        # 1. Escape backslash
-        p = p.replace('\\', '\\\\')
-        # 2. Escape colon (MUST be escaped for many filters like subtitles/lut3d)
-        p = p.replace(':', '\\\\:')
-        # 3. Escape single quote (Triple backslash is often needed for literal quote)
-        p = p.replace("'", r"\\\'")
-        return p
-    else:
-        # Unquoted: escape , : ; [ ] \ ' and whitespace
-        p = p.replace('\\', '\\\\')
-        p = p.replace(':', '\\:')
-        p = p.replace(',', '\\,')
-        p = p.replace(';', '\\;')
-        p = p.replace('[', '\\[').replace(']', '\\]')
-        p = p.replace("'", "\\'")
-        p = p.replace(' ', '\\ ')
-        return p
+    # Double escape characters that FFmpeg uses as delimiters.
+    # We use \\ so that after the first parse, a single \ remains
+    # to protect the character during the second parse.
+    p = p.replace(':', '\\\\:')
+    p = p.replace(' ', '\\\\ ')
+    p = p.replace(',', '\\\\,')
+    p = p.replace("'", r"\\\'")
+    p = p.replace('[', '\\\\[').replace(']', '\\\\]')
+    
+    return p
 
 def get_file_duration(file_path):
     """Returns the duration of the file in seconds."""
@@ -5045,7 +5035,7 @@ class VideoProcessorApp:
                         vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
-                cpu_filters.append(f"lut3d=file='{safe_lut}'")
+                cpu_filters.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
@@ -5054,10 +5044,10 @@ class VideoProcessorApp:
                 else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
-                cpu_filters.append(f"subtitles=filename='{safe_ass}'")
+                cpu_filters.append(f"subtitles=filename={safe_ass}")
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
-                cpu_filters.append(f"subtitles=filename='{safe_title_ass}'")
+                cpu_filters.append(f"subtitles=filename={safe_title_ass}")
             if cpu_filters:
                 # One single trip to CPU for all the heavy lifting
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
