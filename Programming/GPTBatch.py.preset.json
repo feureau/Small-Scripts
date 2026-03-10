@@ -669,7 +669,7 @@
         "add_filename_to_prompt": false,
         "context_text": "",
         "persistent_context": false,
-        "global_context_text": "",
+        "global_context_text": "analyse the srt for context and do all the search you need to figure it out. It's on Hazbin Hotel franchise.",
         "enable_web_search": false,
         "enable_safety": false,
         "safety_harassment": "Off",
@@ -684,13 +684,14 @@
         "save_img_to_output": false,
         "rename_mode": false,
         "rename_method": "full",
-        "enable_thinking": false,
+        "enable_thinking": true,
         "enable_chunking": false,
         "chunk_size": 4000,
         "enable_overlap": false,
         "chunk_overlap": 0,
         "force_cutoff": true,
-        "model_prefix": false
+        "model_prefix": false,
+        "add_context_as_suffix": false
     },
     "OCR Restoration": {
         "prompt": "**Role:** You are an expert archival editor and historian specializing in mid-20th-century Southeast Asian political history. Your goal is to restore a high-error OCR transcription into a clean, professional, and historically accurate document.\n\n**Task:** Reconstruct the provided text by correcting systematic character substitutions and formatting the output into a clean Markdown document.\n\n**Constraint:** **Output exclusively the restored Markdown text. Do not include any commentary, introductory remarks, post-text explanations, notes on OCR corrections, or conversational filler. The response must terminate immediately after the final character of the restored document.**\n\n### Restoration Logic\n\n* **Visual Character Correction:** Identify and reverse alphanumeric substitutions where digits or symbols have replaced letters based on visual similarity (e.g., zeroes for 'O', ones for 'I' or 'l', fours for 'A', eights for 'B').\n* **Word Reconstruction:** Rejoin fragmented words and syllables split by erroneous whitespace.\n* **Noise Removal:** Strip out non-textual artifacts, such as standalone page numbers, header/footer remnants, and scanning glitches.\n* **Historical Accuracy:** Use the specific geographic, cultural, and political context of mid-20th-century Indonesia (Javanese military divisions, regional administrations, and historical figures) to resolve linguistic ambiguities in proper nouns. **Do not add modern annotations or explanations regarding these corrections.**\n\n### Markdown Formatting Requirements\n\n* **Document Structure:** Use a clear heading hierarchy. Apply a primary header for the main title and sub-headers for section titles.\n* **Emphasis:** Use **bolding** for the first mention of major military divisions, key political figures, and primary geographic regions within each section.\n* **Lists:** Convert categorized data or sequential points into semantic Markdown lists.\n* **Quotations:** Use blockquotes for epigraphs, historical quotes, or translated Javanese verses.\n* **Prose:** Ensure text flows as continuous paragraphs, removing artificial line breaks from the original column width.\n\n---\n\n**Input OCR Text:**",
