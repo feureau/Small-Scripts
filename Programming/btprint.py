@@ -674,12 +674,27 @@ def main():
         print(f"[ERROR] Profile '{p_name}' not found.")
         return
     
+    # --- FILE DISCOVERY ---
     files = []
-    for f in args.files: files.extend(glob.glob(f) or [f])
-    if not files: return
+    for f in args.files:
+        matches = glob.glob(f)
+        if matches:
+            files.extend(matches)
+        else:
+            if os.path.exists(f):
+                files.append(f)
+            else:
+                print(f"[WARNING] No files found matching: {f}")
+
+    if not files:
+        print("[ERROR] No files to print.")
+        return
+
+    files.sort()
 
     protocol = cfg.get("protocol", "TSPL")
     print(f"Profile: {p_name} | Protocol: {protocol} | Mode: {cfg.get('sensor_type', 'GAP')}")
+    print(f"Found {len(files)} file(s) to process.")
 
     port = None
     if args.scan: port = get_port_manual()
@@ -701,7 +716,7 @@ def main():
                 try:
                     doc = fitz.open(fname)
                     for i, page in enumerate(doc):
-                        print(f"  > Page {i+1}...", end="\r")
+                        print(f"  > Printing Page {i+1}/{len(doc)}...", end="\r")
                         pix = page.get_pixmap(dpi=203)
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                         
@@ -725,6 +740,7 @@ def main():
                         p.flush()
                         time.sleep(1.5)
                     doc.close()
+                    print(f"  > Finished: {fname}      ")
                 except Exception as e:
                     print(f"  [Error] {e}")
 
