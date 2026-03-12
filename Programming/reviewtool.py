@@ -48,7 +48,7 @@ class TranscriptionReviewer:
         self.root.configure(bg=COLORS["bg"])
         
         self.working_dir = working_dir
-        self.pairs = [] 
+        self.pairs = [] # List of (basename, img_versions_dict, txt_versions_dict)
         self.current_index = 0
         self.image_ref = None 
         self.original_image = None
@@ -56,8 +56,10 @@ class TranscriptionReviewer:
         self.current_file_loaded_empty = False
         self.needs_fit = False
         
-        self.all_versions = set()
+        self.all_versions = set()       # Text versions
+        self.all_img_versions = set()   # Image versions
         self.current_version_var = tk.StringVar()
+        self.current_img_version_var = tk.StringVar()
         self.last_mtime = None  # Track modification time for auto-reload
 
         # UI State
@@ -158,11 +160,19 @@ class TranscriptionReviewer:
         style_btn(self.btn_next)
         self.btn_next.pack(side=tk.LEFT)
         
-        # Version Selection
-        self.lbl_version = tk.Label(self.control_frame, text="Version:", fg=COLORS["fg"], bg=COLORS["bg"], font=("Segoe UI", 9))
-        self.lbl_version.pack(side=tk.LEFT, padx=(20, 5))
+        # Image Set Selection
+        self.lbl_img_version = tk.Label(self.control_frame, text="Image Set:", fg=COLORS["fg"], bg=COLORS["bg"], font=("Segoe UI", 9))
+        self.lbl_img_version.pack(side=tk.LEFT, padx=(20, 5))
         
-        self.combo_version = ttk.Combobox(self.control_frame, textvariable=self.current_version_var, state="readonly", width=15)
+        self.combo_img_version = ttk.Combobox(self.control_frame, textvariable=self.current_img_version_var, state="readonly", width=12)
+        self.combo_img_version.pack(side=tk.LEFT)
+        self.combo_img_version.bind("<<ComboboxSelected>>", lambda e: self.load_pair(self.current_index))
+
+        # Text Set Selection
+        self.lbl_version = tk.Label(self.control_frame, text="Text Set:", fg=COLORS["fg"], bg=COLORS["bg"], font=("Segoe UI", 9))
+        self.lbl_version.pack(side=tk.LEFT, padx=(15, 5))
+        
+        self.combo_version = ttk.Combobox(self.control_frame, textvariable=self.current_version_var, state="readonly", width=12)
         self.combo_version.pack(side=tk.LEFT)
         self.combo_version.bind("<<ComboboxSelected>>", lambda e: self.load_pair(self.current_index))
 
@@ -284,98 +294,128 @@ class TranscriptionReviewer:
             print(f"Error reading directory: {e}")
             return
 
-        images = sorted([f for f in files_in_root if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS], key=natural_sort_key)
-        
         # Find subdirectories
         subdirs = [d for d in files_in_root if os.path.isdir(os.path.join(self.working_dir, d))]
         
-        # Pre-scan all text files in root and subdirs for range patterns
-        def scan_text_files(directory):
+        def scan_files(directory, extensions):
             try:
-                txts = [f for f in os.listdir(directory) if os.path.splitext(f)[1].lower() in TEXT_EXTENSIONS]
-                return txts
+                return [f for f in os.listdir(directory) if os.path.splitext(f)[1].lower() in extensions]
             except:
                 return []
 
-        root_text_files = scan_text_files(self.working_dir)
-        subdir_texts = {sd: scan_text_files(os.path.join(self.working_dir, sd)) for sd in subdirs}
+        # Data structure: basename -> {"img": {version: path}, "txt": {version: path}}
+        discovery = {}
 
+        def add_to_discovery(files, version_name, category, directory):
+            for f in files:
+                basename = os.path.splitext(f)[0]
+                if basename not in discovery:
+                    discovery[basename] = {"img": {}, "txt": {}}
+                discovery[basename][category][version_name] = os.path.join(directory, f)
+
+        # 1. Scan Root
+        root_imgs = scan_files(self.working_dir, IMAGE_EXTENSIONS)
+        root_txts = scan_files(self.working_dir, TEXT_EXTENSIONS)
+        add_to_discovery(root_imgs, "Default", "img", self.working_dir)
+        add_to_discovery(root_txts, "Default", "txt", self.working_dir)
+
+        # 2. Scan Subdirs
+        for sd in subdirs:
+            sd_path = os.path.join(self.working_dir, sd)
+            sd_imgs = scan_files(sd_path, IMAGE_EXTENSIONS)
+            sd_txts = scan_files(sd_path, TEXT_EXTENSIONS)
+            add_to_discovery(sd_imgs, sd, "img", sd_path)
+            add_to_discovery(sd_txts, sd, "txt", sd_path)
+
+        # 3. Handle Range Matches (Special Case for Text only)
         range_pattern = re.compile(r'page-(\d+)_to_page-(\d+)', re.IGNORECASE)
-
-        def get_matching_texts(img_name, txt_list):
-            img_basename = os.path.splitext(img_name)[0]
-            # Try to get a number from the image name
-            img_num_match = re.search(r'(\d+)', img_name)
-            img_num = int(img_num_match.group(1)) if img_num_match else None
-            
-            matches = []
-            for txt in txt_list:
-                txt_basename = os.path.splitext(txt)[0]
-                # 1. Exact or prefix match
-                if txt_basename == img_basename or txt_basename.startswith(img_basename):
-                    matches.append(txt)
-                    continue
-                
-                # 2. Range match
-                range_match = range_pattern.search(txt_basename)
-                if range_match and img_num is not None:
-                    start, end = int(range_match.group(1)), int(range_match.group(2))
-                    if start <= img_num <= end:
-                        matches.append(txt)
-            return matches
-
-        for img_file in images:
-            versions = {}
-            
-            # 1. Look for matches in Root
-            matches = get_matching_texts(img_file, root_text_files)
-            if matches:
-                # If multiple matches (rare), pick the first one as "Default"
-                versions["Default"] = os.path.join(self.working_dir, matches[0])
-
-            # 2. Look in Subdirectories
-            for subdir in subdirs:
-                matches = get_matching_texts(img_file, subdir_texts[subdir])
-                if matches:
-                    # Handle multiple versions in same subdir if needed (e.g. _1, _2)
-                    for i, m in enumerate(matches):
-                        ver_name = subdir if i == 0 else f"{subdir}_{i}"
-                        versions[ver_name] = os.path.join(self.working_dir, subdir, m)
-
-            # ALWAYS add the image, even if versions is empty
-            self.pairs.append((os.path.join(self.working_dir, img_file), versions))
-            self.all_versions.update(versions.keys())
+        all_basenames = sorted(discovery.keys(), key=natural_sort_key)
         
-        print(f"Found {len(self.pairs)} images with versions: {self.all_versions}")
+        # Pre-scan all text files for ranges
+        range_texts = [] # (start, end, path, version)
+        # Check root
+        for txt in root_txts:
+            m = range_pattern.search(txt)
+            if m: range_texts.append((int(m.group(1)), int(m.group(2)), os.path.join(self.working_dir, txt), "Default"))
+        # Check subdirs
+        for sd in subdirs:
+            sd_path = os.path.join(self.working_dir, sd)
+            sd_txts = scan_files(sd_path, TEXT_EXTENSIONS)
+            for txt in sd_txts:
+                m = range_pattern.search(txt)
+                if m: range_texts.append((int(m.group(1)), int(m.group(2)), os.path.join(sd_path, txt), sd))
+
+        # Assign range matches to basenames that don't have text for that version
+        for bn in all_basenames:
+            m = re.search(r'(\d+)', bn)
+            if not m: continue
+            num = int(m.group(1))
+            for start, end, path, ver in range_texts:
+                if start <= num <= end:
+                    if ver not in discovery[bn]["txt"]:
+                        discovery[bn]["txt"][ver] = path
+
+        # Finalize self.pairs
+        for bn in all_basenames:
+            img_vers = discovery[bn]["img"]
+            txt_vers = discovery[bn]["txt"]
+            # Only add if it has at least one image OR one text? 
+            # Original code added every image it found.
+            # Let's add if it has at least ONE of either, to be safe.
+            if img_vers or txt_vers:
+                self.pairs.append((bn, img_vers, txt_vers))
+                self.all_img_versions.update(img_vers.keys())
+                self.all_versions.update(txt_vers.keys())
+
+        print(f"Found {len(self.pairs)} pages. Img Sets: {self.all_img_versions}, Txt Sets: {self.all_versions}")
 
     def _update_version_dropdown(self):
-        sorted_versions = sorted(list(self.all_versions), key=natural_sort_key)
-        if "Default" in sorted_versions:
-            # Move Default to top
-            sorted_versions.remove("Default")
-            sorted_versions.insert(0, "Default")
-        
-        self.combo_version['values'] = sorted_versions
-        if sorted_versions:
-            if self.current_version_var.get() not in sorted_versions:
-                self.current_version_var.set(sorted_versions[0])
+        def get_sorted_versions(version_set):
+            sorted_v = sorted(list(version_set), key=natural_sort_key)
+            if "Default" in sorted_v:
+                sorted_v.remove("Default")
+                sorted_v.insert(0, "Default")
+            return sorted_v
+
+        # Text Versions
+        txt_versions = get_sorted_versions(self.all_versions)
+        self.combo_version['values'] = txt_versions
+        if txt_versions:
+            if self.current_version_var.get() not in txt_versions:
+                self.current_version_var.set(txt_versions[0])
         else:
             self.current_version_var.set("")
+
+        # Image Versions
+        img_versions = get_sorted_versions(self.all_img_versions)
+        self.combo_img_version['values'] = img_versions
+        if img_versions:
+            if self.current_img_version_var.get() not in img_versions:
+                self.current_img_version_var.set(img_versions[0])
+        else:
+            self.current_img_version_var.set("")
 
     def load_pair(self, index):
         if not (0 <= index < len(self.pairs)): return
         self.current_index = index
-        img_path, versions = self.pairs[index]
+        basename, img_versions, txt_versions = self.pairs[index]
         
-        selected_ver = self.current_version_var.get()
-        txt_path = versions.get(selected_ver)
+        selected_img_ver = self.current_img_version_var.get()
+        selected_txt_ver = self.current_version_var.get()
 
-        self.root.title(f"Reviewing: {os.path.basename(img_path)}")
+        img_path = img_versions.get(selected_img_ver)
+        if not img_path and img_versions:
+            # Fallback to Default or first available
+            img_path = img_versions.get("Default", list(img_versions.values())[0])
+
+        txt_path = txt_versions.get(selected_txt_ver)
+
+        self.root.title(f"Reviewing: {basename}")
         self.combo_page.set(str(index + 1))
         self.lbl_page_total.config(text=f" / {len(self.pairs)}")
         
         if txt_path:
-            self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
+            self.lbl_filename.config(text=f"{selected_txt_ver}: {os.path.basename(txt_path)}")
             try:
                 print(f"Loading text file: {txt_path}")
                 with open(txt_path, 'r', encoding='utf-8') as f:
@@ -409,29 +449,33 @@ class TranscriptionReviewer:
                 self.current_txt_path = None
                 self.current_file_loaded_empty = False
         else:
-             self.lbl_filename.config(text=f"{selected_ver}: (Not Found)")
+             self.lbl_filename.config(text=f"{selected_txt_ver}: (Not Found)")
              self.text_editor.delete('1.0', tk.END)
-             self.text_editor.insert('1.0', f"[No text file found for version '{selected_ver}' for this image]")
+             self.text_editor.insert('1.0', f"[No text file found for version '{selected_txt_ver}' for this image]")
              self.text_editor.edit_modified(False)
              self.current_txt_path = None
              self.current_file_loaded_empty = False
 
-
-        try:
-            self.original_image = Image.open(img_path)
-            # Defer fit until we have a real frame size
-            self.needs_fit = True
-            if self.split_settled:
-                self.allow_render = True
-                self._display_image(reset_view=True)
-                # Also schedule a fit after idle to reduce first-draw jump
-                self.root.after_idle(self._fit_image_after_idle)
-            else:
-                # Avoid flash of full-GUI render before panes settle
-                self.allow_render = False
-                self.image_canvas.delete("all")
-                self._schedule_split_enforce()
-        except: pass
+        if img_path:
+            try:
+                self.original_image = Image.open(img_path)
+                # Defer fit until we have a real frame size
+                self.needs_fit = True
+                if self.split_settled:
+                    self.allow_render = True
+                    self._display_image(reset_view=True)
+                    # Also schedule a fit after idle to reduce first-draw jump
+                    self.root.after_idle(self._fit_image_after_idle)
+                else:
+                    # Avoid flash of full-GUI render before panes settle
+                    self.allow_render = False
+                    self.image_canvas.delete("all")
+                    self._schedule_split_enforce()
+            except: pass
+        else:
+            self.image_canvas.delete("all")
+            self.original_image = None
+            self.image_ref = None
 
     def _display_image(self, reset_view=False):
         if self.original_image is None: return
@@ -657,9 +701,8 @@ class TranscriptionReviewer:
             messagebox.showerror("Error", f"Could not open file: {e}")
 
     def _infer_missing_txt_path(self, selected_ver):
-        img_path, _ = self.pairs[self.current_index]
-        img_basename = os.path.splitext(os.path.basename(img_path))[0]
-        filename = f"{img_basename}.txt"
+        basename, _, _ = self.pairs[self.current_index]
+        filename = f"{basename}.txt"
 
         if selected_ver == "Default":
             return os.path.join(self.working_dir, filename)
@@ -680,15 +723,15 @@ class TranscriptionReviewer:
         if not self.text_editor.edit_modified():
             return True
 
-        _, versions = self.pairs[self.current_index]
+        basename, _, txt_versions = self.pairs[self.current_index]
         selected_ver = self.current_version_var.get()
-        txt_path = versions.get(selected_ver)
+        txt_path = txt_versions.get(selected_ver)
 
         content = self.text_editor.get('1.0', 'end-1c')
 
         if not txt_path:
             txt_path = self._infer_missing_txt_path(selected_ver)
-            versions[selected_ver] = txt_path
+            txt_versions[selected_ver] = txt_path
             self.current_txt_path = txt_path
             self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
 
@@ -726,11 +769,11 @@ class TranscriptionReviewer:
         else:
             # Jump to the next image that has a different text file version (or none)
             current_ver = self.current_version_var.get()
-            current_txt = self.pairs[self.current_index][1].get(current_ver)
+            current_txt = self.pairs[self.current_index][2].get(current_ver)
             
             new_index = self.current_index + 1
             while new_index < len(self.pairs):
-                next_txt = self.pairs[new_index][1].get(current_ver)
+                next_txt = self.pairs[new_index][2].get(current_ver)
                 if next_txt != current_txt:
                     break
                 new_index += 1
@@ -750,22 +793,22 @@ class TranscriptionReviewer:
         else:
             # Jump to the previous image that has a different text file version (or none)
             current_ver = self.current_version_var.get()
-            current_txt = self.pairs[self.current_index][1].get(current_ver)
+            current_txt = self.pairs[self.current_index][2].get(current_ver)
             
             new_index = self.current_index - 1
             # First, find the start of the current set (if we are in the middle)
             while new_index >= 0:
-                if self.pairs[new_index][1].get(current_ver) != current_txt:
+                if self.pairs[new_index][2].get(current_ver) != current_txt:
                     break
                 new_index -= 1
             
             # Now new_index is the last item of the PREVIOUS set, or -1
             # If we want to jump to the START of the previous set:
             if new_index >= 0:
-                prev_txt = self.pairs[new_index][1].get(current_ver)
+                prev_txt = self.pairs[new_index][2].get(current_ver)
                 # Walk back to the start of that set
                 while new_index > 0:
-                    if self.pairs[new_index - 1][1].get(current_ver) != prev_txt:
+                    if self.pairs[new_index - 1][2].get(current_ver) != prev_txt:
                         break
                     new_index -= 1
                 self.load_pair(new_index)
@@ -779,6 +822,7 @@ class TranscriptionReviewer:
         
         self.pairs = []
         self.all_versions = set()
+        self.all_img_versions = set()
         
         self._find_files_fuzzy()
         self._update_version_dropdown()
