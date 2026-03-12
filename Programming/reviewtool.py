@@ -61,6 +61,7 @@ class TranscriptionReviewer:
         self.current_version_var = tk.StringVar()
         self.current_img_version_var = tk.StringVar()
         self.last_mtime = None  # Track modification time for auto-reload
+        self.status_var = tk.StringVar(value="")
 
         # UI State
         self.zoom_factor = 1.0
@@ -197,6 +198,18 @@ class TranscriptionReviewer:
         style_btn(self.btn_open_ext)
         self.btn_open_ext.config(bg="#4a4a4a")
         self.btn_open_ext.pack(side=tk.RIGHT, padx=(0, 10))
+        # 5. Status Bar
+        self.status_frame = tk.Frame(self.root, bg=COLORS["bg"])
+        self.status_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.status_label = tk.Label(
+            self.status_frame,
+            textvariable=self.status_var,
+            fg=COLORS["fg"],
+            bg=COLORS["bg"],
+            font=("Segoe UI", 9)
+        )
+        self.status_label.pack(side=tk.LEFT)
+
 
         # Bindings
         self.root.bind('<Control-s>', lambda e: self.save_current_text())
@@ -238,7 +251,15 @@ class TranscriptionReviewer:
                         self.text_editor.delete('1.0', tk.END)
                         self.text_editor.insert('1.0', content)
                         self.text_editor.edit_modified(False)
-                        self.current_file_loaded_empty = (content == "")
+                        self.current_file_loaded_empty = (content.strip() == "")
+
+                        if self.current_file_loaded_empty:
+
+                            self._set_status("Text file is empty.")
+
+                        else:
+
+                            self._set_status("")
                         self.last_mtime = new_mtime
                     else:
                         # Editor is dirty, just acknowledge the new mtime but don't overwrite local changes
@@ -257,6 +278,9 @@ class TranscriptionReviewer:
                 self.load_pair(new_index)
         except ValueError:
             pass
+
+    def _set_status(self, message):
+        self.status_var.set(message or "")
 
     def _update_page_dropdown(self):
         total_pages = len(self.pairs)
@@ -413,6 +437,7 @@ class TranscriptionReviewer:
         self.root.title(f"Reviewing: {basename}")
         self.combo_page.set(str(index + 1))
         self.lbl_page_total.config(text=f" / {len(self.pairs)}")
+        self._set_status("")
         
         if txt_path:
             self.lbl_filename.config(text=f"{selected_txt_ver}: {os.path.basename(txt_path)}")
@@ -429,7 +454,15 @@ class TranscriptionReviewer:
                 # FOCUS TEXT EDITOR
                 self.text_editor.focus_set()
                 self.current_txt_path = txt_path
-                self.current_file_loaded_empty = (content == "")
+                self.current_file_loaded_empty = (content.strip() == "")
+
+                if self.current_file_loaded_empty:
+
+                    self._set_status("Text file is empty.")
+
+                else:
+
+                    self._set_status("")
                 if os.path.exists(txt_path):
                     self.last_mtime = os.path.getmtime(txt_path)
                 else:
@@ -442,16 +475,21 @@ class TranscriptionReviewer:
                 self.text_editor.edit_modified(False)
                 self.current_txt_path = txt_path
                 self.current_file_loaded_empty = True
+
+                self._set_status("Text file missing on disk; will be created on save if you add content.")
             except Exception as e:
                 self.text_editor.delete('1.0', tk.END)
                 self.text_editor.insert('1.0', f"Error: {e}")
+                self._set_status(f"Error loading text file: {e}")
                 self.text_editor.edit_modified(False)
                 self.current_txt_path = None
                 self.current_file_loaded_empty = False
         else:
              self.lbl_filename.config(text=f"{selected_txt_ver}: (Not Found)")
+
+             self._set_status(f"No text file found for version '{selected_txt_ver}' for this image.")
              self.text_editor.delete('1.0', tk.END)
-             self.text_editor.insert('1.0', f"[No text file found for version '{selected_txt_ver}' for this image]")
+
              self.text_editor.edit_modified(False)
              self.current_txt_path = None
              self.current_file_loaded_empty = False
@@ -681,6 +719,7 @@ class TranscriptionReviewer:
     def open_external_editor(self):
         """Opens the current text file in the system's default application."""
         if not self.current_txt_path:
+            self._set_status("No text file found for this version.")
             messagebox.showwarning("Open External", "No text file found for this version.")
             return
             
@@ -735,19 +774,26 @@ class TranscriptionReviewer:
             self.current_txt_path = txt_path
             self.lbl_filename.config(text=f"{selected_ver}: {os.path.basename(txt_path)}")
 
-        # Never persist the informational placeholder as file content.
-        if content.startswith("[No text file found for version '") and content.endswith("for this image]"):
-            content = ""
+
 
         # Blank file protection: If the file doesn't exist and the content is empty, don't create it.
         if not os.path.exists(txt_path) and content.strip() == "":
+            self._set_status("Not saved: empty content and no existing file.")
             return True
 
         try:
             os.makedirs(os.path.dirname(txt_path), exist_ok=True)
             with open(txt_path, 'w', encoding='utf-8') as f: f.write(content)
             self.last_mtime = os.path.getmtime(txt_path) # Update mtime after internal save
-            self.current_file_loaded_empty = (content == "")
+            self.current_file_loaded_empty = (content.strip() == "")
+
+            if self.current_file_loaded_empty:
+
+                self._set_status("Text file is empty.")
+
+            else:
+
+                self._set_status("")
             self.text_editor.edit_modified(False)
             orig_bg = self.btn_save.cget("background")
             self.btn_save.config(bg="#44aa44", text="Saved!")
@@ -847,3 +893,8 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TranscriptionReviewer(root, target_dir)
     root.mainloop()
+
+
+
+
+
