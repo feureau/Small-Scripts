@@ -292,6 +292,9 @@ def load_metadata_json(folder_path):
 
     tags = None
     subjects_val = data.get("subject")
+    if subjects_val is None:
+        subjects_val = data.get("Subject")
+        
     if isinstance(subjects_val, list):
         subjects = [str(s).strip() for s in subjects_val if str(s).strip()]
         if subjects:
@@ -301,6 +304,9 @@ def load_metadata_json(folder_path):
 
     if not tags:
         tags_val = data.get("tags")
+        if tags_val is None:
+            tags_val = data.get("Tags")
+            
         if isinstance(tags_val, list):
             tag_list = [str(s).strip() for s in tags_val if str(s).strip()]
             if tag_list:
@@ -394,8 +400,9 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
         display_name = "..." + display_name[-17:]
 
     # leave=False cleans up the bar line when done
-    with tqdm(total=file_size, unit='B', unit_scale=True, desc=display_name, 
-              position=position, leave=False, dynamic_ncols=True) as bar:
+    with tqdm(total=file_size, unit='B', unit_scale=True, unit_divisor=1024, desc=display_name, 
+              position=position, leave=False, dynamic_ncols=True,
+              bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} | Speed: {rate_fmt} | Time: {elapsed}<{remaining}") as bar:
         
         # RETRY LOOP for Rate Limits
         max_retries = 10
