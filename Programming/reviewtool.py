@@ -313,85 +313,85 @@ class TranscriptionReviewer:
 
     def _find_files_fuzzy(self):
         try:
-            files_in_root = os.listdir(self.working_dir)
-        except Exception as e:
-            print(f"Error reading directory: {e}")
-            return
+            discovery = {}
+            all_txts = []
+            all_imgs = []
 
-        # Find subdirectories
-        subdirs = [d for d in files_in_root if os.path.isdir(os.path.join(self.working_dir, d))]
-        
-        def scan_files(directory, extensions):
-            try:
-                return [f for f in os.listdir(directory) if os.path.splitext(f)[1].lower() in extensions]
-            except:
-                return []
+            for root_dir, dirs, files in os.walk(self.working_dir):
+                rel_dir = os.path.relpath(root_dir, self.working_dir)
+                version_name = "Default" if rel_dir == "." else rel_dir.replace('\\', '/')
 
-        # Data structure: basename -> {"img": {version: path}, "txt": {version: path}}
-        discovery = {}
+                for f in files:
+                    ext = os.path.splitext(f)[1].lower()
+                    path = os.path.join(root_dir, f)
+                    if ext in IMAGE_EXTENSIONS:
+                        all_imgs.append((f, version_name, path))
+                    elif ext in TEXT_EXTENSIONS:
+                        all_txts.append((f, version_name, path))
 
-        def add_to_discovery(files, version_name, category, directory):
-            for f in files:
-                basename = os.path.splitext(f)[0]
+            def add_to_discovery(basename, version_name, category, path):
                 if basename not in discovery:
                     discovery[basename] = {"img": {}, "txt": {}}
-                discovery[basename][category][version_name] = os.path.join(directory, f)
+                discovery[basename][category][version_name] = path
 
-        # 1. Scan Root
-        root_imgs = scan_files(self.working_dir, IMAGE_EXTENSIONS)
-        root_txts = scan_files(self.working_dir, TEXT_EXTENSIONS)
-        add_to_discovery(root_imgs, "Default", "img", self.working_dir)
-        add_to_discovery(root_txts, "Default", "txt", self.working_dir)
+            # 1. Add all images
+            for f, ver, path in all_imgs:
+                basename = os.path.splitext(f)[0]
+                add_to_discovery(basename, ver, "img", path)
 
-        # 2. Scan Subdirs
-        for sd in subdirs:
-            sd_path = os.path.join(self.working_dir, sd)
-            sd_imgs = scan_files(sd_path, IMAGE_EXTENSIONS)
-            sd_txts = scan_files(sd_path, TEXT_EXTENSIONS)
-            add_to_discovery(sd_imgs, sd, "img", sd_path)
-            add_to_discovery(sd_txts, sd, "txt", sd_path)
+            img_basenames = set(discovery.keys())
+            range_texts = []
 
-        # 3. Handle Range Matches (Special Case for Text only)
-        range_pattern = re.compile(r'page-(\d+)_to_page-(\d+)', re.IGNORECASE)
-        all_basenames = sorted(discovery.keys(), key=natural_sort_key)
-        
-        # Pre-scan all text files for ranges
-        range_texts = [] # (start, end, path, version)
-        # Check root
-        for txt in root_txts:
-            m = range_pattern.search(txt)
-            if m: range_texts.append((int(m.group(1)), int(m.group(2)), os.path.join(self.working_dir, txt), "Default"))
-        # Check subdirs
-        for sd in subdirs:
-            sd_path = os.path.join(self.working_dir, sd)
-            sd_txts = scan_files(sd_path, TEXT_EXTENSIONS)
-            for txt in sd_txts:
-                m = range_pattern.search(txt)
-                if m: range_texts.append((int(m.group(1)), int(m.group(2)), os.path.join(sd_path, txt), sd))
+            # 2. Add all texts
+            for f, ver, path in all_txts:
+                basename = os.path.splitext(f)[0]
+                
+                if '_to_' in basename:
+                    parts = basename.split('_to_')
+                    if len(parts) == 2:
+                        range_texts.append((parts[0], parts[1], path, ver))
+                        continue # Don't add range file as a standalone text immediately
 
-        # Assign range matches to basenames that don't have text for that version
-        for bn in all_basenames:
-            m = re.search(r'(\d+)', bn)
-            if not m: continue
-            num = int(m.group(1))
-            for start, end, path, ver in range_texts:
-                if start <= num <= end:
-                    if ver not in discovery[bn]["txt"]:
-                        discovery[bn]["txt"][ver] = path
+                # Try exact match first
+                if basename in img_basenames:
+                    add_to_discovery(basename, ver, "txt", path)
+                else:
+                    # Fuzzy match: maybe text is "IMG_0003", images are "IMG_0003_1L", "IMG_0003_2R"
+                    matched = False
+                    for img_bn in img_basenames:
+                        if img_bn.startswith(basename + "_") or img_bn.startswith(basename + "-"):
+                            add_to_discovery(img_bn, ver, "txt", path)
+                            matched = True
+                    if not matched:
+                        # Fallback add
+                        add_to_discovery(basename, ver, "txt", path)
 
-        # Finalize self.pairs
-        for bn in all_basenames:
-            img_vers = discovery[bn]["img"]
-            txt_vers = discovery[bn]["txt"]
-            # Only add if it has at least one image OR one text? 
-            # Original code added every image it found.
-            # Let's add if it has at least ONE of either, to be safe.
-            if img_vers or txt_vers:
-                self.pairs.append((bn, img_vers, txt_vers))
-                self.all_img_versions.update(img_vers.keys())
-                self.all_versions.update(txt_vers.keys())
+            all_basenames = sorted(discovery.keys(), key=natural_sort_key)
+            
+            # 3. Apply range matches
+            for bn in all_basenames:
+                for start_bn, end_bn, path, ver in range_texts:
+                    k_bn = natural_sort_key(bn)
+                    k_start = natural_sort_key(start_bn)
+                    k_end = natural_sort_key(end_bn)
+                    
+                    if k_start <= k_bn <= k_end:
+                        if ver not in discovery[bn]["txt"]:
+                            discovery[bn]["txt"][ver] = path
 
-        print(f"Found {len(self.pairs)} pages. Img Sets: {self.all_img_versions}, Txt Sets: {self.all_versions}")
+            # Finalize self.pairs
+            for bn in all_basenames:
+                img_vers = discovery[bn]["img"]
+                txt_vers = discovery[bn]["txt"]
+                if img_vers or txt_vers:
+                    self.pairs.append((bn, img_vers, txt_vers))
+                    self.all_img_versions.update(img_vers.keys())
+                    self.all_versions.update(txt_vers.keys())
+
+            print(f"Found {len(self.pairs)} pages. Img Sets: {self.all_img_versions}, Txt Sets: {self.all_versions}")
+
+        except Exception as e:
+            print(f"Error reading directory: {e}")
 
     def _update_version_dropdown(self):
         def get_sorted_versions(version_set):
