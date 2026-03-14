@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.11
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.15
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,18 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.14
+- ✅ **IMPROVEMENT**: Added horizontal and vertical scrollbars to the job queue list.
+
+### v26.14
+- ✅ **IMPROVEMENT**: Faster horizontal scrolling and fixed visibility for the input file list scrollbars.
+
+### v26.13
+- ✅ **IMPROVEMENT**: Added a horizontal scrollbar to the input files list so long paths can be scrolled.
+
+### v26.12
+- ✅ **CHANGE**: Text chunking now packs paragraph blocks up to Max Tokens, with token-split fallback for oversized paragraphs. Overlap and force-cutoff options removed.
 
 ### v26.11
 - ✅ **IMPROVEMENT**: Job config snapshot now logs both raw prompt and resolved prompt (after `{{CONTEXT_TEXT}}` substitution) to make context injection behavior explicit.
@@ -748,8 +760,6 @@ def build_job_config_snapshot(
         "save_img_to_output": False,
         "enable_chunking": False,
         "chunk_size": 4000,
-        "chunk_overlap": 0,
-        "force_cutoff": False,
         "stop_queue_on_model_unavailable": True,
         "context_text": "",
         "use_persistent_context": False,
@@ -831,8 +841,6 @@ def build_job_config_snapshot(
         "chunking": {
             "enabled": bool(effective["enable_chunking"]),
             "chunk_size": effective["chunk_size"],
-            "chunk_overlap": effective["chunk_overlap"],
-            "force_cutoff": bool(effective["force_cutoff"]),
         },
         "extra_kwargs_keys": extra_keys,
     }
@@ -2064,6 +2072,102 @@ def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
         return chunks
 
 
+def chunk_text_by_paragraphs(text, max_tokens):
+    """
+    Splits text into paragraph blocks (blank-line delimited), then packs
+    paragraphs into chunks up to max_tokens. Oversized paragraphs are
+    token-split with overlap=0 and force_cutoff=False.
+    """
+    if not text:
+        return []
+
+    # Normalize line endings
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = [p for p in re.split(r"\n\s*\n+", normalized) if p.strip()]
+    if not paragraphs:
+        return [text]
+
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        sep_tokens = len(encoding.encode("\n\n"))
+
+        chunks = []
+        current_parts = []
+        current_tokens = 0
+
+        for para in paragraphs:
+            para_tokens = len(encoding.encode(para))
+            if para_tokens > max_tokens:
+                # Flush current chunk before splitting oversized paragraph
+                if current_parts:
+                    chunks.append("\n\n".join(current_parts))
+                    current_parts = []
+                    current_tokens = 0
+                chunks.extend(chunk_text(para, max_tokens, overlap=0, force_cutoff=False))
+                continue
+
+            if not current_parts:
+                current_parts = [para]
+                current_tokens = para_tokens
+                continue
+
+            projected = current_tokens + sep_tokens + para_tokens
+            if projected <= max_tokens:
+                current_parts.append(para)
+                current_tokens = projected
+            else:
+                chunks.append("\n\n".join(current_parts))
+                current_parts = [para]
+                current_tokens = para_tokens
+
+        if current_parts:
+            chunks.append("\n\n".join(current_parts))
+
+        return chunks
+
+    except Exception as e:
+        console_log(
+            f"Error getting tiktoken encoding: {e}. Falling back to character-based paragraph packing.",
+            "WARN",
+        )
+        chars_per_token = 4
+        max_chars = max_tokens * chars_per_token
+        sep = "\n\n"
+
+        chunks = []
+        current_parts = []
+        current_len = 0
+
+        for para in paragraphs:
+            para_len = len(para)
+            if para_len > max_chars:
+                if current_parts:
+                    chunks.append(sep.join(current_parts))
+                    current_parts = []
+                    current_len = 0
+                chunks.extend(chunk_text(para, max_tokens, overlap=0, force_cutoff=False))
+                continue
+
+            if not current_parts:
+                current_parts = [para]
+                current_len = para_len
+                continue
+
+            projected = current_len + len(sep) + para_len
+            if projected <= max_chars:
+                current_parts.append(para)
+                current_len = projected
+            else:
+                chunks.append(sep.join(current_parts))
+                current_parts = [para]
+                current_len = para_len
+
+        if current_parts:
+            chunks.append(sep.join(current_parts))
+
+        return chunks
+
+
 def apply_context_to_prompt(user_prompt, context_text):
     prompt = user_prompt or ""
     context = (context_text or "").strip()
@@ -2339,11 +2443,7 @@ def process_file_group(
 
             if kwargs.get("enable_chunking", False):
                 max_tok = kwargs.get("chunk_size", 4000)
-                overlap = kwargs.get("chunk_overlap", 200)
-                force_cut = kwargs.get("force_cutoff", False)
-                chunks = chunk_text(
-                    file_content_all, max_tok, overlap, force_cutoff=force_cut
-                )
+                chunks = chunk_text_by_paragraphs(file_content_all, max_tok)
             else:
                 chunks = [file_content_all]
 
@@ -2846,9 +2946,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # --- NEW: Text Chunking ---
         self.enable_chunking_var = tk.BooleanVar(value=False)
         self.chunk_size_var = tk.IntVar(value=4000)
-        self.enable_overlap_var = tk.BooleanVar(value=False)  # Default Off
-        self.chunk_overlap_var = tk.IntVar(value=0)  # Default to 0
-        self.force_cutoff_var = tk.BooleanVar(value=True)  # Default On as requested
         self.model_prefix_var = tk.BooleanVar(
             value=False
         )  # New: Prefix output folder with model name
@@ -2926,8 +3023,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         file_frame = ttk.LabelFrame(left_frame, text="1. Input Files", padding=5)
         file_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
+        list_frame = ttk.Frame(file_frame)
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        listbox_frame = ttk.Frame(list_frame)
+        listbox_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
         self.file_listbox = tk.Listbox(
-            file_frame,
+            listbox_frame,
             listvariable=self.files_var,
             selectmode=tk.EXTENDED,
             height=6,
@@ -2939,10 +3042,25 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.file_listbox.drop_target_register(DND_FILES)
             self.file_listbox.dnd_bind("<<Drop>>", self.handle_drop)
         sb = ttk.Scrollbar(
-            file_frame, orient=tk.VERTICAL, command=self.file_listbox.yview
+            listbox_frame, orient=tk.VERTICAL, command=self.file_listbox.yview
         )
-        sb.pack(side=tk.LEFT, fill=tk.Y)
-        self.file_listbox.config(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb = ttk.Scrollbar(
+            list_frame, orient=tk.HORIZONTAL, command=self.file_listbox.xview
+        )
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.file_listbox.config(
+            yscrollcommand=sb.set,
+            xscrollcommand=hsb.set,        )
+        self.file_listbox.bind(
+            "<Shift-MouseWheel>", self._on_file_list_shift_mousewheel
+        )
+        self.file_listbox.bind(
+            "<Shift-Button-4>", self._on_file_list_shift_mousewheel
+        )
+        self.file_listbox.bind(
+            "<Shift-Button-5>", self._on_file_list_shift_mousewheel
+        )
 
         btn_f = ttk.Frame(file_frame)
         btn_f.pack(side=tk.LEFT, fill=tk.Y, padx=5)
@@ -3030,26 +3148,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )
         self.chunk_size_spin.grid(row=0, column=1, sticky="w", padx=5)
 
-        self.overlap_check = ttk.Checkbutton(
-            grid_c,
-            text="Enable Overlap:",
-            variable=self.enable_overlap_var,
-            command=self.toggle_chunking,
-        )
-        self.overlap_check.grid(row=1, column=0, sticky="w", pady=(5, 0))
-        self.chunk_overlap_spin = ttk.Spinbox(
-            grid_c, from_=0, to=10000, textvariable=self.chunk_overlap_var, width=10
-        )
-        self.chunk_overlap_spin.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 0))
-
-        self.force_cut_check = ttk.Checkbutton(
-            chunk_f,
-            text="Force Cutoff (End at sentence boundary .!?)",
-            variable=self.force_cutoff_var,
-        )
-        self.force_cut_check.grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(5, 0)
-        )
+        # Overlap/Force Cutoff removed; paragraph-packed chunking only.
 
         self.toggle_chunking()  # Init state
 
@@ -3414,8 +3513,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         main_pane.add(right_frame, weight=1)
         q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5)
         q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        tree_frame = ttk.Frame(q_frame)
+        tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        tree_container = ttk.Frame(tree_frame)
+        tree_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
         self.tree = ttk.Treeview(
-            q_frame, columns=("id", "name", "status", "model"), show="headings"
+            tree_container, columns=("id", "name", "status", "model"), show="headings"
         )
         self.tree.heading("id", text="ID")
         self.tree.column("id", width=30)
@@ -3429,9 +3535,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if DND_AVAILABLE:
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind("<<Drop>>", self.handle_job_drop)
-        sc = ttk.Scrollbar(q_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        sc = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
         sc.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.config(yscrollcommand=sc.set)
+        hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.config(yscrollcommand=sc.set, xscrollcommand=hsb.set)
 
         btn_area = ttk.Frame(right_frame, padding=10)
         btn_area.pack(side=tk.BOTTOM, fill=tk.X)
@@ -3527,6 +3635,18 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.tree.bind("<Button-3>", self.show_context_menu)
 
+    def _on_file_list_shift_mousewheel(self, event):
+        # Speed up horizontal scroll with Shift+Wheel across platforms.
+        if getattr(event, "delta", 0):
+            direction = -1 if event.delta > 0 else 1
+            self.file_listbox.xview_scroll(direction * 3, "units")
+        else:
+            if getattr(event, "num", None) == 4:
+                self.file_listbox.xview_scroll(-3, "units")
+            elif getattr(event, "num", None) == 5:
+                self.file_listbox.xview_scroll(3, "units")
+        return "break"
+
     def toggle_img_settings(self):
         state = "normal" if self.enable_img_conversion_var.get() else "disabled"
 
@@ -3547,12 +3667,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         chunk_enabled = self.enable_chunking_var.get()
         state = "normal" if chunk_enabled else "disabled"
         self.chunk_size_spin.config(state=state)
-        self.force_cut_check.config(state=state)
-        self.overlap_check.config(state=state)
-
-        # Overlap spinbox is only active if BOTH chunking and overlap are enabled
-        overlap_active = chunk_enabled and self.enable_overlap_var.get()
-        self.chunk_overlap_spin.config(state="normal" if overlap_active else "disabled")
 
     def _update_folder_preview(self, *args):
         base_folder = self.output_dir_var.get().strip()
@@ -3664,9 +3778,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             # Text Chunking
             set_var(self.enable_chunking_var, "enable_chunking", False)
             set_var(self.chunk_size_var, "chunk_size", 4000)
-            set_var(self.enable_overlap_var, "enable_overlap", False)
-            set_var(self.chunk_overlap_var, "chunk_overlap", 0)
-            set_var(self.force_cutoff_var, "force_cutoff", True)
 
             # Image Settings
             set_var(self.enable_img_conversion_var, "enable_img_conversion", False)
@@ -3756,9 +3867,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "enable_thinking": self.thinking_var.get(),
             "enable_chunking": self.enable_chunking_var.get(),
             "chunk_size": self.chunk_size_var.get(),
-            "enable_overlap": self.enable_overlap_var.get(),
-            "chunk_overlap": self.chunk_overlap_var.get(),
-            "force_cutoff": self.force_cutoff_var.get(),
             "model_prefix": self.model_prefix_var.get(),
             "add_context_as_suffix": self.add_context_as_suffix_var.get(),
         }
@@ -4236,10 +4344,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 "save_img_to_output": self.save_img_to_output_var.get(),
                 "enable_chunking": self.enable_chunking_var.get(),
                 "chunk_size": self.chunk_size_var.get(),
-                "chunk_overlap": self.chunk_overlap_var.get()
-                if self.enable_overlap_var.get()
-                else 0,
-                "force_cutoff": self.force_cutoff_var.get(),
                 "model_prefix": self.model_prefix_var.get(),
                 "enable_thinking": self.thinking_var.get(),
                 "result_metadata": {},  # Mutable container for returning data
@@ -5036,3 +5140,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
