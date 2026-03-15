@@ -85,6 +85,8 @@ This section explains *why* the script is built the way it is.
 import pypandoc
 import sys
 import glob
+import subprocess
+import shutil
 from pathlib import Path
 
 # Optional PDF conversion dependencies
@@ -96,7 +98,8 @@ except ImportError:
     LIB_PDF_AVAILABLE = False
 
 # Default font to use when converting Markdown inputs.
-DEFAULT_MARKDOWN_FONT = "Computer Modern"
+# Uses CMU Serif (cmunrm.ttf) from the Computer Modern Unicode family.
+DEFAULT_MARKDOWN_FONT = "CMU Serif"
 
 MARKDOWN_FORMAT_NAMES = {
     "markdown",
@@ -125,7 +128,103 @@ def wrap_html_with_font(html_body, font_name):
 </body>
 </html>"""
 
-def convert_to_pdf_lib(input_path, output_path, input_format=None):
+
+def update_reference_docx_font(docx_path, font_name):
+    """
+    Patch all font references inside a .docx to use font_name.
+    Uses regex-based text substitution on the raw XML so namespace
+    round-trip issues in ElementTree cannot corrupt the file.
+    """
+    import zipfile
+    import shutil
+    import re
+
+    docx_path = Path(docx_path)
+    tmp_path = docx_path.with_suffix('.tmp.docx')
+
+    def patch_styles(text):
+        # Replace every <w:rFonts .../> element wholesale so both explicit font
+        # names (w:ascii="Calibri") and theme references (w:asciiTheme="minorHAnsi")
+        # are overwritten with the desired font.
+        repl = (
+            f'<w:rFonts w:ascii="{font_name}" w:hAnsi="{font_name}" '
+            f'w:cs="{font_name}" w:eastAsia="{font_name}"/>'
+        )
+        text = re.sub(r'<w:rFonts\b[^/]*/>', repl, text)
+        text = re.sub(r'<w:rFonts\b[^>]*>.*?</w:rFonts>', repl, text, flags=re.DOTALL)
+        return text
+
+    def patch_theme(text):
+        # Replace all typeface= values inside font-family elements.
+        # Skip the "+mj-lt" / "+mn-lt" virtual-font tokens — those live inside
+        # <a:font> fallback lists and should keep their original values.
+        def _repl(m):
+            val = m.group(1)
+            if val.startswith('+') or val.startswith('&'):
+                return m.group(0)
+            return f'typeface="{font_name}"'
+        return re.sub(r'typeface="([^"]*)"', _repl, text)
+
+    PATCH_MAP = {
+        'word/styles.xml':       patch_styles,
+        'word/theme/theme1.xml': patch_theme,
+    }
+
+    with zipfile.ZipFile(docx_path, 'r') as zin, \
+         zipfile.ZipFile(tmp_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            patcher = PATCH_MAP.get(item.filename)
+            if patcher:
+                try:
+                    data = patcher(data.decode('utf-8')).encode('utf-8')
+                except Exception:
+                    pass  # leave unchanged if anything goes wrong
+            zout.writestr(item, data)
+
+    shutil.move(str(tmp_path), str(docx_path))
+
+
+def ensure_reference_docx(reference_path, font_name):
+    reference_path = Path(reference_path)
+
+    # Always regenerate from Pandoc defaults so we never patch a stale/broken file.
+    pandoc_path = pypandoc.get_pandoc_path()
+    result = subprocess.run(
+        [pandoc_path, '--print-default-data-file=reference.docx'],
+        capture_output=True,
+        check=False
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+        raise RuntimeError(f"Pandoc failed to create reference.docx: {stderr}")
+
+    reference_path.write_bytes(result.stdout)
+    update_reference_docx_font(reference_path, font_name)
+    return reference_path
+
+def detect_pdf_engine():
+    """
+    Return the best available Pandoc PDF engine and whether it supports
+    fontspec (i.e. can load system fonts by name via -V mainfont=...).
+
+    Priority: xelatex > lualatex > pdflatex > wkhtmltopdf > weasyprint
+    Returns (engine_name, supports_fontspec) or (None, False) if nothing found.
+    """
+    candidates = [
+        ('xelatex',     True),
+        ('lualatex',    True),
+        ('pdflatex',    False),
+        ('wkhtmltopdf', False),
+        ('weasyprint',  False),
+    ]
+    for engine, fontspec in candidates:
+        if shutil.which(engine):
+            return engine, fontspec
+    return None, False
+
+
+def convert_to_pdf_lib(input_path, output_path, input_format=None, font_name=None):
     """
     Convert a file to PDF using xhtml2pdf (pisa).
     Supports MD, TXT, HTML directly. 
@@ -143,11 +242,11 @@ def convert_to_pdf_lib(input_path, output_path, input_format=None):
         text = file_path.read_text(encoding='utf-8')
         # Use simple markdown for robust conversion
         html_content = markdown.markdown(text, extensions=['extra', 'codehilite'])
-        html_content = wrap_html_with_font(html_content, DEFAULT_MARKDOWN_FONT)
+        html_content = wrap_html_with_font(html_content, font_name or DEFAULT_MARKDOWN_FONT)
     elif ext == '.txt':
         text = file_path.read_text(encoding='utf-8')
         html_content = f"<pre>{text}</pre>"
-        html_content = wrap_html_with_font(html_content, DEFAULT_MARKDOWN_FONT)
+        html_content = wrap_html_with_font(html_content, font_name or DEFAULT_MARKDOWN_FONT)
     elif input_format == 'docx' or ext == '.docx':
         # Convert DOCX to HTML via Pandoc first
         html_content = pypandoc.convert_file(str(file_path), 'html')
@@ -192,7 +291,7 @@ def ensure_pandoc():
             print("- Or run: conda install -c conda-forge pandoc")
             return False
 
-def convert_files(input_pattern, output_format='docx', input_format=None, force_pandoc=False):
+def convert_files(input_pattern, output_format='docx', input_format=None, force_pandoc=False, font_name=None, debug=False):
     """
     Convert files matching the input pattern to the specified format.
     
@@ -213,6 +312,12 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
         return
     
     print(f"Found {len(files)} files to convert")
+    if debug:
+        print(f"  [debug] input_pattern={input_pattern}")
+        print(f"  [debug] output_format={output_format}")
+        print(f"  [debug] input_format={input_format}")
+        print(f"  [debug] force_pandoc={force_pandoc}")
+        print(f"  [debug] font_name={font_name}")
     
     # Expanded list of common extensions. The '--from' flag is the true catch-all.
     supported_extensions = {
@@ -229,6 +334,7 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
     failed_count = 0
     
     for file_path_str in files:
+        _tmp_files_to_clean = []
         try:
             file_path = Path(file_path_str)
             
@@ -243,10 +349,32 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
             
             output_filename = file_path.with_suffix(f'.{output_format}')
 
-            if output_format.lower() == 'pdf' and not force_pandoc:
+            # Determine format specifier and markdown status early so we can
+            # route PDF correctly before deciding whether to use xhtml2pdf.
+            format_specifier = input_format  # Prioritize user-provided format
+            if not format_specifier:
+                format_specifier = format_map.get(file_path.suffix.lower())
+            if format_specifier:
+                print(f"  → Explicitly using input format: '{format_specifier}'")
+
+            is_markdown_input = (
+                is_markdown_format(format_specifier)
+                or (format_specifier is None and file_path.suffix.lower() in ('.md', '.markdown'))
+            )
+
+            # xhtml2pdf cannot load system fonts by name, so always use the
+            # Pandoc/XeLaTeX path for markdown → PDF (font is applied via -V mainfont).
+            # xhtml2pdf is only used for non-markdown sources (e.g. DOCX → PDF).
+            use_xhtml2pdf = (
+                output_format.lower() == 'pdf'
+                and not force_pandoc
+                and not is_markdown_input
+            )
+
+            if use_xhtml2pdf:
                 print(f"Converting {file_path.name} to {output_filename.name} using xhtml2pdf...")
                 try:
-                    if convert_to_pdf_lib(file_path, output_filename, input_format):
+                    if convert_to_pdf_lib(file_path, output_filename, input_format, font_name=font_name):
                         print(f"  ✓ Success")
                         converted_count += 1
                         continue
@@ -256,27 +384,83 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
                     print(f"  ! Library conversion skipped: {e}")
                     print(f"  → Falling back to Pandoc (requires system PDF engine)...")
 
-            # Determine the input format specifier for Pandoc
-            format_specifier = input_format  # Prioritize user-provided format
-
-            if not format_specifier:  # If user did not provide a format, check our map
-                format_specifier = format_map.get(file_path.suffix.lower())
-
-            if format_specifier:
-                print(f"  → Explicitly using input format: '{format_specifier}'")
-
-            # Apply default font for Markdown inputs (Pandoc path)
-            is_markdown_input = (
-                is_markdown_format(format_specifier)
-                or (format_specifier is None and file_path.suffix.lower() in ('.md', '.markdown'))
-            )
-
             extra_args = []
-            if is_markdown_input and output_format.lower() == 'pdf':
-                extra_args.extend([
-                    '--pdf-engine=xelatex',
-                    '-V', f'mainfont={DEFAULT_MARKDOWN_FONT}',
-                ])
+
+            if is_markdown_input:
+                _active_font = font_name or DEFAULT_MARKDOWN_FONT
+                _fmt = output_format.lower()
+
+                if _fmt == 'pdf':
+                    _engine, _fontspec = detect_pdf_engine()
+                    if _engine is None:
+                        # No LaTeX/HTML-PDF engine found at all — fall back to
+                        # xhtml2pdf with the font embedded so it actually renders.
+                        print(f"  * No PDF engine found (xelatex/lualatex/pdflatex/wkhtmltopdf).")
+                        print(f"  → Falling back to xhtml2pdf (install XeLaTeX for best font support).")
+                        if convert_to_pdf_lib(file_path, output_filename, input_format, font_name=_active_font):
+                            converted_count += 1
+                            print(f"  ✓ Success")
+                            continue
+                        else:
+                            raise RuntimeError("xhtml2pdf fallback also failed.")
+                    extra_args.append(f'--pdf-engine={_engine}')
+                    if _fontspec:
+                        extra_args.extend([
+                            '-V', f'mainfont={_active_font}',
+                            '-V', f'sansfont={_active_font}',
+                            '-V', f'monofont={_active_font}',
+                        ])
+                    else:
+                        # pdflatex / wkhtmltopdf / weasyprint — fontspec unavailable.
+                        # Use lmodern (best pdflatex match for CM fonts) and warn.
+                        extra_args.extend(['-V', 'fontfamily=lmodern'])
+                        print(f"  * {_engine} does not support system fonts.")
+                        print(f"  → Using lmodern (Computer Modern) as a substitute.")
+                        print(f"  → Install XeLaTeX or LuaLaTeX for exact CMU Serif output.")
+                elif _fmt == 'docx':
+                    reference_path = Path(__file__).with_name('pandoc_reference.docx')
+                    reference_path = ensure_reference_docx(reference_path, _active_font)
+                    extra_args.extend(['--reference-doc', str(reference_path)])
+                elif _fmt in ('html', 'html5', 'html4', 'chunkedhtml'):
+                    import tempfile
+                    css = (
+                        "body, p, li, td, th, blockquote, pre, code {\n"
+                        f"  font-family: '{_active_font}', serif;\n"
+                        "}\n"
+                    )
+                    tmp_css = tempfile.NamedTemporaryFile(
+                        mode='w', suffix='.css', delete=False, encoding='utf-8'
+                    )
+                    tmp_css.write(css)
+                    tmp_css.close()
+                    _tmp_files_to_clean.append(tmp_css.name)
+                    extra_args.extend(['--standalone', '--css', tmp_css.name])
+                elif _fmt in ('epub', 'epub2', 'epub3'):
+                    import tempfile
+                    css = (
+                        "body, p, li, td, th, blockquote {\n"
+                        f"  font-family: '{_active_font}', serif;\n"
+                        "}\n"
+                    )
+                    tmp_css = tempfile.NamedTemporaryFile(
+                        mode='w', suffix='.css', delete=False, encoding='utf-8'
+                    )
+                    tmp_css.write(css)
+                    tmp_css.close()
+                    _tmp_files_to_clean.append(tmp_css.name)
+                    extra_args.extend(['--css', tmp_css.name])
+                elif _fmt == 'odt':
+                    print(f"  * ODT: font embedding not supported via Pandoc -- set default font in LibreOffice.")
+
+            if debug:
+                print(f"  [debug] file={file_path}")
+                print(f"  [debug] ext={file_path.suffix.lower()}")
+                print(f"  [debug] format_specifier={format_specifier}")
+                print(f"  [debug] is_markdown_input={is_markdown_input}")
+                print(f"  [debug] output_filename={output_filename}")
+                print(f"  [debug] extra_args={extra_args}")
+                if output_format.lower() == 'docx' and is_markdown_input:
+                    print(f"  [debug] reference_doc={reference_path}")
 
             print(f"Converting {file_path.name} to {output_filename.name}...")
             pypandoc.convert_file(
@@ -289,10 +473,17 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
             
             converted_count += 1
             print(f"  ✓ Success")
-            
+
         except Exception as e:
             print(f"  ✗ Failed to convert {file_path_str}: {str(e)}")
             failed_count += 1
+
+        finally:
+            for _tmp in _tmp_files_to_clean:
+                try:
+                    Path(_tmp).unlink(missing_ok=True)
+                except Exception:
+                    pass
     
     print(f"\nConversion complete!")
     print(f"Successfully converted: {converted_count}")
@@ -313,6 +504,8 @@ Arguments:
 Options:
   -f, --from [format]    Explicitly specify the input format (e.g., markdown, latex, html, rtf)
   -p, --pandoc           Force use of Pandoc for PDF (requires system PDF engine)
+  --font [name]          Set default font for Markdown conversions (PDF/DOCX)
+  --debug                Verbose debug output for conversion decisions
   -h, --help             Show this help message
 
 Examples:
@@ -335,10 +528,17 @@ def main():
     output_format = 'docx'
     input_format = None
     force_pandoc = False
+    font_name = DEFAULT_MARKDOWN_FONT
+    debug = False
     
     # Check if output_format is provided and it's not a flag
     if args and not args[0].startswith('-'):
-        output_format = args.pop(0)
+        candidate = args.pop(0)
+        # "pandoc" is not a format — treat it as shorthand for the --pandoc flag
+        if candidate.lower() == 'pandoc':
+            force_pandoc = True
+        else:
+            output_format = candidate
         
     # Manual flag parsing
     if '-f' in args:
@@ -348,10 +548,17 @@ def main():
         idx = args.index('--from')
         if len(args) > idx + 1: input_format = args[idx+1]
     
+    if '--font' in args:
+        idx = args.index('--font')
+        if len(args) > idx + 1: font_name = args[idx+1]
+
+    if '--debug' in args:
+        debug = True
+
     if '-p' in args or '--pandoc' in args:
         force_pandoc = True
 
-    convert_files(input_pattern, output_format, input_format, force_pandoc)
+    convert_files(input_pattern, output_format, input_format, force_pandoc, font_name=font_name, debug=debug)
 
 if __name__ == "__main__":
     main()
