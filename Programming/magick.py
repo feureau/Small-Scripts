@@ -1,7 +1,7 @@
 """###############################################################################
 Image Conversion Script - GIMP/XCF/RAW/JPG Batch Converter
 -------------------------------------------------------------------------------
-Version: 2.2.4 (2026-03-15)
+Version: 2.2.5 (2026-03-15)
 
 PURPOSE:
     This script batch-converts images of many types (including GIMP 3 `.xcf` files)
@@ -54,6 +54,17 @@ WHY WE USE `magick input output` INSTEAD OF `mogrify`:
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-03-15 (v2.2.5):
+    ▸ Fixed JP2 conversion producing unreadable files in all viewers.
+    ▸ Root cause 1: `-interlace plane` (the default) was always applied, including
+      to JP2 output. JPEG2000 has no interlace concept; passing this flag caused
+      ImageMagick to write a multi-plane separated file that virtually no JP2
+      viewer can parse. Fix: skip `-interlace` entirely when target_format == "jp2".
+    ▸ Root cause 2: `-sampling-factor` (e.g. 4:4:4) was still being passed to JP2
+      even after the v2.2.3 fix switched it away from 4:2:0. JPEG2000 does not use
+      chroma subsampling at all; the flag is meaningless and can confuse encoders.
+      Fix: skip `-sampling-factor` entirely when target_format == "jp2".
+
 2026-03-15 (v2.2.4):
     ▸ Updated JP2 lossless mode to strictly follow FADGI archival standards (Integer mode, rate=1.0).
     ▸ Added `-alpha off` to flattening logic to prevent `numComponents 4` crashing Krita in JP2s.
@@ -360,7 +371,7 @@ def main():
     # jp2_lossless_mode removed in favor of conditional default in command building
 
     print("=" * 80)
-    print(f"IMAGE CONVERSION ENGINE (v2.2.4)")
+    print(f"IMAGE CONVERSION ENGINE (v2.2.5)")
     print("-" * 80)
     print(f"Workload: {len(input_files)} files | Target: {target_format.upper()} | Parallelism: {max_workers} Cores")
     if target_format == "jp2":
@@ -396,10 +407,6 @@ def main():
                 user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
                 if not user_provided_quality:
                     magick_command.extend(["-quality", "0", "-define", "jp2:mode=int", "-define", "jp2:rate=1.0"])
-                    # CRITICAL: Chroma subsampling destroys JP2 lossless and causes the
-                    # "4 images" viewer bug. Override to 4:4:4 to keep planes intact.
-                    if args.sampling_factor == "4:2:0":
-                        args.sampling_factor = "4:4:4"
                 else:
                     magick_command.extend(["-quality", str(args.quality)])
             elif args.quality is not None:
@@ -409,11 +416,13 @@ def main():
             # to prevent JP2 encoders from incorrectly writing 4-component sRGB files (Krita bug)
             magick_command.extend(["-background", DEFAULT_BACKGROUND, "-flatten", "-alpha", "off"])
 
-            if args.sampling_factor:
+            # JPEG2000 does not use chroma subsampling or interlace modes — these are
+            # JPEG/PNG concepts and must be skipped entirely for JP2 to produce valid output.
+            if args.sampling_factor and target_format != "jp2":
                 magick_command.extend(["-sampling-factor", args.sampling_factor])
             if args.density:
                 magick_command.extend(["-density", str(args.density)])
-            if args.interlace:
+            if args.interlace and target_format != "jp2":
                 magick_command.extend(["-interlace", args.interlace])
             if args.strip:
                 magick_command.append("-strip")
