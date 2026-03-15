@@ -95,6 +95,36 @@ try:
 except ImportError:
     LIB_PDF_AVAILABLE = False
 
+# Default font to use when converting Markdown inputs.
+DEFAULT_MARKDOWN_FONT = "Computer Modern"
+
+MARKDOWN_FORMAT_NAMES = {
+    "markdown",
+    "md",
+    "gfm",
+    "commonmark",
+    "commonmark_x",
+}
+
+
+def is_markdown_format(fmt):
+    if not fmt:
+        return False
+    return fmt.lower() in MARKDOWN_FORMAT_NAMES
+
+
+def wrap_html_with_font(html_body, font_name):
+    return f"""<html>
+<head>
+  <style>
+    body {{ font-family: '{font_name}', serif; }}
+  </style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+
 def convert_to_pdf_lib(input_path, output_path, input_format=None):
     """
     Convert a file to PDF using xhtml2pdf (pisa).
@@ -113,9 +143,11 @@ def convert_to_pdf_lib(input_path, output_path, input_format=None):
         text = file_path.read_text(encoding='utf-8')
         # Use simple markdown for robust conversion
         html_content = markdown.markdown(text, extensions=['extra', 'codehilite'])
+        html_content = wrap_html_with_font(html_content, DEFAULT_MARKDOWN_FONT)
     elif ext == '.txt':
         text = file_path.read_text(encoding='utf-8')
-        html_content = f"<html><body><pre>{text}</pre></body></html>"
+        html_content = f"<pre>{text}</pre>"
+        html_content = wrap_html_with_font(html_content, DEFAULT_MARKDOWN_FONT)
     elif input_format == 'docx' or ext == '.docx':
         # Convert DOCX to HTML via Pandoc first
         html_content = pypandoc.convert_file(str(file_path), 'html')
@@ -233,12 +265,26 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
             if format_specifier:
                 print(f"  → Explicitly using input format: '{format_specifier}'")
 
+            # Apply default font for Markdown inputs (Pandoc path)
+            is_markdown_input = (
+                is_markdown_format(format_specifier)
+                or (format_specifier is None and file_path.suffix.lower() in ('.md', '.markdown'))
+            )
+
+            extra_args = []
+            if is_markdown_input and output_format.lower() == 'pdf':
+                extra_args.extend([
+                    '--pdf-engine=xelatex',
+                    '-V', f'mainfont={DEFAULT_MARKDOWN_FONT}',
+                ])
+
             print(f"Converting {file_path.name} to {output_filename.name}...")
             pypandoc.convert_file(
                 str(file_path),
                 output_format,
                 format=format_specifier,
-                outputfile=str(output_filename)
+                outputfile=str(output_filename),
+                extra_args=extra_args
             )
             
             converted_count += 1
