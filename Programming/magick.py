@@ -1,7 +1,7 @@
 """###############################################################################
 Image Conversion Script - GIMP/XCF/RAW/JPG Batch Converter
 -------------------------------------------------------------------------------
-Version: 2.2.1 (2026-03-02)
+Version: 2.2.4 (2026-03-15)
 
 PURPOSE:
     This script batch-converts images of many types (including GIMP 3 `.xcf` files)
@@ -54,6 +54,18 @@ WHY WE USE `magick input output` INSTEAD OF `mogrify`:
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-03-15 (v2.2.4):
+    ▸ Updated JP2 lossless mode to strictly follow FADGI archival standards (Integer mode, rate=1.0).
+    ▸ Added `-alpha off` to flattening logic to prevent `numComponents 4` crashing Krita in JP2s.
+
+2026-03-15 (v2.2.3):
+    ▸ Fixed a bug where default `4:2:0` chroma subsampling destroyed JP2 lossless mode.
+    ▸ Image viewers no longer display a grid of "4 images".
+    
+2026-03-15 (v2.2.2):
+    ▸ Refined JP2 lossless behavior: now defaults to `-quality 0` (mathematically lossless).
+    ▸ Allows user override via `-q/--quality` for JP2 if explicitly provided.
+
 2026-03-02 (v2.2.1):
     ▸ Added automatic JP2 lossless mode when target format is `jp2`.
     ▸ `-f jp2` (or positional `jp2`) now forces mathematically lossless output.
@@ -345,14 +357,18 @@ def main():
     for i in range(1, max_workers + 1):
         shared_dict[f"W{i:02}"] = "IDLE - Waiting for task"
 
-    jp2_lossless_mode = (target_format == "jp2")
+    # jp2_lossless_mode removed in favor of conditional default in command building
 
     print("=" * 80)
-    print(f"IMAGE CONVERSION ENGINE (v2.2.1)")
+    print(f"IMAGE CONVERSION ENGINE (v2.2.4)")
     print("-" * 80)
     print(f"Workload: {len(input_files)} files | Target: {target_format.upper()} | Parallelism: {max_workers} Cores")
-    if jp2_lossless_mode:
-        print("Mode: JP2 lossless forced (ignores -q/--quality)")
+    if target_format == "jp2":
+        user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
+        if not user_provided_quality:
+            print("Mode: JP2 lossless default active (Archival FADGI, 4:4:4)")
+        else:
+            print(f"Mode: JP2 quality override ({args.quality})")
     print("-" * 80)
 
     painter = DashboardPainter(max_workers, len(input_files))
@@ -374,11 +390,24 @@ def main():
             if str(args.threads).lower() != "auto":
                 magick_command.extend(["-limit", "thread", str(args.threads)])
 
-            if args.quality is not None and not jp2_lossless_mode:
+            # Apply quality logic
+            if target_format == "jp2":
+                # Default to lossless unless the user explicitly provided -q/--quality
+                user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
+                if not user_provided_quality:
+                    magick_command.extend(["-quality", "0", "-define", "jp2:mode=int", "-define", "jp2:rate=1.0"])
+                    # CRITICAL: Chroma subsampling destroys JP2 lossless and causes the
+                    # "4 images" viewer bug. Override to 4:4:4 to keep planes intact.
+                    if args.sampling_factor == "4:2:0":
+                        args.sampling_factor = "4:4:4"
+                else:
+                    magick_command.extend(["-quality", str(args.quality)])
+            elif args.quality is not None:
                 magick_command.extend(["-quality", str(args.quality)])
 
-            # Always flatten with background (safe for alpha, xcf, psd)
-            magick_command.extend(["-background", DEFAULT_BACKGROUND, "-flatten"])
+            # Always flatten with background (safe for alpha, xcf, psd) and explicitly strip alpha
+            # to prevent JP2 encoders from incorrectly writing 4-component sRGB files (Krita bug)
+            magick_command.extend(["-background", DEFAULT_BACKGROUND, "-flatten", "-alpha", "off"])
 
             if args.sampling_factor:
                 magick_command.extend(["-sampling-factor", args.sampling_factor])
@@ -393,9 +422,6 @@ def main():
             if args.resize:
                 magick_command.extend(["-resize", args.resize])
 
-            if jp2_lossless_mode:
-                # Force mathematically lossless JPEG 2000 compression.
-                magick_command.extend(["-define", "jp2:rate=1", "-quality", "100"])
 
             magick_command.append(output_file)
 
