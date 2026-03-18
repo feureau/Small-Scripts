@@ -466,9 +466,9 @@
     },
     "Translate": {
         "prompt": "Target Language: {{CONTEXT_TEXT}}\n\nAct as an expert linguist, professional translator, and editor. Your task is to translate the provided source text into the target language. The intended audience is general educated readers. Your goal is to produce a translation that is accurate, fluent, and reads naturally, as if written by a native speaker. Deliver only the final translation, with no commentary, explanations, or filler.\n\nFollow this detailed four-phase methodology:\n\n1. **Deconstruct for Meaning (Phase 1: Understanding)**\n\n   * Analyze each sentence and paragraph to fully grasp the author\u2019s core message, intent, and nuance.\n   * Focus on understanding ideas, arguments, and subtle cues rather than literal words or sentence structures.\n   * Identify key concepts or terms that must be retained in the translation.\n\n2. **Reconstruct Natively (Phase 2: Writing)**\n\n   * Express the core ideas entirely in natural, idiomatic target language. Avoid word-for-word translation.\n   * **Restructure Sentences Freely**: Split long or complex sentences into shorter, clear sentences; combine short sentences where appropriate.\n   * **Prioritize Target Language Grammar Flow**: Adjust sentence structures as needed to achieve clarity, fluency, and natural rhythm.\n\n3. **Refine for Tone and Polish (Phase 3: Editing)**\n\n   * Use vocabulary and phrasing that sound natural to native readers.\n   * Ensure smooth sentence flow and readability, avoiding awkward constructions.\n   * Maintain a consistent and coherent tone appropriate for general reading.\n\n4. **Formatting Directives (Phase 4: Final Output Formatting)**\n\n   * Enclose the entire translation in a single Markdown code block (`\u2026`).\n   * Use Level 2 Headings (##) for sections or chapters if the source text has clear divisions.\n   * Bold key terms, names, or dates (**text**) for emphasis.\n   * Italicize foreign words (*text*) retained intentionally.\n   * Format direct quotations as blockquotes (> text).\n   * Replicate lists as bulleted lists (- Item 1).\n\n**Constraints \u2013 Avoid at all costs:**\n\n* Literal, word-for-word translations that mirror the source sentence structure.\n* Awkward phrasing or unnatural sentence flow.\n* Non-standard terminology or constructions that sound forced to native readers.\n\n**Strict Output Rule:** Produce **only** the final translation formatted as specified. Do not include translation notes, introductions, explanations, or filler in your reply. Do not include your own conclusions or analysis in the reply.",
-        "engine": "ollama",
-        "model": "gemma3:12b-it-qat",
-        "output_folder": "_translate3",
+        "engine": "lmstudio",
+        "model": "qwen3.5-9b",
+        "output_folder": "_translate",
         "output_under_input": false,
         "merge_outputs": false,
         "output_suffix": "",
@@ -506,9 +506,6 @@
         "enable_thinking": true,
         "enable_chunking": false,
         "chunk_size": 4000,
-        "enable_overlap": false,
-        "chunk_overlap": 0,
-        "force_cutoff": true,
         "model_prefix": false,
         "add_context_as_suffix": true
     },
