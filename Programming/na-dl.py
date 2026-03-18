@@ -276,6 +276,10 @@ def files_from_mets(mets_url: str) -> list:
         for variants in file_index.values():
             ordered.extend(dict(v) for v in variants.values())
 
+    # Filter out /thumb/ URLs — METS includes both /original/ (or /default/)
+    # and /thumb/ per scan, which doubles the file list with duplicates
+    ordered = [e for e in ordered if "/file/v1/thumb/" not in e["url"]]
+
     tifs  = [e for e in ordered if "tiff" in e["mimetype"].lower()]
     jpegs = [e for e in ordered if "jpeg" in e["mimetype"].lower() or "jpg" in e["mimetype"].lower()]
 
@@ -489,6 +493,9 @@ def discover_files(ead_id: str, unit_id: str, mets_override: str | None) -> list
 def safe_filename(label: str, index: int, unit_id: str, ext: str) -> str:
     if label and label != f"scan_{index:04d}":
         name = re.sub(r'[^\w\-_.]', '_', label).strip("_")
+        # Strip trailing image extensions so we don't get double extensions
+        # like .tif.jpg when the METS label already contains .tif
+        name = re.sub(r'\.(tif|tiff|jpg|jpeg|jp2)$', '', name, flags=re.I)
     else:
         name = f"{unit_id}_{index:04d}"
     return f"{name}{ext}"
@@ -533,6 +540,7 @@ def download_files(files: list, output_dir: str, unit_id: str):
         label    = info.get("label", "")
         orig_url = info.get("original_url", "")
         def_url  = info.get("url", "")
+        mime     = info.get("mimetype", "")
 
         # Skip if either version already downloaded
         tif_path = os.path.join(output_dir, safe_filename(label, i, unit_id, ".tif"))
@@ -541,10 +549,21 @@ def download_files(files: list, output_dir: str, unit_id: str):
             print(f"  [{i:>4}/{total}] SKIP  (already exists)")
             continue
 
-        # Try TIF first, fall back to JPEG
-        primary  = orig_url or def_url
-        fallback = def_url if orig_url else ""
-        primary_ext  = ".tif" if orig_url else ".jpg"
+        # Determine primary URL, fallback, and extension
+        if orig_url:
+            # invnr path: original_url -> /original/ (TIF), url -> /default/ (JPEG)
+            primary     = orig_url
+            fallback    = def_url
+            primary_ext = ".tif"
+        elif "tiff" in mime.lower() or "/original/" in def_url:
+            # METS path: url is already /original/ (TIF), derive JPEG fallback
+            primary     = def_url
+            fallback    = def_url.replace("/original/", "/default/")
+            primary_ext = ".tif"
+        else:
+            primary     = def_url
+            fallback    = ""
+            primary_ext = ".jpg"
         primary_path = os.path.join(output_dir, safe_filename(label, i, unit_id, primary_ext))
 
         print(f"  [{i:>4}/{total}] {safe_filename(label, i, unit_id, primary_ext)} ...", end="", flush=True)
