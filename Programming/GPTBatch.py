@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.15
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.16
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,11 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.16
+- ✅ **FEATURE**: Added interactive multipass prompt workflow with per-pass prompts and pass chaining.
+- ✅ **FEATURE**: Empty multipass prompts now pause processing and request runtime prompt input for that specific job/pass.
+- ✅ **IMPROVEMENT**: Presets and job snapshots now include multipass configuration.
 
 ### v26.14
 - ✅ **IMPROVEMENT**: Added horizontal and vertical scrollbars to the job queue list.
@@ -764,6 +769,9 @@ def build_job_config_snapshot(
         "context_text": "",
         "use_persistent_context": False,
         "model_prefix": False,
+        "enable_multipass": False,
+        "multipass_count": 1,
+        "multipass_prompts": [],
         "safety_settings": [],
     }
     effective = {k: kwargs.get(k, d) for k, d in known_defaults.items()}
@@ -800,6 +808,16 @@ def build_job_config_snapshot(
             "context_chars": len(effective["context_text"] or ""),
             "context_preview": preview_text(effective["context_text"] or "", 180),
             "use_persistent_context": bool(effective["use_persistent_context"]),
+            "enable_multipass": bool(effective["enable_multipass"]),
+            "multipass_count": int(effective["multipass_count"] or 1),
+            "multipass_prompt_previews": [
+                preview_text(p or "", 140)
+                for p in normalize_multipass_prompts(
+                    effective["multipass_prompts"],
+                    int(effective["multipass_count"] or 1),
+                    user_prompt or "",
+                )
+            ],
         },
         "output_behavior": {
             "overwrite_original": bool(overwrite_original),
@@ -841,6 +859,10 @@ def build_job_config_snapshot(
         "chunking": {
             "enabled": bool(effective["enable_chunking"]),
             "chunk_size": effective["chunk_size"],
+        },
+        "multipass": {
+            "enabled": bool(effective["enable_multipass"]),
+            "count": int(effective["multipass_count"] or 1),
         },
         "extra_kwargs_keys": extra_keys,
     }
@@ -2179,6 +2201,41 @@ def apply_context_to_prompt(user_prompt, context_text):
     return prompt
 
 
+def normalize_multipass_prompts(prompts, pass_count, fallback_prompt=""):
+    count = max(1, int(pass_count or 1))
+    if isinstance(prompts, list):
+        out = [str(p) if p is not None else "" for p in prompts]
+    else:
+        out = []
+    if not out:
+        out = [fallback_prompt or ""]
+    if len(out) < count:
+        out.extend([""] * (count - len(out)))
+    elif len(out) > count:
+        out = out[:count]
+    return out
+
+
+def build_multipass_thread_prompt(previous_turns, current_user_prompt):
+    lines = ["Conversation so far:", ""]
+    for turn in previous_turns:
+        pnum = turn.get("pass", "?")
+        lines.append(f"[Pass {pnum} User]")
+        lines.append(turn.get("user", ""))
+        lines.append("")
+        lines.append(f"[Pass {pnum} Assistant]")
+        lines.append(turn.get("assistant", ""))
+        lines.append("")
+
+    lines.append("[Current User Request]")
+    lines.append(current_user_prompt or "")
+    lines.append("")
+    lines.append(
+        "Use the conversation context above and return only the assistant reply for the current user request."
+    )
+    return "\n".join(lines)
+
+
 def process_file_group(
     filepaths_group,
     api_key,
@@ -2262,8 +2319,19 @@ def process_file_group(
         kwargs["result_metadata"]["resolved_output_folder"] = os.path.dirname(raw_path)
 
     context_text_for_job = kwargs.get("context_text", "")
+    enable_multipass = bool(kwargs.get("enable_multipass", False))
+    multipass_count = max(1, int(kwargs.get("multipass_count", 1) or 1))
+    multipass_prompts = normalize_multipass_prompts(
+        kwargs.get("multipass_prompts"),
+        multipass_count,
+        user_prompt,
+    )
+    if not enable_multipass:
+        multipass_count = 1
+        multipass_prompts = [user_prompt]
+
     resolved_user_prompt_for_snapshot = apply_context_to_prompt(
-        user_prompt, context_text_for_job
+        multipass_prompts[0], context_text_for_job
     )
 
     snapshot = build_job_config_snapshot(
@@ -2439,67 +2507,149 @@ def process_file_group(
 
             file_content_all = "".join(prompt_parts)
 
-            resolved_user_prompt = resolved_user_prompt_for_snapshot
+            max_tok = kwargs.get("chunk_size", 4000)
+            use_chunking = kwargs.get("enable_chunking", False)
+            request_multipass_prompt = kwargs.get("request_multipass_prompt")
 
-            if kwargs.get("enable_chunking", False):
-                max_tok = kwargs.get("chunk_size", 4000)
-                chunks = chunk_text_by_paragraphs(file_content_all, max_tok)
-            else:
-                chunks = [file_content_all]
+            pass_turns = []
+            pass_logs = []
+            response = ""
 
-            if VERBOSE_DIAGNOSTICS:
-                console_log(
-                    f"DEBUG PROMPT BUILD: resolved_prompt_chars={len(resolved_user_prompt or '')} text_chars={len(file_content_all)} chunks={len(chunks)}",
-                    "DEBUG",
+            for pass_idx in range(multipass_count):
+                if cancellation_event and cancellation_event.is_set():
+                    raise CancellationError("Processing cancelled during multipass execution.")
+
+                pass_num = pass_idx + 1
+                pass_prompt_raw = multipass_prompts[pass_idx] if pass_idx < len(multipass_prompts) else ""
+
+                if enable_multipass and not (pass_prompt_raw or "").strip():
+                    if callable(request_multipass_prompt):
+                        runtime_prompt = request_multipass_prompt(
+                            pass_num,
+                            multipass_count,
+                            base_name,
+                            preview_text(response, 260),
+                        )
+                        if runtime_prompt is None:
+                            raise CancellationError(
+                                f"Cancelled while waiting for Pass {pass_num} prompt input."
+                            )
+                        pass_prompt_raw = runtime_prompt.strip()
+                    if not pass_prompt_raw:
+                        raise ValueError(
+                            f"Pass {pass_num} prompt is empty and no runtime prompt was provided."
+                        )
+
+                resolved_pass_prompt = apply_context_to_prompt(
+                    pass_prompt_raw,
+                    context_text_for_job,
                 )
 
-            log_data["prompt_sent"] = resolved_user_prompt + file_content_all
-            if len(chunks) > 1:
-                log_data["chunk_count"] = len(chunks)
+                if pass_num == 1:
+                    pass_input_text = file_content_all
+                    base_prompt_for_chunks = resolved_pass_prompt
+                else:
+                    pass_input_text = response
+                    base_prompt_for_chunks = build_multipass_thread_prompt(
+                        pass_turns,
+                        resolved_pass_prompt,
+                    )
 
-            # --- API CALL LOOP ---
-            chunk_responses = []
-            for idx, chunk_content in enumerate(chunks):
-                if cancellation_event and cancellation_event.is_set():
-                    raise CancellationError(
-                        "Processing cancelled during chunked processing."
+                if use_chunking:
+                    chunks = chunk_text_by_paragraphs(pass_input_text, max_tok)
+                else:
+                    chunks = [pass_input_text]
+                if not chunks:
+                    chunks = [""]
+
+                if VERBOSE_DIAGNOSTICS:
+                    console_log(
+                        f"DEBUG PASS {pass_num}: prompt_chars={len(resolved_pass_prompt or '')} input_chars={len(pass_input_text or '')} chunks={len(chunks)}",
+                        "DEBUG",
                     )
 
                 if len(chunks) > 1:
                     console_log(
-                        f"Processing chunk {idx + 1}/{len(chunks)} for {base_name}...",
+                        f"Pass {pass_num}/{multipass_count}: {len(chunks)} chunks for {base_name}.",
                         "INFO",
                     )
 
-                full_chunk_prompt = resolved_user_prompt + chunk_content
+                chunk_responses = []
+                for idx, chunk_content in enumerate(chunks):
+                    if cancellation_event and cancellation_event.is_set():
+                        raise CancellationError(
+                            "Processing cancelled during chunked processing."
+                        )
 
-                resp = call_generative_ai_api(
-                    engine,
-                    full_chunk_prompt,
-                    api_key,
-                    model_name,
-                    client=client,
-                    images_data_list=images_data_legacy,
-                    google_file_objects=google_file_objects,
-                    stream_output=kwargs.get("stream_output", False),
-                    safety_settings=kwargs.get("safety_settings"),
-                    enable_web_search=kwargs.get("enable_web_search", False),
-                    enable_thinking=kwargs.get("enable_thinking", False),
-                    clean_markdown=kwargs.get("clean_markdown", True),
-                    cancellation_event=cancellation_event,
+                    if len(chunks) > 1:
+                        console_log(
+                            f"Processing pass {pass_num}/{multipass_count} chunk {idx + 1}/{len(chunks)} for {base_name}...",
+                            "INFO",
+                        )
+
+                    if pass_num == 1:
+                        full_chunk_prompt = base_prompt_for_chunks + chunk_content
+                    else:
+                        full_chunk_prompt = base_prompt_for_chunks
+                        if chunk_content:
+                            full_chunk_prompt += f"\n\n[Current Input Chunk]\n{chunk_content}"
+
+                    resp = call_generative_ai_api(
+                        engine,
+                        full_chunk_prompt,
+                        api_key,
+                        model_name,
+                        client=client,
+                        images_data_list=images_data_legacy if pass_num == 1 else [],
+                        google_file_objects=google_file_objects if pass_num == 1 else [],
+                        stream_output=kwargs.get("stream_output", False),
+                        safety_settings=kwargs.get("safety_settings"),
+                        enable_web_search=kwargs.get("enable_web_search", False),
+                        enable_thinking=kwargs.get("enable_thinking", False),
+                        clean_markdown=False,
+                        cancellation_event=cancellation_event,
+                    )
+
+                    if resp and str(resp).strip().startswith("Error"):
+                        raise Exception(resp)
+
+                    chunk_responses.append(resp or "")
+
+                response = "\n".join(chunk_responses)
+
+                pass_turns.append(
+                    {
+                        "pass": pass_num,
+                        "user": resolved_pass_prompt,
+                        "assistant": response,
+                    }
+                )
+                pass_logs.append(
+                    {
+                        "pass": pass_num,
+                        "prompt_chars": len(resolved_pass_prompt or ""),
+                        "input_chars": len(pass_input_text or ""),
+                        "chunks": len(chunks),
+                        "response_chars": len(response or ""),
+                        "prompt_preview": preview_text(resolved_pass_prompt or "", 180),
+                        "response_preview": preview_text(response or "", 180),
+                    }
                 )
 
-                if resp and str(resp).strip().startswith("Error"):
-                    # For chunks, we might want to fail the whole group or just this chunk?
-                    # Usually if one chunk fails, the reassembled output is broken.
-                    raise Exception(resp)
-
-                chunk_responses.append(resp or "")
-
-            response = "\n".join(chunk_responses)
+            log_data["prompt_sent"] = (pass_turns[0]["user"] if pass_turns else "") + file_content_all
+            if pass_logs and pass_logs[0].get("chunks", 0) > 1:
+                log_data["chunk_count"] = pass_logs[0]["chunks"]
+            log_data["multipass"] = {
+                "enabled": enable_multipass,
+                "count": multipass_count,
+                "passes": pass_logs,
+            }
 
         if response and str(response).strip().startswith("Error"):
             raise Exception(response)
+
+        if kwargs.get("clean_markdown", True):
+            response = sanitize_api_response(response)
 
         # --- RENAME MODE LOGIC ---
         if kwargs.get("rename_mode", False):
@@ -2958,6 +3108,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )  # Hibernate after all processing (excluded from presets)
         self.add_context_as_suffix_var = tk.BooleanVar(value=False)
 
+        # --- NEW: Multipass Prompting ---
+        self.enable_multipass_var = tk.BooleanVar(value=False)
+        self.multipass_count_var = tk.IntVar(value=1)
+        self.multipass_prompt_widgets = []
+
         self.create_widgets()
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
@@ -2965,6 +3120,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.model_var.trace_add("write", self._update_folder_preview)
         self.output_dir_var.trace_add("write", self._update_folder_preview)
         self.model_prefix_var.trace_add("write", self._update_folder_preview)
+        self.multipass_count_var.trace_add("write", self._on_multipass_count_change)
 
         self.after(200, self.update_models)
         self.after(300, self._update_folder_preview)
@@ -3080,11 +3236,41 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         prompt_frame = ttk.LabelFrame(left_frame, text="2. System Prompt", padding=5)
         prompt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
-        self.prompt_text = scrolledtext.ScrolledText(prompt_frame, height=10)
+        self.prompt_text = scrolledtext.ScrolledText(prompt_frame, height=8)
         self.prompt_text.pack(fill=tk.BOTH, expand=True)
         self.prompt_text.insert(tk.INSERT, USER_PROMPT_TEMPLATE)
 
-        # --- COLUMN 2 (CENTER): CONFIGURATION ---
+        mp_ctrl = ttk.Frame(prompt_frame)
+        mp_ctrl.pack(fill=tk.X, pady=(6, 4))
+        ttk.Checkbutton(
+            mp_ctrl,
+            text="Enable Multipass Prompt Thread",
+            variable=self.enable_multipass_var,
+            command=self.toggle_multipass_ui,
+        ).pack(side=tk.LEFT)
+        ttk.Label(mp_ctrl, text="Passes:").pack(side=tk.LEFT, padx=(10, 4))
+        self.multipass_count_spin = ttk.Spinbox(
+            mp_ctrl,
+            from_=1,
+            to=12,
+            textvariable=self.multipass_count_var,
+            width=4,
+        )
+        self.multipass_count_spin.pack(side=tk.LEFT)
+
+        self.multipass_hint_label = ttk.Label(
+            prompt_frame,
+            text="Pass 1 uses the System Prompt box above. Pass 2+ can be configured below.",
+            foreground="gray",
+        )
+        self.multipass_hint_label.pack(fill=tk.X, pady=(0, 4))
+
+        self.multipass_prompts_frame = ttk.Frame(prompt_frame)
+        self.multipass_prompts_frame.pack(fill=tk.BOTH, expand=False)
+
+        self.refresh_multipass_prompt_editors()
+        self.toggle_multipass_ui()
+# --- COLUMN 2 (CENTER): CONFIGURATION ---
         mid_frame = ttk.Frame(main_pane)
         main_pane.add(mid_frame, weight=2)
 
@@ -3668,6 +3854,80 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         state = "normal" if chunk_enabled else "disabled"
         self.chunk_size_spin.config(state=state)
 
+    def _on_multipass_count_change(self, *args):
+        try:
+            count = int(self.multipass_count_var.get())
+        except Exception:
+            count = 1
+        count = max(1, min(12, count))
+        if count != int(self.multipass_count_var.get() or 1):
+            self.multipass_count_var.set(count)
+            return
+        self.refresh_multipass_prompt_editors()
+
+    def refresh_multipass_prompt_editors(self):
+        previous_values = [w.get("1.0", tk.END).strip() for w in self.multipass_prompt_widgets]
+        self.multipass_prompt_widgets = []
+
+        for child in self.multipass_prompts_frame.winfo_children():
+            child.destroy()
+
+        count = max(1, int(self.multipass_count_var.get() or 1))
+        for pass_index in range(2, count + 1):
+            value_idx = pass_index - 2
+            wrapper = ttk.LabelFrame(
+                self.multipass_prompts_frame,
+                text=f"Pass {pass_index} Prompt",
+                padding=4,
+            )
+            wrapper.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+            txt = scrolledtext.ScrolledText(wrapper, height=4)
+            txt.pack(fill=tk.BOTH, expand=True)
+            if value_idx < len(previous_values) and previous_values[value_idx]:
+                txt.insert(tk.END, previous_values[value_idx])
+            self.multipass_prompt_widgets.append(txt)
+
+    def toggle_multipass_ui(self):
+        enabled = bool(self.enable_multipass_var.get())
+        state = "normal" if enabled else "disabled"
+        self.multipass_hint_label.config(
+            text=(
+                "Pass 1 uses the System Prompt box above. Pass 2+ can be configured below."
+                if enabled
+                else "Multipass disabled. Only the System Prompt is used."
+            )
+        )
+        self.multipass_count_spin.config(state=state)
+        for widget in self.multipass_prompt_widgets:
+            widget.config(state=state)
+
+    def _collect_multipass_prompts_from_ui(self, include_pass1=True):
+        prompts = []
+        if include_pass1:
+            prompts.append(self.prompt_text.get("1.0", tk.END).strip())
+        prompts.extend([w.get("1.0", tk.END).strip() for w in self.multipass_prompt_widgets])
+        return normalize_multipass_prompts(
+            prompts,
+            int(self.multipass_count_var.get() or 1),
+            self.prompt_text.get("1.0", tk.END).strip(),
+        )
+
+    def _set_multipass_prompts_in_ui(self, prompts, count=None):
+        if count is None:
+            count = len(prompts) if isinstance(prompts, list) and prompts else 1
+        count = max(1, int(count or 1))
+        normalized = normalize_multipass_prompts(prompts, count, USER_PROMPT_TEMPLATE)
+
+        self.multipass_count_var.set(count)
+        self.prompt_text.delete("1.0", tk.END)
+        self.prompt_text.insert(tk.END, normalized[0])
+        self.refresh_multipass_prompt_editors()
+        for idx, widget in enumerate(self.multipass_prompt_widgets, start=1):
+            widget.delete("1.0", tk.END)
+            if idx < len(normalized):
+                widget.insert(tk.END, normalized[idx])
+        self.toggle_multipass_ui()
+
     def _update_folder_preview(self, *args):
         base_folder = self.output_dir_var.get().strip()
         prefix = ""
@@ -3732,8 +3992,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         console_log(f"User selected preset: {name}", "ACTION")
         if name in self.current_presets:
             data = self.current_presets[name]
+            legacy_prompt = data.get("prompt", "")
             self.prompt_text.delete("1.0", tk.END)
-            self.prompt_text.insert(tk.END, data.get("prompt", ""))
+            self.prompt_text.insert(tk.END, legacy_prompt)
 
             def set_var(var, key, default=None):
                 if key in data:
@@ -3744,14 +4005,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.engine_var, "engine")
             self.update_models()
             set_var(self.model_var, "model")
-            set_var(self.output_dir_var, "output_folder")  # Missing Key
+            set_var(self.output_dir_var, "output_folder")
             set_var(self.output_under_input_var, "output_under_input", False)
             set_var(self.merge_outputs_var, "merge_outputs", False)
             set_var(self.suffix_var, "output_suffix")
             set_var(self.output_ext_var, "output_extension", "")
             set_var(self.overwrite_var, "overwrite_original", False)
-            set_var(self.stream_var, "stream_output", True)  # Default True
-            set_var(self.thinking_var, "enable_thinking", False)  # Default False
+            set_var(self.stream_var, "stream_output", True)
+            set_var(self.thinking_var, "enable_thinking", False)
             set_var(self.add_filename_var, "add_filename_to_prompt", False)
             set_var(self.ollama_search_var, "enable_web_search", False)
             set_var(self.persistent_context_var, "persistent_context", False)
@@ -3761,25 +4022,21 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             )
 
             if self.persistent_context_var.get():
-                # Global mode: do not overwrite existing textbox while switching presets.
                 if not self._get_context_text():
                     self._set_context_text(selected_global_context)
                 self.global_context_text_value = self._get_context_text()
             else:
                 self._set_context_text(selected_local_context)
 
-            # Safety Settings
             set_var(self.enable_safety_var, "enable_safety", False)
             set_var(self.harassment_var, "safety_harassment", "Off")
             set_var(self.hate_speech_var, "safety_hate_speech", "Off")
             set_var(self.sexually_explicit_var, "safety_sexually_explicit", "Off")
             set_var(self.dangerous_content_var, "safety_dangerous_content", "Off")
 
-            # Text Chunking
             set_var(self.enable_chunking_var, "enable_chunking", False)
             set_var(self.chunk_size_var, "chunk_size", 4000)
 
-            # Image Settings
             set_var(self.enable_img_conversion_var, "enable_img_conversion", False)
             set_var(self.temp_img_fmt_var, "temp_img_fmt", "PNG")
             set_var(self.img_quality_var, "img_quality", 100)
@@ -3787,7 +4044,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.force_conversion_var, "force_conversion", False)
             set_var(self.save_img_to_output_var, "save_img_to_output", False)
 
-            # Batching & Validation
             set_var(self.group_size_var, "group_size", 1)
             set_var(self.group_files_var, "group_files", False)
             set_var(self.validate_json_var, "validate_json", False)
@@ -3795,7 +4051,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.clean_markdown_var, "clean_markdown", True)
             set_var(self.save_log_var, "save_log", False)
 
-            # Delay & Mode
             set_var(self.delay_min_var, "delay_min", 0)
             set_var(self.delay_sec_var, "delay_sec", 0)
             set_var(self.upload_mode_var, "upload_mode", "parallel")
@@ -3808,17 +4063,26 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.rename_method_var, "rename_method", "full")
             set_var(self.model_prefix_var, "model_prefix", False)
             set_var(self.add_context_as_suffix_var, "add_context_as_suffix", False)
+            set_var(self.enable_multipass_var, "enable_multipass", False)
+            set_var(self.multipass_count_var, "multipass_count", 1)
 
-            self.toggle_safety()  # Refresh UI state
+            self.toggle_safety()
             self.ollama_search_var.set(False)
-
-            self.toggle_img_settings()  # State Change
+            self.toggle_img_settings()
             self.toggle_rename_mode()
-
             self.toggle_overwrite()
             self.toggle_grouping()
             self.toggle_chunking()
-            self._update_folder_preview()  # Update dynamic preview
+
+            mp_count = int(data.get("multipass_count", 1) or 1)
+            mp_prompts = data.get("multipass_prompts", [])
+            if not isinstance(mp_prompts, list):
+                mp_prompts = []
+            if not mp_prompts:
+                mp_prompts = [legacy_prompt]
+            self._set_multipass_prompts_in_ui(mp_prompts, mp_count)
+
+            self._update_folder_preview()
 
     def get_current_settings_dict(self):
         current_context = self._get_context_text()
@@ -3829,7 +4093,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "prompt": self.prompt_text.get("1.0", tk.END).strip(),
             "engine": self.engine_var.get(),
             "model": self.model_var.get(),
-            "output_folder": self.output_dir_var.get(),  # Missing Key
+            "output_folder": self.output_dir_var.get(),
             "output_under_input": self.output_under_input_var.get(),
             "merge_outputs": self.merge_outputs_var.get(),
             "output_suffix": self.suffix_var.get(),
@@ -3839,7 +4103,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "group_size": self.group_size_var.get(),
             "group_files": self.group_files_var.get(),
             "validate_json": self.validate_json_var.get(),
-            "validate_json_keys": self.validate_keys_var.get(),  # Save new setting
+            "validate_json_keys": self.validate_keys_var.get(),
             "clean_markdown": self.clean_markdown_var.get(),
             "save_log": self.save_log_var.get(),
             "delay_min": self.delay_min_var.get(),
@@ -3869,6 +4133,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "chunk_size": self.chunk_size_var.get(),
             "model_prefix": self.model_prefix_var.get(),
             "add_context_as_suffix": self.add_context_as_suffix_var.get(),
+            "enable_multipass": self.enable_multipass_var.get(),
+            "multipass_count": int(self.multipass_count_var.get() or 1),
+            "multipass_prompts": self._collect_multipass_prompts_from_ui(True),
         }
 
     def save_current_preset(self):
@@ -4299,6 +4566,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if use_persistent_context:
             self.global_context_text_value = current_context
 
+        multipass_enabled = bool(self.enable_multipass_var.get())
+        multipass_count = max(1, int(self.multipass_count_var.get() or 1))
+        multipass_prompts = self._collect_multipass_prompts_from_ui(True)
+
         for batch in batches:
             self.job_id_counter += 1
             jid = self.job_id_counter
@@ -4345,6 +4616,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 "enable_chunking": self.enable_chunking_var.get(),
                 "chunk_size": self.chunk_size_var.get(),
                 "model_prefix": self.model_prefix_var.get(),
+                "enable_multipass": multipass_enabled,
+                "multipass_count": multipass_count,
+                "multipass_prompts": multipass_prompts,
                 "enable_thinking": self.thinking_var.get(),
                 "result_metadata": {},  # Mutable container for returning data
             }
@@ -4757,6 +5031,58 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         event_container["result"] = dialog.result
         event_container["event"].set()
 
+    def _ask_user_for_runtime_multipass_prompt(
+        self,
+        event_container,
+        pass_index,
+        pass_count,
+        group_name,
+        prev_preview="",
+    ):
+        message = (
+            f"Pass {pass_index}/{pass_count} prompt is empty for job: {group_name}.\n\n"
+            "Enter the prompt for this pass to continue this job.\n"
+            "Cancel to stop this job."
+        )
+        if prev_preview:
+            message += f"\n\nPrevious pass preview:\n{prev_preview}"
+
+        result = tkinter.simpledialog.askstring(
+            "Multipass Prompt Needed",
+            message,
+            parent=self,
+        )
+        event_container["result"] = result
+        event_container["event"].set()
+
+    def _request_runtime_multipass_prompt(
+        self,
+        job_id,
+        pass_index,
+        pass_count,
+        group_name,
+        prev_preview="",
+    ):
+        event_container = {"event": threading.Event(), "result": None}
+        self.result_queue.put(
+            {"job_id": job_id, "status": f"Waiting Pass {pass_index}/{pass_count}..."}
+        )
+        self.after(
+            0,
+            lambda: self._ask_user_for_runtime_multipass_prompt(
+                event_container,
+                pass_index,
+                pass_count,
+                group_name,
+                prev_preview,
+            ),
+        )
+        event_container["event"].wait()
+        result = event_container["result"]
+        if result is not None:
+            self.result_queue.put({"job_id": job_id, "status": "Running"})
+        return result
+
     def _merge_completed_outputs_by_folder(self, output_paths):
         if not output_paths:
             console_log(
@@ -4842,12 +5168,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             if jid not in self.job_registry:
                 # Silently skip
                 continue
-
             self.result_queue.put({"job_id": jid, "status": "Running"})
             params = job.copy()
             params.pop("job_id")
             if params.get("use_persistent_context"):
                 params["context_text"] = self.global_context_text_value
+
+            params["request_multipass_prompt"] = (
+                lambda pass_index, pass_count, group_name, prev_preview="", _jid=jid: self._request_runtime_multipass_prompt(
+                    _jid, pass_index, pass_count, group_name, prev_preview
+                )
+            )
 
             if self.global_runtime_overrides:
                 params["engine"] = self.global_runtime_overrides["engine"]
@@ -5140,5 +5471,43 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
