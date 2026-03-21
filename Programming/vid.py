@@ -1637,6 +1637,7 @@ class WorkflowPresetManager:
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
+            "close_gui_on_processing": False,
             "burn_subtitles": DEFAULT_BURN_SUBTITLES,
             "use_sharpening": DEFAULT_USE_SHARPENING,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
@@ -1915,6 +1916,7 @@ class VideoProcessorApp:
         self.fruc_fps_var = tk.StringVar(value=DEFAULT_FRUC_FPS)
         self.fruc_fps_var.trace_add('write', lambda *args: self._update_selected_jobs('fruc_fps'))
         self.generate_log_var = tk.BooleanVar(value=False)
+        self.close_gui_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         self.override_bitrate_var = tk.BooleanVar(value=False)
         self.manual_bitrate_var = tk.StringVar(value="0")
@@ -3007,6 +3009,8 @@ class VideoProcessorApp:
         self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = ttk.Checkbutton(parent, text="Generate Log File", variable=self.generate_log_var, command=lambda: self._update_selected_jobs("generate_log"))
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+        self.close_gui_checkbox = ttk.Checkbutton(parent, text="Close GUI on Processing", variable=self.close_gui_var, command=lambda: self._update_selected_jobs("close_gui_on_processing"))
+        self.close_gui_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
     def populate_fonts(self):
         try:
@@ -3494,7 +3498,10 @@ class VideoProcessorApp:
         """Updates the progress bar in the GUI."""
         # This is called from the thread, but assigning to a ttk.Progressbar variable 
         # or configuring it is generally handled well by tk, but using after() is safer.
-        self.root.after(0, lambda: self.progress_bar.config(value=percent))
+        try:
+            self.root.after(0, lambda: self.progress_bar.config(value=percent))
+        except Exception:
+            pass  # GUI already destroyed (console mode)
 
     def _update_selected_jobs(self, *keys_to_update):
         if self._is_loading_job_to_gui:
@@ -3518,6 +3525,7 @@ class VideoProcessorApp:
             "nvenc_ngx_vsr_quality": self.nvenc_ngx_vsr_quality_var.get(),
             "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
+            "close_gui_on_processing": self.close_gui_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
             "video_offset_y": self.video_offset_y_var.get(),
@@ -4098,7 +4106,7 @@ class VideoProcessorApp:
         self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self._on_merged_aspect_change(self.merged_aspect_var.get())
-        self.generate_log_var.set(options.get("generate_log", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
+        self.generate_log_var.set(options.get("generate_log", False)); self.close_gui_var.set(options.get("close_gui_on_processing", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); 
         self.use_dynaudnorm_var.set(options.get("use_dynaudnorm", DEFAULT_USE_DYNAUDNORM))
         self.dyn_frame_len_var.set(options.get("dyn_frame_len", DEFAULT_DYNAUDNORM_FRAME_LEN))
@@ -5208,11 +5216,46 @@ class VideoProcessorApp:
         if not self.validate_processing_settings(): return
         self.output_mode = self.output_mode_var.get()
         
+        # Check if GUI should be closed for console-only processing
+        close_gui = self.close_gui_var.get()
+        
+        if close_gui:
+            # Snapshot jobs before destroying GUI (Tk vars won't survive root.destroy)
+            jobs_snapshot = copy.deepcopy(self.processing_jobs)
+            print("\n[INFO] 'Close GUI on Processing' enabled. Closing GUI and processing in console...")
+            self.root.destroy()
+            self._process_files_console(jobs_snapshot)
+            return
+        
         # Disable button to prevent re-entry
         self.start_button.config(state="disabled")
         
         # Start Thread
         threading.Thread(target=self._process_files_thread, daemon=True).start()
+
+    def _process_files_console(self, jobs):
+        """Process jobs in console without GUI (called after root.destroy)."""
+        print("\n" + "="*80 + "\n--- Starting processing batch (Console Mode) ---")
+        successful, failed = 0, 0
+        total_jobs = len(jobs)
+        
+        for i, job in enumerate(jobs):
+            print("\n" + "-"*80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-"*80)
+            try:
+                orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
+                resolution = job['options'].get("resolution", "Unknown")
+                print(f"[DEBUG] Job: {job['display_name']}")
+                print(f"[DEBUG] Orientation: {orientation}")
+                print(f"[DEBUG] Resolution: {resolution}")
+                
+                self.build_ffmpeg_command_and_run(job, orientation)
+                successful += 1; print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
+            except (VideoProcessingError, Exception) as e:
+                failed += 1; print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
+        
+        final_message = f"Processing Complete: {successful} successful, {failed} failed"
+        print("\n" + "="*80 + "\n" + final_message)
+        sys.exit(0)
 
     def _process_files_thread(self):
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
