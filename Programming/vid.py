@@ -4741,6 +4741,43 @@ class VideoProcessorApp:
                 return None
             return left, top, right, bottom
 
+        def _compute_pad(src_w, src_h, dst_w, dst_h, ox=0, oy=0):
+            try:
+                src_ar = float(src_w) / float(src_h)
+                dst_ar = float(dst_w) / float(dst_h)
+            except Exception:
+                return None
+            if abs(src_ar - dst_ar) < 1e-6:
+                return None
+            if src_ar > dst_ar:
+                fit_w = dst_w
+                fit_h = int(round(dst_w / src_ar))
+                fit_h = (fit_h // 2) * 2
+            else:
+                fit_h = dst_h
+                fit_w = int(round(dst_h * src_ar))
+                fit_w = (fit_w // 2) * 2
+            
+            base_pl = max(0, (dst_w - fit_w) // 2)
+            base_pl = (base_pl // 2) * 2
+            
+            base_pt = max(0, (dst_h - fit_h) // 2)
+            base_pt = (base_pt // 2) * 2
+
+            pad_left = max(0, min(dst_w - fit_w, base_pl + ox))
+            pad_left = (pad_left // 2) * 2
+            pad_right = max(0, dst_w - fit_w - pad_left)
+            pad_right = (pad_right // 2) * 2
+            
+            pad_top = max(0, min(dst_h - fit_h, base_pt + oy))
+            pad_top = (pad_top // 2) * 2
+            pad_bottom = max(0, dst_h - fit_h - pad_top)
+            pad_bottom = (pad_bottom // 2) * 2
+            
+            if pad_left == 0 and pad_right == 0 and pad_top == 0 and pad_bottom == 0:
+                return None
+            return pad_left, pad_top, pad_right, pad_bottom
+
         precrop = None
         use_precrop = (
             aspect_mode == "crop"
@@ -4809,11 +4846,19 @@ class VideoProcessorApp:
 
         if resize_algo and (info["width"] != target_w or info["height"] != target_h):
             output_res = f"{target_w}x{target_h}"
+            pad_args = None
             if aspect_mode == "pad":
-                output_res = f"{output_res},preserve_aspect_ratio=decrease"
+                ox = int(options.get("video_offset_x", "0"))
+                oy = int(options.get("video_offset_y", "0"))
+                pad_args = _compute_pad(info["width"], info["height"], target_w, target_h, ox, oy)
+                if not pad_args:
+                    output_res = f"{output_res},preserve_aspect_ratio=decrease"
             elif aspect_mode == "crop" and not precrop:
                 output_res = f"{output_res},preserve_aspect_ratio=increase"
+            
             cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", output_res])
+            if pad_args:
+                cmd.extend(["--vpp-pad", f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]}"])
 
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
