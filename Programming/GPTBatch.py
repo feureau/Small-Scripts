@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.16
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.17
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,11 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.17
+- ✅ **REBUILD**: Rewrote text chunking from the ground up with budget-aware semantic chunking and sequential carryover context.
+- ✅ **IMPROVEMENT**: Added deterministic seam de-duplication when stitching chunk outputs to reduce repeated boundary text.
+- ✅ **IMPROVEMENT**: Chunk token budget is now auto-computed from model context window with safety, output, and carry reserves; legacy chunk_size is treated as an optional cap.
 
 ### v26.16
 - ✅ **FEATURE**: Added interactive multipass prompt workflow with per-pass prompts and pass chaining.
@@ -765,6 +770,10 @@ def build_job_config_snapshot(
         "save_img_to_output": False,
         "enable_chunking": False,
         "chunk_size": 4000,
+        "chunking_mode": "sequential_carryover",
+        "chunk_overlap_tokens": 180,
+        "chunk_output_tail_tokens": 120,
+        "chunk_safety_margin_pct": 0.15,
         "stop_queue_on_model_unavailable": True,
         "context_text": "",
         "use_persistent_context": False,
@@ -859,6 +868,10 @@ def build_job_config_snapshot(
         "chunking": {
             "enabled": bool(effective["enable_chunking"]),
             "chunk_size": effective["chunk_size"],
+            "mode": effective["chunking_mode"],
+            "overlap_tokens": effective["chunk_overlap_tokens"],
+            "output_tail_tokens": effective["chunk_output_tail_tokens"],
+            "safety_margin_pct": effective["chunk_safety_margin_pct"],
         },
         "multipass": {
             "enabled": bool(effective["enable_multipass"]),
@@ -1977,217 +1990,397 @@ def copy_failed_file(filepath):
         pass
 
 
-def chunk_text(text, max_tokens, overlap=0, force_cutoff=False):
-    """
-    Splits text into chunks of max_tokens with optional overlap.
-    Uses tiktoken for precise tokenization.
-    If force_cutoff is True, attempts to end chunks at sentence boundaries (. ! ?)
-    """
-    if not text:
-        return []
-
-    # Sentence terminators for backtracking
-    terminators = (".", "!", "?", "\n")
-
+def _get_chunk_encoding():
     try:
-        encoding = tiktoken.get_encoding("cl100k_base")
-
-        # --- TIKTOKEN LOGIC ---
-        tokens = encoding.encode(text)
-        if len(tokens) <= max_tokens:
-            return [text]
-
-        chunks = []
-        current_token_idx = 0
-
-        while current_token_idx < len(tokens):
-            # 1. Get raw candidate end
-            end_token_idx = min(current_token_idx + max_tokens, len(tokens))
-            chunk_tokens = tokens[current_token_idx:end_token_idx]
-            decoded_text = encoding.decode(chunk_tokens)
-
-            # 2. Handle Force Cutoff
-            if force_cutoff and end_token_idx < len(tokens):
-                last_t_idx = -1
-                for t in terminators:
-                    found = decoded_text.rfind(t)
-                    if found > last_t_idx:
-                        last_t_idx = found
-
-                if last_t_idx != -1:
-                    # Truncate string to terminator
-                    truncated_text = decoded_text[: last_t_idx + 1]
-                    # Re-encode to find the EXACT token count for this visual cut
-                    truncated_tokens = encoding.encode(truncated_text)
-
-                    if len(truncated_tokens) > 0:
-                        decoded_text = truncated_text
-                        end_token_idx = current_token_idx + len(truncated_tokens)
-
-            chunks.append(decoded_text)
-
-            # 3. Advance.
-            # For disjoint chunks (overlap=0), new start should be exactly current end.
-            current_token_idx = end_token_idx - overlap
-
-            # Safety checks
-            if current_token_idx >= len(tokens):
-                break
-            if current_token_idx < 0:
-                current_token_idx = 0
-            if len(chunks) > 5000:
-                break
-
-        return chunks
-
-    except Exception as e:
-        console_log(
-            f"Error getting tiktoken encoding: {e}. Falling back to character-based splitting.",
-            "WARN",
-        )
-        # Fallback: ~4 chars per token
-        chars_per_token = 4
-        chunk_size_chars = max_tokens * chars_per_token
-        overlap_chars = overlap * chars_per_token
-
-        chunks = []
-        current_pos = 0
-        while current_pos < len(text):
-            end_pos = min(current_pos + chunk_size_chars, len(text))
-            chunk_content = text[current_pos:end_pos]
-
-            if force_cutoff and end_pos < len(text):
-                last_t_idx = -1
-                for t in terminators:
-                    found = chunk_content.rfind(t)
-                    if found > last_t_idx:
-                        last_t_idx = found
-
-                if last_t_idx != -1:
-                    actual_end = current_pos + last_t_idx + 1
-                    chunk_content = text[current_pos:actual_end]
-                    end_pos = actual_end
-
-            chunks.append(chunk_content)
-
-            # Advancement logic
-            if force_cutoff:
-                # If we're forcing cutoff, we don't really support 'overlap' in the traditional sense
-                # normally, but let's respect the user's wish if they set it.
-                # If they set overlap 0, start exactly at end_pos.
-                current_pos = end_pos - overlap_chars
-            else:
-                current_pos = end_pos - overlap_chars
-
-            # Safety break to avoid infinite loop
-            if current_pos >= len(text) or (
-                current_pos <= 0 and len(chunks) > 0 and len(text) > 0
-            ):
-                if current_pos < len(text) and len(chunks) > 0:
-                    # This should only happen if overlap >= chunk_size
-                    current_pos = end_pos
-                else:
-                    break
-            if len(chunks) > 5000:
-                break  # Safety limit
-
-        return chunks
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
 
 
-def chunk_text_by_paragraphs(text, max_tokens):
-    """
-    Splits text into paragraph blocks (blank-line delimited), then packs
-    paragraphs into chunks up to max_tokens. Oversized paragraphs are
-    token-split with overlap=0 and force_cutoff=False.
-    """
+def _count_tokens(text, encoding=None):
+    if not text:
+        return 0
+    enc = encoding or _get_chunk_encoding()
+    if enc is not None:
+        try:
+            return len(enc.encode(text))
+        except Exception:
+            pass
+    # Fallback approximation
+    return max(1, len(text) // 4)
+
+
+def _tail_text_by_tokens(text, tail_tokens, encoding=None):
+    if not text or tail_tokens <= 0:
+        return ""
+    enc = encoding or _get_chunk_encoding()
+    if enc is not None:
+        try:
+            toks = enc.encode(text)
+            if len(toks) <= tail_tokens:
+                return text
+            return enc.decode(toks[-tail_tokens:])
+        except Exception:
+            pass
+    approx_chars = max(32, tail_tokens * 4)
+    return text[-approx_chars:]
+
+
+def _token_split_fallback(text, max_tokens, encoding=None):
+    if not text:
+        return []
+    max_tokens = max(1, int(max_tokens or 1))
+    enc = encoding or _get_chunk_encoding()
+    if enc is not None:
+        try:
+            toks = enc.encode(text)
+            if len(toks) <= max_tokens:
+                return [text]
+            parts = []
+            for i in range(0, len(toks), max_tokens):
+                parts.append(enc.decode(toks[i : i + max_tokens]))
+            return parts
+        except Exception:
+            pass
+
+    # Char fallback
+    chunk_size_chars = max_tokens * 4
+    return [text[i : i + chunk_size_chars] for i in range(0, len(text), chunk_size_chars)]
+
+
+def _split_paragraph_into_sentence_units(paragraph):
+    p = (paragraph or "").strip()
+    if not p:
+        return []
+    # Supports common western and CJK sentence boundaries.
+    pieces = re.split(r"(?<=[.!?。！？])\s+", p)
+    pieces = [s.strip() for s in pieces if s and s.strip()]
+    if len(pieces) <= 1:
+        return [p]
+    return pieces
+
+
+def get_model_context_window(engine, model_name):
+    e = (engine or "").lower()
+    m = (model_name or "").lower()
+
+    lookup = {
+        "google": [
+            ("gemini-2.5-pro", 1048576),
+            ("gemini-2.5-flash", 1048576),
+            ("gemini-2.0", 1048576),
+            ("gemini-1.5", 1048576),
+        ],
+        "ollama": [
+            ("qwen2.5", 32768),
+            ("qwen2", 32768),
+            ("llama3.3", 131072),
+            ("llama3.2", 131072),
+            ("llama3.1", 131072),
+            ("llama3", 8192),
+            ("mistral", 32768),
+            ("phi", 16384),
+        ],
+        "lmstudio": [
+            ("qwen2.5", 32768),
+            ("qwen2", 32768),
+            ("llama3.3", 131072),
+            ("llama3.2", 131072),
+            ("llama3.1", 131072),
+            ("llama3", 8192),
+            ("mistral", 32768),
+            ("phi", 16384),
+        ],
+    }
+
+    for needle, size in lookup.get(e, []):
+        if needle in m:
+            return size
+    return 8192
+
+
+def compute_chunk_budget(
+    prompt_text,
+    engine,
+    model_name,
+    chunk_size_cap=None,
+    chunk_safety_margin_pct=0.15,
+    output_reserve_pct=0.20,
+    carry_context_reserve_pct=0.10,
+    min_chunk_tokens=600,
+):
+    encoding = _get_chunk_encoding()
+    context_window = int(get_model_context_window(engine, model_name) or 8192)
+
+    prompt_tokens = _count_tokens(prompt_text or "", encoding)
+    wrapper_tokens = 140  # chunk wrapper + section labels + continuity instructions
+
+    pct_reserved = int(
+        context_window
+        * max(0.0, float(output_reserve_pct) + float(chunk_safety_margin_pct) + float(carry_context_reserve_pct))
+    )
+
+    available = context_window - prompt_tokens - wrapper_tokens - pct_reserved
+
+    cap = None
+    if chunk_size_cap is not None:
+        try:
+            cap_val = int(chunk_size_cap)
+            if cap_val > 0:
+                cap = cap_val
+        except Exception:
+            cap = None
+    if cap is not None:
+        available = min(available, cap)
+
+    payload = max(int(min_chunk_tokens), int(available))
+
+    return {
+        "context_window": context_window,
+        "prompt_tokens": prompt_tokens,
+        "reserved_tokens": pct_reserved + wrapper_tokens,
+        "chunk_payload_tokens": payload,
+        "encoding": encoding,
+    }
+
+
+def build_semantic_chunks(text, max_chunk_tokens, overlap_tokens=180, encoding=None):
     if not text:
         return []
 
-    # Normalize line endings
+    max_chunk_tokens = max(1, int(max_chunk_tokens or 1))
+    overlap_tokens = max(0, int(overlap_tokens or 0))
+    enc = encoding or _get_chunk_encoding()
+    sep = "\n\n"
+    sep_tokens = _count_tokens(sep, enc)
+
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    paragraphs = [p for p in re.split(r"\n\s*\n+", normalized) if p.strip()]
+    paragraphs = [p for p in re.split(r"\n\s*\n+", normalized) if p and p.strip()]
     if not paragraphs:
-        return [text]
+        paragraphs = [normalized]
 
-    try:
-        encoding = tiktoken.get_encoding("cl100k_base")
-        sep_tokens = len(encoding.encode("\n\n"))
+    units = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        if _count_tokens(para, enc) <= max_chunk_tokens:
+            units.append(para)
+            continue
 
-        chunks = []
-        current_parts = []
-        current_tokens = 0
+        sentence_units = _split_paragraph_into_sentence_units(para)
+        if len(sentence_units) > 1:
+            running = []
+            running_tokens = 0
+            for sentence in sentence_units:
+                s_tokens = _count_tokens(sentence, enc)
+                if s_tokens > max_chunk_tokens:
+                    if running:
+                        units.append(" ".join(running).strip())
+                        running = []
+                        running_tokens = 0
+                    units.extend(_token_split_fallback(sentence, max_chunk_tokens, enc))
+                    continue
 
-        for para in paragraphs:
-            para_tokens = len(encoding.encode(para))
-            if para_tokens > max_tokens:
-                # Flush current chunk before splitting oversized paragraph
-                if current_parts:
-                    chunks.append("\n\n".join(current_parts))
-                    current_parts = []
-                    current_tokens = 0
-                chunks.extend(chunk_text(para, max_tokens, overlap=0, force_cutoff=False))
-                continue
+                projected = s_tokens if not running else running_tokens + _count_tokens(" ", enc) + s_tokens
+                if projected <= max_chunk_tokens:
+                    running.append(sentence)
+                    running_tokens = projected
+                else:
+                    units.append(" ".join(running).strip())
+                    running = [sentence]
+                    running_tokens = s_tokens
+            if running:
+                units.append(" ".join(running).strip())
+        else:
+            units.extend(_token_split_fallback(para, max_chunk_tokens, enc))
 
-            if not current_parts:
-                current_parts = [para]
-                current_tokens = para_tokens
-                continue
+    chunks = []
+    current_parts = []
+    current_tokens = 0
 
-            projected = current_tokens + sep_tokens + para_tokens
-            if projected <= max_tokens:
-                current_parts.append(para)
-                current_tokens = projected
-            else:
-                chunks.append("\n\n".join(current_parts))
-                current_parts = [para]
-                current_tokens = para_tokens
+    for unit in units:
+        u_tokens = _count_tokens(unit, enc)
+        if not current_parts:
+            current_parts = [unit]
+            current_tokens = u_tokens
+            continue
 
-        if current_parts:
-            chunks.append("\n\n".join(current_parts))
-
-        return chunks
-
-    except Exception as e:
-        console_log(
-            f"Error getting tiktoken encoding: {e}. Falling back to character-based paragraph packing.",
-            "WARN",
-        )
-        chars_per_token = 4
-        max_chars = max_tokens * chars_per_token
-        sep = "\n\n"
-
-        chunks = []
-        current_parts = []
-        current_len = 0
-
-        for para in paragraphs:
-            para_len = len(para)
-            if para_len > max_chars:
-                if current_parts:
-                    chunks.append(sep.join(current_parts))
-                    current_parts = []
-                    current_len = 0
-                chunks.extend(chunk_text(para, max_tokens, overlap=0, force_cutoff=False))
-                continue
-
-            if not current_parts:
-                current_parts = [para]
-                current_len = para_len
-                continue
-
-            projected = current_len + len(sep) + para_len
-            if projected <= max_chars:
-                current_parts.append(para)
-                current_len = projected
-            else:
-                chunks.append(sep.join(current_parts))
-                current_parts = [para]
-                current_len = para_len
-
-        if current_parts:
+        projected = current_tokens + sep_tokens + u_tokens
+        if projected <= max_chunk_tokens:
+            current_parts.append(unit)
+            current_tokens = projected
+        else:
             chunks.append(sep.join(current_parts))
+            current_parts = [unit]
+            current_tokens = u_tokens
 
-        return chunks
+    if current_parts:
+        chunks.append(sep.join(current_parts))
+
+    # Add controlled source overlap into following chunks.
+    if overlap_tokens > 0 and len(chunks) > 1:
+        overlapped = [chunks[0]]
+        for i in range(1, len(chunks)):
+            overlap_text = _tail_text_by_tokens(chunks[i - 1], overlap_tokens, enc).strip()
+            if overlap_text:
+                overlapped.append(overlap_text + "\n\n" + chunks[i])
+            else:
+                overlapped.append(chunks[i])
+        chunks = overlapped
+
+    return chunks
+
+
+def _word_token_spans(text):
+    return list(re.finditer(r"\w+|[^\w\s]", text, flags=re.UNICODE))
+
+
+def _trim_prefix_by_word_overlap(prev_text, curr_text, min_overlap_tokens=12, max_overlap_tokens=220):
+    if not prev_text or not curr_text:
+        return curr_text, 0
+
+    prev_matches = _word_token_spans(prev_text)
+    curr_matches = _word_token_spans(curr_text)
+    if not prev_matches or not curr_matches:
+        return curr_text, 0
+
+    prev_tokens = [m.group(0).lower() for m in prev_matches]
+    curr_tokens = [m.group(0).lower() for m in curr_matches]
+
+    max_k = min(len(prev_tokens), len(curr_tokens), int(max_overlap_tokens))
+    min_k = max(1, int(min_overlap_tokens))
+
+    for k in range(max_k, min_k - 1, -1):
+        if prev_tokens[-k:] == curr_tokens[:k]:
+            cut_pos = curr_matches[k - 1].end()
+            trimmed = curr_text[cut_pos:].lstrip()
+            return trimmed, k
+
+    return curr_text, 0
+
+
+def stitch_chunk_outputs(chunk_outputs):
+    outputs = [o if o is not None else "" for o in (chunk_outputs or [])]
+    if not outputs:
+        return ""
+    if len(outputs) == 1:
+        return outputs[0]
+
+    merged = outputs[0]
+    for nxt in outputs[1:]:
+        trimmed, matched = _trim_prefix_by_word_overlap(merged, nxt)
+        if matched > 0:
+            if merged and not merged.endswith("\n") and trimmed and not trimmed.startswith("\n"):
+                merged += "\n"
+            merged += trimmed
+        else:
+            # Raw fallback overlap check for exact duplicated seams.
+            raw_overlap = 0
+            max_probe = min(len(merged), len(nxt), 2000)
+            for size in range(max_probe, 119, -20):
+                if merged.endswith(nxt[:size]):
+                    raw_overlap = size
+                    break
+            if raw_overlap > 0:
+                trimmed_raw = nxt[raw_overlap:].lstrip()
+                if merged and not merged.endswith("\n") and trimmed_raw and not trimmed_raw.startswith("\n"):
+                    merged += "\n"
+                merged += trimmed_raw
+            else:
+                if merged and not merged.endswith("\n"):
+                    merged += "\n"
+                merged += nxt
+
+    return merged
+
+
+def process_chunks_sequentially(
+    chunks,
+    pass_num,
+    base_prompt_for_chunks,
+    chunking_mode,
+    chunk_output_tail_tokens,
+    engine,
+    api_key,
+    model_name,
+    client,
+    images_data_list,
+    google_file_objects,
+    kwargs,
+    cancellation_event=None,
+):
+    if not chunks:
+        chunks = [""]
+
+    sequential_mode = (chunking_mode or "sequential_carryover").strip().lower() == "sequential_carryover"
+    enc = _get_chunk_encoding()
+    responses = []
+    prev_output = ""
+
+    for idx, chunk_content in enumerate(chunks):
+        if cancellation_event and cancellation_event.is_set():
+            raise CancellationError("Processing cancelled during chunked processing.")
+
+        if len(chunks) > 1:
+            console_log(
+                f"Processing pass {pass_num} chunk {idx + 1}/{len(chunks)}...",
+                "INFO",
+            )
+
+        if len(chunks) == 1 or not sequential_mode:
+            if pass_num == 1:
+                full_chunk_prompt = base_prompt_for_chunks + chunk_content
+            else:
+                full_chunk_prompt = base_prompt_for_chunks
+                if chunk_content:
+                    full_chunk_prompt += f"\n\n[Current Input Chunk]\n{chunk_content}"
+        else:
+            continuity_tail = ""
+            if idx > 0 and chunk_output_tail_tokens > 0:
+                continuity_tail = _tail_text_by_tokens(prev_output, chunk_output_tail_tokens, enc).strip()
+
+            full_chunk_prompt = (
+                f"{base_prompt_for_chunks}\n\n"
+                f"[Chunking Mode]\n"
+                f"Sequential carryover\n"
+                f"Chunk {idx + 1}/{len(chunks)}\n\n"
+                f"[Instructions]\n"
+                f"Continue naturally from prior context.\n"
+                f"Do not repeat text already produced in earlier chunks.\n"
+                f"Prioritize consistency in terminology, entities, and formatting.\n"
+            )
+
+            if continuity_tail:
+                full_chunk_prompt += f"\n[Previous Output Tail]\n{continuity_tail}\n"
+
+            full_chunk_prompt += f"\n[Current Input Chunk]\n{chunk_content}"
+
+        resp = call_generative_ai_api(
+            engine,
+            full_chunk_prompt,
+            api_key,
+            model_name,
+            client=client,
+            images_data_list=images_data_list if pass_num == 1 else [],
+            google_file_objects=google_file_objects if pass_num == 1 else [],
+            stream_output=kwargs.get("stream_output", False),
+            safety_settings=kwargs.get("safety_settings"),
+            enable_web_search=kwargs.get("enable_web_search", False),
+            enable_thinking=kwargs.get("enable_thinking", False),
+            clean_markdown=False,
+            cancellation_event=cancellation_event,
+        )
+
+        if resp and str(resp).strip().startswith("Error"):
+            raise Exception(resp)
+
+        resp = resp or ""
+        responses.append(resp)
+        prev_output = resp
+
+    stitched = stitch_chunk_outputs(responses)
+    return stitched, responses
 
 
 def apply_context_to_prompt(user_prompt, context_text):
@@ -2507,8 +2700,12 @@ def process_file_group(
 
             file_content_all = "".join(prompt_parts)
 
-            max_tok = kwargs.get("chunk_size", 4000)
+            chunk_size_cap = kwargs.get("chunk_size", 4000)
             use_chunking = kwargs.get("enable_chunking", False)
+            chunking_mode = kwargs.get("chunking_mode", "sequential_carryover")
+            chunk_overlap_tokens = int(kwargs.get("chunk_overlap_tokens", 180) or 180)
+            chunk_output_tail_tokens = int(kwargs.get("chunk_output_tail_tokens", 120) or 120)
+            chunk_safety_margin_pct = float(kwargs.get("chunk_safety_margin_pct", 0.15) or 0.15)
             request_multipass_prompt = kwargs.get("request_multipass_prompt")
 
             pass_turns = []
@@ -2555,16 +2752,35 @@ def process_file_group(
                         resolved_pass_prompt,
                     )
 
+                budget_info = None
                 if use_chunking:
-                    chunks = chunk_text_by_paragraphs(pass_input_text, max_tok)
+                    budget_info = compute_chunk_budget(
+                        prompt_text=base_prompt_for_chunks,
+                        engine=engine,
+                        model_name=model_name,
+                        chunk_size_cap=chunk_size_cap,
+                        chunk_safety_margin_pct=chunk_safety_margin_pct,
+                    )
+                    chunks = build_semantic_chunks(
+                        pass_input_text,
+                        budget_info["chunk_payload_tokens"],
+                        overlap_tokens=chunk_overlap_tokens,
+                        encoding=budget_info.get("encoding"),
+                    )
                 else:
                     chunks = [pass_input_text]
+
                 if not chunks:
                     chunks = [""]
 
                 if VERBOSE_DIAGNOSTICS:
+                    budget_preview = (
+                        f" budget={budget_info.get('chunk_payload_tokens')} cw={budget_info.get('context_window')}"
+                        if budget_info
+                        else ""
+                    )
                     console_log(
-                        f"DEBUG PASS {pass_num}: prompt_chars={len(resolved_pass_prompt or '')} input_chars={len(pass_input_text or '')} chunks={len(chunks)}",
+                        f"DEBUG PASS {pass_num}: prompt_chars={len(resolved_pass_prompt or '')} input_chars={len(pass_input_text or '')} chunks={len(chunks)}{budget_preview}",
                         "DEBUG",
                     )
 
@@ -2574,48 +2790,21 @@ def process_file_group(
                         "INFO",
                     )
 
-                chunk_responses = []
-                for idx, chunk_content in enumerate(chunks):
-                    if cancellation_event and cancellation_event.is_set():
-                        raise CancellationError(
-                            "Processing cancelled during chunked processing."
-                        )
-
-                    if len(chunks) > 1:
-                        console_log(
-                            f"Processing pass {pass_num}/{multipass_count} chunk {idx + 1}/{len(chunks)} for {base_name}...",
-                            "INFO",
-                        )
-
-                    if pass_num == 1:
-                        full_chunk_prompt = base_prompt_for_chunks + chunk_content
-                    else:
-                        full_chunk_prompt = base_prompt_for_chunks
-                        if chunk_content:
-                            full_chunk_prompt += f"\n\n[Current Input Chunk]\n{chunk_content}"
-
-                    resp = call_generative_ai_api(
-                        engine,
-                        full_chunk_prompt,
-                        api_key,
-                        model_name,
-                        client=client,
-                        images_data_list=images_data_legacy if pass_num == 1 else [],
-                        google_file_objects=google_file_objects if pass_num == 1 else [],
-                        stream_output=kwargs.get("stream_output", False),
-                        safety_settings=kwargs.get("safety_settings"),
-                        enable_web_search=kwargs.get("enable_web_search", False),
-                        enable_thinking=kwargs.get("enable_thinking", False),
-                        clean_markdown=False,
-                        cancellation_event=cancellation_event,
-                    )
-
-                    if resp and str(resp).strip().startswith("Error"):
-                        raise Exception(resp)
-
-                    chunk_responses.append(resp or "")
-
-                response = "\n".join(chunk_responses)
+                response, chunk_responses = process_chunks_sequentially(
+                    chunks=chunks,
+                    pass_num=pass_num,
+                    base_prompt_for_chunks=base_prompt_for_chunks,
+                    chunking_mode=chunking_mode,
+                    chunk_output_tail_tokens=chunk_output_tail_tokens,
+                    engine=engine,
+                    api_key=api_key,
+                    model_name=model_name,
+                    client=client,
+                    images_data_list=images_data_legacy,
+                    google_file_objects=google_file_objects,
+                    kwargs=kwargs,
+                    cancellation_event=cancellation_event,
+                )
 
                 pass_turns.append(
                     {
@@ -5471,6 +5660,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
 
 
 
