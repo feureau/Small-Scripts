@@ -24,7 +24,7 @@ optional LUT application, and lossless TIFF compression.
 ## Requirements
 - Python 3.x
 - RawTherapee CLI (`rawtherapee-cli`)
-- For LUTs: `pillow` and `pillow_lut`
+- For LUTs: `pillow` and `numpy` (LUT interpolation is done natively — no `pillow_lut` needed)
 - For inference: `numpy`, `torch`, `tifffile`, local `nafnet_arch.py`, and `einops` (for Restormer)
 - For DualDn: compatible DualDn inference script + checkpoint (external execution)
 
@@ -55,17 +55,11 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - `-d, --denoise`: Run AI inference after conversion using default model (`Restormer-real_denoising`)
 - `-i, --inference MODEL`: Run AI inference with a specific model name (e.g. `NAFNet-SIDD`)
 - `--tile-size`: Optional manual tile size override for AI tiling (auto-rounded to model-required multiple)
-- `--overlap`: Optional manual overlap override for AI tiling
-- `--overlap-fit`: Keep tile size fixed and auto-fit X/Y overlaps so all tiles stay full size (default: on)
-- `--no-overlap-fit`: Disable overlap-fit and use fixed nominal step tiling
-- `--pp3`: Prompt to choose a `.pp3` profile from `pp3/` next to this script (includes RAW sidecar mode)
-- `-f, --fit`: Fit image dimensions to an exact tile grid using uniform scaling + center crop (no aspect distortion)
-- `-tf, --tile-fit`: Keep image size and auto-fit tile size to image dimensions where possible
+- `--overlap`: Optional manual overlap override for AI tiling (default: 32)
 - `--calibrate`: Run CUDA full-frame calibration and save/update `denoise_cache.json`
 - `--calibrate-all`: Force recalibration for all supported models and overwrite cached limits
 - `--denoise-mode`: AI execution mode (`auto`, `full`, `tiled`)
-- `--denoise-strength`: Denoise strength scalar (`0.0-2.0`, default `1.0`)
-- `--ai-safety-fallback`: Enable automatic safe retry chain when AI output looks suspicious
+- `--denoise-strength`: Blend strength `0.0–1.0`; 1.0 = full denoise, 0.0 = original unchanged
 - `--dualdn-python`: Python executable used to launch DualDn script
 - `--dualdn-script`: Path to DualDn inference script if auto-detection fails
 - `--dualdn-cmd`: Custom DualDn command template (`{python} {script} {weights} {input} {output_dir}`)
@@ -80,22 +74,17 @@ photo.py input\\**\\* -m tif --skip-rt -d
 - When a LUT is applied, its name is appended to the output filename.
 
 ## Inference Behavior
-- `-d` uses Restormer-real_denoising.
-- `-d` also applies tuned defaults unless overridden: `--denoise-mode full`, `--denoise-strength 1.3`, `--ai-safety-fallback`.
+- `-d` uses Restormer-real_denoising with tuned defaults: `--denoise-mode full`.
 - `-i MODEL` runs the same inference pipeline with the selected model.
 - Checkpoints are loaded from `F:\\AI\\Inference\\NAFNet` and `F:\\AI\\Inference\\Restormer`.
 - `DualDn-Big` runs through DualDn's native Real_captured inference flow and returns an sRGB output image.
-- Auto mode attempts full-frame on CUDA if within calibrated limits, otherwise tiled.
+- Full-frame inference is the preferred path — Restormer's channel-wise attention works best on the whole image.
+- `--denoise-mode auto` attempts full-frame on CUDA if within calibrated limits, otherwise tiles.
 - `--denoise-mode full` forces a full-frame attempt first (falls back to tiled on OOM).
-- `--denoise-mode tiled` always uses tiled inference.
+- `--denoise-mode tiled` always uses tiled inference (tile=720, overlap=32 by default).
+- Tiled fallback sends one tile to GPU at a time; accumulators stay on CPU — no VRAM floor from full-image buffers.
 - Calibration results are saved in `denoise_cache.json` and reused per model.
 - Calibration is opt-in via `--calibrate`.
-- If no model is selected, `--calibrate` calibrates each supported model that is not yet cached.
-- `--calibrate-all` forces calibration of all supported models even when cached.
-- With `--fit`, image size is adjusted to exact tile counts without changing aspect ratio (scale + center crop).
-- With `--tile-fit`, tile size is adjusted (instead of image size) to best fit image dimensions.
-- With `--overlap-fit` (enabled by default), tile size is preserved and tile starts are redistributed so edge tiles remain full-sized.
-- RAW default profile is `pp3/auto_film.pp3` when present; use `--pp3` to interactively pick another profile or RAW sidecar mode (`*.ext.pp3`) with default fallback.
 
 ## Processing Order
 1. RawTherapee conversion (or direct non-RAW conversion/copy)
@@ -230,18 +219,14 @@ _ARCH_MODULE_CACHE = {}
 _LUT_CACHE = {}
 TILING_DEFAULTS_BY_LOADER = {
     "nafnet_local": {
-        "tile_size": 512,
-        "overlap": 64,
+        "tile_size": 720,
+        "overlap": 32,
         "tile_multiple": 16,
-        "min_fit_tile": 128,
-        "fallback_tiles": [512, 384, 320, 256, 224, 192, 160, 128],
     },
     "restormer_external": {
-        "tile_size": 384,
-        "overlap": 64,
+        "tile_size": 720,
+        "overlap": 32,
         "tile_multiple": 8,
-        "min_fit_tile": 128,
-        "fallback_tiles": [384, 320, 288, 256, 224, 192, 160, 128],
     },
 }
 
@@ -297,13 +282,6 @@ def _import_pil_only():
     except Exception as e:
         return None, e
 
-def _import_lut_deps():
-    try:
-        from PIL import Image
-        from pillow_lut import load_cube_file
-        return Image, load_cube_file, None
-    except Exception as e:
-        return None, None, e
 
 def _import_tifffile():
     try:
@@ -363,27 +341,35 @@ def _find_dualdn_script(override_path=None):
             return p
     return None
 
-def _read_exif_noise_profile(raw_path):
+def _read_exif_tags(raw_path, *tags):
+    """Read one or more EXIF tags from a RAW file via exiftool. Returns a dict."""
     try:
         res = subprocess.run(
-            ["exiftool", "-j", "-NoiseProfile", raw_path],
-            capture_output=True,
-            text=True,
+            ["exiftool", "-j"] + [f"-{t}" for t in tags] + [raw_path],
+            capture_output=True, text=True,
         )
         if res.returncode != 0 or not res.stdout.strip():
-            return None
+            return {}
         payload = json.loads(res.stdout)
         if not payload or not isinstance(payload, list):
-            return None
-        val = payload[0].get("NoiseProfile")
-        if val is None:
-            return None
-        text = str(val).strip()
-        if not text:
-            return None
-        return text
+            return {}
+        return payload[0]
     except Exception:
-        return None
+        return {}
+
+def _iso_to_dualdn_noise_level(iso):
+    """
+    Convert ISO to a DualDn noise_level range [K_low, K_high].
+
+    The Poisson shot-noise coefficient K scales roughly linearly with ISO.
+    Calibrated against typical Sony full-frame sensor characteristics.
+    We bracket with ±1 stop so the model can adapt to actual per-file variation.
+    """
+    iso = max(100, int(iso))
+    K = iso * 2.0e-6          # centre estimate: ~0.002 at ISO 1000
+    K_low  = max(1e-5, K * 0.5)
+    K_high = min(0.2,  K * 2.0)
+    return K_low, K_high
 
 def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dualdn_script=None, dualdn_cmd=None):
     canonical, cfg = _get_inference_model_cfg(model_name)
@@ -411,61 +397,120 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
     python_exe = dualdn_python or sys.executable
     repo_root = DUALDN_DIR
     started = time.time()
-
-    # Stage single-file inference into DualDn's expected Real_captured dataset layout.
-    ds_root = os.path.join(repo_root, "datasets", "real_capture")
-    raw_dir = os.path.join(ds_root, "Raw")
-    ref_dir = os.path.join(ds_root, "ref_sRGB")
-    list_dir = os.path.join(ds_root, "list_file")
-    os.makedirs(raw_dir, exist_ok=True)
-    os.makedirs(ref_dir, exist_ok=True)
-    os.makedirs(list_dir, exist_ok=True)
-
     src = Path(raw_input_path)
     tag = f"{src.stem}_{uuid.uuid4().hex[:8]}"
-    staged_raw_name = f"{tag}{src.suffix.lower()}"
-    staged_raw_path = os.path.join(raw_dir, staged_raw_name)
-    staged_ref_path = os.path.join(ref_dir, f"{tag}.jpg")
-    staged_list = os.path.join(list_dir, "val_list.txt")
 
-    try:
-        shutil.copy2(raw_input_path, staged_raw_path)
-    except Exception as e:
-        print(f"   [DualDn] Failed to stage RAW input: {e}")
-        return None
+    # --- Determine inference path: Real_captured (needs NoiseProfile) or Synthetic (ISO-based) ---
+    exif = _read_exif_tags(raw_input_path, "NoiseProfile", "ISO", "ISOSpeedRatings")
+    noise_profile = str(exif.get("NoiseProfile", "")).strip() or None
+    use_real_captured = bool(noise_profile)
 
-    noise_profile = _read_exif_noise_profile(staged_raw_path)
-    if not noise_profile:
-        print("   [DualDn] Missing EXIF NoiseProfile in RAW file.")
-        print("   [DualDn] DualDn Real_captured path requires NoiseProfile metadata.")
-        print("   [DualDn] Use smartphone Pro RAW (as in DualDn docs), or use another model for this file.")
-        return None
+    if use_real_captured:
+        # Real_captured path: file has DNG NoiseProfile (smartphone Pro RAW, DNG, etc.)
+        ds_root  = os.path.join(repo_root, "datasets", "real_capture")
+        raw_dir  = os.path.join(ds_root, "Raw")
+        ref_dir  = os.path.join(ds_root, "ref_sRGB")
+        list_dir = os.path.join(ds_root, "list_file")
+        os.makedirs(raw_dir,  exist_ok=True)
+        os.makedirs(ref_dir,  exist_ok=True)
+        os.makedirs(list_dir, exist_ok=True)
 
-    # Optional same-prefix JPG for BGU color alignment. If absent, we disable BGU via force_yml.
-    ref_src = None
-    for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
-        p = src.with_suffix(ext)
-        if p.exists():
-            ref_src = str(p)
-            break
-    has_ref = False
-    if ref_src:
+        staged_raw_name = f"{tag}{src.suffix.lower()}"
+        staged_raw_path = os.path.join(raw_dir, staged_raw_name)
+        staged_ref_path = os.path.join(ref_dir, f"{tag}.jpg")
+        staged_list     = os.path.join(list_dir, "val_list.txt")
+
         try:
-            shutil.copy2(ref_src, staged_ref_path)
-            has_ref = True
+            shutil.copy2(raw_input_path, staged_raw_path)
         except Exception as e:
-            print(f"   [DualDn] Warning: failed to stage reference JPG ({e}); disabling BGU.")
+            print(f"   [DualDn] Failed to stage RAW input: {e}")
+            return None
 
-    try:
-        with open(staged_list, "w", encoding="utf-8") as f:
-            f.write(staged_raw_name + "\n")
-    except Exception as e:
-        print(f"   [DualDn] Failed to update val list: {e}")
-        return None
+        # Optional companion JPG for BGU color alignment
+        has_ref = False
+        for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
+            p = src.with_suffix(ext)
+            if p.exists():
+                try:
+                    shutil.copy2(str(p), staged_ref_path)
+                    has_ref = True
+                except Exception as e:
+                    print(f"   [DualDn] Warning: failed to stage reference JPG ({e}); disabling BGU.")
+                break
+
+        try:
+            with open(staged_list, "w", encoding="utf-8") as f:
+                f.write(staged_raw_name + "\n")
+        except Exception as e:
+            print(f"   [DualDn] Failed to update val list: {e}")
+            return None
+
+        print(f"   [DualDn] Path: Real_captured (NoiseProfile found in EXIF)")
+        option_path = os.path.join(repo_root, "options", "DualDn_Big.yml")
+        if not os.path.isfile(option_path):
+            print(f"   [DualDn] Option file not found: {option_path}")
+            return None
+        cmd = [
+            python_exe, script_path,
+            "-opt", option_path,
+            "--pretrained_model", weights,
+            "--val_datasets", "Real_captured",
+            "--force_yml",
+            "datasets:val:val_datasets:Real_captured:data_path=datasets/real_capture",
+        ]
+        if not has_ref:
+            cmd.append("datasets:val:val_datasets:Real_captured:BGU=false")
+
+    else:
+        # Synthetic path: no NoiseProfile — derive noise level from ISO instead.
+        iso_raw = exif.get("ISO") or exif.get("ISOSpeedRatings")
+        try:
+            iso = int(str(iso_raw).split()[0])
+        except Exception:
+            iso = 1600
+            print(f"   [DualDn] Could not read ISO from EXIF; assuming ISO {iso}.")
+        K_low, K_high = _iso_to_dualdn_noise_level(iso)
+        print(f"   [DualDn] Path: Synthetic (ISO {iso} → noise_level [{K_low:.5f}, {K_high:.5f}])")
+
+        ds_root  = os.path.join(repo_root, "datasets", "fivek")
+        raw_dir  = os.path.join(ds_root, "Raw")
+        list_dir = os.path.join(ds_root, "list_file")
+        os.makedirs(raw_dir,  exist_ok=True)
+        os.makedirs(list_dir, exist_ok=True)
+
+        staged_raw_name = f"{tag}{src.suffix.lower()}"
+        staged_raw_path = os.path.join(raw_dir, staged_raw_name)
+        staged_list     = os.path.join(list_dir, "val_list.txt")
+
+        try:
+            shutil.copy2(raw_input_path, staged_raw_path)
+        except Exception as e:
+            print(f"   [DualDn] Failed to stage RAW input: {e}")
+            return None
+        try:
+            with open(staged_list, "w", encoding="utf-8") as f:
+                f.write(staged_raw_name + "\n")
+        except Exception as e:
+            print(f"   [DualDn] Failed to update val list: {e}")
+            return None
+
+        # DualDn.yml configures the FiveK/synthetic dataset layout
+        option_path = os.path.join(repo_root, "options", "DualDn.yml")
+        if not os.path.isfile(option_path):
+            print(f"   [DualDn] Option file not found: {option_path}")
+            return None
+        cmd = [
+            python_exe, script_path,
+            "-opt", option_path,
+            "--pretrained_model", weights,
+            "--noise_level", f"{K_low:.5f},{K_high:.5f}",
+            "--alpha", "0,0.5",
+        ]
 
     if dualdn_cmd:
+        # User-supplied command template always wins
         try:
-            cmd = dualdn_cmd.format(
+            cmd_str = dualdn_cmd.format(
                 python=python_exe,
                 script=script_path,
                 weights=weights,
@@ -475,35 +520,10 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
         except Exception as e:
             print(f"   [DualDn] Invalid --dualdn-cmd template: {e}")
             return None
-        res = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=os.path.dirname(script_path),
-        )
-        cmd_desc = cmd
+        res = subprocess.run(cmd_str, shell=True, cwd=os.path.dirname(script_path))
+        cmd_desc = cmd_str
     else:
-        option_path = os.path.join(repo_root, "options", "DualDn_Big.yml")
-        if not os.path.isfile(option_path):
-            print(f"   [DualDn] Option file not found: {option_path}")
-            return None
-        cmd = [
-            python_exe,
-            script_path,
-            "-opt",
-            option_path,
-            "--pretrained_model",
-            weights,
-            "--val_datasets",
-            "Real_captured",
-            "--force_yml",
-            "datasets:val:val_datasets:Real_captured:data_path=datasets/real_capture",
-        ]
-        if not has_ref:
-            cmd.append("datasets:val:val_datasets:Real_captured:BGU=false")
-        res = subprocess.run(
-            cmd,
-            cwd=repo_root,
-        )
+        res = subprocess.run(cmd, cwd=repo_root)
         cmd_desc = " ".join(cmd)
 
     if res.returncode != 0:
@@ -522,7 +542,6 @@ def _run_dualdn_external_raw(raw_input_path, model_name, dualdn_python=None, dua
             continue
         if mtime + 1.0 < started:
             continue
-        # Prefer output that contains our staged stem.
         if tag not in p.name and best is not None:
             continue
         if best is None or mtime > best[0]:
@@ -554,14 +573,11 @@ def _resolve_tiling_config(cfg, tile_size=None, overlap=None):
     user_tile = int(tile_size) if tile_size is not None else None
     user_overlap = int(overlap) if overlap is not None else None
 
-    resolved_tile = int(user_tile if user_tile is not None else cfg.get("tile_size", defaults.get("tile_size", 512)))
-    resolved_overlap = int(user_overlap if user_overlap is not None else cfg.get("overlap", defaults.get("overlap", 64)))
-    tile_multiple = int(cfg.get("tile_multiple", defaults.get("tile_multiple", 16)))
-    fallback_tiles = list(cfg.get("fallback_tiles", defaults.get("fallback_tiles", [resolved_tile, 384, 320, 256, 192, 128])))
+    resolved_tile = int(user_tile if user_tile is not None else cfg.get("tile_size", defaults.get("tile_size", 720)))
+    resolved_overlap = int(user_overlap if user_overlap is not None else cfg.get("overlap", defaults.get("overlap", 32)))
+    tile_multiple = int(cfg.get("tile_multiple", defaults.get("tile_multiple", 8)))
     notes = []
 
-    if resolved_tile < tile_multiple:
-        resolved_tile = tile_multiple
     resolved_tile = max(tile_multiple, (resolved_tile // tile_multiple) * tile_multiple)
     if user_tile is not None and resolved_tile != user_tile:
         notes.append(f"tile size adjusted from {user_tile} to {resolved_tile} to match required multiple {tile_multiple}")
@@ -571,202 +587,8 @@ def _resolve_tiling_config(cfg, tile_size=None, overlap=None):
     if user_overlap is not None and resolved_overlap != user_overlap:
         notes.append(f"overlap adjusted from {user_overlap} to {resolved_overlap} (must be >=0 and < tile size)")
 
-    normalized_fallbacks = []
-    for t in [resolved_tile] + fallback_tiles:
-        try:
-            t = int(t)
-        except Exception:
-            continue
-        if t < tile_multiple:
-            continue
-        t = max(tile_multiple, (t // tile_multiple) * tile_multiple)
-        if t not in normalized_fallbacks:
-            normalized_fallbacks.append(t)
+    return resolved_tile, resolved_overlap, tile_multiple, notes
 
-    if not normalized_fallbacks:
-        normalized_fallbacks = [resolved_tile]
-
-    return resolved_tile, resolved_overlap, tile_multiple, normalized_fallbacks, notes
-
-def _fit_image_to_tile_grid_pil(im, tile_size):
-    from PIL import Image
-
-    w, h = im.size
-    if tile_size <= 0:
-        return im, {"changed": False, "reason": "invalid_tile_size"}
-    if (w % tile_size == 0) and (h % tile_size == 0):
-        return im, {"changed": False, "reason": "already_aligned"}
-
-    nx0 = max(1, int(round(w / tile_size)))
-    ny0 = max(1, int(round(h / tile_size)))
-
-    nx_candidates = {
-        max(1, int(math.floor(w / tile_size))),
-        max(1, int(math.ceil(w / tile_size))),
-        nx0,
-    }
-    ny_candidates = {
-        max(1, int(math.floor(h / tile_size))),
-        max(1, int(math.ceil(h / tile_size))),
-        ny0,
-    }
-    for d in range(-2, 3):
-        nx_candidates.add(max(1, nx0 + d))
-        ny_candidates.add(max(1, ny0 + d))
-
-    best = None
-    for nx in sorted(nx_candidates):
-        for ny in sorted(ny_candidates):
-            tw = nx * tile_size
-            th = ny * tile_size
-
-            # Keep aspect ratio: scale uniformly, then crop center to exact tile grid.
-            scale = max(tw / w, th / h)
-            sw = max(tw, int(round(w * scale)))
-            sh = max(th, int(round(h * scale)))
-            crop_w = sw - tw
-            crop_h = sh - th
-
-            scale_cost = abs(math.log(scale)) if scale > 0 else 1e9
-            crop_cost = (crop_w / max(1, sw)) + (crop_h / max(1, sh))
-            score = scale_cost + 0.3 * crop_cost
-
-            cand = {
-                "score": score,
-                "nx": nx,
-                "ny": ny,
-                "target_w": tw,
-                "target_h": th,
-                "scaled_w": sw,
-                "scaled_h": sh,
-            }
-            if best is None or cand["score"] < best["score"]:
-                best = cand
-
-    if best is None:
-        return im, {"changed": False, "reason": "no_candidate"}
-
-    tw = best["target_w"]
-    th = best["target_h"]
-    sw = best["scaled_w"]
-    sh = best["scaled_h"]
-
-    out = im
-    if (sw, sh) != (w, h):
-        out = out.resize((sw, sh), Image.Resampling.LANCZOS)
-
-    left = max(0, (sw - tw) // 2)
-    top = max(0, (sh - th) // 2)
-    out = out.crop((left, top, left + tw, top + th))
-
-    return out, {
-        "changed": True,
-        "orig_w": w,
-        "orig_h": h,
-        "scaled_w": sw,
-        "scaled_h": sh,
-        "final_w": tw,
-        "final_h": th,
-        "tile_size": tile_size,
-        "tiles_x": best["nx"],
-        "tiles_y": best["ny"],
-        "crop_left": left,
-        "crop_top": top,
-        "crop_right": max(0, sw - (left + tw)),
-        "crop_bottom": max(0, sh - (top + th)),
-        "crop_total_w": max(0, sw - tw),
-        "crop_total_h": max(0, sh - th),
-    }
-
-def _fit_image_to_tile_grid_np(img_np, tile_size, torch=None, F=None):
-    h, w = img_np.shape[:2]
-    if tile_size <= 0:
-        return img_np, {"changed": False, "reason": "invalid_tile_size"}
-    if (w % tile_size == 0) and (h % tile_size == 0):
-        return img_np, {"changed": False, "reason": "already_aligned"}
-
-    nx0 = max(1, int(round(w / tile_size)))
-    ny0 = max(1, int(round(h / tile_size)))
-
-    nx_candidates = {
-        max(1, int(math.floor(w / tile_size))),
-        max(1, int(math.ceil(w / tile_size))),
-        nx0,
-    }
-    ny_candidates = {
-        max(1, int(math.floor(h / tile_size))),
-        max(1, int(math.ceil(h / tile_size))),
-        ny0,
-    }
-    for d in range(-2, 3):
-        nx_candidates.add(max(1, nx0 + d))
-        ny_candidates.add(max(1, ny0 + d))
-
-    best = None
-    for nx in sorted(nx_candidates):
-        for ny in sorted(ny_candidates):
-            tw = nx * tile_size
-            th = ny * tile_size
-
-            scale = max(tw / w, th / h)
-            sw = max(tw, int(round(w * scale)))
-            sh = max(th, int(round(h * scale)))
-            crop_w = sw - tw
-            crop_h = sh - th
-
-            scale_cost = abs(math.log(scale)) if scale > 0 else 1e9
-            crop_cost = (crop_w / max(1, sw)) + (crop_h / max(1, sh))
-            score = scale_cost + 0.3 * crop_cost
-
-            cand = {
-                "score": score,
-                "nx": nx,
-                "ny": ny,
-                "target_w": tw,
-                "target_h": th,
-                "scaled_w": sw,
-                "scaled_h": sh,
-            }
-            if best is None or cand["score"] < best["score"]:
-                best = cand
-
-    if best is None:
-        return img_np, {"changed": False, "reason": "no_candidate"}
-
-    tw = best["target_w"]
-    th = best["target_h"]
-    sw = best["scaled_w"]
-    sh = best["scaled_h"]
-
-    out = img_np
-    if (sw, sh) != (w, h):
-        # Use torch interpolate so this works for float tensors independent of PIL image modes/bit depth.
-        t = torch.from_numpy(out.transpose(2, 0, 1)).unsqueeze(0)
-        t = F.interpolate(t, size=(sh, sw), mode="bicubic", align_corners=False)
-        out = t.squeeze(0).permute(1, 2, 0).cpu().numpy()
-
-    left = max(0, (sw - tw) // 2)
-    top = max(0, (sh - th) // 2)
-    out = out[top:top + th, left:left + tw, :]
-
-    return out, {
-        "changed": True,
-        "orig_w": w,
-        "orig_h": h,
-        "scaled_w": sw,
-        "scaled_h": sh,
-        "final_w": tw,
-        "final_h": th,
-        "tile_size": tile_size,
-        "tiles_x": best["nx"],
-        "tiles_y": best["ny"],
-        "crop_left": left,
-        "crop_top": top,
-        "crop_right": max(0, sw - (left + tw)),
-        "crop_bottom": max(0, sh - (top + th)),
-        "crop_total_w": max(0, sw - tw),
-        "crop_total_h": max(0, sh - th),
-    }
 
 def _read_image_for_ai(image_path, np):
     ext = Path(image_path).suffix.lower()
@@ -1003,65 +825,6 @@ def _apply_lut_np(img, lut, np):
 
     return np.clip(out.astype(np.float32), 0.0, 1.0)
 
-def _fit_tile_size_to_image_dims(width, height, base_tile, tile_multiple, min_tile=128):
-    base_tile = max(tile_multiple, int(base_tile))
-    min_tile = max(tile_multiple, int(min_tile))
-    gcd_wh = math.gcd(int(width), int(height))
-
-    # Exact-fit candidates: divisors of gcd(width, height) that honor tile multiple.
-    candidates = set()
-    limit = int(math.isqrt(gcd_wh))
-    for i in range(1, limit + 1):
-        if gcd_wh % i == 0:
-            a = i
-            b = gcd_wh // i
-            if a % tile_multiple == 0 and a >= min_tile:
-                candidates.add(a)
-            if b % tile_multiple == 0 and b >= min_tile:
-                candidates.add(b)
-
-    if candidates:
-        sorted_cands = sorted(candidates)
-        best = min(sorted_cands, key=lambda t: (abs(t - base_tile), -t))
-        return best, True, {"gcd": gcd_wh, "candidates": len(sorted_cands)}
-
-    # No exact tile exists under required multiple; keep current tile.
-    return base_tile, False, {"gcd": gcd_wh, "candidates": 0, "min_tile": min_tile}
-
-def _run_tiled_with_fallback(img_tensor, model, tile_candidates, overlap=64, overlap_fit=False, torch=None, F=None, np=None, model_name="model"):
-    last_error = None
-    attempted = False
-    for tile in tile_candidates:
-        use_overlap = min(overlap, max(0, tile - 16))
-        try:
-            fit_tag = ", overlap-fit" if overlap_fit else ""
-            if not attempted:
-                print(f"   [AI] Tiled pass: tile {tile}, overlap {use_overlap}{fit_tag}")
-            else:
-                print(f"   [AI] Retrying {model_name} with tile {tile}, overlap {use_overlap}{fit_tag}")
-            attempted = True
-            restored = _tile_process_overlap_blend(
-                img_tensor,
-                model,
-                tile_size=tile,
-                overlap=use_overlap,
-                overlap_fit=overlap_fit,
-                torch=torch,
-                F=F,
-                np=np,
-            )
-            return restored, tile, use_overlap
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                last_error = e
-                print(f"   [AI] Tile {tile} OOM. Trying next candidate.")
-                if torch is not None and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                continue
-            raise
-    if last_error:
-        raise last_error
-    raise RuntimeError("Tiled inference failed with no candidates.")
 
 def _compute_ai_stats(img_in, img_out, np):
     finite = np.isfinite(img_out).all()
@@ -1094,127 +857,50 @@ def _is_ai_output_suspicious(stats):
         reasons.append("very high output variance")
     return (len(reasons) > 0), reasons
 
-def _compute_fitted_tile_starts(length, tile_size, overlap, overlap_fit):
-    if length <= tile_size:
-        return [0]
 
-    nominal_step = max(1, tile_size - overlap)
-    if not overlap_fit:
-        return list(range(0, length, nominal_step))
 
-    # Keep tile size fixed and redistribute starts so first tile starts at 0 and
-    # last tile ends exactly at image boundary (no partial edge tile).
-    tile_count = int(math.ceil((length - tile_size) / nominal_step)) + 1
-    max_start = max(0, length - tile_size)
-    if tile_count <= 1 or max_start == 0:
-        return [0]
-    return [(i * max_start) // (tile_count - 1) for i in range(tile_count)]
 
-def _analyze_axis_tiling(length, tile_size, overlap, overlap_fit):
-    starts = _compute_fitted_tile_starts(length, tile_size, overlap, overlap_fit)
-    lengths = []
-    deficits = []
-    for s in starts:
-        end = min(s + tile_size, length)
-        curr = max(0, end - s)
-        lengths.append(curr)
-        deficits.append(max(0, tile_size - curr))
-    full_count = sum(1 for v in lengths if v == tile_size)
-    partial_count = len(lengths) - full_count
-    ends = [min(s + tile_size, length) for s in starts]
-    max_end = max(ends) if ends else 0
-    steps = [starts[i + 1] - starts[i] for i in range(len(starts) - 1)]
-    return {
-        "starts": starts,
-        "count": len(starts),
-        "full_count": full_count,
-        "partial_count": partial_count,
-        "uncovered_px": max(0, length - max_end),
-        "total_deficit_px": int(sum(deficits)),
-        "last_deficit_px": int(deficits[-1] if deficits else 0),
-        "step_min": int(min(steps)) if steps else 0,
-        "step_max": int(max(steps)) if steps else 0,
-    }
-
-def _report_tiling_math(width, height, tile_size, overlap, overlap_fit, label="active"):
-    nominal_step = max(1, tile_size - overlap)
-    x = _analyze_axis_tiling(width, tile_size, overlap, overlap_fit)
-    y = _analyze_axis_tiling(height, tile_size, overlap, overlap_fit)
-    total_tiles = x["count"] * y["count"]
-    full_tiles = x["full_count"] * y["full_count"]
-    nonfull_tiles = total_tiles - full_tiles
-    print(f"   [AI] Tiling math ({label}): image {width}x{height}, tile={tile_size}, overlap={overlap}, nominal_step={nominal_step}, overlap_fit={overlap_fit}")
-    print(
-        f"   [AI]   X-axis: tiles={x['count']} full={x['full_count']} partial={x['partial_count']} "
-        f"starts={x['starts'][0]}..{x['starts'][-1]} step[min,max]={x['step_min']},{x['step_max']} "
-        f"uncovered_px={x['uncovered_px']} spare_deficit_px={x['total_deficit_px']} right_edge_deficit_px={x['last_deficit_px']}"
-    )
-    print(
-        f"   [AI]   Y-axis: tiles={y['count']} full={y['full_count']} partial={y['partial_count']} "
-        f"starts={y['starts'][0]}..{y['starts'][-1]} step[min,max]={y['step_min']},{y['step_max']} "
-        f"uncovered_px={y['uncovered_px']} spare_deficit_px={y['total_deficit_px']} bottom_edge_deficit_px={y['last_deficit_px']}"
-    )
-    print(f"   [AI]   Grid: {x['count']}x{y['count']} => total_tiles={total_tiles}, full_tiles={full_tiles}, nonfull_tiles={nonfull_tiles}")
-    return {"x": x, "y": y, "total_tiles": total_tiles, "full_tiles": full_tiles, "nonfull_tiles": nonfull_tiles}
-
-def _tile_process_overlap_blend(img_tensor, model, tile_size=512, overlap=64, overlap_fit=False, torch=None, F=None, np=None):
+def _tile_process(img_cpu, model, tile_size, overlap, device, torch, F):
     """
-    Processes the image in overlapping tiles and blends them to avoid seams.
+    Tiled inference using the official Restormer approach: overlapping tiles
+    accumulated and averaged. Accumulators stay on CPU; only one tile on GPU at a time.
+    stride = tile_size - overlap, with the last tile anchored to the image edge.
     """
-    b, c, h, w = img_tensor.shape
-    output = torch.zeros_like(img_tensor)
-    weight = torch.zeros_like(img_tensor)
+    b, c, h, w = img_cpu.shape
+    stride = max(1, tile_size - overlap)
 
-    pad = overlap
-    padded = F.pad(img_tensor, (pad, pad, pad, pad), mode='reflect')
+    def tile_starts(length):
+        if length <= tile_size:
+            return [0]
+        starts = list(range(0, length - tile_size, stride))
+        last = length - tile_size
+        if not starts or starts[-1] != last:
+            starts.append(last)
+        return starts
 
-    def _edge_fade_vec(length, fade_left, fade_right):
-        v = torch.ones(length, device=img_tensor.device, dtype=img_tensor.dtype)
-        if length <= 1:
-            return v
-        if overlap > 0 and fade_left:
-            left_n = min(overlap, length - 1)
-            if left_n > 0:
-                t = torch.linspace(0, 1, steps=left_n + 1, device=img_tensor.device, dtype=img_tensor.dtype)[1:]
-                v[:left_n] *= t
-        if overlap > 0 and fade_right:
-            right_n = min(overlap, length - 1)
-            if right_n > 0:
-                t = torch.linspace(1, 0, steps=right_n + 1, device=img_tensor.device, dtype=img_tensor.dtype)[:-1]
-                v[-right_n:] *= t
-        return v
+    y_starts = tile_starts(h)
+    x_starts = tile_starts(w)
+    total = len(y_starts) * len(x_starts)
+    print(f"   [AI] Tiled: tile={tile_size}, overlap={overlap}, stride={stride}, "
+          f"grid={len(x_starts)}x{len(y_starts)}, total_tiles={total}")
 
-    y_starts = _compute_fitted_tile_starts(h, tile_size, overlap, overlap_fit)
-    x_starts = _compute_fitted_tile_starts(w, tile_size, overlap, overlap_fit)
+    # Accumulators live on CPU - no VRAM cost for the full image
+    E = torch.zeros(b, c, h, w, dtype=img_cpu.dtype)
+    W = torch.zeros(b, c, h, w, dtype=img_cpu.dtype)
+
     for y in y_starts:
         for x in x_starts:
-            if overlap_fit and (y + tile_size <= h) and (x + tile_size <= w):
-                y_end = y + tile_size
-                x_end = x + tile_size
-                curr_h = tile_size
-                curr_w = tile_size
-            else:
-                y_end = min(y + tile_size, h)
-                x_end = min(x + tile_size, w)
-                curr_h = y_end - y
-                curr_w = x_end - x
-
-            tile = padded[:, :, y:y+curr_h+2*pad, x:x+curr_w+2*pad]
+            y2 = min(y + tile_size, h)
+            x2 = min(x + tile_size, w)
+            tile_gpu = img_cpu[:, :, y:y2, x:x2].to(device)
             with torch.no_grad():
-                processed = model(tile)
+                out = model(tile_gpu)
+            E[:, :, y:y2, x:x2] += out.cpu()
+            W[:, :, y:y2, x:x2] += 1.0
+            del tile_gpu, out
 
-            processed = processed[:, :, pad:pad+curr_h, pad:pad+curr_w]
-            fade_left = x > 0
-            fade_right = x_end < w
-            fade_top = y > 0
-            fade_bottom = y_end < h
-            wy = _edge_fade_vec(curr_h, fade_top, fade_bottom)
-            wx = _edge_fade_vec(curr_w, fade_left, fade_right)
-            w_curr = (wy[:, None] * wx[None, :]).unsqueeze(0).unsqueeze(0)
-            output[:, :, y:y_end, x:x_end] += processed * w_curr
-            weight[:, :, y:y_end, x:x_end] += w_curr
+    return E / W.clamp(min=1e-6)
 
-    return output / torch.clamp(weight, min=1e-6)
 
 def _pad_to_multiple(img_tensor, multiple=16, torch=None, F=None):
     _, _, h, w = img_tensor.shape
@@ -1438,142 +1124,66 @@ def _calibrate_model_cache_entry(model_name, force=False):
         print(f"   [AI] Calibration failed for {canonical_model_name}: {e}")
         return False
 
-def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None, np=None, denoise_mode="auto", tile_size=512, overlap=64, overlap_fit=False, max_full_pixels=None, input_multiple=16, tile_candidates=None, model_name="model", allow_full_without_limit=False, safety_fallback=False):
-    print(f"   [AI] Running denoise on {device.upper()}...")
-    img_tensor = torch.from_numpy(np.transpose(img_srgb_np, (2, 0, 1))).float().unsqueeze(0).to(device)
-    img_tensor, pad = _pad_to_multiple(img_tensor, multiple=input_multiple, torch=torch, F=F)
-    pixels = img_tensor.shape[-1] * img_tensor.shape[-2]
+def _run_denoise_srgb_with_model(img_srgb_np, model, device, torch=None, F=None, np=None,
+                                  denoise_mode="auto", tile_size=720, overlap=32,
+                                  max_full_pixels=None, input_multiple=8, model_name="model"):
+    """
+    Run Restormer (or NAFNet) on a float32 HxWx3 numpy image in [0,1].
 
-    try_full = (denoise_mode == "full") or (
-        denoise_mode == "auto"
-        and device == "cuda"
-        and (
-            (max_full_pixels is not None and pixels <= max_full_pixels)
-            or (max_full_pixels is None and allow_full_without_limit)
-        )
+    Strategy mirrors the official Restormer demo.py:
+      1. Attempt full-frame on CUDA (with AMP). This is the preferred path —
+         Restormer's channel-wise attention works best seeing the whole image.
+      2. On OOM (or if denoise_mode=="tiled"), fall back to _tile_process.
+         Accumulators stay on CPU; only one tile occupies VRAM at a time.
+    """
+    print(f"   [AI] Running inference on {device.upper()}...")
+
+    # Build tensor on CPU — don't send to GPU until we know which path we're taking
+    img_cpu = torch.from_numpy(np.transpose(img_srgb_np, (2, 0, 1))).float().unsqueeze(0)
+    img_cpu, pad = _pad_to_multiple(img_cpu, multiple=input_multiple, torch=torch, F=F)
+    pixels = img_cpu.shape[-1] * img_cpu.shape[-2]
+
+    try_full = (denoise_mode != "tiled") and (device == "cuda") and (
+        max_full_pixels is None or pixels <= max_full_pixels
     )
+
     used_full = False
-    tile_candidates = tile_candidates or [tile_size]
+    restored_cpu = None
 
-    def run_attempt(label, prefer_full, use_amp, attempt_overlap, attempt_tile_candidates):
-        nonlocal used_full
-        print(
-            f"   [AI] Attempt '{label}': "
-            f"prefer_full={prefer_full}, amp={use_amp}, overlap={attempt_overlap}, "
-            f"tiles={attempt_tile_candidates[:4]}{'...' if len(attempt_tile_candidates) > 4 else ''}"
-        )
-        local_used_full = False
-        local_used_tile = None
-        local_used_overlap = None
-        if prefer_full and device == "cuda":
-            try:
-                with torch.no_grad():
-                    if use_amp:
-                        with torch.amp.autocast("cuda"):
-                            restored_local = model(img_tensor)
-                    else:
-                        restored_local = model(img_tensor)
-                local_used_full = True
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    print("   [AI] Full-frame OOM, switching to tiled for this attempt.")
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    restored_local, local_used_tile, local_used_overlap = _run_tiled_with_fallback(
-                        img_tensor,
-                        model,
-                        tile_candidates=attempt_tile_candidates,
-                        overlap=attempt_overlap,
-                        overlap_fit=overlap_fit,
-                        torch=torch,
-                        F=F,
-                        np=np,
-                        model_name=model_name,
-                    )
-                else:
-                    raise
-        else:
-            restored_local, local_used_tile, local_used_overlap = _run_tiled_with_fallback(
-                img_tensor,
-                model,
-                tile_candidates=attempt_tile_candidates,
-                overlap=attempt_overlap,
-                overlap_fit=overlap_fit,
-                torch=torch,
-                F=F,
-                np=np,
-                model_name=model_name,
-            )
+    if try_full:
+        print(f"   [AI] Attempting full-frame (AMP)...")
+        try:
+            with torch.no_grad(), torch.amp.autocast("cuda"):
+                restored_cpu = model(img_cpu.to(device)).cpu()
+            used_full = True
+        except RuntimeError as e:
+            if "out of memory" not in str(e).lower():
+                raise
+            print("   [AI] Full-frame OOM — falling back to tiled.")
+            torch.cuda.empty_cache()
 
-        restored_local = _unpad(restored_local, pad)
-        img_local = restored_local.clamp(0, 1).cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy()
-        stats = _compute_ai_stats(img_srgb_np, img_local, np=np)
-        print(
-            f"   [AI] Attempt '{label}' stats: "
-            f"finite={stats['finite']}, out[min={stats['out_min']:.4f}, max={stats['out_max']:.4f}, std={stats['out_std']:.4f}], "
-            f"delta[abs_mean={stats['delta_abs_mean']:.4f}, std={stats['delta_std']:.4f}]"
-        )
-        suspicious, reasons = _is_ai_output_suspicious(stats)
-        if suspicious:
-            print(f"   [AI] Attempt '{label}' flagged suspicious: {', '.join(reasons)}")
-        used_full = local_used_full
-        return img_local, suspicious, reasons, local_used_tile, local_used_overlap, local_used_full
+    if restored_cpu is None:
+        restored_cpu = _tile_process(img_cpu, model, tile_size=tile_size,
+                                     overlap=overlap, device=device, torch=torch, F=F)
 
-    attempts = []
-    attempts.append({
-        "label": "primary",
-        "prefer_full": bool(try_full and device == "cuda"),
-        "use_amp": True,
-        "overlap": overlap,
-        "tile_candidates": list(tile_candidates),
-    })
-    if safety_fallback:
-        safer_overlap = min(max(overlap, 96), max(0, tile_candidates[0] - 16))
-        safer_tiles = sorted(set(tile_candidates), reverse=True)
-        attempts.append({
-            "label": "safety_fp32_wider_overlap",
-            "prefer_full": False,
-            "use_amp": False,
-            "overlap": safer_overlap,
-            "tile_candidates": safer_tiles,
-        })
-        attempts.append({
-            "label": "safety_small_tiles_fp32",
-            "prefer_full": False,
-            "use_amp": False,
-            "overlap": min(max(safer_overlap, 96), max(0, 320 - 16)),
-            "tile_candidates": [t for t in safer_tiles if t <= 320] or safer_tiles[-3:],
-        })
+    restored_cpu = _unpad(restored_cpu, pad)
+    img_out = restored_cpu.clamp(0, 1).detach().permute(0, 2, 3, 1).squeeze(0).numpy()
 
-    chosen = None
-    for idx, attempt in enumerate(attempts, 1):
-        img_candidate, suspicious, reasons, used_tile, used_ov, used_full_local = run_attempt(
-            attempt["label"],
-            attempt["prefer_full"],
-            attempt["use_amp"],
-            attempt["overlap"],
-            attempt["tile_candidates"],
-        )
-        if not suspicious:
-            if idx > 1:
-                print(f"   [AI] Safety fallback succeeded on attempt '{attempt['label']}'.")
-            chosen = img_candidate
-            break
-        else:
-            if idx == 1 and not safety_fallback:
-                print("   [AI] Suspicious output detected, but safety fallback is disabled.")
-                print("   [AI] Re-run with --ai-safety-fallback to enable automatic safe retries.")
-                chosen = img_candidate
-                break
-            print(f"   [AI] Attempt '{attempt['label']}' rejected; continuing fallback chain.")
-            chosen = img_candidate
+    stats = _compute_ai_stats(img_srgb_np, img_out, np=np)
+    print(
+        f"   [AI] Stats: finite={stats['finite']}, "
+        f"out[min={stats['out_min']:.4f}, max={stats['out_max']:.4f}, std={stats['out_std']:.4f}], "
+        f"delta[abs_mean={stats['delta_abs_mean']:.4f}, std={stats['delta_std']:.4f}]"
+    )
+    suspicious, reasons = _is_ai_output_suspicious(stats)
+    if suspicious:
+        print(f"   [AI] ⚠️  Output flagged suspicious: {', '.join(reasons)}")
 
-    if chosen is None:
-        raise RuntimeError("AI denoise produced no output.")
+    return img_out, used_full, pixels
 
-    return chosen, used_full, pixels
-
-def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto", tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL, calibrate=False, fit=False, tile_fit=False, overlap_fit=False, safety_fallback=False, denoise_strength=1.0):
+def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="auto",
+                        tile_size=None, overlap=None, model_name=DEFAULT_INFERENCE_MODEL,
+                        calibrate=False, denoise_strength=1.0):
     np, torch, F, Image = _import_denoise_deps()
     if np is None:
         print(f"   [AI] Missing denoise dependencies: {Image}")
@@ -1583,10 +1193,9 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
     if not model_info:
         return False
     model, device, canonical_model_name, model_cfg = model_info
-    tile_size, overlap, tile_multiple, tile_candidates, tiling_notes = _resolve_tiling_config(
-        model_cfg,
-        tile_size=tile_size,
-        overlap=overlap,
+
+    tile_size, overlap, tile_multiple, tiling_notes = _resolve_tiling_config(
+        model_cfg, tile_size=tile_size, overlap=overlap,
     )
     for note in tiling_notes:
         print(f"   [AI] Note: {note}")
@@ -1595,169 +1204,71 @@ def _denoise_image_file(image_path, out_format="jpg", quality=92, denoise_mode="
     if img is None:
         return False
 
-    h, w = img.shape[:2]
-    if tile_fit:
-        orig_tile = tile_size
-        min_fit_tile = model_cfg.get(
-            "min_fit_tile",
-            TILING_DEFAULTS_BY_LOADER.get(model_cfg.get("loader", ""), {}).get("min_fit_tile", 128),
-        )
-        fitted_tile, exact, meta = _fit_tile_size_to_image_dims(
-            w,
-            h,
-            base_tile=tile_size,
-            tile_multiple=tile_multiple,
-            min_tile=min_fit_tile,
-        )
-        tile_size = fitted_tile
-        max_overlap = max(0, tile_size - tile_multiple)
-        overlap = max(0, min(overlap, max_overlap))
-        tile_candidates = [tile_size] + [t for t in tile_candidates if t != tile_size]
-        if exact:
-            print(
-                f"   [AI] Tile-fit: image {w}x{h}, tile {orig_tile} -> {tile_size} "
-                f"(exact grid, gcd={meta['gcd']})"
-            )
-        else:
-            print(
-                f"   [AI] Tile-fit: no exact tile found for {w}x{h} with multiple {tile_multiple} "
-                f"and min tile {min_fit_tile}; using tile {tile_size} (gcd={meta['gcd']})"
-            )
-        nx = (w + tile_size - 1) // tile_size
-        ny = (h + tile_size - 1) // tile_size
-        spare_w = (tile_size - (w % tile_size)) % tile_size
-        spare_h = (tile_size - (h % tile_size)) % tile_size
-        print(
-            f"   [AI] Tile-fit math: nx=ceil({w}/{tile_size})={nx}, ny=ceil({h}/{tile_size})={ny}, "
-            f"spare_if_grid_aligned=+{spare_w}px right, +{spare_h}px bottom"
-        )
-
-    if fit:
-        img, fit_info = _fit_image_to_tile_grid_np(img, tile_size=tile_size, torch=torch, F=F)
-        if fit_info.get("changed"):
-            print(
-                f"   [AI] Fit applied: "
-                f"{fit_info['orig_w']}x{fit_info['orig_h']} -> "
-                f"{fit_info['scaled_w']}x{fit_info['scaled_h']} -> "
-                f"{fit_info['final_w']}x{fit_info['final_h']} "
-                f"({fit_info['tiles_x']}x{fit_info['tiles_y']} tiles @ {fit_info['tile_size']})"
-            )
-            print(
-                f"   [AI] Fit math: scale={fit_info['scaled_w']}/{fit_info['orig_w']} and {fit_info['scaled_h']}/{fit_info['orig_h']} (uniform), "
-                f"crop_total=({fit_info['crop_total_w']}px, {fit_info['crop_total_h']}px), "
-                f"crop_ltrb=({fit_info['crop_left']},{fit_info['crop_top']},{fit_info['crop_right']},{fit_info['crop_bottom']})"
-            )
-    h, w = img.shape[:2]
-
-    fit_mode = ", overlap-fit on" if overlap_fit else ""
-    print(f"   [AI] Tiling config for {canonical_model_name}: tile {tile_size}, overlap {overlap}, multiple {tile_multiple}{fit_mode}")
-    if fit or tile_fit or overlap_fit:
-        _report_tiling_math(w, h, tile_size, overlap, overlap_fit, label="post-fit")
-
+    # Load / update calibration cache
     cache = _load_denoise_cache() or {}
     models_cache = cache.setdefault("models", {})
     model_cache = models_cache.get(canonical_model_name, {})
+    # Backward compat: flat cache format used by older versions
     if not model_cache and canonical_model_name == DEFAULT_INFERENCE_MODEL and cache.get("max_full_pixels"):
-        # Backward compatibility for legacy flat cache format.
-        model_cache = {
-            "max_full_pixels": cache.get("max_full_pixels"),
-            "max_full_mp": cache.get("max_full_mp"),
-            "aspect": cache.get("aspect"),
-            "gpu_name": cache.get("gpu_name"),
-            "total_vram_mb": cache.get("total_vram_mb"),
-        }
+        model_cache = {k: cache[k] for k in ("max_full_pixels", "max_full_mp", "aspect", "gpu_name", "total_vram_mb") if k in cache}
         models_cache[canonical_model_name] = model_cache
+
     max_full_pixels = model_cache.get("max_full_pixels")
+
     if denoise_mode == "auto" and device == "cuda" and max_full_pixels is None and calibrate:
         try:
-            aspect = _aspect_to_ratio(CALIBRATE_ASPECT)
-            result = _calibrate_max_full_frame(
-                model,
-                device,
-                torch=torch,
-                aspect_ratio=aspect,
-                use_amp=True,
-                max_mp=CALIBRATE_MAX_MP,
-                verbose=True,
-            )
+            result = _calibrate_max_full_frame(model, device, torch=torch,
+                                               aspect_ratio=_aspect_to_ratio(CALIBRATE_ASPECT),
+                                               use_amp=True, max_mp=CALIBRATE_MAX_MP, verbose=True)
             if result:
-                mp, w, h = result
+                mp, cw, ch = result
                 props = torch.cuda.get_device_properties(0)
                 model_cache = {
                     "gpu_name": props.name,
                     "total_vram_mb": int(props.total_memory / (1024 ** 2)),
-                    "max_full_pixels": int(w * h),
+                    "max_full_pixels": int(cw * ch),
                     "max_full_mp": round(mp, 2),
                     "aspect": CALIBRATE_ASPECT,
                 }
                 models_cache[canonical_model_name] = model_cache
                 _save_denoise_cache(cache)
-                max_full_pixels = model_cache.get("max_full_pixels")
-                print(f"   [AI] Calibration saved for {canonical_model_name}: ~{model_cache['max_full_mp']} MP ({w}x{h})")
+                max_full_pixels = model_cache["max_full_pixels"]
+                print(f"   [AI] Calibration saved: ~{model_cache['max_full_mp']} MP ({cw}x{ch})")
         except Exception as e:
             print(f"   [AI] Calibration failed: {e}")
-    elif denoise_mode == "auto" and device == "cuda" and max_full_pixels is None and not calibrate:
-        print("   [AI] No calibration limit found; using tiled inference. Use --calibrate to measure and cache full-frame limits.")
-    elif denoise_mode == "full":
-        print("   [AI] Denoise mode: full (full-frame preferred; tiled fallback on OOM).")
-    elif denoise_mode == "tiled":
-        print("   [AI] Denoise mode: tiled (full-frame disabled).")
+
+    mode_label = {"full": "full-frame preferred, tiled on OOM",
+                  "tiled": "tiled only",
+                  "auto": "auto (full-frame if within calibrated limit)"}.get(denoise_mode, denoise_mode)
+    print(f"   [AI] Mode: {mode_label} | tile={tile_size}, overlap={overlap}")
 
     denoised, used_full, pixels = _run_denoise_srgb_with_model(
-        img,
-        model,
-        device,
-        torch=torch,
-        F=F,
-        np=np,
+        img, model, device,
+        torch=torch, F=F, np=np,
         denoise_mode=denoise_mode,
         tile_size=tile_size,
         overlap=overlap,
-        overlap_fit=overlap_fit,
         max_full_pixels=max_full_pixels,
         input_multiple=tile_multiple,
-        tile_candidates=tile_candidates,
         model_name=canonical_model_name,
-        allow_full_without_limit=False,
-        safety_fallback=safety_fallback,
     )
-    if denoise_strength < 1.0:
-        mix = max(0.0, float(denoise_strength))
-        print(f"   [AI] Applying denoise strength blend: {mix:.2f} (toward original)")
-        denoised = (img * (1.0 - mix)) + (denoised * mix)
-    elif denoise_strength > 1.0:
-        extra_mix = min(1.0, float(denoise_strength) - 1.0)
-        print(
-            f"   [AI] Applying stronger denoise: second pass with blend {extra_mix:.2f} "
-            f"(strength={float(denoise_strength):.2f})"
-        )
-        denoised_pass2, _, _ = _run_denoise_srgb_with_model(
-            denoised,
-            model,
-            device,
-            torch=torch,
-            F=F,
-            np=np,
-            denoise_mode=denoise_mode if denoise_mode in {"full", "tiled"} else "auto",
-            tile_size=tile_size,
-            overlap=overlap,
-            overlap_fit=overlap_fit,
-            max_full_pixels=max_full_pixels,
-            input_multiple=tile_multiple,
-            tile_candidates=tile_candidates,
-            model_name=canonical_model_name,
-            allow_full_without_limit=False,
-            safety_fallback=safety_fallback,
-        )
-        denoised = (denoised * (1.0 - extra_mix)) + (denoised_pass2 * extra_mix)
+
+    strength = max(0.0, min(1.0, float(denoise_strength)))
+    if strength < 1.0:
+        print(f"   [AI] Strength {strength:.2f} — blending toward original")
+        denoised = img * (1.0 - strength) + denoised * strength
+
     denoised = np.clip(denoised, 0.0, 1.0)
 
+    # Update cache if full-frame succeeded at a new high-water mark
     if denoise_mode == "auto" and used_full and pixels:
         if max_full_pixels is None or pixels > max_full_pixels:
             model_cache["max_full_pixels"] = int(pixels)
             models_cache[canonical_model_name] = model_cache
             _save_denoise_cache(cache)
-    return _write_ai_output(image_path, denoised, out_format=out_format, quality=quality, io_info=io_info, np=np)
+
+    return _write_ai_output(image_path, denoised, out_format=out_format,
+                            quality=quality, io_info=io_info, np=np)
 
 def _compress_tif_inplace(image_path):
     Image, err = _import_pil_only()
@@ -2106,16 +1617,10 @@ def main():
     parser.add_argument("-i", "--inference", nargs="?", const="__PROMPT__", metavar="MODEL", default=None, help="Run AI inference with a specific model (or prompt if omitted)")
     parser.add_argument("--tile-size", type=int, default=None, help="Override AI tile size (auto-rounded to model multiple: NAFNet=16, Restormer=8)")
     parser.add_argument("--overlap", type=int, default=None, help="Override AI tile overlap")
-    parser.add_argument("--overlap-fit", dest="overlap_fit", action="store_true", default=True, help="Keep tile size fixed and auto-fit X/Y overlap so all tiles are full-size (default: enabled)")
-    parser.add_argument("--no-overlap-fit", dest="overlap_fit", action="store_false", help="Disable overlap-fit and use fixed nominal tile step")
-    fit_group = parser.add_mutually_exclusive_group()
-    fit_group.add_argument("-f", "--fit", action="store_true", help="Fit image dimensions to exact tile grid (uniform scale + center crop, no aspect distortion)")
-    fit_group.add_argument("-tf", "--tile-fit", action="store_true", help="Fit tile size to image dimensions (keeps image size)")
     parser.add_argument("--calibrate", action="store_true", help="Run CUDA calibration for AI full-frame limits and save denoise_cache.json")
     parser.add_argument("--calibrate-all", action="store_true", help="Force calibration of all supported models and refresh denoise_cache.json")
-    parser.add_argument("--denoise-mode", default="auto", choices=["auto", "full", "tiled"], help="AI denoise execution mode: auto (calibrated full-or-tiled), full (prefer full-frame), or tiled")
-    parser.add_argument("--denoise-strength", type=float, default=1.0, help="Denoise strength scalar: <1 blends toward original, >1 runs an extra denoise pass and blends in")
-    parser.add_argument("--ai-safety-fallback", action="store_true", help="Enable automatic safe retry chain when AI output is flagged suspicious")
+    parser.add_argument("--denoise-mode", default="auto", choices=["auto", "full", "tiled"], help="AI denoise execution mode: auto (full-frame if within limit, else tiled), full (always try full-frame first), tiled (always tile)")
+    parser.add_argument("--denoise-strength", type=float, default=1.0, help="Denoise blend strength 0.0–1.0: 1.0 = full denoise, 0.0 = original unchanged, values between blend the two")
     parser.add_argument("--dualdn-python", default=None, help="Python executable for DualDn external inference (default: current Python)")
     parser.add_argument("--dualdn-script", default=None, help="Path to DualDn inference script (if auto-detect fails)")
     parser.add_argument("--dualdn-cmd", default=None, help="Optional DualDn command template with placeholders: {python} {script} {weights} {input} {output_dir}")
@@ -2129,26 +1634,19 @@ def main():
     cli_args = sys.argv[1:]
     has_denoise_mode_arg = any(a == "--denoise-mode" or a.startswith("--denoise-mode=") for a in cli_args)
     has_denoise_strength_arg = any(a == "--denoise-strength" or a.startswith("--denoise-strength=") for a in cli_args)
-    has_safety_fallback_arg = "--ai-safety-fallback" in cli_args
     if args.denoise and args.inference is None:
-        # Tuned defaults for -d only; explicit user flags always win.
+        # Tuned defaults for -d shortcut; explicit user flags always win.
         if not has_denoise_mode_arg:
             args.denoise_mode = "full"
         if not has_denoise_strength_arg:
-            args.denoise_strength = 1.3
-        if not has_safety_fallback_arg:
-            args.ai_safety_fallback = True
+            args.denoise_strength = 1.0
         print(
             f"ℹ️  -d defaults: denoise_mode={args.denoise_mode}, "
-            f"denoise_strength={args.denoise_strength:.2f}, "
-            f"ai_safety_fallback={'on' if args.ai_safety_fallback else 'off'}"
+            f"denoise_strength={args.denoise_strength:.2f}"
         )
-    if args.denoise_strength < 0.0:
-        print("ℹ️  --denoise-strength below 0 is invalid; clamping to 0.0.")
-        args.denoise_strength = 0.0
-    if args.denoise_strength > 2.0:
-        print("ℹ️  --denoise-strength above 2.0 is not recommended; clamping to 2.0.")
-        args.denoise_strength = 2.0
+    if not (0.0 <= args.denoise_strength <= 1.0):
+        print(f"ℹ️  --denoise-strength {args.denoise_strength} out of range; clamping to 0.0–1.0.")
+        args.denoise_strength = max(0.0, min(1.0, args.denoise_strength))
     if args.out_format == "jpg" and args.rt_bit_depth != "auto":
         print(f"ℹ️  --rt-bit-depth {args.rt_bit_depth} ignored for JPG output (always 8-bit).")
     if args.calibrate and args.calibrate_all:
@@ -2403,10 +1901,6 @@ def main():
                         tile_size=args.tile_size,
                         overlap=args.overlap,
                         calibrate=args.calibrate,
-                        fit=args.fit,
-                        tile_fit=args.tile_fit,
-                        overlap_fit=args.overlap_fit,
-                        safety_fallback=args.ai_safety_fallback,
                         denoise_strength=args.denoise_strength,
                         model_name=selected_model,
                     )
@@ -2423,10 +1917,6 @@ def main():
                     tile_size=args.tile_size,
                     overlap=args.overlap,
                     calibrate=args.calibrate,
-                    fit=args.fit,
-                    tile_fit=args.tile_fit,
-                    overlap_fit=args.overlap_fit,
-                    safety_fallback=args.ai_safety_fallback,
                     denoise_strength=args.denoise_strength,
                     model_name=selected_model,
                 )
