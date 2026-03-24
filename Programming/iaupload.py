@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.2 (Path-Only MD5 Verification)
+VERSION: 6.4 (Size Verification)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,10 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-03-24] VERSION 6.4 UPDATE
+   - ADDED: Fast size comparison check during scan phase to identify incomplete uploads instantly.
+   - MODIFIED: Size verification is now checked on all files. MD5 runs afterwards if enabled.
+
 [2026-03-04] VERSION 6.3 UPDATE
    - ADDED: `--md5-verify` flag to enable same-path MD5 comparison during scan.
    - MODIFIED: Default scan now uses path-only matching unless MD5 flag is provided.
@@ -499,7 +503,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.3) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.4) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if args.sync:
@@ -584,7 +588,7 @@ def main():
                 local_file_map[norm] = {'path': p, 'rel_path': rel_path}
 
         # 3b. Index Remote Files
-        remote_map = {} # normalized_path -> md5
+        remote_map = {} # normalized_path -> dict with md5 and size
         total_remote_files = 0
         total_remote_originals = 0
         
@@ -596,9 +600,11 @@ def main():
                     if f['source'] == 'original': # Only consider original files
                         total_remote_originals += 1
                         norm_path = normalize_path(f['name'])
-                        f_md5 = f.get('md5')
                         
-                        remote_map[norm_path] = f_md5
+                        remote_map[norm_path] = {
+                            'md5': f.get('md5'),
+                            'size': f.get('size')
+                        }
 
         # 3c. Comparison
         files_to_upload = [] 
@@ -625,28 +631,38 @@ def main():
                 status_msg = ""
                 
                 if norm_name not in remote_map:
-                    # New path: no MD5 needed because there is no same-path remote file to compare against.
+                    # New path: no MD5 or size needed because there is no same-path remote file to compare against.
                     should_upload = True
-                    status_msg = f"[NEW]    {rel_path}"
+                    status_msg = f"[NEW]         {rel_path}"
                     upload_new_count += 1
 
                 else:
-                    if args.md5_verify:
-                        # Same-path compare by content hash only when enabled.
-                        local_md5 = calculate_md5(local_file)
-                        if not local_md5:
-                            break
-
-                        remote_md5 = remote_map[norm_name]
-                        if local_md5 != remote_md5:
-                            should_upload = True
-                            status_msg = f"[UPDATE] {rel_path}"
-                            upload_update_count += 1
-                        else:
-                            matched_count += 1
+                    remote_info = remote_map[norm_name]
+                    remote_size = remote_info['size']
+                    remote_md5 = remote_info['md5']
+                    local_size = os.path.getsize(local_file)
+                    
+                    # Fast size check first
+                    if remote_size is not None and str(local_size) != str(remote_size):
+                        should_upload = True
+                        status_msg = f"[UPDATE SIZE] {rel_path}"
+                        upload_update_count += 1
                     else:
-                        # Path-only mode treats existing same-path files as matched.
-                        matched_count += 1
+                        if args.md5_verify:
+                            # Sizes match (or remote unknown). Verify content hash if enabled.
+                            local_md5 = calculate_md5(local_file)
+                            if not local_md5:
+                                break
+    
+                            if local_md5 != remote_md5:
+                                should_upload = True
+                                status_msg = f"[UPDATE MD5]  {rel_path}"
+                                upload_update_count += 1
+                            else:
+                                matched_count += 1
+                        else:
+                            # Path and size match, treat as matched without downloading full file hash.
+                            matched_count += 1
                 
                 if should_upload:
                     files_to_upload.append((rel_path, local_file))
