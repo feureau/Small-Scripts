@@ -201,12 +201,29 @@ def collect_metadata(default_title, prefills=None):
     creator_default = prefills.get("creator") if prefills else None
     description_default = prefills.get("description") if prefills else None
     tags_default = prefills.get("tags") if prefills else None
+    collection_default = prefills.get("collection") if prefills else None
     creator = get_input("Creator", required=False, default=creator_default)
     description = get_input("Description", required=False, default=description_default)
     tags_input = get_input("Tags (comma sep)", required=False, default=tags_default)
     subjects = [t.strip() for t in tags_input.split(',')] if tags_input else []
 
     metadata = {'title': title, 'mediatype': mediatype}
+    
+    # Map mediatype to default community collection
+    collection_map = {
+        'texts': 'opensource',
+        'audio': 'opensource_audio',
+        'movies': 'opensource_movies',
+        'image': 'opensource_image',
+        'software': 'open_source_software',
+        'data': 'opensource_media'
+    }
+    
+    if collection_default:
+        metadata['collection'] = collection_default
+    elif mediatype in collection_map:
+        metadata['collection'] = collection_map[mediatype]
+
     if creator: metadata['creator'] = creator
     if description: metadata['description'] = description
     if subjects: metadata['subject'] = subjects
@@ -240,6 +257,7 @@ def load_metadata_xml(folder_path):
     mediatype = find_text(["mediatype", "Mediatype"])
     creator = find_text(["creator", "Creator"])
     description = find_text(["description", "Description"])
+    collection = find_text(["collection", "Collection"])
 
     # subjects/tags: support repeated <subject> or <tag> nodes
     subjects = [(_xml_text(n) or "") for n in root.findall(".//subject")]
@@ -253,6 +271,7 @@ def load_metadata_xml(folder_path):
     if creator: prefills["creator"] = creator
     if description: prefills["description"] = description
     if tags: prefills["tags"] = tags
+    if collection: prefills["collection"] = collection
 
     return prefills or None
 
@@ -293,6 +312,7 @@ def load_metadata_json(folder_path):
     if not creator:
         creator = get_str(["Creator"])
     description = get_str(["description", "Description"])
+    collection = get_str(["collection", "Collection"])
 
     tags = None
     subjects_val = data.get("subject")
@@ -324,6 +344,7 @@ def load_metadata_json(folder_path):
     if creator: prefills["creator"] = creator
     if description: prefills["description"] = description
     if tags: prefills["tags"] = tags
+    if collection: prefills["collection"] = collection
 
     return prefills or None
 
