@@ -829,15 +829,9 @@ from collections import deque
 # ================== USER CONFIGURABLE VARIABLES ==================
 YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
 GALLERYDL_PATH = "gallery-dl"
-OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s")
-PARALLEL_DOWNLOADS = 6
-# ================================================================
-
-
-# ================== USER CONFIGURABLE VARIABLES ==================
-YTDLP_PATH = [sys.executable, "-m", "yt_dlp"]
-GALLERYDL_PATH = "gallery-dl"
-OUTPUT_TEMPLATE = os.path.join(os.getcwd(), "%(channel)s - %(upload_date)s - %(title)s [%(id)s].%(ext)s")
+FOLDER_TEMPLATE = "%(channel)s - %(upload_date)s - %(title)s [%(id)s]"
+OUTPUT_TEMPLATE = os.path.join(os.getcwd(), f"{FOLDER_TEMPLATE}.%(ext)s")
+OUTPUT_TEMPLATE_FOLDER = os.path.join(os.getcwd(), FOLDER_TEMPLATE, f"{FOLDER_TEMPLATE}.%(ext)s")
 PARALLEL_DOWNLOADS = 6
 # ================================================================
 
@@ -1214,7 +1208,7 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
         display_title = (title[:50] + '...') if len(title) > 50 else title
     elif task_type == GALLERYDL_TASK:
         tool_name = "gallery-dl"
-        command_list = build_gallerydl_command(identifier, args)
+        command_list = build_gallerydl_command(identifier, args, title)
         display_title = (identifier[:60] + '...') if len(identifier) > 60 else identifier
     else:
         return ("FAILURE", f"Unknown task type '{task_type}'")
@@ -1532,7 +1526,8 @@ def get_tasks_from_url(url):
 
 def build_ytdlp_command(target_url, args):
     video_url = target_url
-    command_list = [*YTDLP_PATH, '--no-warnings', '--newline', '--progress-delta', '2', '-o', OUTPUT_TEMPLATE]
+    output_tmpl = OUTPUT_TEMPLATE_FOLDER if getattr(args, 'individual_folder', False) else OUTPUT_TEMPLATE
+    command_list = [*YTDLP_PATH, '--no-warnings', '--newline', '--progress-delta', '2', '-o', output_tmpl]
 
     if args.verbose:
         command_list.append('-v')
@@ -1590,10 +1585,14 @@ def build_ytdlp_command(target_url, args):
     command_list.append(video_url)
     return command_list
 
-def build_gallerydl_command(url, args):
+def build_gallerydl_command(url, args, title=None):
     command_list = [GALLERYDL_PATH]
     if args.verbose: command_list.append("--verbose")
-    if args.g_directory: command_list.extend(["-D", args.g_directory])
+    if getattr(args, 'individual_folder', False) and title:
+        safe_title = sanitize_filename(title)
+        command_list.extend(["-d", os.path.join(os.getcwd(), safe_title)])
+    elif args.g_directory: 
+        command_list.extend(["-D", args.g_directory])
     if args.g_archive: command_list.extend(["-A", args.g_archive])
     if args.g_no_skip: command_list.append("--no-skip")
     if args.g_write_metadata or getattr(args, 'default_download', False):
@@ -1684,6 +1683,7 @@ def main():
     general_group.add_argument("-oE", "--output-errors", type=str, default="errors.txt", help="File to save the clean list of URLs that failed (default: errors.txt).")
     general_group.add_argument("-V", "--verbose", action="store_true", help="Show all underlying output for debugging.")
     general_group.add_argument("--no-live-ui", action="store_true", help="Disable dynamic terminal status UI and use plain scrolling logs.")
+    general_group.add_argument("-F", "--individual-folder", action="store_true", help="Download each item into its own individual folder.")
     
     ytdlp_group = parser.add_argument_group('yt-dlp Options (for video content in Download Mode)')
     ytdlp_group.add_argument("-v", "--video", action="store_true", help="Download video (MP4).")
