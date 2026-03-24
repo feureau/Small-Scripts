@@ -3422,6 +3422,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Button(btn_f, text="Ld List", command=self.load_files_list).pack(
             fill=tk.X, pady=2
         )
+        ttk.Button(btn_f, text="Sel Blank Out", command=self.select_blank_output_files).pack(
+            fill=tk.X, pady=2
+        )
+        ttk.Button(btn_f, text="Sel Missing Out", command=self.select_missing_output_files).pack(
+            fill=tk.X, pady=2
+        )
 
         prompt_frame = ttk.LabelFrame(left_frame, text="2. System Prompt", padding=5)
         prompt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -4615,6 +4621,92 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         except Exception as e:
             console_log(f"Failed to load file list: {e}", "ERROR")
             tkinter.messagebox.showerror("Load Error", str(e))
+
+    def select_blank_output_files(self):
+        out_dir = filedialog.askdirectory(parent=self, title="Select Output Folder to Scan for Blank Files")
+        if not out_dir:
+            return
+
+        try:
+            blank_stems = set()
+            count_scanned = 0
+            for root, _, files in os.walk(out_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    count_scanned += 1
+                    try:
+                        if os.path.getsize(file_path) == 0:
+                            stem = os.path.splitext(file)[0]
+                            blank_stems.add(stem.lower())
+                    except Exception:
+                        pass
+            
+            if not blank_stems:
+                tkinter.messagebox.showinfo("Scan Complete", f"Scanned {count_scanned} files.\nNo 0-byte (blank) files found in the selected folder.")
+                return
+
+            input_files = list(self.files_var.get())
+            matched_indices = []
+            
+            for i, input_path in enumerate(input_files):
+                input_stem = os.path.splitext(os.path.basename(input_path))[0]
+                if input_stem.lower() in blank_stems:
+                    matched_indices.append(i)
+
+            self.file_listbox.selection_clear(0, tk.END)
+            if matched_indices:
+                for idx in matched_indices:
+                    self.file_listbox.selection_set(idx)
+
+                self.file_listbox.see(matched_indices[0])
+                tkinter.messagebox.showinfo("Selection Complete", f"Found {len(blank_stems)} blank files.\nSelected {len(matched_indices)} corresponding files in the input list.")
+            else:
+                tkinter.messagebox.showinfo("Selection Complete", f"Found {len(blank_stems)} blank files, but no files in the current input list matched their names.")
+
+        except Exception as e:
+            console_log(f"Error scanning for blank files: {e}", "ERROR")
+            tkinter.messagebox.showerror("Scan Error", str(e))
+
+    def select_missing_output_files(self):
+        out_dir = filedialog.askdirectory(parent=self, title="Select Output Folder to Scan for Missing Outputs")
+        if not out_dir:
+            return
+
+        try:
+            out_stems = set()
+            count_scanned = 0
+            for root, _, files in os.walk(out_dir):
+                for file in files:
+                    count_scanned += 1
+                    try:
+                        stem = os.path.splitext(file)[0]
+                        out_stems.add(stem.lower())
+                    except Exception:
+                        pass
+            
+            input_files = list(self.files_var.get())
+            matched_indices = []
+            
+            for i, input_path in enumerate(input_files):
+                input_stem = os.path.splitext(os.path.basename(input_path))[0]
+                if input_stem.lower() not in out_stems:
+                    matched_indices.append(i)
+
+            self.file_listbox.selection_clear(0, tk.END)
+            if matched_indices:
+                for idx in matched_indices:
+                    self.file_listbox.selection_set(idx)
+
+                self.file_listbox.see(matched_indices[0])
+                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} output files.\nSelected {len(matched_indices)} input files with missing outputs.")
+            else:
+                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} output files.\nAll input files have corresponding outputs currently.")
+
+        except Exception as e:
+            console_log(f"Error scanning for missing output files: {e}", "ERROR")
+            tkinter.messagebox.showerror("Scan Error", str(e))
+
+
 
     def browse_out(self):
         d = filedialog.askdirectory(parent=self)
