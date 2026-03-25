@@ -22,15 +22,17 @@ For each numbered claim from Step 1B, run a web search and verify it independent
 * The verified version of the fact
 * The source
 
+**Claim-type verification:** For every claim, establish not just whether it is true or false, but **what type of claim it is**. Is this a confirmed cash figure or a conditional warrant? A projection or a disclosed number? A named source's statement or an anonymous estimate? A legal filing figure or a journalist's approximation? The type determines how the claim can be used in the script. A claim can be technically true and still be misrepresented if its type is not preserved — "Disney planned a $1 billion investment" and "Disney held $1 billion in stock warrants" are both technically accurate but mean completely different things.
+
 **Timeline verification:** For any story involving multiple people departing, resigning, or leaving, establish the exact sequence. Who left first, who left second, how much time elapsed. Get this right before writing anything — timeline errors embedded in early drafts persist through rewrites.
 
 Note any claims that originate from a single source — these must be presented with epistemic hedging in the script. Note any claims whose figures come from legal documents, court filings, or official disclosures — these should be identified as such in the script because they carry more credibility than estimates.
 
+**Single-source numeric figures — removal, not hedging:** If a specific numeric figure (a cost, a rate, a statistic) originates from a single anonymous source — a forum post, a social media comment, an unattributed estimate with no sourcing chain — it defaults to **removal**, not hedging. Hedging implies partial credibility that does not exist for anonymous numeric claims. Replace with general language confirmed by industry consensus, or cut entirely. The script must never look authoritative by citing fake precision.
+
 At the end, produce a clean verified fact sheet — the only version of the facts that will appear in the script. Never use unverified claims.
 
 ---
-
-
 
 ## STEP 3 — STUDY THE CREATOR'S VOICE
 
@@ -41,6 +43,8 @@ This step has two parts. **Part A is the pre-loaded baseline** — documented me
 ### PART A — PRE-LOADED CREATOR BASELINE: PENGUINZ0
 
 This baseline was built from direct transcript analysis and carries documented confidence on every point. Do not override it with general assumptions about "casual YouTube voice" — this is specific to the creator, and several patterns directly contradict general YouTube conventions.
+
+**Note on negative findings:** The list of what this creator never does (A10) carries equal operational weight to the list of what they do. What does not happen is as important to enforce as what does. Both lists must be active simultaneously during script generation.
 
 ---
 
@@ -113,6 +117,8 @@ Opening does not happen inside the viewer's experience. The default MrBeast-styl
 
 **Closing:** Stop when done. No tidy summary, no thesis restatement. The last sentence of a topic is often short and flat — not because it is constructed to be a closer, but because running out of things to add and moving on. *"So yeah, I just wanted to write about it a bit. That's it."* The flatness is genuine, not performed.
 
+**The flat signoff is a required structural element, not a style preference.** Every script ends with a variant of "So, yeah" followed by a one-line flat reflection, followed by "That's it." or equivalent. This is not optional. It is as fixed a structural requirement as the hook. A conclusion that builds to a poetic crystallizing final line is wrong for this creator — that is a different person's voice. The script ends when it has said the thing, and then it says "That's it."
+
 **The "Anyway" pivot** is the primary gear-shift. It signals: leaving this register and going somewhere else. Usually used to transition from heavy/analytical back to warm/human, or to wrap a tangent and return to the main thread.
 
 ---
@@ -137,7 +143,7 @@ Specific words and phrases native to the creator:
 - **"Many moons ago"** — archaic temporal phrase used deadpan
 - **"Assuming all of this is true"** / **"assuming of course"** — factual hedge, appears after presenting something found compelling but cannot verify
 - **"Kitten caboodle"** — malapropism for "whole kit and caboodle," delivered with full confidence
-- **"Apparently"** — most common hedging opener; appears frequently at the start of a new factual claim
+- **"Apparently"** — most common hedging opener; appears frequently at the start of a new factual claim. **Deployment rule: "apparently" is not texture — it is a semantically accurate hedge for a specific epistemic situation: information that has sourcing but no firsthand confirmation. Match the word to the situation. Use it when the claim is sourced but indirect (reported by Bloomberg, confirmed through a third party, stated by a volunteer rather than witnessed). Do not use it for claims that are directly documented. Do not use it for claims that are pure speculation. The word is most powerful when deployed precisely.**
 - **"Legitimately"** — used for genuine emphasis, not ironic
 - **"Truly incredible"** / **"genuinely incredible"** — sincere superlative, not hyperbolic
 - **Internet culture vocabulary:** karma farmers, AI-generated content/slop, Reddit posting conventions — these appear as native references, not explained
@@ -193,10 +199,12 @@ The most signature move. Apply maximum superlative framing to something ordinary
 
 **Technique 2: The Fully Committed Roleplay / Impression**
 
-Do not gesture at an analogy. Inhabit it completely. Become the other person or embody the other scenario in full voice, with invented specific dialogue, for far longer than the point requires. The excess duration is intentional — the length is the joke. Cutting it short destroys the mechanism.
+Do not gesture at an analogy. Inhabit it completely. Become the other person or embody the other scenario in full voice, with invented specific dialogue, for far longer than the point requires.
+
+**THE LENGTH IS THE JOKE. Cutting it short is not editing — it is destroying the comedic mechanism.** The analogy that runs for five lines when two would have made the point is not excessive — it is the joke. The moment the analogy starts to feel uncomfortably long is the signal that it is working. Do not cut there. Keep going. Exit the bit flatly when it is finished and move on as if nothing happened.
 
 - **Trigger:** When needing an analogy to explain something abstract. The more abstract the concept, the longer and more specific the roleplay.
-- **Duration:** Full paragraph minimum. Often five to eight lines. Never cut early.
+- **Duration:** Full paragraph minimum. Often five to eight lines. **Never cut early.** If you find yourself thinking "this is getting long," that is confirmation the mechanism is active. Let it finish.
 - **Delivery:** Do not break character to tell you doing a bit. Exit the bit the same way entered — flatly, mid-sentence, and move on.
 - **Example:** The Reddit karma farmer bit: *"No different than like Reddit karma farmers who will just take a picture of their PlayStation 2 and be like, 'Man, I still remember my father before he went off into space and then blew up from a cosmic alien attack giving me this PlayStation 2...'"* — full invented dialogue, full escalating absurdity, five lines, then straight back to the point.
 - **Script application:** The stereotype-as-infrastructure concept requires a committed analogy of this type. Write it fully. Do not summarize it. Do not cut it when it starts to feel long — that feeling is the signal that it is working.
@@ -235,6 +243,8 @@ Use a wrong word or slightly mangled phrase with complete confidence, as if it i
 
 #### A10. WHAT NEVER HAPPENS
 
+These negative findings carry equal operational weight to the positive patterns in A1–A9. Enforcing this list is as important as applying the native patterns.
+
 - Rhetorical triplets of the "Not X. Not Y. Z." form
 - Elegant closing thesis statements that wrap up a paragraph's argument
 - Formal academic transitions ("Furthermore," "Moreover," "In contrast")
@@ -244,6 +254,7 @@ Use a wrong word or slightly mangled phrase with complete confidence, as if it i
 - Steelmanning positions thought wrong
 - Addressing the audience formally — no "you, the viewer" or "those watching"
 - Building to a poetic final line — endings are flat, not constructed
+- Conclusions that end on intellectual uncertainty or "I genuinely don't know"
 
 ---
 
@@ -275,6 +286,8 @@ Produce a brief update report: what the baseline got right, what needs correctio
 
 ## STEP 4 — SOURCE MATERIAL COMPLETENESS AUDIT
 
+**Important framing note:** Step 4 is not only a housekeeping checklist — it is frequently the step where the central argument and best material are discovered. The most interesting angle, the reframe that makes the story matter, and the ironic specificity that makes it land are often buried in the source material and only surface under systematic audit. Treat Step 4 as generative, not just corrective. If you find yourself discovering the real story during this step, that is expected and correct. Proceed to Step 5 with what you found here, not with what seemed obvious before you started.
+
 Before choosing an angle or writing a single word of script, conduct a systematic audit comparing all source material against what could appear in the script.
 
 For each section of the source material, check:
@@ -295,7 +308,7 @@ For each section of the source material, check:
 
 **H. Structural continuity details.** Does the source material contain information about what happened after the main events — roles that kept being filled, structures that continued, mechanisms that persisted? These details demonstrate that the argument is about systems not individuals. Flag them for inclusion.
 
-**I. Fun and personality moments.** Are there details in the source material that are inherently funny, surprising, or characterful — details the creator would genuinely react to rather than just report? Flag these. The script needs these moments distributed throughout, not just in the emotional resolution section. Cross-reference against Step 3I — each flagged moment should have a named humor technique assigned to it before prose generation begins.
+**I. Fun and personality moments.** Are there details in the source material that are inherently funny, surprising, or characterful — details the creator would genuinely react to rather than just report? Flag these. The script needs these moments distributed throughout, not just in the emotional resolution section. Cross-reference against Step 3 A9 — each flagged moment should have a named humor technique assigned to it before prose generation begins.
 
 Produce a completeness report listing every gap, missing detail, and underdeveloped section before proceeding. Only proceed to Step 5 when the completeness audit is finished.
 
@@ -323,12 +336,17 @@ Name the angle in one sentence. Briefly explain why it is better than the two mo
 
 Before writing a single word of prose, establish a spoken starting point for every paragraph in the script.
 
-For each paragraph, answer two things:
+For each paragraph, document three things in a table:
+
+| Para | Raw thing being communicated | First 6 words |
+|------|------------------------------|---------------|
 
 1. **The raw thing being communicated** — one sentence, no craft, just the information
 2. **The first six words out of the creator's mouth** if they were live right now and wanted to tell their audience this one thing
 
 These are not topic sentences. They are not planned openers. They are the literal first words before any sentence structure has been decided — the words that determine what the rest of the sentence will do.
+
+**Use the three-column table format.** This is the recommended format because it makes the discipline visible and auditable before any prose is written. Every paragraph has a row. No paragraph gets written without a row. The table is the contract between the planning phase and the prose phase.
 
 **Test every starting point against these five questions before proceeding:**
 
@@ -336,7 +354,9 @@ These are not topic sentences. They are not planned openers. They are the litera
 * Does the starting point start with a filler phrase announcement like "okay so," "so here's the thing," "and here's what's insane," or "and look"? If yes, rebuild. These are templates not speech.
 * Does the starting point use the creator's actual audience address — "chat," "guys," or whatever their specific term is — rather than formal "you"?
 * Could this starting point have been produced by someone writing prose and then adding informal words on top? If yes, it's a written patch. Rebuild from a genuinely spoken starting point.
-* ** Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject-led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross-reference against the native openers list from Step 3H — if the connector is not documented as a native paragraph opener for this creator, it is prohibited regardless of how natural it feels.
+* **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject-led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross-reference against the native openers list from Step 3 A2 — if the connector is not documented as a native paragraph opener for this creator, it is prohibited regardless of how natural it feels.
+
+Mark personality moments in the table before prose generation begins. Do not leave them to emerge naturally — they won't. If the ratio from Step 3 A8 requires a personality beat at a certain point, mark it in the table row before writing that paragraph.
 
 Only proceed to prose generation when every starting point passes all five tests.
 
@@ -348,13 +368,20 @@ Write a 9–11 minute commentary script using the verified facts, the creator's 
 
 ---
 
-#### ** THE HOOK PRINCIPLE**
+#### **THE HOOK PRINCIPLE**
 
 This governs the opening of every script. It is not a suggestion — it is the single most important structural requirement for retention.
 
-**Before applying any hook formula, verify the hook structure against Step 3D and Step 3H.** Different creators open differently. The default hook structure below works for many YouTube creators, but it must be checked against the creator's actual opener patterns before use. If the reference transcript shows a different hook pattern — grand sweeping claims about the subject, a cold-open on the most absurd detail, a piece of received wisdom that the video will dismantle — use that pattern instead. The creator's native hook logic always overrides the default.
+**APPLY THE CREATOR-SPECIFIC HOOK OVERRIDE FIRST — BEFORE READING THE DEFAULT FORMULA.**
 
-**Default hook principle:** The first line is not the topic of the video. It is the most extreme version of what the video proves, already happening, no setup required.
+Step 3 A3 and A2 document this creator's native hook pattern. Read and apply that pattern before engaging with the default structure below. The default structure is a fallback for creators whose hook pattern has not been established. For this creator, the pattern is established. Do not read the default formula and then check whether the override applies — read the override first and apply it directly.
+
+**This creator's hook pattern (from Step 3 A3):**
+1. Grand sweeping claim about the subject, stated with full confidence
+2. Escalation via legitimate examples, then absurd self-insertion, completely deadpan
+3. Into the story — no teasing, no trailer, just the first beat of the actual content
+
+**Default hook principle** *(apply only if creator-specific pattern is not established):* The first line is not the topic of the video. It is the most extreme version of what the video proves, already happening, no setup required.
 
 Specific prohibitions for the first line:
 
@@ -370,8 +397,6 @@ Specific prohibitions for the first line:
 **Line 2 — The human stakes:** Escalates to the person. Names them. States the most extreme consequence. Correct timeline is established here — if multiple people departed, the sequence is stated accurately.
 
 **Line 3 — The forward pull:** Opens two specific unresolved questions simultaneously. The first question is about the specific subject. The second question extends beyond the subject to something universal and personal for the viewer. Both questions must be concrete enough to form a mental image. Vague teases are not allowed.
-
-** Creator-specific hook override:** If Step 3D and Step 3H reveal that the creator does not open with the viewer's own experience — if they open with grand confident claims about the subject, a cold-open on the most extreme detail, or a piece of received wisdom being set up for dismantlement — apply that pattern instead. Document the creator-specific hook structure before writing the hook. The default structure above applies only when the creator's native hook pattern has not been established.
 
 ---
 
@@ -458,11 +483,11 @@ It must be stated explicitly, not implied. The viewer stops being an observer of
 
 ---
 
-#### ** THE CONCLUSION REQUIREMENT**
+#### **THE CONCLUSION REQUIREMENT**
 
 The conclusion must leave the viewer with something that stays with them.
 
-** Register check — apply before writing the conclusion:** The content requirements below describe what the conclusion must accomplish. But the *register* — how the conclusion is delivered — must be verified against Step 3D. Some creators end on poetic crystallizing lines. Others end by just stopping when they have said the thing. A conclusion that ends on a carefully constructed final image is profound for the first type of creator and false for the second. Identify which type this creator is before writing a single word of the conclusion. Match the ending register to the creator's actual pattern.
+**Register check — apply before writing the conclusion:** The content requirements below describe what the conclusion must accomplish. But the *register* — how the conclusion is delivered — must be verified against Step 3 A4. This creator ends flat. The flat signoff ("So, yeah... That's it.") is a required structural element documented in A4, not a style preference. A conclusion that builds to a poetic crystallizing final line is wrong for this voice. Verify before writing a single word: the conclusion ends when it has said the thing, then says "That's it."
 
 **What makes an ending profound:**
 
@@ -484,11 +509,11 @@ The conclusion must leave the viewer with something that stays with them.
 1. Move from the specific subject to the universal pattern it represents
 2. Name that universal pattern explicitly — the thing that makes this story matter to someone with no connection to the specific subject
 3. The emotional resolution connects back to something established earlier in the script — a breadcrumb paying off
-4. The final line carries full weight because the viewer now understands exactly what it means — but the *form* of that final line (poetic, flat, abrupt) must match the creator's register from Step 3D
+4. The final line matches the creator's actual register — flat, not constructed; the "So, yeah... That's it." pattern is the ending
 
 ---
 
-#### ** THE FUN TO LISTEN TO REQUIREMENTS**
+#### **THE FUN TO LISTEN TO REQUIREMENTS**
 
 A script that is only argument is compelling the way a documentary is compelling. It is not fun to be with. The following techniques must be distributed throughout the script — not concentrated in the emotional resolution section.
 
@@ -504,13 +529,13 @@ A script that is only argument is compelling the way a documentary is compelling
 
 **Technique 6 — Humor that serves the argument:** Observations that are both funny and true, where laughing at the observation means accepting the point it makes. The humor is the argument, not decoration around it. Identify the moments in the source material where this is possible and use them.
 
-** Technique 7 — The creator's native humor mechanics:** Every comedic moment in the script must use a technique documented in Step 3I. Generic humor techniques are not permitted — they produce humor that is funny in the abstract but wrong for this specific voice. Before writing any comedic moment, identify which Step 3I technique it uses. If you cannot name the technique, the joke is foreign to the creator's voice and must be rebuilt or cut.
+**Technique 7 — The creator's native humor mechanics:** Every comedic moment in the script must use a technique documented in Step 3 A9. Generic humor techniques are not permitted — they produce humor that is funny in the abstract but wrong for this specific voice. Before writing any comedic moment, identify which A9 technique it uses. If you cannot name the technique, the joke is foreign to the creator's voice and must be rebuilt or cut.
 
-Pay particular attention to the duration question from Step 3I. For creators whose humor relies on running an analogy or impression far longer than seems structurally justified — where the length itself is the joke — the script must include at least one moment that commits to that duration. Cutting such an analogy short because it seems inefficient destroys the mechanism. Let it run.
+Pay particular attention to Technique 2 (The Fully Committed Roleplay). For this creator, the length of the analogy or impression is itself the comedic mechanism. An analogy that runs for five lines when two would have made the point is not a mistake — it is the joke. The script must include at least one moment that commits to that duration. Do not cut it short because it feels long. That feeling is the signal it is working.
 
-** Self-narration requirement:** Some creators always narrate their own process of discovery — "I looked into this," "the more I read about it," "I couldn't figure out where this came from." If Step 3 documents this as a native pattern, the script must preserve it. The speaker should sound like someone who found these things out and is now telling you what they found — not a removed narrator presenting established facts. Every major revelation should carry the energy of someone who discovered it, not someone who always knew it.
+**Self-narration requirement:** This creator always narrates their own process of discovery — "I looked into this," "the more I looked into it," "I could not find it with original audio." This is documented as a required pattern in Step 3 A7. The script must preserve it throughout. The speaker should sound like someone who found these things out and is now telling you what they found — not a removed narrator presenting established facts. Every major revelation should carry the energy of someone who discovered it, not someone who always knew it.
 
-**The personality-to-argument ratio:** The ratio established in Step 3G must be maintained throughout the script. If the reference transcript has moments of personality distributed every two to three minutes, the script must have the same. Mark where these moments fall in the script before writing — don't leave them to emerge naturally, because they won't.
+**The personality-to-argument ratio:** The ratio established in Step 3 A8 (35% personality, 65% argument) must be maintained throughout the script. Mark where personality moments fall in the spoken starting points table before writing — don't leave them to emerge naturally, because they won't.
 
 ---
 
@@ -518,7 +543,7 @@ Pay particular attention to the duration question from Step 3I. For creators who
 
 The script must use viral YouTube video structure. Stakes rise at every act break — never fall. The detective revelation structure governs how and why they rise.
 
-**HOOK [0:00–0:30]** — governed entirely by the Hook Principle above, with creator-specific override from Step 3D and Step 3H applied first. Three lines. Same flat fast register throughout. Two specific forward-pull questions in the final line, the second of which extends beyond the specific subject.
+**HOOK [0:00–0:30]** — governed entirely by the creator-specific hook pattern from Step 3 A3, applied before any default formula. Grand sweeping claim, absurd self-insertion, into the story. No trailer. No tease. Max 30 seconds.
 
 **ACTS — rising stakes through escalating crime structure:**
 
@@ -542,9 +567,9 @@ The highest drop-off window is approximately minutes 3–7. The tonal variation 
 
 **CONCLUSION — THE CONCLUSION REQUIREMENT:**
 
-Governed by the Conclusion Requirement above. Register verified against Step 3D before writing. Moves from specific to universal. Names the universal pattern. Connects back to an earlier breadcrumb. Final line matches the creator's actual register — poetic or flat, constructed or abrupt, according to what Step 3D documents.
+Governed by the Conclusion Requirement above. Register verified against Step 3 A4 before writing — this creator ends flat, not poetic. Moves from specific to universal. Names the universal pattern. Connects back to an earlier breadcrumb. Ends with the flat signoff pattern: "So, yeah... That's it." or equivalent.
 
-Do not end on "I genuinely don't know." Do not end on intellectual uncertainty. End in a way that leaves the viewer with something they cannot un-know, in the register this specific creator actually uses.
+Do not end on "I genuinely don't know." Do not end on intellectual uncertainty. Do not end on a constructed poetic line. End flat, when the thing has been said.
 
 ---
 
@@ -552,9 +577,11 @@ Do not end on "I genuinely don't know." Do not end on intellectual uncertainty. 
 
 The single most common failure mode is writing prose and then making it sound spoken. This produces written sentences with informal vocabulary on top. It is not spoken language.
 
-**The correct generation process:** Start from the spoken starting point. Let the sentence build clause by clause the way a person actually builds a thought out loud — not by executing a pre-planned structure but by adding each clause because the previous clause prompted it. The sentence does not know where it is going when it starts.
+**The correct generation process:** Start from the spoken starting point established in the table. Let the sentence build clause by clause the way a person actually builds a thought out loud — not by executing a pre-planned structure but by adding each clause because the previous clause prompted it. The sentence does not know where it is going when it starts.
 
 **Never edit existing written text to make it sound spoken. Always rebuild from the spoken starting point.**
+
+**Preferred execution mode:** Internalize the prohibitions below before writing and prevent violations during generation, rather than writing freely and then auditing afterward. The quality checklist can be run post-hoc, but integrated prevention during generation produces cleaner prose because violations are never embedded in the first place.
 
 ---
 
@@ -583,7 +610,7 @@ The single most common failure mode is writing prose and then making it sound sp
 * Narrator-mode hook openers — "dude they literally called him" puts viewer one remove from the event
 * Unattributed quotes as opening lines — requires the viewer to ask "who is speaking" before feeling impact
 * Timeline errors — sequence of events must be verified in Step 2 and correctly stated throughout
-* ** Connector words as paragraph openers — any paragraph that begins with So, And, But, Because, or a compound connector (And here's, So here's, But here's) must be rebuilt unless that specific connector is documented as a native paragraph opener in Step 3H. This prohibition applies across the entire script — if the opener audit in the quality checks reveals more than two paragraphs beginning with the same word, rebuild until the count drops.**
+* **Connector words as paragraph openers — any paragraph that begins with So, And, But, Because, or a compound connector (And here's, So here's, But here's) must be rebuilt unless that specific connector is documented as a native paragraph opener in Step 3 A2. This prohibition applies across the entire script — if the opener audit in the quality checks reveals more than two paragraphs beginning with the same word, rebuild until the count drops.**
 
 ---
 
@@ -598,11 +625,11 @@ The single most common failure mode is writing prose and then making it sound sp
 * Genuine reactive discovery moments — at least two places where the speaker appears to realize something as they say it
 * Pace variation built into text itself through paragraph length and clause density
 * Context established before every specific detail — every term, jargon, proper noun, gaming term, industry structure, medical term explained before the detail depending on it
-* Personality moments distributed throughout at the ratio established in Step 3G — marked in the spoken starting points before prose generation begins
+* Personality moments distributed throughout at the ratio established in Step 3 A8 — marked in the spoken starting points table before prose generation begins
 * Fun techniques 1–7 distributed throughout — not concentrated at the end
 * Timeline accuracy — verified sequence of events stated correctly every time it appears
-* ** Self-narration present if documented as native in Step 3 — the speaker should sound like someone who found these things out, not someone presenting established facts**
-* ** At least one extended analogy or impression running at the duration documented in Step 3I — if the creator's humor relies on analogy duration, cut nothing from it**
+* **Self-narration present as documented in Step 3 A7 — the speaker should sound like someone who found these things out, not someone presenting established facts**
+* **At least one extended analogy or impression running at the full duration documented in Step 3 A9 Technique 2 — if the creator's humor relies on analogy duration, cut nothing from it. The length is the joke.**
 
 ---
 
@@ -631,7 +658,7 @@ Before any paragraph is considered complete, check for these specific patterns t
 * **"Kept existing"** and similar unusual constructions — find natural English equivalent
 * **"Runs data on"** and similar non-native phrases — replace with natural phrasing
 * **Tense inconsistencies:** mixing historical narrative past with present-tense narration
-* ** Paragraph opener audit:** List the first word of every paragraph in the completed script. Any word appearing more than twice as a paragraph opener is a pattern. Cross-reference against the native openers list from Step 3H. Any opener not on that list must be rebuilt. Any word appearing more than twice must be varied until no single word appears more than twice. Do not proceed to delivery notes until this audit is clean.
+* **Paragraph opener audit:** List the first word of every paragraph in the completed script. Any word appearing more than twice as a paragraph opener is a pattern. Cross-reference against the native openers list from Step 3 A2. Any opener not on that list must be rebuilt. Any word appearing more than twice must be varied until no single word appears more than twice. Do not proceed to delivery notes until this audit is clean.
 
 ---
 
@@ -639,7 +666,7 @@ Before any paragraph is considered complete, check for these specific patterns t
 
 **FALSE FIRST-PERSON OWNERSHIP — STRICTLY PROHIBITED**
 
-Never present another person's lived experience as the creator's own. Verify against Step 3F before any first-person claim.
+Never present another person's lived experience as the creator's own. Verify against Step 3 A7 and the personal experiences/credentials documented in the baseline before any first-person claim.
 
 * Never claim employment, roles, or credentials the creator does not have
 * Never present another person's account as the creator's own memory
@@ -652,6 +679,10 @@ Rewrite in original language or attribute lightly without naming. Test: would an
 **SINGLE-SOURCE CLAIMS**
 
 Hedge with "apparently," "from what's come out," "according to accounts that have been reported."
+
+**SINGLE-SOURCE NUMERIC FIGURES**
+
+Default to removal, not hedging. See Step 2 for the full rule. A specific number from an anonymous source has no credibility that hedging can preserve. Replace with general language or cut entirely.
 
 **LEGAL AND OFFICIAL SOURCING**
 
@@ -679,28 +710,32 @@ In the script body:
 
 After the script:
 
-**DELIVERY NOTES:** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through and what that looks and sounds like for this specific creator. ** Includes at least one note per Step 3I humor technique identifying where it appears and how long to let it run.**
+**DELIVERY NOTES:** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through and what that looks and sounds like for this specific creator. **Includes at least one note per Step 3 A9 humor technique identifying where it appears and how long to let it run. For Technique 2 specifically, the delivery note must confirm the full duration of the extended analogy and instruct not to cut it short.**
 
-**SOURCE NOTES:** Every factual claim mapped to its verified source. Single-source claims flagged. Legal sources identified. Timeline sources noted separately. Unsourced claims removed.
+**SOURCE NOTES:** Every factual claim mapped to its verified source. Single-source claims flagged. Anonymous-source numeric figures noted as removed. Legal sources identified. Timeline sources noted separately. Unsourced claims removed.
 
 ---
 
 #### **QUALITY CHECKS — COMPLETE ALL BEFORE DELIVERING**
 
+**Execution note:** The quality checks below can be run in two valid modes: (a) **integrated during generation** — internalize prohibitions before writing and prevent violations from being embedded in the first place; or (b) **post-hoc audit** — run checks after completing a draft. Integrated prevention is the preferred mode because violations caught before they are written are cleaner than violations edited out afterward. Both modes produce acceptable results; neither is the only valid approach.
+
+---
+
 **HOOK CHECKS:**
 
-* [ ] **** Creator-specific hook structure verified against Step 3D and Step 3H before applying any default formula
-* [ ] Hook opens correctly for this creator — viewer's experience OR grand subject claim, per Step 3H findings
-* [ ] Named subject does not appear until line 2 (default structure) or equivalent beat in creator-specific structure
-* [ ] Line 2 states the most extreme consequence and correctly establishes timeline sequence
-* [ ] Line 3 opens two specific unresolved questions — the second extends beyond the specific subject
+* [ ] Creator-specific hook structure from Step 3 A3 applied FIRST — before reading any default formula
+* [ ] Hook opens with grand sweeping claim, not viewer's own experience
+* [ ] Absurd self-insertion present in escalation, delivered deadpan
+* [ ] No teasing, no trailer — goes directly into the story after escalation
 * [ ] Hook is 30 seconds maximum — read aloud at normal pace and time it
 * [ ] No conditionals, no narrator mode, no unattributed quotes in the first line
 
 **SPOKEN FLOW CHECKS:**
 
-* [ ] Spoken starting points established before any prose was written
+* [ ] Spoken starting points table completed before any prose was written
 * [ ] All five starting point tests passed for every paragraph — including the connector word test
+* [ ] Personality moments marked in the table before prose generation
 * [ ] No "okay so" openers
 * [ ] No em-dashes anywhere in spoken text
 * [ ] No formal pivot opener templates — count instances of "so here's," "and here's," "and look" — more than one of any is a template
@@ -711,20 +746,21 @@ After the script:
 * [ ] Aloud test passed — sounds like someone explaining to a friend
 * [ ] Patch test passed — remove all informal words, no formal sentence should remain
 * [ ] Naturalness audit passed on every paragraph — all patterns from the naturalness audit list checked
-* [ ] ** Paragraph opener audit completed** — first word of every paragraph listed, no single word appears more than twice, all openers cross-referenced against Step 3H native opener list
+* [ ] **Paragraph opener audit completed** — first word of every paragraph listed, no single word appears more than twice, all openers cross-referenced against Step 3 A2 native opener list
 
 **STRUCTURE CHECKS:**
 
 * [ ] Stakes rise at every act break following the escalating crime structure
 * [ ] Re-engagement hooks are forward pulls not summaries
 * [ ] Crystallising line exists, is in the final third, arrives as the verdict
-* [ ] Conclusion register verified against Step 3D before writing
-* [ ] Conclusion meets the Conclusion Requirement — moves to universal, final line carries full weight in creator's native register
+* [ ] Conclusion register verified against Step 3 A4 — ends flat, not poetic
+* [ ] Conclusion ends with flat signoff pattern, not constructed final line
+* [ ] Conclusion meets the Conclusion Requirement — moves to universal, final line in creator's native register
 * [ ] Conclusion does not end on "I genuinely don't know" or equivalent intellectual uncertainty
 
 **DETECTIVE REVELATION CHECKS:**
 
-* [ ] Act 1 opens with the viewer's own experience or creator-native equivalent
+* [ ] Act 1 opens with the viewer's own experience or creator-native equivalent (grand claim)
 * [ ] Effects named before causes at every major revelation point
 * [ ] At least three explicit reframe moments — stated clearly not implied
 * [ ] Breadcrumb details planted in Act 1 pay off in Act 4
@@ -735,15 +771,16 @@ After the script:
 
 **FUN TO LISTEN TO CHECKS:**
 
-* [ ] Personality moments distributed throughout at the ratio from Step 3G — not concentrated at the end
+* [ ] Personality moments distributed throughout at the 35/65 ratio from Step 3 A8 — not concentrated at the end
 * [ ] At least one genuine reaction before analysis in the first half of the script
 * [ ] At least one absurdity acknowledged with a beat before moving past it
 * [ ] Humor that serves the argument exists — at least one observation that is both funny and makes the point
 * [ ] Sentence energy varies — fast loose sections exist alongside slow deliberate sections
-* [ ] At least one moment that gives the listener something to do — a shared observation, a "you know what's wild"
-* [ ] ** Every comedic moment in the script has a named Step 3I technique assigned — no generic humor**
-* [ ] ** At least one analogy or impression running at the duration documented in Step 3I — not cut short**
-* [ ] ** Self-narration present if documented as native in Step 3 — at least two moments where the speaker sounds like someone who found something out**
+* [ ] At least one moment that gives the listener something to do — a shared observation
+* [ ] **Every comedic moment has a named Step 3 A9 technique assigned — no generic humor**
+* [ ] **At least one extended analogy running at full Technique 2 duration — not cut short. Confirmed in delivery notes.**
+* [ ] **Self-narration present — at least two moments where the speaker sounds like someone who found something out**
+* [ ] **"Apparently" deployed at semantically correct moments — matched to sourced-but-indirect claims only, not used as general texture**
 
 **CONTENT CHECKS:**
 
@@ -763,13 +800,14 @@ After the script:
 **CREDIBILITY CHECKS:**
 
 * [ ] Clear stance supported by evidence — no intellectual credibility given to positions the evidence does not support
-* [ ] False first-person ownership check against Step 3F
+* [ ] False first-person ownership check against Step 3 baseline
 * [ ] No borrowed personal accounts presented as creator's own
 * [ ] No lifted distinctive phrases presented as original
 * [ ] No false credentials claimed
 * [ ] Single-source claims hedged
+* [ ] Single-source anonymous numeric figures removed, not hedged — confirmed in source notes
 * [ ] Direct quotes clearly attributed
 * [ ] No attribution of observations to named sources in spoken text
 * [ ] No floating passive constructions
 * [ ] Every fact sourced — unsourced claims removed
-* [ ] Timeline verified and correctly stated — sequence of departures, resignations, and events matches Step 2 fact sheet
+* [ ] Timeline verified and correctly stated — sequence of events matches Step 2 fact sheet
