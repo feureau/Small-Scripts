@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.4 (Size Verification)
+VERSION: 6.5 (Verbose Debug Logging & Timeout Fix)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,13 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-03-24] VERSION 6.5 UPDATE
+   - ADDED: --verbose / -v flag for detailed debug logging during uploads.
+   - ADDED: HTTP socket timeout (30s connect, 300s read) to prevent infinite hangs.
+   - ADDED: Periodic liveness reporting showing in-flight files during upload.
+   - ADDED: Thread lifecycle, slot acquisition, and HTTP timing logs in verbose mode.
+   - FIXED: Upload freeze caused by missing HTTP timeout on item.upload() calls.
+
 [2026-03-24] VERSION 6.4 UPDATE
    - ADDED: Fast size comparison check during scan phase to identify incomplete uploads instantly.
    - MODIFIED: Size verification is now checked on all files. MD5 runs afterwards if enabled.
@@ -102,6 +109,14 @@ final_results = {
     'failed': [],
     'cancelled': []
 }
+VERBOSE = False  # Set by --verbose flag
+
+def vlog(msg):
+    """Print a verbose debug message with timestamp and thread ID."""
+    if VERBOSE:
+        ts = time.strftime('%H:%M:%S')
+        tid = threading.current_thread().name
+        tqdm.write(f"  [VERBOSE {ts} {tid}] {msg}")
 
 # --- HELPER CLASSES ---
 
@@ -424,6 +439,8 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
     if len(display_name) > 20:
         display_name = "..." + display_name[-17:]
 
+    vlog(f"START upload_worker for '{remote_key}' ({file_size:,} bytes)")
+
     # leave=False cleans up the bar line when done
     with tqdm(total=file_size, unit='B', unit_scale=True, unit_divisor=1024, desc=display_name, 
               position=position, leave=False, dynamic_ncols=True,
@@ -437,25 +454,37 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
         while attempt < max_retries:
             wrapped_file = None
             try:
+                vlog(f"  Attempt {attempt+1}/{max_retries} for '{remote_key}'")
                 wrapped_file = ProgressWrapper(local_path, bar)
                 files_arg = {remote_key: wrapped_file}
                 
                 r = None
+                upload_start = time.time()
                 # Use the passed session if available to recycle connections
                 if session:
                     # We must use the Item-level API to pass the session
                     # 'session' here is expected to be an ArchiveSession
+                    vlog(f"  get_item('{identifier}') via session...")
                     item = get_item(identifier, archive_session=session)
-                    r = item.upload(files=files_arg, metadata=metadata, verbose=False, retries=3)
+                    vlog(f"  Calling item.upload() for '{remote_key}'...")
+                    r = item.upload(files=files_arg, metadata=metadata, verbose=False, retries=3,
+                                    request_kwargs={'timeout': (30, 300)})
                 else:
                     # Fallback to default global upload
-                    r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=3)
+                    vlog(f"  Calling upload() (no session) for '{remote_key}'...")
+                    r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=3,
+                               request_kwargs={'timeout': (30, 300)})
+                
+                upload_elapsed = time.time() - upload_start
+                vlog(f"  upload() returned for '{remote_key}' in {upload_elapsed:.1f}s")
                 
                 wrapped_file.close()
+                vlog(f"  ProgressWrapper closed for '{remote_key}'")
 
                 # CRITICAL LOOPHOLE FIX: Explicitly close responses to free connection pool slots immediately
                 if r:
                     for resp in r:
+                        vlog(f"  Response status={resp.status_code} for '{remote_key}'")
                         resp.close()
 
                 if shutdown_event.is_set():
@@ -463,12 +492,14 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                     return (False, "Cancelled")
 
                 if r and r[0].status_code == 200:
+                    vlog(f"  SUCCESS for '{remote_key}' (took {upload_elapsed:.1f}s)")
                     record_result('success', remote_key)
                     return (True, remote_key)
                 
                 # Check for rate limiting in status code (if 429 or 503 wasn't handled by custom adapter)
                 if r and r[0].status_code in [429, 503, 509]:
                      tqdm.write(f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s...")
+                     vlog(f"  Rate limited ({r[0].status_code}), sleeping {backoff_time}s...")
                      time.sleep(backoff_time)
                      backoff_time = min(backoff_time * 1.5, 300) # Cap at 5 mins
                      attempt += 1
@@ -476,6 +507,8 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                      continue
 
                 code = r[0].status_code if r else "Unknown"
+                tqdm.write(f"FAILED {display_name}: HTTP {code}")
+                vlog(f"  FAILED '{remote_key}' with HTTP {code}")
                 record_result('failed', f"{remote_key} (Status {code})")
                 return (False, f"Status {code}")
                 
@@ -490,9 +523,11 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                     return (False, "Cancelled")
                 
                 error_str = str(e).lower()
+                vlog(f"  EXCEPTION for '{remote_key}': {type(e).__name__}: {e}")
                 # Check specifically for the bucket queue limit or generic rate requests
                 if "bucket_tasks_queued" in error_str or "reduce your request rate" in error_str or "read timed out" in error_str:
                     tqdm.write(f"Rate Limit/Timeout hit for {display_name}: {e}. Pausing {backoff_time}s...")
+                    vlog(f"  Retryable error, sleeping {backoff_time}s...")
                     time.sleep(backoff_time)
                     backoff_time = min(backoff_time * 1.5, 300)
                     attempt += 1
@@ -504,6 +539,9 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 record_result('failed', f"{remote_key} ({str(e)})")
                 return (False, str(e))
         
+        tqdm.write(f"FAILED {display_name}: Max retries exceeded")
+        vlog(f"  Max retries exceeded for '{remote_key}'")
+        record_result('failed', f"{remote_key} (Max Retries)")
         return (False, "Max Retries Exceeded (Rate Limit)")
 
 
@@ -520,13 +558,19 @@ def main():
     parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
     parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")
     parser.add_argument("--md5-verify", action="store_true", help="Enable MD5 comparison for files that already exist remotely by path")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable detailed debug logging for each upload step")
     args = parser.parse_args()
+
+    global VERBOSE
+    VERBOSE = args.verbose
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.4) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.5) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
+    if VERBOSE:
+        print(f"--- Verbose: ON ---")
     if args.sync:
         print("--- Mode: SYNC (Uploads) ---")
     if args.orphan_deletion:
@@ -557,11 +601,13 @@ def main():
             sys.exit(1)
 
         if not identifier:
-            while True:
-                identifier = get_input("Identifier", required=True)
-                if " " not in identifier and identifier.isascii(): break
-                print("Error: Invalid identifier.")
+            # Suggest the folder name as default if possible
+            default_id = Path(folder_path_str).name if folder_path_str else None
+            identifier = get_input("Identifier", required=True, default=default_id)
 
+        # Store the suggested title before sanitizing the identifier
+        title_suggestion = identifier
+        
         # Sanitize identifier to ensure IA-accepted bucket name
         sanitized_identifier = sanitize_identifier(identifier)
         if sanitized_identifier != identifier:
@@ -586,11 +632,11 @@ def main():
             # Only ask update question if -m flag is provided
             if args.metadata:
                 if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                    metadata = collect_metadata(identifier, prefills=metadata_prefills)
+                    metadata = collect_metadata(title_suggestion, prefills=metadata_prefills)
         else:
             print(f"  > New item detected.")
             is_new_item = True
-            metadata = collect_metadata(identifier, prefills=metadata_prefills)
+            metadata = collect_metadata(title_suggestion, prefills=metadata_prefills)
 
         # 3. MD5 Scanning Phase
         print("\n" + "="*30)
@@ -791,8 +837,12 @@ def main():
                     custom_session.mount("https://", adapter)
                     custom_session.mount("http://", adapter)
                 
+                vlog(f"Session configured: pool_connections={max_workers+5}, pool_maxsize={max_workers+5}")
+                vlog(f"HTTP timeout: connect=30s, read=300s")
+                
             except Exception as e:
                 print(f"Warning: Could not configure connection pool: {e}")
+                vlog(f"Session config exception: {type(e).__name__}: {e}")
                 # Fallback to standard session if mounting fails
                 if not custom_session:
                      custom_session = get_session()
@@ -803,12 +853,14 @@ def main():
             if is_new_item:
                 # Upload the first (smallest) file to initialize the item
                 first_file = files_to_upload[0]
+                vlog(f"Creating new item with first file: '{first_file[0]}'")
                 success, msg = upload_worker(identifier, first_file, metadata, position=1, session=custom_session)
                 main_bar.update(1)
                 if not success:
                     main_bar.close()
                     print(f"\nCRITICAL ERROR on creation: {msg}")
                     sys.exit(1)
+                vlog(f"Item created successfully, switching to parallel uploads")
                 start_index = 1
                 metadata = None
 
@@ -820,10 +872,13 @@ def main():
                     slot_queue.put(i)
 
                 def worker_wrapper(f_data):
+                    vlog(f"worker_wrapper: waiting for slot for '{f_data[0]}'")
                     slot = slot_queue.get() 
+                    vlog(f"worker_wrapper: got slot {slot} for '{f_data[0]}'")
                     try:
                         return upload_worker(identifier, f_data, None, position=slot, session=custom_session)
                     finally:
+                        vlog(f"worker_wrapper: releasing slot {slot} (was '{f_data[0]}')")
                         slot_queue.put(slot)
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -831,12 +886,44 @@ def main():
                         executor.submit(worker_wrapper, fdata): fdata 
                         for fdata in remaining_files
                     }
+                    vlog(f"Submitted {len(future_to_file)} futures to executor")
                     
-                    for future in as_completed(future_to_file):
+                    completed_count = 0
+                    pending = set(future_to_file.keys())
+                    last_liveness = time.time()
+                    
+                    while pending:
                         if shutdown_event.is_set():
                             executor.shutdown(wait=False, cancel_futures=True)
                             break
-                        main_bar.update(1)
+                        
+                        # Use timeout so we can periodically report liveness
+                        done_batch = set()
+                        try:
+                            for future in as_completed(pending, timeout=60):
+                                done_batch.add(future)
+                                completed_count += 1
+                                fdata = future_to_file[future]
+                                vlog(f"Future completed for '{fdata[0]}' ({completed_count}/{len(future_to_file)})")
+                                main_bar.update(1)
+                                # Break out after processing done ones to re-check liveness
+                                if time.time() - last_liveness >= 60:
+                                    break
+                        except TimeoutError:
+                            # Timeout fired with no new completions — this is expected,
+                            # fall through to liveness reporting below
+                            pass
+                        
+                        pending -= done_batch
+                        
+                        # Periodic liveness report if anything is still pending
+                        if pending and time.time() - last_liveness >= 60:
+                            last_liveness = time.time()
+                            in_flight = [future_to_file[f][0] for f in pending]
+                            if len(in_flight) <= 5:
+                                tqdm.write(f"  [LIVENESS] {len(in_flight)} file(s) still in-flight: {in_flight}")
+                            else:
+                                tqdm.write(f"  [LIVENESS] {len(in_flight)} file(s) still in-flight (showing first 5): {in_flight[:5]}")
             
             main_bar.close()
 
