@@ -821,7 +821,7 @@
         "save_img_to_output": false,
         "rename_mode": false,
         "rename_method": "full",
-        "enable_thinking": true,
+        "enable_thinking": false,
         "enable_chunking": false,
         "chunk_size": 4000,
         "model_prefix": true,
