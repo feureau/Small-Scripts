@@ -1,589 +1,578 @@
-viewReferenceWipeInvert := Alt+W
-viewShowViewerOverlay := Shift+`
-editMulticamTgtAudio := Alt+Shift+\
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 4 } := Ctrl+Shift+4 | Ctrl+Shift+Num+4
-clipAudioDecreaseAudioLevel3dB := Alt+Shift+-
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 9 } := Alt+9
-editSelectAll := Ctrl+A
-editTrackDestinationSelectionTargetV4 := 
-editSlipAudioOneSubFrameForward := Alt+Right
-sessionPrinterLightsRedMinus := Num+4
-sessionMemoriesLoadA := 
-sessionMemoriesSaveF := Alt+6
-controlTimecodeIncrement := + | Num++
-sessionPrinterLightsGreenMinus := Num+5
-markAudioIn := Ctrl+Alt+I
-editPointer := A
-fairlightToggleGroup5Status := Ctrl+Num+5
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 5 } := Num+5 | 5
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 2 } := 2 | Num+2
-viewTimelineModeCycle := Ctrl+PgDown
-clipAudioDecreaseAudioLevel1dB := Ctrl+Alt+-
-sessionPrinterLightsBlueQuarterMinus := Ctrl+Num+6
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 7 } := Ctrl+Shift+Num+7 | Ctrl+Shift+7
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 4 } := Alt+4
-FairlightTimeline.trimExtendEditSelectionToPreviousEdit := Ctrl+Shift+K
-controlJumpLeft := Ctrl+Alt+Left
-viewReferenceReposition := Alt+Shift+R
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 2, toggle = true} := B
-controlPlayAroundToPlayToIn := 
-FusionWidget.fuHotkey_GLView_Viewer_Reset := Ctrl+1
-sessionPrinterLightsMagQuarterPlus := Ctrl+Num+2
-FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 0 } := ,
-markVideoResetInOut := Alt+Shift+X
-sessionTrackForward := Ctrl+T
-editLinkedSelection := Ctrl+Shift+L
-controlClipPrev := Up
-controlFastReverse := Shift+J
-viewActiveWindowSelectionSourceViewer := Ctrl+3
-editAutoSelectToggleVideoAll := Alt+F9
-FusionWidget.fuHotkey_TimelineView_Time_Goto_Key_Prev := Alt+[
-trimSelectAudioEditPoint := Shift+E
-editToggleDynamicTrimMode := 
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 8 } := 8 | Num+8
-editMulticamPrevAngle := Ctrl+Shift+Left
-resolveAbout := 
-FairlightTimeline.trimMoveEditSelectionToPreviousTrack := Ctrl+P
-FusionWidget.fuHotkey_Fusion_Console_Show{} := Shift+0
-FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = false} := K
-editSwitchToTimelineAfterEdit := Alt+Shift+Q
-clipShowCurveEditor := Shift+C
-editClipEnabled := 
-sessionPrinterLightsYelQuarterPlus := Ctrl+Num+3
-nodesExtractCurrent := E
-editToggleVideoAudioSelection := Alt+U
-fairlightMonitoringMute := F6
-markIn := Alt+1
-fairlightToggleGroup8Status := Ctrl+Num+8
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_By{ offset = -1 } := Left
-controlStepForward := Shift+F
-sessionMemoriesLoadD := 
-sessionTrackOneFrameReverse := Alt+Left
-fairlightCreateGroup := Ctrl+G
-editDeselectAll := Ctrl+Shift+A
-editTrackLockToggleA8 := Alt+Shift+F8
-sessionBaseMemoryAll := Ctrl+Shift+Home
-clipAudioIncreaseAudioLevel3dB := Alt+Shift+=
-EditTimeline.Context_normalizeAudioLevels := F4
-controlPlayAroundToPlayAroundCurrentSelection := /
-workspacePrimaryWorkspaceDeliver := 
-editAddVideoTransition := Alt+T
-editTrackDestinationSelectionTargetV := 
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_Prev{} := Alt+Left
-sessionTrackStop := Ctrl+Alt+T
-FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = -10} := Shift+Left
-sessionLiveGradePause := Ctrl+Shift+R
-markResetInOut := Alt+X
-FusionWidget.fuHotkey_SplineControl_View_Zoom_In := = | Ctrl+= | Num++
-editMulticamNextAngle := Ctrl+Shift+Right
-fileImportBatchListFromEDL := 
-editToggleEditPointType := U
-controlScannerPerfStepReverse := Ctrl+J
-nodesAddLayer := Alt+L
-viewTogglePrimariesLogMode := Alt+Z
-trimToggleSlideMode := 
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_Start{} := Ctrl+Left
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_Next{} := Alt+Right
-editTrackDestinationSelectionTargetV6 := 
-editMulticamCutToAngle3 := 3
-editEnableDisableToggleVideoTrack2 := Ctrl+Shift+2
-fairlightActionsRecord := F5
-editTrackDestinationSelectionTargetA7 := Ctrl+Alt+7
-controlPlayForward := F
-editSelectClipsSelectTrackBefore := Ctrl+Shift+W
-viewChannelsRGB := Ctrl+Shift+0
-editInsertOverwriteActionInsert := F9
-editMulticamCutToAngle1 := 1
-markConvertDurationMarkerToInOut := 
-timelineSplitClipsAtSceneCut := F3
-FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Nodes' } := F5
-editNudgeTrimStepExtendEdit := 
-FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Keyframes' } := F7
-editTrackLockToggleA4 := Alt+Shift+F4
-markMarkerAddAndModify := Ctrl+M
-clipFreezeFrame := Ctrl+Shift+F
-FairlightTimeline.controlLastFrame := 
-controlLastFrame := '
-viewHighlightHighlightDiff := Ctrl+Shift+H
-editSelectSubNext := Ctrl+Right
-editMediaStereoModeToRight := Alt+Shift+.
-fileSaveProject := Ctrl+S
-FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Fit := Ctrl+F
-editTrackDestinationSelectionTargetV7 := 
-fileEasyDCPImportServerCertificate := 
-fairlightToggleSuspendGroups := Ctrl+Num+*
-FusionWidget.fuHotkey_TimelineView_Time_Goto_Key_Next := Alt+]
-markAudioOut := Ctrl+Alt+O
-trimRippleEndToPlayhead := Alt+R
-controlTimelineEnd := End
-markFavoriteKeywords7 := Alt+Shift+7
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 6 } := Alt+6
-controlPlayAroundToPlayAroundOut := Shift+Space
-workspacePrimaryWorkspaceFusion := 
-sessionVersionDefault := Ctrl+U
-editNudgeTrimStepTrimMultiFrameLeft := Shift+,
-editMoveClipsDown := Alt+Down
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 9 } := Ctrl+Alt+9
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_End{} := Ctrl+Right
-editAutoSelectToggleAudioAll := Ctrl+Alt+F9
-FusionWidget.fuHotkey_GLView_Viewer_Lock := Ctrl+L
-controlPlayAroundToPlayInToOut := Alt+/
-FusionWidget.fuHotkey_SplineControl_View_Zoom_Rectangle := Ctrl+R
-sessionMemoriesSaveE := Alt+5
-sessionPrinterLightsMagPlus := Num+2
-FairlightTimeline.trimCrossfadeSelection := Alt+Shift+F
-FusionWidget.fuHotkey_FuFrame_Frame_Activate_Next := Ctrl+Tab
-FusionWidget.fuHotkey_GLView_Viewer_Unview_All := `
-viewColorPickerPixelBitDepthCycle := 
-sessionMemoriesLoadF := 
-markSelected := Shift+A
-markVideoOut := Alt+Shift+O
-editNudgeSwapEditForward := Ctrl+Shift+.
-editMulticamCutToAngle5 := 5
-workspaceRemoteGrading := Ctrl+G
-sessionGradeFromOneClipPrior := Shift+=
-FusionWidget.fuHotkey_GLView_Viewer_Scale_Rel{ scale=1·4142135623730950488016887242097 } := = | Num++
-editNudgeTrimStepTrimStart := Shift+[
-nodesAddSplitterCombiner := Alt+Y
-markFlagClearAll := 
-FusionWidget.fuHotkey_FuFrame_View_Show{ id = 'ControlView' } := F9
-controlPlayAroundToPlayAroundIn := Alt+Space
-sessionMemoriesLoadB := 
-FairlightTimeline.editAddTransition := 
-markMarkerModify := Shift+M
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 10 } := Alt+0
-resolveCustomizedActions := Ctrl+Alt+K
-FairlightTimeline.controlFirstFrame := 
-editMulticamCutToAngle6 := 6
-controlScannerFramingMoveForward := Ctrl+Right
-editSlipEyeOppositeEyeOneFrameReverse := Ctrl+Alt+,
-FusionWidget.fuHotkey_FuFrame_Time_Step_NextKey := Alt+] | Alt+Right
-MediaStorage.Context_sceneCutDetect := 
-FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Out := Num+- | -
-editNudgeTrimStepNudgeReverse := W
-editCopy := Ctrl+C
-controlFirstFrame := ;
-editEnableDisableToggleVideoTrack5 := Ctrl+Shift+5
-FusionWidget.fuHotkey_FuFrame_Time_Step_Back := [ | Left | Media Previous
-viewReferenceWipeModeCycle := Alt+Shift+W
-markClip := 
-nodesToggleCurrent := Ctrl+D
-sessionOriginalMemory := Alt+Shift+O
-editAutoSelectToggleVideo7 := Alt+F7
-FusionWidget.fuHotkey_FuFrame_Frame_Activate_Prev := Ctrl+Shift+Tab
-gangSourceTimelinePlayheads := Alt+Q
-editAudioMoveTrackDestinationUp := Ctrl+Alt+Up
-editMulticamSwitchToAngle3 := 
-sessionPrinterLightsRedQuarterPlus := Ctrl+Num+7
-editNudgeTrimStepTrimMultiFrameRight := Shift+.
-editM2JoinClip := Alt+\
-viewWindowOutlineCycle := Alt+H
-fairlightToggleGroupAllStatus := Ctrl+Num+0
-editEnableDisableToggleVideoTrack3 := Ctrl+Shift+3
-nodesAddOutside := Alt+O
-FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 2 } := /
-markMoveSelectedKeyframesUp := 
-FusionWidget.fuHotkey_TimelineView_View_Zoom_Out := Num+- | -
-FairlightTimeline.editDuplicateSelection := Ctrl+Shift+D
-controlScannerPerfStepForward := Ctrl+L
-FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_FitSelected := F
-sessionGradeFromTwoClipsPrior := Shift+-
-FairlightTimeline.viewTrackWaveformResetZoomSelectedTracks := Alt+Shift+R
-sessionPrinterLightsMagMinus := Num+0
-fairlightToggleGroup1Status := Ctrl+Num+1
-FusionWidget.fuHotkey_FuFrame_Playback_Mode := Space | Toggle Media Play/Pause
-viewActiveWindowSelectionEditIndex := Ctrl+7
-controlTimecodeDecrement := - | Num+-
-sessionPrinterLightsBluePlus := Num+9
-markFavoriteKeywords8 := Alt+Shift+8
-FusionWidget.fuHotkey_FloatLUTMacroFrame_Comp_Redo := Ctrl+Y | Ctrl+Shift+Z
-markKeyframeDelete := Alt+]
-editAutoSelectToggleAudio6 := Ctrl+Alt+F6
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 1 } := Ctrl+Alt+1
-viewStillsStillPrev := Ctrl+Alt+B
-FairlightTimeline.trimTrimToSelection := Ctrl+Shift+T
-editTrackLockToggleA2 := Alt+Shift+F2
-sessionMemoriesSaveD := Alt+4
-editMatchFrame := 
-sessionPrinterLightsMagQuarterMinus := Ctrl+Num+0
-editTrackDestinationSelectionTargetA4 := Ctrl+Alt+4
-FusionWidget.fuHotkey_FlowView_Flow_Add_Bookmark := Ctrl+D
-nodesAddLPW := Alt+Q
-sessionVersionPrev := Ctrl+B
-FusionWidget.fuHotkey_FuFrame_Time_Goto_RenderEnd := Ctrl+Right | Ctrl+]
-FusionWidget.fuHotkey_FuFrame_View_Show{ id = 'ModifierView' } := F11
-editMulticamSwitchToAngle4 := 
-FairlightTimeline.trimMoveEditSelectionToPreviousEdit := Ctrl+L
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 1, toggle = true} := G
-editTrackDestinationSelectionTargetA2 := Ctrl+Alt+2
-viewSafeAreaToggle := 
-editVideoMoveTrackDestinationDown := Ctrl+Shift+Down
-sessionPrinterLightsBlueMinus := Num+6
-controlTimecode := = | Num+=
-FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_FitAll := Shift+F
-editDynamicTrimStop := Ctrl+K
-editAutoSelectToggleVideo3 := Alt+F3
-FairlightTimeline.trimExtendEditSelectionToNextTrack := Ctrl+Shift+;
-sessionMemoriesSaveG := Alt+7
-markFavoriteKeywords3 := Alt+Shift+3
-editRedo := Ctrl+Shift+Z
-editTrackLockToggleA3 := Alt+Shift+F3
-markMoveSelectedKeyframesRight := 
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 9 } := Ctrl+Shift+9 | Ctrl+Shift+Num+9
-markConvertInOutToDurationMarker := 
-FusionWidget.fuHotkey_PlaybackManager_Player_Seek_By{ offset = 1 } := Right
-fairlightDumpDebugLogs := 
-editCut := Ctrl+X
-editPasteInsert := Ctrl+Shift+V
-viewZoomSubZoomOut := Ctrl+-
-viewHighlightHighlight := Shift+H
-fileNewProject := 
-clipChangeClipDuration := Ctrl+D
-markMarkerSecondaryAdd := Ctrl+M
-nodesAddCPW := Alt+C
-FairlightTimeline.viewTrackWaveformResetZoomAllTracks := Ctrl+Alt+R
-FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Spline' } := F8
-sessionTrackOneFrameForward := Alt+Right
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 9 } := 9 | Num+9
-editTrackDestinationSelectionTargetA3 := Ctrl+Alt+3
-editMulticamCutToAngle7 := 7
-editSlipAudioOneSubFrameReverse := Alt+Left
-FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = -1} := Left
-editTrackDestinationSelectionTargetV3 := 
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 6 } := Ctrl+Shift+6 | Ctrl+Shift+Num+6
-controlLargeStepForward := Shift+Right
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 5 } := Alt+5
-editTrackDestinationSelectionTargetV8 := 
-viewZoomSubZoomToFit := Shift+Z
-nodesAddSerial := Alt+S
-editMulticamSwitchToAngle8 := 
-sessionPrinterLightsYelMinus := Num+.
-fairlightToggleGroup4Status := Ctrl+Num+4
-editAudioMoveTrackDestinationDown := Ctrl+Alt+Down
-fairlightToggleGroup9Status := Ctrl+Num+9
-FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = false } := Media Stop
-nodesAppend := Alt+K
-markMarkerAdd := M
-editDelete := Shift+Backspace | X
-FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 1 } := .
-controlLargeStepReverse := Shift+Left
-nodesAddParallel := Alt+P
-resolvePreferences := Ctrl+,
-viewBypassColorGrades := Shift+D
-editPaste := Ctrl+V
-sessionBaseMemoryReset := Ctrl+Home
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 6 } := Ctrl+Alt+6
-workspaceViewerModeCinemaViewer := Ctrl+F | P
-viewTimelineModeRecord := 
-editRippleCut := Ctrl+Shift+X
-FusionWidget.fuHotkey_TimelineView_View_Zoom_Fit := Ctrl+F
-editTrim := T
-FusionWidget.fuHotkey_GLPreview_Playback_Seek_Start := Ctrl+Left
-controlPlayAroundToPlayAroundCurrentClip := Shift+/
-editTrackDestinationSelectionTargetV5 := 
-viewViewerSourceModeToggle := Shift+Q
-viewReferenceWipeStyleCycle := Shift+W
-editDeleteGaps := Shift+4
-sessionPrinterLightsCyanMinus := Num+-
-fairlightStatusMonitor := 
-FusionWidget.fuHotkey_SplineEditorView_Time_Goto_Key_Prev := Alt+[
-editNudgeSwapEditReverse := Ctrl+Shift+,
-editMulticamTgtAudioAndVideo := Alt+Shift+[
-editEnableDisableToggleVideoTrack1 := Ctrl+Shift+1
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 1 } := Alt+1
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 3 } := Ctrl+Shift+3 | Ctrl+Shift+Num+3
-sessionMemoriesLoadC := 
-sessionMemoriesLoadG := 
-controlGotoIn := Shift+I
-FusionWidget.fuHotkey_GLView_Viewer_SubView_Swap := Shift+V
-editM2SplitClip := E
-FusionWidget.fuHotkey_Fusion_Expose_Tool_Name_Mode := Ctrl+Shift+E
-sessionPrinterLightsCyanQuarterPlus := Ctrl+Num+1
-editMulticamCutToAngle9 := 9
-editInsertOverwriteActionReplace := F11
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 2 } := Alt+2
-editSelectClipsSelectAllAfter := Shift+R
-MediaPool.Context_setPosterFrame := Ctrl+P
-editRangeSelection := 
-FairlightTimeline.trimExtendEditSelectionToPreviousTrack := Ctrl+Shift+P
-sessionAutoColor := Alt+Shift+C
-FusionWidget.fuHotkey_FuFrame_Comp_Redo := Ctrl+Y | Ctrl+Shift+Z
-fileNewFolder := Ctrl+Shift+N
-viewStillsStillGrab := Ctrl+Alt+G
-markAudioResetInOut := Ctrl+Alt+X
-trimRippleStartToPlayhead := Alt+W
-FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = true, reverse = false} := L
-editVideoMoveTrackDestinationUp := Ctrl+Shift+Up
-viewZoomActualSize := Alt+Shift+Z
-sessionBaseMemory := Shift+Home
-workspaceViewerModeFullViewer := 
-sessionPrinterLightsGreenQuarterPlus := Ctrl+Num+8
-markKeyframeMakeDynamic := Ctrl+[
-sessionPreviewMemory := Alt+Shift+P
-sessionMemoriesSaveC := Alt+3
-timelineSelectionFollowsTimeline := 
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 12, toggle = true} := Z
+workspaceLightboxView := Ctrl+Shift+F
 FairlightTimeline.trimMoveEditSelectionToNextTrack := Ctrl+;
-controlStop := D
-trimFadeOutToPlayhead := Alt+Shift+G
-viewActiveWindowSelectionTimelineViewer := Ctrl+5
-FairlightTimeline.trimExtendEditSelectionToNextEdit := Shift+Tab | Ctrl+Shift+'
-markVideoIn := Alt+Shift+I
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 4 } := Ctrl+Alt+4
-FusionWidget.fuHotkey_GLView_Viewer_Scale_Rel{ scale=0·70710678118654752440084436210485 } := - | Num+-
-viewActiveWindowSelectionInspector := Ctrl+9
-controlPlayAroundToPlayToOut := Ctrl+Alt+/
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 4 } := Num+4 | 4
-viewSplitScreenModeOnOffToggle := Ctrl+Alt+W
-controlMarkersNext := Shift+Down
-viewStillsStillPlay := Ctrl+Alt+F
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 7 } := Num+7 | 7
-FusionWidget.fuHotkey_PlaybackManager_Player_Channel{ channel = 'Color' } := C
-editMulticamTgtVideo := Alt+Shift+]
-viewStillsStillNext := Ctrl+Alt+N
-editAutoSelectToggleVideo8 := Alt+F8
-editTrackDestinationSelectionTargetA5 := Ctrl+Alt+5
-sessionPrinterLightsRedQuarterMinus := Ctrl+Num+4
-editSlipAudioOneFrameForward := Alt+.
-clipResetRetime := Ctrl+Alt+R
-markFavoriteKeywords5 := Alt+Shift+5
-clipAudioIncreaseAudioLevel1dB := Ctrl+Alt+=
+FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Out := Num+- | -
+editAutoSelectToggleAudio3 := Ctrl+Alt+F3
+FusionWidget.fuHotkey_FuFrame_Comp_Choose_Action := Ctrl+Shift+Space
+FusionWidget.fuHotkey_FuFrame_Time_Step_NextKey := Alt+] | Alt+Right
+viewActiveWindowSelectionMediaPoolClips := Ctrl+2
+sessionPrinterLightsBlueMinus := Num+6
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 6 } := Ctrl+Shift+6 | Ctrl+Shift+Num+6
+EditTimeline.Context_normalizeAudioLevels := F4
+fileEasyDCPImportServerCertificate := 
+FusionWidget.fuHotkey_FuFrame_Time_Step_Forward := ] | Media Next | Right
+markFavoriteKeywords2 := Alt+Shift+2
+viewReferenceWipeModeCycle := Alt+Shift+W
+viewStereoSwitchEyeCycle := Ctrl+.
+workspacePrimaryWorkspaceFirstCut := 
+editPasteValue := Alt+Shift+V
+editEnableDisableToggleVideoTrack6 := Ctrl+Shift+6
+editVideoMoveTrackDestinationDown := Ctrl+Shift+Down
+controlRenderCacheCycle := 
+editTrackLockToggleA3 := Alt+Shift+F3
+FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Fit := Ctrl+F
+editMoveClipsDown := Alt+D
+controlGapPrev := Ctrl+Alt+;
+sessionPrinterLightsEnable := Ctrl+Alt+`
+sessionPrinterLightsMasterQuarterMinus := Ctrl+Num+Enter
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 3 } := Ctrl+Shift+3 | Ctrl+Shift+Num+3
+FusionWidget.fuHotkey_FuFrame_View_Show{ id = 'ModifierView' } := F11
+FusionWidget.fuHotkey_FuFrame_Time_Goto_GlobalEnd := Shift+Right | Shift+]
+editMulticamNextPage := Alt+Shift+Right
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 10 } := Alt+0
 FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 8 } := Alt+8
-editAutoSelectToggleAudio8 := Ctrl+Alt+F8
-workspacePrimaryWorkspaceColor := 
-workspaceVideoScopesToggle := Ctrl+Shift+W
-FusionWidget.fuHotkey_SplineControl_View_Zoom_Out := - | Ctrl+- | Num+-
-controlGotoOut := Shift+O
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 0, toggle = true} := R
-fileSaveProjectAs := Ctrl+Shift+S
-markFlagAdd := G
-editSelectClipsSelectTrackAfter := Ctrl+Shift+R
-viewTimelineModeSource := 
-FusionWidget.fuHotkey_GLPreview_Playback_Seek_End := Ctrl+Right
+controlPlayAroundToPlayInToOut := Alt+/
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 9 } := Ctrl+Alt+9
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 2 } := 2 | Num+2
+sessionLiveGrade := Ctrl+R
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 4 } := Ctrl+Shift+4 | Ctrl+Shift+Num+4
+workspacePrimaryWorkspaceDeliver := 
+workspacePrimaryWorkspaceMedia := 
+fairlightToggleGroupAllStatus := Ctrl+Num+0
+sessionMemoriesLoadH := 
+nodesToggleAll := Alt+D
+timelineSelectionFollowsTimeline := 
+editTrackDestinationSelectionTargetA4 := Ctrl+Alt+4
+editAddVideoTransition := Alt+T
+markResetIn := Alt+I
+workspacePrimaryWorkspaceFusion := 
+editTrackDestinationSelectionTargetV2 := 
+editTrackDestinationSelectionTargetV8 := 
+timelineAutoCaption := F2
+editMulticamSwitchToAngle4 := 
+clipChangeClipDuration := Ctrl+D
+editMulticamSwitchToAngle5 := 
+editEnableDisableToggleVideoTrack3 := Ctrl+Shift+3
+viewTogglePrimariesLogMode := Alt+Z
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 4 } := Ctrl+Alt+4
+sessionMemoriesLoadD := 
+sessionGradeFromOneClipPrior := Shift+=
+sessionPrinterLightsYelQuarterPlus := Ctrl+Num+3
+sessionPrinterLightsBlueQuarterMinus := Ctrl+Num+6
+FusionWidget.fuHotkey_GLView_Viewer_Lock := Ctrl+L
+nodesAddSerial := Alt+S
+fairlightStatusMonitor := 
+sessionTrackReverse := Alt+T
+viewTimelineModeRecord := 
+trimFadeOutToPlayhead := Alt+Shift+G
+markKeyframeDelete := Alt+]
+editSwitchToTimelineAfterEdit := Alt+Shift+Q
+controlFastReverse := Shift+J
+clipAudioDecreaseAudioLevel1dB := Ctrl+Alt+-
+FusionWidget.fuHotkey_SplineControl_View_Zoom_Fit := Ctrl+F
+clipResetRetime := Ctrl+Alt+R
+viewActiveWindowSelectionEffects := Ctrl+6
+editTrackDestinationSelectionTargetV3 := 
+controlPlayAgain := Alt+L
+editBladeRazor := Ctrl+B
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 2 } := Ctrl+Shift+2 | Ctrl+Shift+Num+2
+fairlightDumpDebugLogs := 
+sessionPrinterLightsYelMinus := Num+.
+FusionWidget.fuHotkey_SplineEditorView_Time_Goto_Key_Prev := Alt+[
+resolveAbout := 
+viewTimelineModeCycle := Ctrl+PgDown
+editAutoSelectToggleAudio1 := Ctrl+Alt+F1
+editAutoSelectToggleAudioAll := Ctrl+Alt+F9
+sessionPrinterLightsGreenMinus := Num+5
+fairlightToggleGroup7Status := Ctrl+Num+7
+viewHighlightHighlightDiff := Ctrl+Shift+H
+editSlipAudioOneFrameReverse := Alt+,
+FusionWidget.fuHotkey_FuFrame_Comp_Undo := Ctrl+Z
+nodesAddLPW := Alt+Q
+workspacePrimaryWorkspaceAudio := 
+viewZoomViewerToFit := Z
+markOut := Alt+2
+FairlightTimeline.controlFirstFrame := 
+markAudioIn := Ctrl+Alt+I
+editMulticamSwitchToAngle2 := 
+viewBypassColorGrades := Shift+D
+controlClipPrev := Up
+fileProjectManager := Shift+1
+fairlightToggleSuspendGroups := Ctrl+Num+*
+markCreateSubClip := Alt+B
+controlClipNext := Down
+fileProjectSettings := Shift+2
+editMulticamSwitchToAngle6 := 
+editMatchFrame := 
+controlStop := D
+nodesAddCPW := Alt+C
+controlLoop := Ctrl+/
+editSelectClipsSelectAllAfter := Shift+R
+trimSelectVideoEditPoint := 
+editTrackLockToggleA1 := Alt+Shift+F1
+editSelectClipsSelectAllBefore := Shift+W
+editInsertOverwriteActionAppendAtEnd := Shift+F12
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 1 } := Num+1 | 1
+viewZoomSubZoomOut := Ctrl+-
+clipAudioIncreaseAudioLevel1dB := Ctrl+Alt+=
+fairlightToggleGroup6Status := Ctrl+Num+6
+editMulticamCutToAngle6 := 6
+FusionWidget.fuHotkey_FloatLUTMacroFrame_Comp_Undo := Ctrl+Z
+editEnableDisableToggleVideoTrack1 := Ctrl+Shift+1
+FusionWidget.fuHotkey_FuFrame_Time_Goto_GlobalStart := Shift+Left | Shift+[
+editMulticamSwitchToAngle1 := 
+viewWindowOutlineCycle := Alt+H
+FusionWidget.fuHotkey_SplineControl_View_Zoom_Rectangle := Ctrl+R
+controlPlayAroundToPlayAroundCurrentClip := Shift+/
+FusionWidget.fuHotkey_FuFrame_Time_Goto_RenderEnd := Ctrl+Right | Ctrl+]
+editAudioMoveTrackDestinationUp := Ctrl+Alt+Up
+editSelectAll := Ctrl+A
+editM2SplitClip := E
+trimFadeInToPlayhead := Alt+Shift+D
+FusionWidget.fuHotkey_FuFrame_Frame_Activate_Next := Ctrl+Tab
+FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Rectangle := Ctrl+R
+controlKeyframePrev := [
+FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_FitSelected := F
 workspacePrimaryWorkspaceEdit := 
+markKeyframeTimelineModeCycle := 
+editTrackLockToggleA8 := Alt+Shift+F8
+FairlightTimeline.viewTrackWaveformResetZoomAllTracks := Ctrl+Alt+R
+markAudioResetInOut := Ctrl+Alt+X
+viewActiveWindowSelectionSourceViewer := Ctrl+3
+editNudgeTrimStepNudgeForward := Alt+F
+editNudgeTrimStepTrimStart := Shift+[
+editSelectClipsSelectTrackAfter := Ctrl+Shift+R
+controlTimecode := = | Num+=
+editLinkedSelection := Ctrl+Shift+L
+markMarkerSecondaryAdd := Ctrl+M
+editEnableDisableToggleVideoTrack5 := Ctrl+Shift+5
+sessionVersionNext := Ctrl+N
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 9 } := Alt+9
+FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 1 } := .
+controlScannerPerfStepReverse := Ctrl+J
+FairlightTimeline.trimMoveEditSelectionToNextEdit := Ctrl+' | Tab
+markFlagAdd := G
+FusionWidget.fuHotkey_FuFrame_Comp_Abort := Esc
+FusionWidget.fuHotkey_GLView_Viewer_Scale_Abs{ scale=0 } := Ctrl+F
+FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = true, reverse = false} := L
+editTrackLockToggleA4 := Alt+Shift+F4
+FairlightTimeline.controlLastFrame := 
+sessionBaseMemoryAll := Ctrl+Shift+Home
+markFavoriteKeywords4 := Alt+Shift+4
+clipAudioIncreaseAudioLevel3dB := Alt+Shift+=
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 3 } := Num+3 | 3
+editTrackDestinationSelectionTargetAudioAll := Ctrl+Alt+9
+sessionLiveGradePause := Ctrl+Shift+R
+FusionWidget.fuHotkey_FuFrame_App_Help := F1
+editToggleEditPointType := U
+sessionPrinterLightsCyanQuarterPlus := Ctrl+Num+1
+editAutoSelectToggleVideo3 := Alt+F3
+fairlightActionsRecord := F5
+editVideoMoveTrackDestinationUp := Ctrl+Shift+Up
+editMulticamCutToAngle3 := 
+editAutoSelectToggleAudio6 := Ctrl+Alt+F6
+sessionPrinterLightsRedQuarterMinus := Ctrl+Num+4
+editAutoSelectToggleAudio4 := Ctrl+Alt+F4
+workspaceViewerModeCinemaViewer := Ctrl+F | P
+controlJumpLeft := Ctrl+Alt+Left
+fileImportProject := 
+FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = false} := K
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 2 } := Ctrl+Alt+2
+controlKeyframeNext := ]
+editTrackDestinationSelectionTargetV6 := 
+FusionWidget.fuHotkey_FuFrame_ACTION_SHOW_CONSOLE := F6
+markFlagClearAll := 
+controlLargeStepForward := Shift+Right
+controlPlayAroundToPlayAroundCurrentSelection := /
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 7 } := Ctrl+Alt+7
+sessionPreviewMemory := Alt+Shift+P
+helpManual := 
+FusionWidget.fuHotkey_SplineControl_View_Zoom_Out := - | Ctrl+- | Num+-
+viewActiveWindowSelectionEditIndex := Ctrl+7
+viewStillsStillPrev := Ctrl+Alt+B
+controlGapNext := Ctrl+Alt+'
+sessionMemoriesSaveD := Alt+4
+editTrackDestinationSelectionTargetV4 := 
+editMulticamTgtAudio := Alt+Shift+\
+viewHighlightHighlight := Shift+H
+fairlightDebugSettings := 
+fairlightCreateGroup := Ctrl+G
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 5 } := Alt+5
+markKeyframeMakeDynamic := Ctrl+[
+viewColorPickerPixelBitDepthCycle := 
+sessionPrinterLightsBluePlus := Num+9
+FusionWidget.fuHotkey_FuFrame_Comp_Choose_Tool := Ctrl+Space | Shift+Space
+FusionWidget.fuHotkey_SplineEditorView_Time_Goto_Key_Next := Alt+]
+FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = false } := Media Stop
 editNudgeTrimStepTrimEnd := Shift+]
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 3, toggle = true} := A
+sessionPrinterLightsMagQuarterPlus := Ctrl+Num+2
+editMulticamTgtAudioAndVideo := Alt+Shift+[
+editTrackDestinationSelectionTargetA := Ctrl+Alt+1
+editDelete := Shift+Backspace | X
+FusionWidget.fuHotkey_GLPreview_Playback_Seek_End := Ctrl+Right
+editAutoSelectToggleAudio2 := Ctrl+Alt+F2
+sessionMemoriesLoadF := 
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 8 } := 8 | Num+8
+sessionPrinterLightsMasterPlus := Num++
+editNudgeTrimStepTrimMultiFrameLeft := Shift+,
+viewSafeAreaToggle := 
+FusionWidget.fuHotkey_SplineEditorView_View_Zoom_In := Num++ | =
+sessionPrinterLightsMagMinus := Num+0
+markKeyframeDeleteAll := 
+editAutoSelectToggleVideo1 := Alt+F1
+sessionMemoriesSaveH := Alt+8
+editMulticamPrevAngle := Ctrl+Shift+Left
+editDeselectAll := Ctrl+Shift+A
+editMulticamCutToAngle1 := 1
+viewReferenceWipeToggle := Ctrl+W
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark := Ctrl+Shift+D
+viewViewerToggle := Q
+sessionMemoriesSaveG := Alt+7
+fairlightToggleGroup3Status := Ctrl+Num+3
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = -1, toggle = true} := C
+editSlipAudioOneFrameForward := Alt+.
+controlStepReverse := Shift+S
+fairlightToggleGroup8Status := Ctrl+Num+8
+sessionVersionPrev := Ctrl+B
+sessionPrinterLightsMasterMinus := Num+Enter
+viewReferenceReposition := Alt+Shift+R
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 6 } := Ctrl+Alt+6
+resolvePreferences := Ctrl+,
+FairlightTimeline.trimCrossfadeSelection := Alt+Shift+F
+FairlightTimeline.viewTrackWaveformResetZoomSelectedTracks := Alt+Shift+R
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 8 } := Ctrl+Shift+8 | Ctrl+Shift+Num+8
+FusionWidget.fuHotkey_GLView_Viewer_Reset{ scale = 2·0 } := Ctrl+2
+FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 0 } := ,
+controlPlayToggle := Space
+markMoveSelectedKeyframesDown := 
+sessionTrackStop := Ctrl+Alt+T
+controlGotoOut := Shift+O
+controlScannerPerfStepForward := Ctrl+L
+FairlightTimeline.trimExtendEditSelectionToNextEdit := Shift+Tab | Ctrl+Shift+'
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 2 } := Alt+2
+markResetInOut := Alt+X
+sessionPrinterLightsBlueQuarterPlus := Ctrl+Num+9
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 1, toggle = true} := G
+markVideoResetInOut := Alt+Shift+X
+nodesAppend := Alt+K
+editTrackDestinationSelectionTargetA2 := Ctrl+Alt+2
+editTrackLockToggleA5 := Alt+Shift+F5
+editTrackLockToggleA2 := Alt+Shift+F2
+editCopy := Ctrl+C
+FusionWidget.fuHotkey_GLView_Viewer_SubView_Swap := Shift+V
+trimRippleStartToPlayhead := Alt+W
+clipAudioRemoveSilence := F8
+fileNewFolder := Ctrl+Shift+N
+editAutoSelectToggleVideo4 := Alt+F4
+sessionPrinterLightsMasterQuarterPlus := Ctrl+Num++
+controlJumpRight := Ctrl+Alt+Right
+fairlightToggleGroup5Status := Ctrl+Num+5
+editEnableDisableToggleVideoTrackAll := Ctrl+Shift+9
+fileSaveProjectAs := Ctrl+Shift+S
+controlPlayAroundToPlayAroundOut := Shift+Space
+markMoveSelectedKeyframesLeft := 
+editSelectSubNext := Ctrl+Right
+viewZoomSubZoomToFit := Shift+Z
+workspaceRemoteGrading := Ctrl+G
+controlLastFrame := '
+sessionMemoriesLoadE := 
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 0, toggle = true} := R
+sessionBaseMemoryReset := Ctrl+Home
+editTrackDestinationSelectionTargetV5 := 
+FusionWidget.fuHotkey_GLView_Viewer_QuadView := Shift+Q
+fairlightMonitoringMute := F6
+sessionMemoriesLoadB := 
+markMarkerModify := Shift+M
+markAudioOut := Ctrl+Alt+O
+FairlightTimeline.trimMoveEditSelectionToPreviousTrack := Ctrl+P
+nodesAddParallel := Alt+P
+viewReferenceWipeStyleCycle := Shift+W
+sessionPrinterLightsCyanPlus := Num+1
+MediaStorage.Context_sceneCutDetect := 
+editBlade := B
+clipChangeClipSpeed := 
+editMulticamSwitchToAngle7 := 
+sessionMemoriesSaveB := 
+editUndo := Ctrl+Z
+MediaPool.Context_setPosterFrame := Ctrl+P
+editTrackLockToggleA6 := Alt+Shift+F6
+sessionMemoriesSaveF := Alt+6
+editMulticamNextAngle := Ctrl+Shift+Right
+FusionWidget.fuHotkey_GLPreview_Playback_Seek_Start := Ctrl+Left
+sessionGradeFromTwoClipsPrior := Shift+-
+editTrackDestinationSelectionTargetA5 := Ctrl+Alt+5
+controlPlayAroundToPlayToOut := Ctrl+Alt+/
+controlPlayAroundToPlayAroundIn := Alt+Space
+viewActiveWindowSelectionMediaPoolFolders := Ctrl+1
+FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = 10} := Shift+Right
+MediaPool.Context_clearPosterFrame := Alt+P
+sessionTrackOneFrameForward := Alt+Right
+editAutoSelectToggleVideo6 := Alt+F6
+trimToggleSlideMode := 
+markFavoriteKeywords8 := Alt+Shift+8
+markConvertDurationMarkerToInOut := 
+clipFreezeFrame := Ctrl+Shift+F
+editAutoSelectToggleAudio5 := Ctrl+Alt+F5
+editAddAudioTransition := Shift+T
+editSnapping := `
+fileExportProject := Ctrl+E
+FusionWidget.fuHotkey_FuFrame_View_Show{ id = 'ControlView' } := F9
+FusionWidget.fuHotkey_GLView_Viewer_Unview_All := `
+markMarkerClear := Alt+M
+FusionWidget.fuHotkey_FuFrame_Playback_Mode := Space | Toggle Media Play/Pause
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 4 } := Alt+4
+sessionPrinterLightsCyanQuarterMinus := Ctrl+Num+-
+FusionWidget.fuHotkey_SplineControl_View_Zoom_In := = | Ctrl+= | Num++
+controlPlayForward := F
+sessionGrabLiveGradeFrame := Ctrl+Alt+R
+editAutoSelectToggleVideo7 := Alt+F7
+fileImportMedia := Ctrl+I
+viewActiveWindowSelectionInspector := Ctrl+9
+markConvertInOutToDurationMarker := 
+fairlightToggleGroup1Status := Ctrl+Num+1
+editPointer := A
+editMulticamSwitchToAngle8 := 
+controlFirstFrame := ;
+sessionMemoriesLoadG := 
+resolveQuit := Ctrl+Q
+editNudgeSwapEditReverse := Ctrl+Shift+,
+viewShowViewerOverlay := Shift+`
+FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Keyframes' } := F7
+editNudgeSwapEditForward := Ctrl+Shift+.
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 5 } := Ctrl+Alt+5
+editScrubAudio := 
+editTrackDestinationSelectionTargetA6 := Ctrl+Alt+6
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 10 } := Ctrl+Alt+0
+nodesAddBefore := Alt+A
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 9 } := 9 | Num+9
+markMarkerAddAndModify := Ctrl+M
+fileEasyDCPExportSignerCertificate := 
+editInsertOverwriteActionOverwrite := F10
+fileSaveProject := Ctrl+S
+viewReferenceWipeInvert := Alt+W
+sessionMemoriesSaveC := Alt+3
+markMoveSelectedKeyframesUp := 
+workspacePrimaryWorkspaceColor := 
+editTrim := T
+sessionPrinterLightsYelQuarterMinus := Ctrl+Num+.
+editPasteAttributes := Alt+V
+viewSplitScreenModeOnOffToggle := Ctrl+Alt+W
+editClipEnabled := 
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 5 } := Num+5 | 5
+markFavoriteKeywords1 := Alt+Shift+1
+FairlightTimeline.trimMoveEditSelectionToPreviousEdit := Ctrl+L
+FusionWidget.fuHotkey_FuFrame_Time_Goto_RenderStart := Ctrl+[ | Ctrl+Left
+controlPlayReverse := S
+controlMarkersNext := Shift+Down
+FairlightTimeline.trimTrimToSelection := Ctrl+Shift+T
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 7 } := Ctrl+Shift+Num+7 | Ctrl+Shift+7
+viewHighlightHighlightBW := Alt+Shift+H
+workspaceVideoScopesToggle := Ctrl+Shift+W
+editSlipAudioOneSubFrameForward := Alt+Right
+editRangeSelection := 
+viewZoomSubZoomIn := Ctrl+= | Ctrl++
+editMulticamCutToAngle7 := 7
+editDynamicTrimStop := Ctrl+K
+editSelectClipsSelectTrackBefore := Ctrl+Shift+W
+FusionWidget.fuHotkey_FuFrame_Time_Step_PrevKey := Alt+[ | Alt+Left
+markMarkerAdd := 3
+FusionWidget.fuHotkey_FuFrame_Time_Step_Back := [ | Left | Media Previous
+editAudioMoveTrackDestinationDown := Ctrl+Alt+Down
+sessionOriginalMemory := Alt+Shift+O
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 1 } := Ctrl+Alt+1
+viewViewerSourceModeToggle := Shift+Q
+FusionWidget.fuHotkey_TimelineView_View_Zoom_Out := Num+- | -
+nodesAddLayer := Alt+L
+editMulticamSwitchToAngle9 := 
+viewChannelsRGB := Ctrl+Shift+0
+fileNewTimeline := Ctrl+N
+FairlightTimeline.editDuplicateSelection := Ctrl+Shift+D
 nodesNext := Alt+Shift+'
 FusionWidget.fuHotkey_TimelineView_View_Zoom_In := Num++ | =
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 8 } := Ctrl+Alt+8
-timelineAutoCaption := F2
-sessionPrinterLightsRedPlus := Num+7
-sessionMemoriesSaveB := 
-fileExportXml := Ctrl+Shift+O
-editInsertOverwriteActionOverwrite := F10
-controlPlaySlow := Shift+K
-editScrubAudio := 
-controlRenderCacheCycle := 
-sessionVersionAdd := Ctrl+Y
-controlClipNext := Down
-fairlightToggleGroup3Status := Ctrl+Num+3
-FusionWidget.fuHotkey_GLView_Viewer_Reset{ scale = 2·0 } := Ctrl+2
-editMulticamNextPage := Alt+Shift+Right
-editUndo := Ctrl+Z
-sessionGrabLiveGradeFrame := Ctrl+Alt+R
-markFavoriteKeywords6 := Alt+Shift+6
-fileNewTimeline := Ctrl+N
-viewTimelineWipeOneFrameReverse := Ctrl+Alt+Left
-controlPlayToggle := Space
-editAutoSelectToggleVideo6 := Alt+F6
-viewHighlightHighlightBW := Alt+Shift+H
-nodesAddPPW := Alt+G
-FairlightTimeline.trimMoveEditSelectionToNextEdit := Ctrl+' | Tab
-controlPlayAgain := Alt+L
-editTrackLockToggleA1 := Alt+Shift+F1
-FusionWidget.fuHotkey_SplineEditorView_View_Zoom_Rectangle := Ctrl+R
-editEnableDisableToggleVideoTrack7 := Ctrl+Shift+7
-editEnableDisableToggleVideoTrack4 := Ctrl+Shift+4
-editMulticamCutToAngle2 := 2
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 5 } := Ctrl+Alt+5
-editSelectItemAtPlayhead := Shift+V
-FusionWidget.fuHotkey_PlaybackManager_Player_Item_Prev{} := Up
-markMoveSelectedKeyframesLeft := 
-markFavoriteKeywords9 := Alt+Shift+9
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 2 } := Ctrl+Alt+2
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 1 } := Num+1 | 1
-editTrackDestinationSelectionTargetA := Ctrl+Alt+1
-FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = 1} := Right
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 6 } := Num+6 | 6
-FusionWidget.fuHotkey_SplineEditorView_View_Zoom_In := Num++ | =
-editMulticamSwitchToAngle9 := 
-sessionMemoriesLoadH := 
-markFavoriteKeywords4 := Alt+Shift+4
-editLink := Ctrl+Alt+L
-editAutoSelectToggleAudio3 := Ctrl+Alt+F3
-viewReferenceWipeToggle := Ctrl+W
-sessionPrinterLightsYelPlus := Num+3
-viewStereoSwitchEyeCycle := Ctrl+.
-FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 3 } := Num+3 | 3
-editMulticamCutToAngle8 := 8
-sessionMemoriesSaveA := 
-viewActiveWindowSelectionMediaPoolFolders := Ctrl+1
-FusionWidget.fuHotkey_GLView_Viewer_SubView_Enable := V
-editInsertOverwriteActionAppendAtEnd := Shift+F12
-FusionWidget.fuHotkey_SplineControl_View_Zoom_Fit := Ctrl+F
-sessionPrinterLightsMasterQuarterPlus := Ctrl+Num++
-editMulticamPrevPage := Alt+Shift+Left
-FusionWidget.fuHotkey_FuFrame_Tool_ViewClear := `
-editSlipEyeOppositeEyeOneFrameForward := Ctrl+Alt+.
-editMulticamSwitchToAngle1 := 
-editAutoSelectToggleAudio2 := Ctrl+Alt+F2
-fileProjectSettings := Shift+2
-sessionMemoriesLoadE := 
-editAutoSelectToggleAudio7 := Ctrl+Alt+F7
-sessionTrackReverse := Alt+T
-editEnableDisableToggleVideoTrack6 := Ctrl+Shift+6
-fairlightToggleGroup7Status := Ctrl+Num+7
-viewTimelineWipeOneFrameForward := Ctrl+Alt+Right
-editTrackLockToggleA5 := Alt+Shift+F5
-sessionVersionNext := Ctrl+N
-editSelectSubPrevious := Ctrl+Left
-FusionWidget.fuHotkey_PlaybackManager_Player_Item_Next{} := Down
-markMarkerClear := Alt+M
-controlGapNext := Ctrl+Alt+'
-editTrackDestinationSelectionTargetA6 := Ctrl+Alt+6
-controlJumpRight := Ctrl+Alt+Right
-editPasteAttributes := Alt+V
-resolveQuit := Ctrl+Q
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 8 } := Ctrl+Shift+8 | Ctrl+Shift+Num+8
-nodesToggleAll := Alt+D
-fileImportXml := Ctrl+Shift+I
-editBackspace := Backspace | Shift+X
-editMulticamCutToAngle4 := 4
-workspacePrimaryWorkspaceMedia := 
-workspaceLightboxView := Ctrl+Shift+F
-fileExportProject := Ctrl+E
-fileImportProject := 
-markKeyframeDeleteAll := 
-trimSelectVideoEditPoint := Alt+E
-sessionPrinterLightsGreenQuarterMinus := Ctrl+Num+5
-controlFastForward := Shift+L
-editAutoSelectToggleVideo5 := Alt+F5
-editSelectSubBelow := Ctrl+Down
-FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = true, reverse = true} := J
-markCreateSubClip := Alt+B
-editAutoSelectToggleAudio1 := Ctrl+Alt+F1
-helpManual := 
-editMoveClipsUp := Alt+Up
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 2 } := Ctrl+Shift+2 | Ctrl+Shift+Num+2
-sessionPrinterLightsGreenPlus := Num+8
-FusionWidget.fuHotkey_FuFrame_Comp_Abort := Esc
-sessionPrinterLightsMasterPlus := Num++
-FusionWidget.fuHotkey_FuFrame_ACTION_SHOW_CONSOLE := F6
-FusionWidget.fuHotkey_FuFrame_Time_Goto_GlobalStart := Shift+Left | Shift+[
-sessionPrinterLightsYelQuarterMinus := Ctrl+Num+.
-FusionWidget.fuHotkey_GLView_Viewer_Scale_Abs{ scale=0 } := Ctrl+F
-FusionWidget.fuHotkey_GLView_Viewer_Tools_Disable := Ctrl+P
-FusionWidget.fuHotkey_FuFrame_Time_Step_Forward := ] | Media Next | Right
-controlLoop := Ctrl+/
-editTrackDestinationSelectionTargetA8 := Ctrl+Alt+8
-editAutoSelectToggleVideo1 := Alt+F1
-FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_CentreSelected := D
-sessionPrinterLightsEnable := Ctrl+Alt+`
-markFavoriteKeywords1 := Alt+Shift+1
-editTrackLockToggleA := Alt+Shift+F9
-editMulticamSwitchToAngle7 := 
-FusionWidget.fuHotkey_PlaybackManager_Player_Play_Forward{} := Space
-trimFadeInToPlayhead := Alt+Shift+D
-editSelectClipsSelectAllBefore := Shift+W
-editMulticamSwitchToAngle2 := 
-editInsertOverwriteActionRippleOverwrite := Shift+F10
-editNudgeTrimStepNudgeForward := R
-editTrackLockToggleA7 := Alt+Shift+F7
-editTrackDestinationSelectionTargetAudioAll := Ctrl+Alt+9
-workspacePrimaryWorkspaceAudio := 
-markOut := Alt+2
-viewActiveWindowSelectionTimeline := Ctrl+4
-FusionWidget.fuHotkey_FuFrame_Comp_Choose_Tool := Ctrl+Space | Shift+Space
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = -1, toggle = true} := C
-FusionWidget.fuHotkey_GLViewer_Viewer_Controls_Show := Ctrl+K
-clipChangeClipSpeed := 
-editInsertOverwriteActionFitToFill := Shift+F11
-editEnableDisableToggleVideoTrack8 := Ctrl+Shift+8
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark := Ctrl+Shift+D
-editSlipAudioOneFrameReverse := Alt+,
-timelineSourceViewerSwap := Ctrl+PgUp
-FusionWidget.fuHotkey_FloatLUTMacroFrame_Comp_Undo := Ctrl+Z
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 7 } := Alt+7
-viewZoomViewerToFit := Z
-clipFindClipInMediaPool := Alt+F
-controlGapPrev := Ctrl+Alt+;
-workspacePrimaryWorkspaceFirstCut := 
-markMoveSelectedKeyframesDown := 
-editAutoSelectToggleAudio4 := Ctrl+Alt+F4
-markDeleteFlagCurrentSelected := 
-markResetOut := Alt+O
-editSnapping := `
-FusionWidget.fuHotkey_FuFrame_Comp_Choose_Action := Ctrl+Shift+Space
-sessionLiveGrade := Ctrl+R
-editMulticamSwitchToAngle5 := 
-sessionPrinterLightsBlueQuarterPlus := Ctrl+Num+9
-fairlightDebugSettings := 
-FusionWidget.fuHotkey_TimelineView_View_Zoom_Rectangle := Ctrl+R
-fileImportMedia := Ctrl+I
-editMediaStereoModeToLeft := Alt+Shift+,
-editAddAudioTransition := Shift+T
-FusionWidget.fuHotkey_FuFrame_Time_Goto_RenderStart := Ctrl+[ | Ctrl+Left
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 1 } := Ctrl+Shift+1 | Ctrl+Shift+Num+1
-FusionWidget.fuHotkey_FuFrame_Time_Step_PrevKey := Alt+[ | Alt+Left
-markKeyframeTimelineModeCycle := 
-editMediaStereoModeToBoth := Alt+Shift+/
-FusionWidget.fuHotkey_SplineEditorView_Time_Goto_Key_Next := Alt+]
-fairlightToggleGroup6Status := Ctrl+Num+6
-viewZoomSubZoomIn := Ctrl+= | Ctrl++
-sessionMemoriesSaveH := Alt+8
-workspaceViewerModeEnhancedViewer := Alt+F
-clipRetimeControls := Ctrl+R
-sessionPrinterLightsMasterQuarterMinus := Ctrl+Num+Enter
-FusionWidget.fuHotkey_FuFrame_Time_Goto_GlobalEnd := Shift+Right | Shift+]
-nodesPrevious := Alt+Shift+;
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 3 } := Ctrl+Alt+3
-editSelectEditPoint := V
-FusionWidget.fuHotkey_FuFrame_App_Help := F1
-controlKeyframePrev := [
-fileEasyDCPExportSignerCertificate := 
-nodesAddBefore := Alt+A
-controlTimelineStart := Home
-editEnableDisableToggleVideoTrackAll := Ctrl+Shift+9
-editAutoSelectToggleVideo2 := Alt+F2
-editMulticamSwitchToAngle6 := 
-FusionWidget.fuHotkey_GLViewer_Viewer_Guides_Show := Ctrl+G
-FusionWidget.fuHotkey_GLView_Viewer_QuadView := Shift+Q
-controlKeyframeNext := ]
-controlMarkersPrev := Shift+Up
-controlStepReverse := Shift+S
-fileProjectManager := Shift+1
-editAutoSelectToggleVideo4 := Alt+F4
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 7 } := Ctrl+Alt+7
-clipShowKeyframeEditor := Ctrl+Shift+C
-FusionWidget.fuHotkey_FuFrame_Comp_Undo := Ctrl+Z
-FusionWidget.fuHotkey_PlaybackManager_Player_Channel{ channel = 'Alpha' } := A
-editAutoSelectToggleAudio5 := Ctrl+Alt+F5
-editInsertOverwriteActionPlaceOnTop := F12
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 10 } := Ctrl+Alt+0
-nodesAddPCW := Alt+B
-editTrackDestinationSelectionTargetV2 := 
-editTrackLockToggleA6 := Alt+Shift+F6
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 12, toggle = true} := Z
-FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 3 } := Alt+3
-viewActiveWindowSelectionEffects := Ctrl+6
-editPasteValue := Alt+Shift+V
-viewActiveWindowSelectionMediaPoolClips := Ctrl+2
-editAddTransition := Ctrl+T
-FusionWidget.fuHotkey_PlaybackManager_Player_Play_Reverse{} := Alt+Space
-fairlightToggleGroup2Status := Ctrl+Num+2
-sessionPrinterLightsMasterMinus := Num+Enter
-sessionPrinterLightsCyanQuarterMinus := Ctrl+Num+-
-MediaPool.Context_clearPosterFrame := Alt+P
-controlScannerFramingMoveReverse := Ctrl+Left
+editSlipAudioOneSubFrameReverse := Alt+Left
 markFavoriteKeywordsClear := Alt+Shift+0
-editSelectSubAbove := Ctrl+Up
-controlPlayReverse := S
-sessionPrinterLightsCyanPlus := Num+1
-editBladeRazor := Ctrl+B
-viewViewerToggle := Q
-editBlade := B
-markResetIn := Alt+I
-markFavoriteKeywords2 := Alt+Shift+2
-FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 5 } := Ctrl+Shift+5 | Ctrl+Shift+Num+5
+markMoveSelectedKeyframesRight := 
+sessionPrinterLightsGreenPlus := Num+8
+sessionPrinterLightsRedPlus := Num+7
+markVideoIn := Alt+Shift+I
+FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 2, toggle = true} := B
+controlFastForward := Shift+L
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 1 } := Ctrl+Shift+1 | Ctrl+Shift+Num+1
+editTrackLockToggleA := Alt+Shift+F9
+FusionWidget.fuHotkey_FloatLUTMacroFrame_Comp_Redo := Ctrl+Y | Ctrl+Shift+Z
+viewTimelineModeSource := 
+FusionWidget.fuHotkey_GLView_Viewer_Reset := Ctrl+1
+editMulticamCutToAngle8 := 8
+sessionAutoColor := Alt+Shift+C
+editPasteInsert := Ctrl+Shift+V
+sessionBaseMemory := Shift+Home
+FairlightTimeline.trimExtendEditSelectionToNextTrack := Ctrl+Shift+;
+editInsertOverwriteActionReplace := F11
+nodesAddPCW := Alt+B
+sessionPrinterLightsCyanMinus := Num+-
+editToggleVideoAudioSelection := Alt+U
+FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Spline' } := F8
+editTrackDestinationSelectionTargetA7 := Ctrl+Alt+7
+editCut := Ctrl+X
+editEnableDisableToggleVideoTrack8 := Ctrl+Shift+8
+sessionPrinterLightsYelPlus := Num+3
+nodesPrevious := Alt+Shift+;
+sessionPrinterLightsGreenQuarterPlus := Ctrl+Num+8
+editM2JoinClip := Alt+\
+editNudgeTrimStepExtendEdit := 
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 9 } := Ctrl+Shift+9 | Ctrl+Shift+Num+9
+FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = -10} := Shift+Left
+controlTimelineEnd := End
+sessionVersionAdd := Ctrl+Y
+editMulticamPrevPage := Alt+Shift+Left
+nodesExtractCurrent := E
+viewZoomActualSize := Alt+Shift+Z
+sessionMemoriesSaveE := Alt+5
+resolveCustomizedActions := Ctrl+Alt+K
+FusionWidget.fuHotkey_GLImageViewer_Viewer_Layer_Change{ relindex = -1 } := PgUp
+editMulticamSwitchToAngle3 := 
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 7 } := Alt+7
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 6 } := Alt+6
+fairlightToggleGroup4Status := Ctrl+Num+4
+sessionMemoriesSaveA := 
+FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = 1} := Right
+sessionPrinterLightsGreenQuarterMinus := Ctrl+Num+5
+editTrackDestinationSelectionTargetV7 := 
+editEnableDisableToggleVideoTrack2 := Ctrl+Shift+2
+nodesAddOutside := Alt+O
+FairlightTimeline.editAddTransition := 
+sessionPrinterLightsRedMinus := Num+4
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 8 } := Ctrl+Alt+8
+editSlipEyeOppositeEyeOneFrameForward := Ctrl+Alt+.
+markDeleteFlagCurrentSelected := 
+viewStillsStillGrab := Ctrl+Alt+G
+editMulticamTgtVideo := Alt+Shift+]
+markResetOut := Alt+O
+editMulticamCutToAngle2 := 2
+FusionWidget.fuHotkey_TimelineView_View_Zoom_Rectangle := Ctrl+R
+FusionWidget.fuHotkey_GLViewer_Viewer_Guides_Show := Ctrl+G
+fileImportBatchListFromEDL := 
+editSelectEditPoint := V
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 6 } := Num+6 | 6
+editPaste := Ctrl+V
+FairlightTimeline.trimExtendEditSelectionToPreviousEdit := Ctrl+Shift+K
+nodesAddSplitterCombiner := Alt+Y
+editAutoSelectToggleAudio8 := Ctrl+Alt+F8
+editEnableDisableToggleVideoTrack7 := Ctrl+Shift+7
+editSelectItemAtPlayhead := Shift+V
+editBackspace := Backspace | Shift+X
+nodesToggleCurrent := Ctrl+D
+editLink := Ctrl+Alt+L
+controlTimecodeIncrement := + | Num++
+trimSelectAudioEditPoint := Shift+E
+controlPlaySlow := Shift+K
+controlScannerFramingMoveReverse := Ctrl+Left
+editEnableDisableToggleVideoTrack4 := Ctrl+Shift+4
+sessionMemoriesLoadA := 
+editDeleteGaps := Shift+4
+editAutoSelectToggleAudio7 := Ctrl+Alt+F7
+FusionWidget.fuHotkey_GLView_Viewer_Buffer{ index = 2 } := /
+editAutoSelectToggleVideo2 := Alt+F2
+workspaceViewerModeFullViewer := 
+controlPlayAroundToPlayToIn := 
+editNudgeTrimStepNudgeReverse := Alt+S
 trimSelectAllItemsAtPlayhead := Alt+Shift+V
+viewTimelineWipeOneFrameReverse := Ctrl+Alt+Left
+markFavoriteKeywords5 := Alt+Shift+5
+controlTimelineStart := Home
+FusionWidget.fuHotkey_GLView_Viewer_Scale_Rel{ scale=1·4142135623730950488016887242097 } := = | Num++
+editTrackDestinationSelectionTargetA8 := Ctrl+Alt+8
+FusionWidget.fuHotkey_GLView_Viewer_Scale_Rel{ scale=0·70710678118654752440084436210485 } := - | Num+-
+viewStillsStillNext := Ctrl+Alt+N
+editMediaStereoModeToLeft := Alt+Shift+,
+FusionWidget.fuHotkey_GLView_Viewer_SubView_Enable := V
+editAutoSelectToggleVideo5 := Alt+F5
+fairlightToggleGroup2Status := Ctrl+Num+2
+editTrackDestinationSelectionTargetA3 := Ctrl+Alt+3
 markKeyframeMakeStatic := Ctrl+]
-FusionWidget.fuHotkey_GLViewer_Viewer_Channel{chan = 3, toggle = true} := A
-FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = 10} := Shift+Right
+FusionWidget.fuHotkey_FuFrame_Fusion_View_Show{ view = 'Nodes' } := F5
+FusionWidget.fuHotkey_Fusion_Console_Show{} := Shift+0
+FusionWidget.fuHotkey_GLImageViewer_Viewer_Layer{ layer = ':Default' } := Home
+FusionWidget.fuHotkey_FlowView_Flow_Add_Bookmark := Ctrl+D
+editMulticamCutToAngle4 := 4
+workspaceViewerModeEnhancedViewer := 
+editSelectSubBelow := Ctrl+Down
+fairlightToggleGroup9Status := Ctrl+Num+9
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 3 } := Alt+3
+editSelectSubPrevious := Ctrl+Left
+viewTimelineWipeOneFrameForward := Ctrl+Alt+Right
+viewStillsStillPlay := Ctrl+Alt+F
+markFavoriteKeywords9 := Alt+Shift+9
+editAutoSelectToggleVideoAll := Alt+F9
+FusionWidget.fuHotkey_FuFrame_Tool_ViewClear := `
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 4 } := Num+4 | 4
+controlGotoIn := Shift+I
+fileExportXml := Ctrl+Shift+O
+FusionWidget.fuHotkey_FuFrame_Playback_Mode{ play = true, reverse = true} := J
+FusionWidget.fuHotkey_FuFrame_Tool_ViewOn{ index = 7 } := Num+7 | 7
+controlStepForward := Shift+F
+editRippleCut := Ctrl+Shift+X
+sessionTrackForward := Ctrl+T
+editInsertOverwriteActionPlaceOnTop := F12
+sessionPrinterLightsMagPlus := Num+2
+FusionWidget.fuHotkey_Fusion_Expose_Tool_Name_Mode := Ctrl+Shift+E
+editAutoSelectToggleVideo8 := Alt+F8
+editTrackLockToggleA7 := Alt+Shift+F7
+editInsertOverwriteActionRippleOverwrite := Shift+F10
+nodesAddPPW := Alt+G
+FusionWidget.fuHotkey_GLView_Viewer_Tools_Disable := Ctrl+P
+controlMarkersPrev := Shift+Up
+fileNewProject := 
+fileImportXml := Ctrl+Shift+I
+editAddTransition := Ctrl+T
+clipRetimeControls := Ctrl+R
+clipFindClipInMediaPool := 
+markFavoriteKeywords6 := Alt+Shift+6
+sessionTrackOneFrameReverse := Alt+Left
+editInsertOverwriteActionFitToFill := Shift+F11
+controlTimecodeDecrement := - | Num+-
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Activate{ index = 1 } := Alt+1
+editMulticamCutToAngle5 := 5
+editMulticamCutToAngle9 := 9
+markVideoOut := Alt+Shift+O
+timelineSplitClipsAtSceneCut := F3
+FusionWidget.fuHotkey_FlowView_Flow_Go_To_Bookmark { index = 5 } := Ctrl+Shift+5 | Ctrl+Shift+Num+5
+editRedo := Ctrl+Shift+Z
+sessionVersionDefault := Ctrl+U
+markClip := 
+FusionWidget.fuHotkey_TimelineView_Time_Goto_Key_Prev := Alt+[
+markFavoriteKeywords7 := Alt+Shift+7
+trimRippleEndToPlayhead := Alt+R
+FusionWidget.fuHotkey_FuFrame_Comp_Redo := Ctrl+Y | Ctrl+Shift+Z
+editMediaStereoModeToBoth := Alt+Shift+/
+editTrackDestinationSelectionTargetV := 
+sessionPrinterLightsRedQuarterPlus := Ctrl+Num+7
+markFavoriteKeywords3 := Alt+Shift+3
+FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_CentreSelected := D
+markSelected := Shift+A
+editNudgeTrimStepTrimMultiFrameRight := Shift+.
+editMoveClipsUp := Alt+E
+FusionWidget.fuHotkey_FuFrame_Tool_Settings_Store{ index = 3 } := Ctrl+Alt+3
+sessionPrinterLightsMagQuarterMinus := Ctrl+Num+0
+FusionWidget.fuHotkey_GLPreview_Playback_Seek{frames = -1} := Left
+FusionWidget.fuHotkey_TimelineView_Time_Goto_Key_Next := Alt+]
+editMediaStereoModeToRight := Alt+Shift+.
+FusionWidget.fuHotkey_GLImageViewer_Viewer_Layer_Change{ relindex =  1 } := PgDown
+editSlipEyeOppositeEyeOneFrameReverse := Ctrl+Alt+,
+FairlightTimeline.trimExtendEditSelectionToPreviousTrack := Ctrl+Shift+P
+controlLargeStepReverse := Shift+Left
+editSelectSubAbove := Ctrl+Up
+FusionWidget.fuHotkey_GL3DViewer_Viewer_3D_FitAll := Shift+F
+FusionWidget.fuHotkey_FuFrame_Frame_Activate_Prev := Ctrl+Shift+Tab
+FusionWidget.fuHotkey_TimelineView_View_Zoom_Fit := Ctrl+F
+editInsertOverwriteActionInsert := F9
+markIn := Alt+1
+gangSourceTimelinePlayheads := Alt+Q
+viewActiveWindowSelectionTimeline := Ctrl+4
+sessionMemoriesLoadC := 
+editToggleDynamicTrimMode := 
+FusionWidget.fuHotkey_GLViewer_Viewer_Controls_Show := Ctrl+K
+controlScannerFramingMoveForward := Ctrl+Right
+viewActiveWindowSelectionTimelineViewer := Ctrl+5
+clipAudioDecreaseAudioLevel3dB := Alt+Shift+-
