@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 ================================================================================================
@@ -82,11 +81,18 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     We do NOT print inside here to avoid scrambled text in multiprocessing.
     """
     path = Path(path_str)
-    # Prepare basic info for valid return
     
     try:
         img = Image.open(path)
         img = ImageOps.exif_transpose(img)
+        
+        # Ensure we are in a color mode (RGB or RGBA) so that color borders
+        # and color output work even if the input is grayscale.
+        if img.mode not in ("RGB", "RGBA"):
+            if "transparency" in img.info or img.mode in ("LA", "PA"):
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
     except Exception as e:
         return False, f"[Error] {path.name}: Open failed ({e})"
 
