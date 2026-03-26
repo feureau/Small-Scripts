@@ -1637,7 +1637,7 @@ class WorkflowPresetManager:
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
-            "close_gui_on_processing": False,
+            "close_gui_on_processing": True,
             "burn_subtitles": DEFAULT_BURN_SUBTITLES,
             "use_sharpening": DEFAULT_USE_SHARPENING,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
@@ -1916,7 +1916,7 @@ class VideoProcessorApp:
         self.fruc_fps_var = tk.StringVar(value=DEFAULT_FRUC_FPS)
         self.fruc_fps_var.trace_add('write', lambda *args: self._update_selected_jobs('fruc_fps'))
         self.generate_log_var = tk.BooleanVar(value=False)
-        self.close_gui_var = tk.BooleanVar(value=False)
+        self.close_gui_var = tk.BooleanVar(value=True)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         self.override_bitrate_var = tk.BooleanVar(value=False)
         self.manual_bitrate_var = tk.StringVar(value="0")
@@ -4785,7 +4785,8 @@ class VideoProcessorApp:
         )
         if use_precrop:
             precrop = _compute_center_crop(info["width"], info["height"], target_w, target_h)
-        use_avsw_reader = bool(precrop)
+        cuvid_codecs = {"h264", "hevc", "av1", "vp9", "mpeg1", "mpeg2", "vc1", "vp8", "mjpeg"}
+        use_avsw_reader = bool(precrop) or info.get("codec_name", "") not in cuvid_codecs
 
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         codec_map = {"h264": "h264", "hevc": "hevc", "av1": "av1"}
@@ -4909,10 +4910,19 @@ class VideoProcessorApp:
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
         decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid", "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
-        decoder = decoder_map.get(info["codec_name"]) if decoder_available else info["codec_name"]
+        decoder = decoder_map.get(info["codec_name"], info["codec_name"]) if decoder_available else info["codec_name"]
         use_cuda_decoder = "_cuvid" in decoder
         cmd = [FFMPEG_CMD, "-y", "-hide_banner"] + (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
         filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        # For codecs without CUVID support (e.g. ProRes), frames are software-decoded to CPU.
+        # CUDA filters (scale_cuda, overlay_cuda, etc.) need GPU frames, so we convert
+        # the pixel format and upload to CUDA at the start of the filter chain.
+        if not use_cuda_decoder:
+            upload_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+            filter_complex_parts.append(f"[0:v]format={upload_fmt},hwupload_cuda[v_cuda_in]")
+            cuda_video_in = "[v_cuda_in]"
+        else:
+            cuda_video_in = "[0:v]"
         upscale_algo = options.get("upscale_algo")
         use_nvencc_resize = encoder_backend == "preprocess" and upscale_algo in ["nvvfx-superres", "ngx-vsr"]
         ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
@@ -4982,7 +4992,7 @@ class VideoProcessorApp:
                 final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
 
             video_fc_parts = [
-                "[0:v]split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
+                f"{cuda_video_in}split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
                 f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
                 "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
                 final_v_out
@@ -4992,7 +5002,7 @@ class VideoProcessorApp:
         else:
             vf_filters, cpu_filters = [], []
             # Default input tag for cases like "original" orientation (no resize/aspect chain)
-            video_in_tag = "[0:v]"
+            video_in_tag = cuda_video_in
             if orientation == "original":
                 res_key = options.get('resolution')
                 if res_key and res_key.lower() != "original":
@@ -5109,7 +5119,7 @@ class VideoProcessorApp:
             if vf_filters:
                 filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
                 video_out_tag = "[v_out]"
-            elif video_in_tag != "[0:v]":
+            elif video_in_tag != cuda_video_in:
                 video_out_tag = video_in_tag
         
         # Track effective resolution for metadata/aspect forcing
