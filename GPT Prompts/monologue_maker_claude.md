@@ -1,4 +1,6 @@
-You are writing a YouTube commentary script. Work through all six steps in order. Do not skip steps or combine them. Show your work at each step before proceeding.
+# YouTube Commentary Script Prompt — Version 2
+
+You are writing a YouTube commentary script. Work through all six steps in order, plus the standalone section between Step 5 and Step 6. Do not skip steps or combine them. Show your work at each step before proceeding.
 
 ---
 
@@ -31,6 +33,22 @@ Note any claims that originate from a single source — these must be presented 
 **Single-source numeric figures — removal, not hedging:** If a specific numeric figure (a cost, a rate, a statistic) originates from a single anonymous source — a forum post, a social media comment, an unattributed estimate with no sourcing chain — it defaults to **removal**, not hedging. Hedging implies partial credibility that does not exist for anonymous numeric claims. Replace with general language confirmed by industry consensus, or cut entirely. The script must never look authoritative by citing fake precision.
 
 At the end, produce a clean verified fact sheet — the only version of the facts that will appear in the script. Never use unverified claims.
+
+---
+
+### LIVING FACT SHEET PROTOCOL
+
+**The verified fact sheet produced at the end of Step 2 is not a closed document. It remains active for the entire project.**
+
+Any factual claim introduced after Step 2 — during drafting, revision, or integration of new material — triggers the following procedure before it enters the script:
+
+- Run a verification check using the same standards applied in Step 2
+- Classify the claim type (confirmed figure, named source opinion, institutional record, single-source, etc.)
+- Add it to the fact sheet with its source and type noted
+- If the claim is single-source anonymous numeric: remove, do not hedge
+- If the claim cannot be verified: cut or reframe as explicit speculation with appropriate hedging
+
+The fact sheet closes only when the script is final. Any revision session that introduces new claims reopens it automatically. This applies to claims that emerge from the argument itself — comparisons, historical context, assumed statistics, framework descriptions — not just claims present in the original source material.
 
 ---
 
@@ -310,7 +328,19 @@ For each section of the source material, check:
 
 **I. Fun and personality moments.** Are there details that are inherently funny, surprising, or characterful — details the creator would genuinely react to rather than just report? Flag these. Assign the named A9 technique each will use. The script needs these moments distributed throughout, not just at the end.
 
-Produce a completeness report listing every gap, missing detail, underdeveloped section, and humor technique assignment before proceeding. Only proceed to Step 5 when the completeness audit is finished.
+**J. Argument-Driven Gap Identification.**
+
+After completing the source material audit above, read the planned argument structure and ask: what does this argument implicitly assume, compare, or lean on that did not originate in the source material?
+
+Check for:
+
+- **Implicit comparisons:** Does the argument compare the subject to something external — another institution, another era, another sport, another policy framework? That external point needs verification before it enters the script. Add all verified findings to the living fact sheet.
+- **Historical context:** Does the argument reference events, quotes, or institutional history that predate the source material? Verify each one independently. Precise attribution matters — a named quote needs a sourced origin, not a paraphrase of a paraphrase.
+- **Assumed facts:** Does the argument assume a figure, standard, or statistic that seems obvious but hasn't been checked — qualifying standards, world records, timelines, percentages? Verify before writing and add to the living fact sheet.
+- **Framework assumptions:** Does the argument depend on a claim about how a system works — how categories are structured, how classification operates, how a test is administered — that hasn't been explicitly sourced? Source it or flag it as assumed.
+- **Unverifiable assumptions:** Add to a flagged list. These must be either verified before entering the script, reframed as explicit speculation with appropriate hedging, or cut.
+
+Produce a completeness report listing every gap, missing detail, underdeveloped section, humor technique assignment, and argument-driven gap before proceeding. Only proceed to Step 5 when the completeness audit is finished.
 
 ---
 
@@ -327,6 +357,23 @@ Based on the verified facts and the completeness audit, identify the single most
 * **Has a universal extension:** the argument should connect to something bigger than the specific subject
 
 Name the angle in one sentence. Briefly explain why it is better than the two most obvious alternatives. Identify the universal pattern the angle reveals — the thing that makes this story matter to someone with no connection to the specific subject.
+
+---
+
+## REPETITION VS. REINFORCEMENT
+
+**This section applies during drafting and during every revision. It is not a post-hoc audit — apply it in real time whenever information appears more than once.**
+
+Not all repeated information is redundancy. Before cutting any information that appears more than once in the script, apply this test:
+
+*Is this information doing the same argumentative job in both locations — making the same point, for the same reason, to the same effect?*
+
+- **Yes — Redundancy:** Cut the weaker instance. Keep the one where the information lands with more force, more specificity, or more emotional weight. If both instances are equally strong, keep the one that appears later in the script, where the reader has more context to receive it fully.
+- **No — Potential Reinforcement:** Ask: does the second appearance reframe the information, extend it, or make a new point by placing it in a new context? If yes, keep both. Make the difference explicit in the prose — the second appearance should signal, through its framing or placement, that something new is happening with this information, not that the script forgot it already appeared.
+
+**Reinforcement is earned, not assumed.** If you cannot articulate in one sentence what new argumentative work the repeated information is doing in its second location, it is redundancy, not reinforcement. Cut it.
+
+**The standard for reinforcement — the Atlanta test:** A single data point can appear multiple times if each appearance does distinct work. The Atlanta 1996 false positive rate (87.5%) can legitimately appear as: evidence the test historically failed; proof that the CAIS exemption's internal logic undermines the genetic approach; and emotional payoff of a 130-year institutional pattern. Each instance advances the argument from a different angle. That is the standard. Apply it to every repeated element before deciding to keep or cut.
 
 ---
 
@@ -535,6 +582,8 @@ Place three re-engagement hooks at approximately the 2-minute, 5-minute, and 7-m
 
 **Test each re-engagement hook:** Does reading it make the viewer form a specific unresolved question? If they could feel satisfied without watching further, it's a summary. Rebuild.
 
+**After any revision to act content, re-audit all downstream re-engagement hooks.** A hook that pulled forward content that has since moved, changed, or been pre-empted by new material must be rewritten. A hook that now summarises rather than teases must be rebuilt. This audit is not optional — it is part of the Revision Integration Checklist.
+
 **CRYSTALLISING LINE:**
 
 One line that captures the entire argument as a shareable verdict. In the final third. The payoff of the detective case. Not an observation — a proven conclusion. Highlighted visually. Spoken. The one intentional exception to the spoken flow rules.
@@ -638,6 +687,41 @@ These are spoken-aloud red flags — patterns that survive written editing but f
 
 ---
 
+#### **REVISION INTEGRATION CHECKLIST**
+
+**Run this checklist in full any time new material is added to an existing draft — a paragraph, an argument, a fact, a humor beat, or any other change. Do not skip steps. The revision is not complete until this checklist is finished.**
+
+**A. Living fact sheet**
+- Does the new material introduce any factual claim not present in the original source material?
+- If yes: verify it now using Step 2 standards, classify its type, and add it to the living fact sheet before it enters the script.
+- If the claim is single-source anonymous numeric: remove it, do not hedge.
+- If the claim cannot be verified: cut or reframe as explicit speculation.
+
+**B. Upstream effects**
+- Does the new material assume anything that earlier paragraphs haven't established? If yes, add the setup earlier or move the new material to a later position.
+- Does the new material contradict anything established earlier? If yes, resolve the contradiction explicitly — do not leave both versions in the script.
+
+**C. Downstream effects — hooks**
+- Does the new material pre-empt any re-engagement hook that follows it? If yes, rewrite the hook to pull forward something not yet revealed.
+- Does any existing hook now summarise rather than tease, because the content it was pointing to has changed? If yes, rebuild the hook.
+
+**D. Downstream effects — existing paragraphs**
+- Does the new material make any existing paragraph weaker, redundant, or superseded?
+- For each affected paragraph, apply the Repetition vs. Reinforcement test.
+- Decision: cut, reshape as reinforcement, or keep with a documented reason. Default to reshape unless cutting is clearly better.
+
+**E. Downstream effects — conclusion and crystallising line**
+- Does the new material change what the conclusion needs to do? If yes, re-audit the conclusion against the full current script.
+- Does the new material change what the crystallising line is proving? If yes, rewrite the crystallising line.
+
+**F. Housekeeping**
+- Add every new factual claim to the living fact sheet with source and type noted.
+- Add or update delivery notes for any new humor beat, tonal shift, emotional register change, or technique deployment.
+- Re-run the paragraph opener audit — verify no single word now appears more than twice as a paragraph opener across the full revised script.
+- Verify the source table is complete and current.
+
+---
+
 #### **CREDIBILITY AND INTEGRITY REQUIREMENTS**
 
 **FALSE FIRST-PERSON OWNERSHIP — STRICTLY PROHIBITED**
@@ -730,6 +814,7 @@ After the script:
 
 * [ ] Stakes rise at every act break
 * [ ] Re-engagement hooks are forward pulls not summaries
+* [ ] Re-engagement hooks re-audited against current act content after any revision
 * [ ] Crystallising line exists, is in the final third, arrives as the verdict
 * [ ] Conclusion register verified against A4 — ends flat, not poetic
 * [ ] Conclusion ends with flat signoff pattern
@@ -763,6 +848,7 @@ After the script:
 **CONTENT CHECKS:**
 
 * [ ] Source material completeness audit completed and all gaps addressed
+* [ ] Argument-driven gap identification completed — all implicit comparisons, historical context, assumed facts, and framework assumptions verified and added to living fact sheet
 * [ ] A9 humor technique assignments from Step 4 carried into the script
 * [ ] Named individuals present where inclusion adds specificity, irony, credibility, or emotional weight
 * [ ] Specific mechanisms behind general descriptions included
@@ -772,6 +858,20 @@ After the script:
 * [ ] Legal and official sources noted with brief explanation of why they are more credible
 * [ ] Context before detail — every term explained before the detail depending on it
 * [ ] Timeline accuracy — verified sequence stated correctly throughout
+* [ ] Repetition vs. Reinforcement test applied to every element appearing more than once — redundancies cut, reinforcements kept with documented reason
+
+**REVISION CHECKS (apply after any revision):**
+
+* [ ] Revision Integration Checklist completed in full
+* [ ] Living fact sheet updated with all new claims introduced during revision
+* [ ] All new claims verified to Step 2 standards before entering script
+* [ ] Upstream contradictions resolved
+* [ ] Downstream hooks re-audited against revised content
+* [ ] Affected existing paragraphs assessed — cut, reshaped, or kept with documented reason
+* [ ] Conclusion and crystallising line re-audited against full revised script
+* [ ] Delivery notes updated
+* [ ] Source table updated
+* [ ] Paragraph opener audit re-run on full revised script
 
 **CREDIBILITY CHECKS:**
 
