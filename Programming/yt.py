@@ -11,7 +11,7 @@ Desktop (Tkinter) tool for two workflows:
 
 - Authenticates with the YouTube Data API (OAuth installed app flow).
 - Loads existing channel videos or videos from a specific playlist.
-- Matches local `.txt` descriptions and subtitle files to videos.
+- Matches local `.txt`/`.json` descriptions and subtitle files to videos.
 - Bulk updates titles/descriptions/tags/category/language/scheduling/privacy.
 - Uploads local files as private videos (with optional post-upload file moving).
 - Provides guardrails (blank metadata-file skip, dry-run mode, log persistence).
@@ -29,7 +29,7 @@ Desktop (Tkinter) tool for two workflows:
 
 ### 3) Utility helpers
 - Text normalization/sanitization for matching and YouTube-safe payloads.
-- JSON cleaning for tolerant metadata parsing from `.txt`.
+- JSON cleaning for tolerant metadata parsing from metadata files (`.txt`/`.json`).
 - File moving helpers for uploaded/failed organization.
 
 ### 4) Data models
@@ -67,7 +67,7 @@ Notes:
 
 ## Upload Mode Flow
 1. Load local files matching video patterns.
-2. Script auto-finds matching `.txt` description and subtitle files.
+2. Script auto-finds matching `.txt`/`.json` description and subtitle files.
 3. Select desired rows and click `PROCESS`.
 4. Each upload is inserted as private (optionally with `publishAt` if set).
 5. Optional file moves into organized `uploaded/...` folders.
@@ -102,7 +102,7 @@ Key fields used:
 - `sanitize_for_youtube`: strips `<` and `>` and truncates.
 - `sanitize_description`: removes control chars and enforces 5000 chars.
 - `sanitize_tags`: enforces character/count/length constraints.
-- `sanitize_and_parse_json`: tolerant extraction of JSON blocks from `.txt`.
+- `sanitize_and_parse_json`: tolerant extraction of JSON blocks from metadata files.
 
 ### File movement and logs
 - `generate_batch_id`: unique batch key.
@@ -117,7 +117,7 @@ Key fields used:
   - `is_likely_short()` for scheduling heuristics.
 - `VideoEntry`:
   - represents local upload candidate.
-  - auto-loads adjacent `.txt`/subtitle if present.
+  - auto-loads adjacent `.txt`/`.json` metadata + subtitle if present.
 
 ### GUI class (`MainApp`)
 - `build_gui`: constructs all widgets and binds callbacks.
@@ -155,7 +155,7 @@ Key fields used:
 
 ## Safety Guards and Behaviors
 
-- Blank metadata `.txt` files are skipped.
+- Blank metadata files (`.txt`/`.json`) are skipped.
 - Invalid date input for scheduling aborts update run with log error.
 - Network/API exceptions are logged; app continues where possible.
 - Dry-run mode logs intended updates without calling `videos().update(...)`.
@@ -222,6 +222,7 @@ OAUTH_PORT = 0
 API_TIMEOUT_SECONDS = 60
 VIDEO_PATTERNS = ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.wmv"]
 SUBTITLE_PATTERNS = ["*.srt", "*.sbv", "*.vtt", "*.scc", "*.ttml"]
+METADATA_EXTENSIONS = {".txt", ".json"}
 YOUTUBE_TAGS_MAX_LENGTH = 500
 YOUTUBE_TAGS_MAX_COUNT = 15
 YOUTUBE_TITLE_MAX_LENGTH = 100
@@ -288,6 +289,29 @@ def normalize_for_matching(text: str) -> str:
     text = re.sub(r'[^a-z0-9\s]', ' ', text)
     text = re.sub(r'\s+', '_', text)
     return text.strip()
+
+def nuclear_clean(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r'\.[a-z0-9]{3,4}$', '', text, flags=re.IGNORECASE)
+    return re.sub(r'[^a-z0-9]', '', text.lower())
+
+def extract_marker_number(text: str):
+    if not text:
+        return None
+    lowered = text.lower()
+    m = re.search(r'\bmarker[\s_\-\(\)]*(\d{1,4})(?!\d)', lowered)
+    if m:
+        return int(m.group(1))
+    m2 = re.search(r'\bmarker(\d{1,4})(?!\d)', lowered)
+    if m2:
+        return int(m2.group(1))
+    return None
+
+def has_eng_token(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r'\beng\b', text.lower()))
 
 def sanitize_for_youtube(text: str, max_len=None) -> str:
     sanitized = text.replace('<', '').replace('>', '')
@@ -444,12 +468,33 @@ class VideoEntry:
         p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []; self.description_file_path = None
         try:
             # Skip blank files during scan
-            matching_txt_files = [f for f in p.parent.glob(f"{p.stem}*.txt") if f.stat().st_size > 0]
-            if matching_txt_files:
-                txt_file = matching_txt_files[0]; logger.info(f"Found matching description file '{txt_file.name}' for video '{p.name}'."); content = txt_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
+            matching_metadata_files = [f for f in p.parent.iterdir() if f.is_file() and f.suffix.lower() in METADATA_EXTENSIONS and f.stat().st_size > 0]
+            best_metadata_file, best_score = None, float('inf')
+            p_nuclear = nuclear_clean(p.stem)
+            p_marker = extract_marker_number(p.stem)
+            p_has_eng = has_eng_token(p.stem)
+            for candidate in matching_metadata_files:
+                c_stem = candidate.stem
+                c_nuclear = nuclear_clean(c_stem)
+                score = float('inf')
+                # Strong: direct nuclear containment
+                if c_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
+                    score = 0
+                else:
+                    # Fallback: marker-number alignment (handles "... - eng-yt.json" style names)
+                    c_marker = extract_marker_number(c_stem)
+                    if p_marker is not None and c_marker == p_marker:
+                        score = 1
+                        if p_has_eng and has_eng_token(c_stem):
+                            score = 0.5
+                if score < best_score:
+                    best_score = score
+                    best_metadata_file = candidate
+            if best_metadata_file:
+                metadata_file = best_metadata_file; logger.info(f"Found matching description file '{metadata_file.name}' for video '{p.name}'."); content = metadata_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
                 if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
                 else: self.description = content
-                self.description_source = txt_file.name; self.description_file_path = str(txt_file)
+                self.description_source = metadata_file.name; self.description_file_path = str(metadata_file)
         except Exception as e: logger.error(f"Error reading description file for '{p.name}': {e}")
         try:
             for pattern in SUBTITLE_PATTERNS:
@@ -618,10 +663,10 @@ class MainApp:
     def _update_gui_for_mode(self):
         self.tree.delete(*self.tree.get_children())
         if self.app_mode == "update":
-            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('status', text='Privacy'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
+            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('title', text='Title'); self.tree.heading('desc_file', text='Description File'); self.tree.heading('sub_file', text='Subtitle File'); self.tree.heading('status', text='Privacy'); self.tree.heading('publish_at', text='Publish At (UTC)'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
             self.update_status("UPDATE MODE: Load existing videos or select from list.")
         elif self.app_mode == "upload":
-            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('status', text='Desc Source'); self.tree.heading('upload_date', text='Sub Source'); self.tree.column('upload_date', width=120)
+            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('title', text='Title'); self.tree.heading('desc_file', text='Description Source'); self.tree.heading('sub_file', text=''); self.tree.heading('status', text=''); self.tree.heading('publish_at', text=''); self.tree.heading('upload_date', text='Subtitle Source'); self.tree.column('upload_date', width=120)
             self.vis_cb.config(state=tk.DISABLED); self.rad_private.config(state=tk.DISABLED); self.rad_unlisted.config(state=tk.DISABLED); self.rad_public.config(state=tk.DISABLED)
             self.update_status("UPLOAD MODE: Load local files or select from list to upload.")
         self._update_ui_states()
@@ -765,11 +810,6 @@ class MainApp:
             # High-Precision TIMESTAMP_PATTERN (Captures Seconds)
             TIMESTAMP_PATTERN = re.compile(r'(202\d)[\.\-\s_]?([01]\d)[\.\-\s_]?([0-3]\d).*?([0-2]\d)[\.\-\s_]?([0-5]\d)[\.\-\s_]?([0-5]\d)?')
             
-            def nuclear_clean(text):
-                if not text: return ""
-                text = re.sub(r'\.[a-z0-9]{3,4}$', '', text, flags=re.IGNORECASE)
-                return re.sub(r'[^a-z0-9]', '', text.lower())
-
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
                 videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails,contentDetails").execute()
@@ -804,13 +844,15 @@ class MainApp:
                         if ts_orig: yt_timestamps.add(ts_orig)
 
                     nuclear_title = nuclear_clean(vd_obj.current_title)
+                    marker_num_title = extract_marker_number(vd_obj.current_title)
                     best_txt_match = None; best_sub_match = None
                     best_txt_score = float('inf')
-                    found_match_name = None
+                    best_meta_match_name = None
+                    best_sub_match_name = None
 
                     for file_path in local_files:
                         # Guard: Skip blank files
-                        if file_path.suffix == '.txt' and file_path.stat().st_size == 0: continue
+                        if file_path.suffix.lower() in METADATA_EXTENSIONS and file_path.stat().st_size == 0: continue
                         
                         current_score = float('inf')
                         file_ts = get_ts(file_path.name)
@@ -828,16 +870,25 @@ class MainApp:
                         if current_score > 1 and len(nuclear_file) > 8:
                             if nuclear_file in nuclear_title or nuclear_title in nuclear_file:
                                 current_score = 1
+                        # C. Marker token match (handles "Marker X ..."-style names)
+                        if current_score > 1:
+                            marker_num_file = extract_marker_number(file_path.stem)
+                            if marker_num_title is not None and marker_num_file == marker_num_title:
+                                current_score = 2
+                                if has_eng_token(vd_obj.current_title) and has_eng_token(file_path.stem):
+                                    current_score = 1.5
 
                         if current_score < float('inf'):
-                            found_match_name = file_path.stem 
                             ext = file_path.suffix.lower()
-                            if ext == '.txt':
+                            if ext in METADATA_EXTENSIONS:
                                 if current_score < best_txt_score:
                                     best_txt_score = current_score
                                     best_txt_match = file_path
+                                    best_meta_match_name = file_path.name
                             elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS):
-                                if not best_sub_match: best_sub_match = file_path
+                                if not best_sub_match:
+                                    best_sub_match = file_path
+                                    best_sub_match_name = file_path.name
 
                     if best_txt_match or best_sub_match:
                          if best_txt_match:
@@ -846,7 +897,7 @@ class MainApp:
                          if best_sub_match:
                              vd_obj.subtitle_file_path = str(best_sub_match)
                              vd_obj.subtitle_filename = best_sub_match.name
-                         logger.info(f"  > MATCH FOUND -> {found_match_name}")
+                         logger.info(f"  > MATCH FOUND -> metadata={best_meta_match_name or 'None'}, subtitle={best_sub_match_name or 'None'}")
                     else:
                          logger.info("  > NO LOCAL MATCH FOUND")
 
@@ -943,3 +994,4 @@ def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
 
 if __name__ == '__main__':
     MainApp()
+
