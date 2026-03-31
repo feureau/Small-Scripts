@@ -185,6 +185,7 @@ DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = D
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), original
 DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate
+DEFAULT_PAD_COLOR = "#000000"                       # Padding color for Aspect Ratio Handling set to "pad" (Fit). Default: #000000
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
 DEFAULT_PIXELATE_BRIGHTNESS = "-0.4"                # Background brightness adjustment. Default: -0.4
 DEFAULT_PIXELATE_SATURATION = "0.6"                  # Background saturation adjustment. Default: 0.6
@@ -1882,7 +1883,7 @@ class VideoProcessorApp:
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
         self.upscale_algo_var = tk.StringVar(value=DEFAULT_UPSCALE_ALGO)
-        self.upscale_algo_var.trace_add('write', lambda *args: self._toggle_superres_options())
+        self.upscale_algo_var.trace_add('write', lambda *args: [self._toggle_superres_options(), self._apply_backend_constraints()])
         self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
         self.video_codec_var = tk.StringVar(value=DEFAULT_VIDEO_CODEC)
         self.video_codec_var.trace_add('write', lambda *args: self._update_selected_jobs('video_codec'))
@@ -1895,6 +1896,7 @@ class VideoProcessorApp:
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
+        self.pad_color_var = tk.StringVar(value=DEFAULT_PAD_COLOR)
         self.video_offset_x_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_X)
         self.video_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_x'))
         self.video_offset_y_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_Y)
@@ -2518,7 +2520,12 @@ class VideoProcessorApp:
         self.aspect_crop_rb = ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options)
         self.aspect_crop_rb.pack(side=tk.LEFT)
         self.aspect_pad_rb = ttk.Radiobutton(aspect_handling_frame, text="Pad (Fit)", variable=self.aspect_mode_var, value="pad", command=self._toggle_upscale_options)
-        self.aspect_pad_rb.pack(side=tk.LEFT, padx=5)
+        self.aspect_pad_rb.pack(side=tk.LEFT, padx=(5, 2))
+        self.pad_color_swatch = tk.Label(aspect_handling_frame, width=2, relief="solid", bg=self.pad_color_var.get())
+        self.pad_color_swatch.pack(side=tk.LEFT)
+        self.pad_color_btn = ttk.Button(aspect_handling_frame, text="..", command=lambda: self.choose_color(self.pad_color_var, self.pad_color_swatch, "pad_color"), width=2)
+        self.pad_color_btn.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(self.pad_color_btn, "Padding Color (FFmpeg Only). Disabled if NVEncC handles padding.")
         self.aspect_stretch_rb = ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options)
         self.aspect_stretch_rb.pack(side=tk.LEFT)
         self.aspect_blur_rb = ttk.Radiobutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_mode_var, value="blur", command=self._toggle_upscale_options)
@@ -3350,6 +3357,7 @@ class VideoProcessorApp:
         is_nvencc_video_audio = backend == "nvencc_video_with_ffmpeg_audio"
         is_ffmpeg_only = backend == "ffmpeg_only"
         is_nvencc_video_backend = is_nvencc_only or is_nvencc_video_audio
+        use_nvencc_resize = is_nvencc_video_backend or (backend == "nvencc_with_ffmpeg" and self.upscale_algo_var.get() in ["nvvfx-superres", "ngx-vsr"])
 
         # NVEncC-only or NVEncC video + FFmpeg audio: disable unsupported FFmpeg video-only features.
         # Subtitle burning is supported via NVEncC vpp-subburn.
@@ -3396,6 +3404,9 @@ class VideoProcessorApp:
                     rb.config(state="disabled" if is_nvencc_video_backend else "normal")
                 else:
                     rb.config(state="normal")
+                    
+        if hasattr(self, "pad_color_btn"):
+            self.pad_color_btn.config(state="disabled" if use_nvencc_resize else "normal")
 
         # Orientation options: disable hybrid in NVEncC-only paths NO LONGER APPLIES. We support it by routing to nvencc_with_ffmpeg.
         if hasattr(self, "orientation_both_rb"):
@@ -3527,6 +3538,7 @@ class VideoProcessorApp:
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "close_gui_on_processing": self.close_gui_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+            "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
             "video_offset_y": self.video_offset_y_var.get(),
             "pixelate_multiplier": self.pixelate_multiplier_var.get(),
@@ -4096,6 +4108,7 @@ class VideoProcessorApp:
             self.merged_aspect_var.set(options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)))
             self.orientation_var.set(raw_orientation)
         self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
+        self.pad_color_var.set(options.get("pad_color", DEFAULT_PAD_COLOR))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
         self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
         self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
@@ -4859,7 +4872,8 @@ class VideoProcessorApp:
             
             cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", output_res])
             if pad_args:
-                cmd.extend(["--vpp-pad", f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]}"])
+                pad_color_hex = options.get("pad_color", DEFAULT_PAD_COLOR).lstrip('#')
+                cmd.extend(["--vpp-pad", f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
 
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
@@ -4956,7 +4970,8 @@ class VideoProcessorApp:
                 scale = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={upscale_algo}"
                 if mode == 'stretch': return scale, "", target_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
-                cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black" if mode == 'pad' else f"crop={target_w}:{target_h}"
+                pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
+                cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}" if mode == 'pad' else f"crop={target_w}:{target_h}"
                 return vf, cpu, target_h
 
             safe_algo = ffmpeg_upscale_algo
@@ -5086,8 +5101,9 @@ class VideoProcessorApp:
                     filter_complex_parts.append(blur_fc)
                     video_in_tag = "[v_blur_combined]"
                 elif aspect_mode == 'pad':
+                    pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
                     vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
-                    vf_filters.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black")
+                    vf_filters.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):{pad_color}")
                 elif aspect_mode == 'crop':
                     vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                     cpu_filters.append(f"crop={target_w}:{target_h}")
