@@ -113,7 +113,9 @@ MARKDOWN_FORMAT_NAMES = {
 def is_markdown_format(fmt):
     if not fmt:
         return False
-    return fmt.lower() in MARKDOWN_FORMAT_NAMES
+    # Strip off any Pandoc extensions (e.g., +smart, -yaml_metadata_block)
+    base_fmt = fmt.lower().split('-')[0].split('+')[0]
+    return base_fmt in MARKDOWN_FORMAT_NAMES
 
 
 def wrap_html_with_font(html_body, font_name):
@@ -327,7 +329,9 @@ def convert_files(input_pattern, output_format='docx', input_format=None, force_
     
     # Mapping for ambiguous extensions to default Pandoc formats
     format_map = {
-        '.txt': 'markdown',
+        '.txt': 'markdown-yaml_metadata_block',
+        '.md': 'markdown-yaml_metadata_block',
+        '.markdown': 'markdown-yaml_metadata_block',
     }
     
     converted_count = 0
