@@ -58,16 +58,33 @@ IMAGE_CONTOUR_MIN_AREA = 100
 # Page is BLANK if Text Lines < X  AND  Image Content < Y
 TH_BLANK_TEXT_MAX = 1   # Lowered to 1 to catch minimal text (e.g. Page 5)
 TH_BLANK_IMAGE_MAX = 5000
+TH_TEXT_PRESENT_MIN = 2  # Require at least this many lines to mark page as text.
 
 # BLANK Check (Standard Deviation)
 # If image std-dev is below this, it is considered BLANK (ignores noise/texture).
 TH_BLANK_STD_MAX = 10.0
 
 # STRONG TEXT/IMAGE categorization
-# If text is very strong, it's likely a TEXT page even with icons.
-# If image is very strong, a few text lines are likely just captions or noise.
 TH_TEXT_STRONG_MIN = 20
 TH_IMAGE_STRONG_MIN = 120000
+
+# Tuned for scanned old-book pages:
+# - Dense text pages create lots of small edges, so summed edge area can be misleading.
+# - True illustration/photo pages usually produce one very large connected contour.
+TH_IMAGE_LARGEST_MIN = 350000
+TH_IMAGE_AREA_RATIO_MIN = 0.18
+TH_IMAGE_EDGE_DENSITY_MIN = 0.03
+
+# Structural blank detector: low texture and low text count.
+TH_BLANK_LARGEST_MAX = 60000
+TH_BLANK_IMAGE_RATIO_MAX = 0.02
+TH_BLANK_EDGE_DENSITY_MAX = 0.02
+TH_BLANK_TEXT_SOFT_MAX = 35
+
+# For pages with both text and image, only split when text is substantial.
+TH_BOTH_TEXT_MIN = 100
+TH_BOTH_IMAGE_RATIO_MIN = 0.13
+TH_BOTH_LARGEST_MIN = 800000
 
 # ==============================================================================
 
@@ -215,8 +232,45 @@ def classify_page_content(image_path, params, verbose=True):
                 text_lines_found += 1
                 total_text_area += area
 
+        # Secondary text pass for old-book pages with weak contrast:
+        # adaptive thresholding recovers text missed by Sobel-only logic.
+        adaptive = cv2.adaptiveThreshold(
+            denoised,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            35,
+            15,
+        )
+        adaptive_connected = cv2.morphologyEx(
+            adaptive,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3)),
+        )
+        cnts_text_adaptive, _ = cv2.findContours(
+            adaptive_connected.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        adaptive_text_lines = 0
+        for c in cnts_text_adaptive:
+            (x, y, w, h) = cv2.boundingRect(c)
+            if h <= 0:
+                continue
+            aspect_ratio = w / float(h)
+            area = cv2.contourArea(c)
+            if (
+                w > thresh_min_w
+                and h > thresh_min_h
+                and aspect_ratio > 1.8
+                and area > int(thresh_min_area * 0.8)
+            ):
+                adaptive_text_lines += 1
+
+        text_lines_found = max(text_lines_found, adaptive_text_lines)
+
         if verbose:
-            print(f"      -> METRIC: Text Lines Found: {text_lines_found}")
+            print(
+                f"      -> METRIC: Text Lines Found: {text_lines_found} (Adaptive: {adaptive_text_lines})"
+            )
 
         # ----------------------------------------------------------------------
         # DETECT IMAGE CONTENT
@@ -240,9 +294,14 @@ def classify_page_content(image_path, params, verbose=True):
                 if area > largest_contour_area:
                     largest_contour_area = area
 
+        edge_density = float(np.count_nonzero(edges)) / float(h_img * w_img)
+        image_area_ratio = float(image_content_area) / float(h_img * w_img)
+
+        # Compute structure metrics used by conservative blank/image decisions.
+
         if verbose:
             print(
-                f"      -> METRIC: Image Content Area: {image_content_area} (Largest: {largest_contour_area})"
+                f"      -> METRIC: Image Content Area: {image_content_area} (Largest: {largest_contour_area}, Ratio: {image_area_ratio:.4f}, EdgeDensity: {edge_density:.4f})"
             )
 
         # ----------------------------------------------------------------------
@@ -253,20 +312,43 @@ def classify_page_content(image_path, params, verbose=True):
         # DECISION LOGIC
         # ----------------------------------------------------------------------
 
-        has_text = text_lines_found >= TH_BLANK_TEXT_MAX
-        has_image = image_content_area >= TH_BLANK_IMAGE_MAX
+        has_text = text_lines_found >= TH_TEXT_PRESENT_MIN
+
+        # Image detection: require strong, coherent image structure.
+        has_image = (
+            largest_contour_area >= TH_IMAGE_LARGEST_MIN
+            and (
+                image_area_ratio >= TH_IMAGE_AREA_RATIO_MIN
+                or edge_density >= TH_IMAGE_EDGE_DENSITY_MIN
+            )
+        )
+
+        is_blank = (
+            largest_contour_area <= TH_BLANK_LARGEST_MAX
+            and image_area_ratio <= TH_BLANK_IMAGE_RATIO_MAX
+            and edge_density <= TH_BLANK_EDGE_DENSITY_MAX
+            and text_lines_found <= TH_BLANK_TEXT_SOFT_MAX
+        )
+
+        if is_blank:
+            has_text = False
+            has_image = False
 
         result = {
             "has_text": has_text,
             "has_image": has_image,
             "text_lines": text_lines_found,
             "image_area": image_content_area,
+            "image_area_ratio": image_area_ratio,
+            "largest_contour_area": largest_contour_area,
+            "edge_density": edge_density,
+            "is_blank": is_blank,
             "std": std_val,
         }
 
         if verbose:
             print(
-                f"      -> METRICS: Text={has_text} ({text_lines_found}), Image={has_image} ({image_content_area}), StdDev={std_val:.2f}"
+                f"      -> METRICS: Text={has_text} ({text_lines_found}), Image={has_image} (Area={image_content_area}, Largest={largest_contour_area}, Ratio={image_area_ratio:.4f}, EdgeDensity={edge_density:.4f}), Blank={is_blank}, StdDev={std_val:.2f}"
             )
 
         return result
@@ -301,8 +383,18 @@ def process_images(target_dir, params, verbose=True):
         else:
             print(f"  StdDev Blank Check = Disabled")
 
-        print(f"  TH_BLANK_TEXT_MAX  = {TH_BLANK_TEXT_MAX}")
-        print(f"  TH_BLANK_IMAGE_MAX = {TH_BLANK_IMAGE_MAX}")
+        print(f"  TH_BLANK_TEXT_MAX   = {TH_BLANK_TEXT_MAX}")
+        print(f"  TH_TEXT_PRESENT_MIN = {TH_TEXT_PRESENT_MIN}")
+        print(f"  TH_IMAGE_LARGEST_MIN = {TH_IMAGE_LARGEST_MIN}")
+        print(f"  TH_IMAGE_AREA_RATIO_MIN = {TH_IMAGE_AREA_RATIO_MIN}")
+        print(f"  TH_IMAGE_EDGE_DENSITY_MIN = {TH_IMAGE_EDGE_DENSITY_MIN}")
+        print(f"  TH_BLANK_LARGEST_MAX = {TH_BLANK_LARGEST_MAX}")
+        print(f"  TH_BLANK_IMAGE_RATIO_MAX = {TH_BLANK_IMAGE_RATIO_MAX}")
+        print(f"  TH_BLANK_EDGE_DENSITY_MAX = {TH_BLANK_EDGE_DENSITY_MAX}")
+        print(f"  TH_BLANK_TEXT_SOFT_MAX = {TH_BLANK_TEXT_SOFT_MAX}")
+        print(f"  TH_BOTH_TEXT_MIN = {TH_BOTH_TEXT_MIN}")
+        print(f"  TH_BOTH_IMAGE_RATIO_MIN = {TH_BOTH_IMAGE_RATIO_MIN}")
+        print(f"  TH_BOTH_LARGEST_MIN = {TH_BOTH_LARGEST_MIN}")
         print("-" * 30 + "\n")
 
     for ext in image_extensions:
@@ -370,8 +462,8 @@ def process_images(target_dir, params, verbose=True):
             # 3. Image Only (Move to Image)
             # 4. Text Only (Move to Pages)
 
-            if not has_text and not has_image:
-                # BLANK
+            if analysis.get("is_blank"):
+                # BLANK (structural override)
                 dest = dirs["blanks"]
                 shutil.move(image_path, dest)
                 if verbose:
@@ -379,43 +471,34 @@ def process_images(target_dir, params, verbose=True):
                 stats["blanks"] += 1
 
             elif has_text and has_image:
-                # BOTH (Initially detected)
-                # Refine based on strengths
-                if (
-                    analysis["text_lines"] < TH_TEXT_STRONG_MIN
-                    and analysis["image_area"] > TH_IMAGE_STRONG_MIN
-                ):
-                    # Likely just captions or noise on a full image
-                    dest = dirs["images"]
-                    shutil.move(image_path, dest)
-                    if verbose:
-                        print(f"      -> Action: Moved to sorted/images (Image Strong)")
-                    stats["images"] += 1
-                elif (
-                    analysis["text_lines"] >= TH_TEXT_STRONG_MIN
-                    and analysis["image_area"] < TH_IMAGE_STRONG_MIN / 2
-                ):
-                    # Likely just small icons or stray marks on a text page
-                    dest = dirs["text"]
-                    shutil.move(image_path, dest)
-                    if verbose:
-                        print(f"      -> Action: Moved to sorted/text (Text Strong)")
-                    stats["text"] += 1
-                else:
-                    # TRUE BOTH
-                    # 1. Copy to Images
+                # BOTH only when both text and image are clearly substantial.
+                strong_image_for_both = (
+                    analysis.get("image_area_ratio", 0.0) >= TH_BOTH_IMAGE_RATIO_MIN
+                    or analysis.get("largest_contour_area", 0.0) >= TH_BOTH_LARGEST_MIN
+                )
+                if analysis["text_lines"] >= TH_BOTH_TEXT_MIN and strong_image_for_both:
                     shutil.copy2(image_path, dirs["images"])
                     if verbose:
                         print(f"      -> Action: Copied to sorted/images")
 
-                    # 2. Move to Text
                     shutil.move(image_path, dirs["text"])
                     if verbose:
                         print(f"      -> Action: Moved to sorted/text")
                     stats["both"] += 1
+                elif analysis["text_lines"] >= TH_BOTH_TEXT_MIN:
+                    dest = dirs["text"]
+                    shutil.move(image_path, dest)
+                    if verbose:
+                        print(f"      -> Action: Moved to sorted/text")
+                    stats["text"] += 1
+                else:
+                    dest = dirs["images"]
+                    shutil.move(image_path, dest)
+                    if verbose:
+                        print(f"      -> Action: Moved to sorted/images")
+                    stats["images"] += 1
 
             elif has_image:
-                # IMAGE ONLY
                 dest = dirs["images"]
                 shutil.move(image_path, dest)
                 if verbose:
@@ -423,12 +506,18 @@ def process_images(target_dir, params, verbose=True):
                 stats["images"] += 1
 
             elif has_text:
-                # TEXT ONLY
                 dest = dirs["text"]
                 shutil.move(image_path, dest)
                 if verbose:
                     print(f"      -> Action: Moved to sorted/text")
                 stats["text"] += 1
+
+            else:
+                dest = dirs["blanks"]
+                shutil.move(image_path, dest)
+                if verbose:
+                    print(f"      -> Action: Moved to sorted/blanks")
+                stats["blanks"] += 1
 
         except Exception as e:
             print(f"    -> Error processing file: {e}")
@@ -460,6 +549,7 @@ def main():
         "-r",
         "--report",
         action="store_true",
+        default=False,
         help="Save console output to pagesort_report.txt",
     )
 
