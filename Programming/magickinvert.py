@@ -10,6 +10,7 @@ Usage:
     python /path/to/magickinvert.py *.png            # shell-expanded list
     python /path/to/magickinvert.py "**/*.jpg"       # quoted glob, all subdirs
     python /path/to/magickinvert.py --copy *.tif     # save copies instead
+    python /path/to/magickinvert.py --format png      # convert to png
     python /path/to/magickinvert.py --dry-run        # preview only
 """
 
@@ -95,19 +96,24 @@ def resolve_patterns(patterns: list[str]) -> list[Path]:
     return images
 
 
-def invert_image(src: Path, im_cmd: list[str], copy: bool, dry_run: bool) -> bool:
+def invert_image(src: Path, im_cmd: list[str], copy: bool, format_ext: str | None, dry_run: bool) -> bool:
     """
     Invert a single image using ImageMagick -negate.
     Returns True on success, False on failure.
     """
-    dest = src.with_stem(src.stem + OUTPUT_SUFFIX) if copy else src
+    stem = src.stem + OUTPUT_SUFFIX if copy else src.stem
+    suffix = f".{format_ext.lstrip('.')}" if format_ext else src.suffix
+    dest = src.with_name(f"{stem}{suffix}")
 
     # ImageMagick syntax: magick input -negate output
     cmd = im_cmd + [str(src), "-negate", str(dest)]
 
     if dry_run:
-        action = "copy" if copy else "overwrite"
-        print(f"  [dry-run] ({action}) {src.name}  ->  {dest.name}")
+        action = "copy" if (copy or format_ext) else "overwrite"
+        if action == "overwrite" and dest == src:
+             print(f"  [dry-run] (overwrite) {src.name}")
+        else:
+             print(f"  [dry-run] ({action}) {src.name}  ->  {dest.name}")
         return True
 
     try:
@@ -115,7 +121,7 @@ def invert_image(src: Path, im_cmd: list[str], copy: bool, dry_run: bool) -> boo
         if result.returncode != 0:
             print(f"  [ERROR] {src.name}\n    {result.stderr.strip()}")
             return False
-        if copy:
+        if copy or (format_ext and dest != src):
             print(f"  [OK]  {src.name}  ->  {dest.name}")
         else:
             print(f"  [OK]  {src.name}  (overwritten)")
@@ -175,6 +181,10 @@ def main():
         help="Save inverted files as *_inverted.* copies instead of overwriting originals.",
     )
     parser.add_argument(
+        "--format", "-f",
+        help="Output format/extension (e.g., png, jpg). If specified, output files will use this extension.",
+    )
+    parser.add_argument(
         "--dry-run", "-n",
         action="store_true",
         help="Show what would be done without actually processing anything.",
@@ -188,6 +198,8 @@ def main():
         "DRY RUN" if args.dry_run
         else ("save as *_inverted.* (copy)" if args.copy else "overwrite originals (in-place)")
     )
+    if args.format:
+        mode_label += f" | format: {args.format.lstrip('.')}"
     scope_label = (
         ", ".join(args.patterns) if args.patterns
         else "all supported images (recursive)"
@@ -216,7 +228,7 @@ def main():
 
     ok = fail = 0
     for img in images:
-        success = invert_image(img, im_cmd=im_cmd, copy=args.copy, dry_run=args.dry_run)
+        success = invert_image(img, im_cmd=im_cmd, copy=args.copy, format_ext=args.format, dry_run=args.dry_run)
         if success:
             ok += 1
         else:

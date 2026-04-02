@@ -111,6 +111,14 @@ final_results = {
 }
 VERBOSE = False  # Set by --verbose flag
 
+# --- CONFIGURATION DEFAULTS ---
+DEFAULT_THREADS = 2
+MAX_RETRIES = 10
+RETRY_BACKOFF_START = 30
+MAX_BACKOFF_TIME = 300
+CONNECT_TIMEOUT = 30
+READ_TIMEOUT = 300
+
 def vlog(msg):
     """Print a verbose debug message with timestamp and thread ID."""
     if VERBOSE:
@@ -219,11 +227,56 @@ def collect_metadata(default_title, prefills=None):
     collection_default = prefills.get("collection") if prefills else None
     creator = get_input("Creator", required=False, default=creator_default)
     description = get_input("Description", required=False, default=description_default)
-    tags_input = get_input("Tags (comma sep)", required=False, default=tags_default)
-    subjects = [t.strip() for t in tags_input.split(',')] if tags_input else []
+    subjects_val = get_input("Tags (comma sep)", required=False, default=tags_default)
+    subjects = [t.strip() for t in subjects_val.split(',')] if subjects_val else []
+
+    # --- LICENSE SELECTION ---
+    print("\nSelect a License (Press Enter for GPLv3 default):")
+    license_options = {
+        '1': ('GPLv3', 'https://www.gnu.org/licenses/gpl-3.0.html'),
+        '2': ('CC BY 4.0', 'https://creativecommons.org/licenses/by/4.0/'),
+        '3': ('CC BY-SA 4.0', 'https://creativecommons.org/licenses/by-sa/4.0/'),
+        '4': ('CC BY-ND 4.0', 'https://creativecommons.org/licenses/by-nd/4.0/'),
+        '5': ('CC BY-NC 4.0', 'https://creativecommons.org/licenses/by-nc/4.0/'),
+        '6': ('CC BY-NC-SA 4.0', 'https://creativecommons.org/licenses/by-nc-sa/4.0/'),
+        '7': ('CC BY-NC-ND 4.0', 'https://creativecommons.org/licenses/by-nc-nd/4.0/'),
+        '8': ('CC0 1.0 (Public Domain)', 'https://creativecommons.org/publicdomain/zero/1.0/'),
+        '9': ('PDM 1.0 (Public Domain Mark)', 'https://creativecommons.org/publicdomain/mark/1.0/'),
+        '0': ('Custom URL / None', None)
+    }
+
+    for key, (name, _) in license_options.items():
+        print(f"  [{key}] {name}")
+
+    license_default = prefills.get("licenseurl") if prefills else None
+    
+    # Map prefilled URL back to an option number if possible for display
+    default_key = '1' # GPLv3 default
+    if license_default:
+        for k, (name, url) in license_options.items():
+            if url == license_default:
+                default_key = k
+                break
+        else:
+            default_key = '0' # Custom
+
+    choice = get_input("Choose license", default=default_key)
+    
+    selected_url = None
+    if choice in license_options:
+        selected_url = license_options[choice][1]
+        
+    if choice == '0' or (choice not in license_options and choice):
+        # If they chose custom or typed a random string that isn't a key
+        if choice not in license_options:
+            selected_url = choice # Treat as custom URL if not a key
+        else:
+            selected_url = get_input("Custom License URL (leave empty for none)", default=license_default)
 
     metadata = {'title': title, 'mediatype': mediatype}
-    
+    if selected_url:
+        metadata['licenseurl'] = selected_url
+
     # Map mediatype to default community collection
     collection_map = {
         'texts': 'opensource',
@@ -273,6 +326,7 @@ def load_metadata_xml(folder_path):
     creator = find_text(["creator", "Creator"])
     description = find_text(["description", "Description"])
     collection = find_text(["collection", "Collection"])
+    licenseurl = find_text(["licenseurl", "LicenseURL", "license", "License"])
 
     # subjects/tags: support repeated <subject> or <tag> nodes
     subjects = [(_xml_text(n) or "") for n in root.findall(".//subject")]
@@ -287,6 +341,7 @@ def load_metadata_xml(folder_path):
     if description: prefills["description"] = description
     if tags: prefills["tags"] = tags
     if collection: prefills["collection"] = collection
+    if licenseurl: prefills["licenseurl"] = licenseurl
 
     return prefills or None
 
@@ -328,6 +383,7 @@ def load_metadata_json(folder_path):
         creator = get_str(["Creator"])
     description = get_str(["description", "Description"])
     collection = get_str(["collection", "Collection"])
+    licenseurl = get_str(["licenseurl", "LicenseURL", "license", "License"])
 
     tags = None
     subjects_val = data.get("subject")
@@ -360,6 +416,7 @@ def load_metadata_json(folder_path):
     if description: prefills["description"] = description
     if tags: prefills["tags"] = tags
     if collection: prefills["collection"] = collection
+    if licenseurl: prefills["licenseurl"] = licenseurl
 
     return prefills or None
 
@@ -447,9 +504,9 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
               bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} | Speed: {rate_fmt} | Time: {elapsed}<{remaining}") as bar:
         
         # RETRY LOOP for Rate Limits
-        max_retries = 10
+        max_retries = MAX_RETRIES
         attempt = 0
-        backoff_time = 30 # Start with 30s wait for rate limits
+        backoff_time = RETRY_BACKOFF_START # Start wait for rate limits
         
         while attempt < max_retries:
             wrapped_file = None
@@ -468,12 +525,12 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                     item = get_item(identifier, archive_session=session)
                     vlog(f"  Calling item.upload() for '{remote_key}'...")
                     r = item.upload(files=files_arg, metadata=metadata, verbose=False, retries=3,
-                                    request_kwargs={'timeout': (30, 300)})
+                                    request_kwargs={'timeout': (CONNECT_TIMEOUT, READ_TIMEOUT)})
                 else:
                     # Fallback to default global upload
                     vlog(f"  Calling upload() (no session) for '{remote_key}'...")
                     r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=3,
-                               request_kwargs={'timeout': (30, 300)})
+                               request_kwargs={'timeout': (CONNECT_TIMEOUT, READ_TIMEOUT)})
                 
                 upload_elapsed = time.time() - upload_start
                 vlog(f"  upload() returned for '{remote_key}' in {upload_elapsed:.1f}s")
@@ -501,7 +558,7 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                      tqdm.write(f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s...")
                      vlog(f"  Rate limited ({r[0].status_code}), sleeping {backoff_time}s...")
                      time.sleep(backoff_time)
-                     backoff_time = min(backoff_time * 1.5, 300) # Cap at 5 mins
+                     backoff_time = min(backoff_time * 1.5, MAX_BACKOFF_TIME) # Cap max sleep
                      attempt += 1
                      bar.reset() # Reset progress bar for retry
                      continue
@@ -524,12 +581,22 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 
                 error_str = str(e).lower()
                 vlog(f"  EXCEPTION for '{remote_key}': {type(e).__name__}: {e}")
-                # Check specifically for the bucket queue limit or generic rate requests
-                if "bucket_tasks_queued" in error_str or "reduce your request rate" in error_str or "read timed out" in error_str:
-                    tqdm.write(f"Rate Limit/Timeout hit for {display_name}: {e}. Pausing {backoff_time}s...")
+                
+                # Check specifically for network issues, bucket limits, or timeouts
+                retryable_errors = [
+                    "bucket_tasks_queued", 
+                    "reduce your request rate", 
+                    "timed out", 
+                    "connection aborted", 
+                    "connection reset",
+                    "remotely closed"
+                ]
+                
+                if any(err in error_str for err in retryable_errors):
+                    tqdm.write(f"Rate Limit/Network issue for {display_name}: {e}. Pausing {backoff_time}s...")
                     vlog(f"  Retryable error, sleeping {backoff_time}s...")
                     time.sleep(backoff_time)
-                    backoff_time = min(backoff_time * 1.5, 300)
+                    backoff_time = min(backoff_time * 1.5, MAX_BACKOFF_TIME)
                     attempt += 1
                     bar.reset()
                     continue
@@ -553,7 +620,7 @@ def main():
     parser = argparse.ArgumentParser(description="Archive.org Smart Uploader & Syncer")
     parser.add_argument("folder", nargs="?", help="Path to local folder")
     parser.add_argument("identifier", nargs="?", help="Unique Archive.org identifier")
-    parser.add_argument("-t", "--threads", type=int, default=5, help="Number of parallel upload/delete threads (default: 5)")
+    parser.add_argument("-t", "--threads", type=int, default=DEFAULT_THREADS, help=f"Number of parallel upload/delete threads (default: {DEFAULT_THREADS})")
     parser.add_argument("-s", "--sync", action="store_true", help="Sync mode (Upload/Update only)")
     parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
     parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")

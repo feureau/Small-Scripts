@@ -2966,6 +2966,7 @@ def process_file_group(
             or "quota exhausted" in error_str
             or "429" in error_str
             or "limit reached" in error_str
+            or "usage limit" in error_str
             or "content connection error" in error_str
         ):
             raise QuotaExhaustedError(str(e))
@@ -5528,6 +5529,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         or "Quota exhausted" in err_str
                         or "429" in err_str
                         or "503" in err_str
+                        or "usage limit" in err_str.lower()
                         or "Service Temporarily Unavailable" in err_str
                         or "Open WebUI: Server Connection Error" in err_str
                     )
