@@ -1337,8 +1337,8 @@
     },
     "Transcribe - local OCR only": {
         "prompt": "You are a raw OCR transcription system.\n\nPRIMARY GOAL\nProduce a character-accurate transcription of the image.\n\nABSOLUTE RULE\nDo NOT correct, normalize, interpret, or improve the text in any way.\n\nOUTPUT CONSTRAINTS\n- Output plain text only.\n- No explanations.\n- No formatting markup.\n\nTRANSCRIPTION RULES\n- Copy text exactly as seen, character by character.\n- Preserve ALL spelling, including errors.\n- Preserve ALL diacritics exactly as shown.\n- Preserve ALL punctuation exactly.\n- Preserve line breaks exactly as they appear.\n- Preserve hyphenation exactly (including line-break hyphens).\n- Preserve unusual or inconsistent spacing.\n- Preserve all numbers exactly.\n\nSTRICTLY FORBIDDEN\n- Do NOT fix spelling or grammar.\n- Do NOT normalize words.\n- Do NOT expand abbreviations.\n- Do NOT merge or split words.\n- Do NOT reinterpret unclear text.\n- Do NOT replace characters with \u201ccorrect\u201d versions.\n\nFOOTNOTES\n- Transcribe footnote numbers exactly as printed.\n- Transcribe footnote text exactly.\n- Do NOT move or reformat footnotes.\n\nUNCLEAR TEXT\n- If uncertain, reproduce the closest visible characters.\n- Do NOT guess missing content.\n\nOUTPUT\nReturn only the raw transcription.",
-        "engine": "ollama",
-        "model": "qwen3.5:cloud",
+        "engine": "lmstudio",
+        "model": "qwen3.5-4b",
         "output_folder": "Transcription",
         "output_under_input": false,
         "merge_outputs": false,
