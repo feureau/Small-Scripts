@@ -6,12 +6,13 @@ Image Cropper and Converter (Multiprocessing Supported)
 """
 
 import argparse
-import sys
-import os
-from pathlib import Path
-from PIL import Image, ImageOps, ImageColor
 import glob
+import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+from PIL import Image, ImageColor, ImageOps
 
 # Optional AVIF support
 try:
@@ -20,14 +21,23 @@ except ImportError:
     pass
 
 # --- Constants ---
-DEFAULT_TARGET_WIDTH = 1920
-DEFAULT_TARGET_HEIGHT = 1080
-SUPPORTED_INPUT_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.avif')
-DEFAULT_OUTPUT_FORMAT = 'jpg'
+DEFAULT_TARGET_WIDTH = 3840
+DEFAULT_TARGET_HEIGHT = 2160
+SUPPORTED_INPUT_EXTENSIONS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".webp",
+    ".avif",
+)
+DEFAULT_OUTPUT_FORMAT = "jpg"
 DEFAULT_QUALITY = 85
-DEFAULT_OUTPUT_SUBFOLDER = 'cropped_output'
-DEFAULT_BORDER_WIDTH = 60
-DEFAULT_BORDER_COLOR = 'red'
+DEFAULT_OUTPUT_SUBFOLDER = "cropped_output"
+DEFAULT_BORDER_WIDTH = 120
+DEFAULT_BORDER_COLOR = "red"
 
 try:
     RESAMPLING_FILTER = Image.Resampling.LANCZOS
@@ -36,6 +46,7 @@ except AttributeError:
 
 # --- Helpers ---
 
+
 def validate_color_string(color_str: str) -> bool:
     try:
         ImageColor.getrgb(color_str)
@@ -43,11 +54,13 @@ def validate_color_string(color_str: str) -> bool:
     except ValueError:
         return False
 
+
 def looks_like_file_token(token: str) -> bool:
     t = token.strip()
-    if any(ch in t for ch in ('*', '?', '[', ']')):
+    if any(ch in t for ch in ("*", "?", "[", "]")):
         return True
     return Path(t).suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
+
 
 def calculate_dynamic_dimensions(img_width, img_height, rw, rh, box):
     in_ratio = img_width / img_height
@@ -67,13 +80,16 @@ def calculate_dynamic_dimensions(img_width, img_height, rw, rh, box):
 
     return w, h
 
+
 def center_crop(img, new_w, new_h):
     w, h = img.size
     l = (w - new_w) // 2
     t = (h - new_h) // 2
     return img.crop((l, t, l + new_w, t + new_h))
 
+
 # --- Core Processing ---
+
 
 def process_image(path_str, output_dir, args, border_color, border_width):
     """
@@ -81,11 +97,11 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     We do NOT print inside here to avoid scrambled text in multiprocessing.
     """
     path = Path(path_str)
-    
+
     try:
         img = Image.open(path)
         img = ImageOps.exif_transpose(img)
-        
+
         # Ensure we are in a color mode (RGB or RGBA) so that color borders
         # and color output work even if the input is grayscale.
         if img.mode not in ("RGB", "RGBA"):
@@ -98,16 +114,19 @@ def process_image(path_str, output_dir, args, border_color, border_width):
 
     # --- Target sizing ---
     target_w, target_h = DEFAULT_TARGET_WIDTH, DEFAULT_TARGET_HEIGHT
-    
+
     if args.fixed:
         target_w, target_h = args.fixed
     elif args.square or args.portrait or args.landscape or args.ratio:
         rw, rh = 16, 9
-        if args.square: rw, rh = 1, 1
-        elif args.portrait: rw, rh = 9, 16
-        elif args.landscape: rw, rh = 16, 9
+        if args.square:
+            rw, rh = 1, 1
+        elif args.portrait:
+            rw, rh = 9, 16
+        elif args.landscape:
+            rw, rh = 16, 9
         elif args.ratio:
-            rw, rh = map(float, args.ratio.split(':'))
+            rw, rh = map(float, args.ratio.split(":"))
 
         target_w, target_h = calculate_dynamic_dimensions(
             img.width, img.height, rw, rh, args.box
@@ -147,7 +166,7 @@ def process_image(path_str, output_dir, args, border_color, border_width):
                 canvas = Image.new(final.mode, (tw, th), border_color)
                 px = (tw - content.width) // 2
                 py = (th - content.height) // 2
-                if content.mode in ('RGBA', 'LA'):
+                if content.mode in ("RGBA", "LA"):
                     canvas.paste(content, (px, py), content)
                 else:
                     canvas.paste(content, (px, py))
@@ -158,16 +177,18 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     # --- Save ---
     out_fmt = args.output_format.upper()
     out_ext = args.output_format.lower()
-    if out_fmt == 'JPG': out_fmt = 'JPEG'
-    if out_ext == 'jpeg': out_ext = 'jpg'
+    if out_fmt == "JPG":
+        out_fmt = "JPEG"
+    if out_ext == "jpeg":
+        out_ext = "jpg"
 
     opts = {}
-    if out_fmt in ('JPEG', 'WEBP', 'AVIF'):
-        opts['quality'] = min(max(1, args.quality), 95 if out_fmt == 'JPEG' else 100)
+    if out_fmt in ("JPEG", "WEBP", "AVIF"):
+        opts["quality"] = min(max(1, args.quality), 95 if out_fmt == "JPEG" else 100)
 
-    if out_fmt == 'JPEG' and final.mode != 'RGB':
+    if out_fmt == "JPEG" and final.mode != "RGB":
         bg = Image.new("RGB", final.size, (255, 255, 255))
-        bg.paste(final, mask=final.split()[-1] if final.mode == 'RGBA' else None)
+        bg.paste(final, mask=final.split()[-1] if final.mode == "RGBA" else None)
         final = bg
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -184,45 +205,75 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     except Exception as e:
         return False, f"[Error] {path.name}: Save failed ({e})"
 
+
 # --- Main ---
 
-def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('files', nargs='*')
-    parser.add_argument('-o', '--output-dir', default=DEFAULT_OUTPUT_SUBFOLDER, help="Subfolder name for output")
-    parser.add_argument('--pool', action='store_true', help="Flatten all outputs to one single directory")
-    
-    # NEW ARGUMENT
-    parser.add_argument('-w', '--workers', type=int, default=os.cpu_count(), help="Number of parallel processes")
 
-    parser.add_argument('-x', '--suffix', help="Custom filename suffix")
-    parser.add_argument('-f', '--output-format', default=DEFAULT_OUTPUT_FORMAT,
-                        choices=['jpg','png','webp','tiff','bmp','avif'])
-    parser.add_argument('-q', '--quality', type=int, default=DEFAULT_QUALITY)
+def main():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("files", nargs="*")
     parser.add_argument(
-        '-b', '--border',
-        nargs='?',
-        const=DEFAULT_BORDER_COLOR,
-        help="Border spec: COLOR or COLOR:WIDTH (e.g. black or #ffffff:40). If value omitted, defaults to black."
+        "-o",
+        "--output-dir",
+        default=DEFAULT_OUTPUT_SUBFOLDER,
+        help="Subfolder name for output",
+    )
+    parser.add_argument(
+        "--pool",
+        action="store_true",
+        help="Flatten all outputs to one single directory",
     )
 
-    dim = parser.add_argument_group('Dimensions')
-    dim.add_argument('-d', '--fixed', type=int, nargs=2, help="Fixed W H")
-    dim.add_argument('-s', '--square', action='store_true')
-    dim.add_argument('-p', '--portrait', action='store_true')
-    dim.add_argument('-l', '--landscape', action='store_true')
-    dim.add_argument('-r', '--ratio', help="Aspect Ratio (e.g., 21:9)")
-    dim.add_argument('-m', '--box', type=int, help="Max dimension (contains within box)")
+    # NEW ARGUMENT
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=os.cpu_count(),
+        help="Number of parallel processes",
+    )
 
-    dim.add_argument('-c', '--crop-percent', type=int)
-    dim.add_argument('-z', '--zoom-percent', type=int)
-    dim.add_argument('-S', '--scale-percent', type=int)
+    parser.add_argument("-x", "--suffix", help="Custom filename suffix")
+    parser.add_argument(
+        "-f",
+        "--output-format",
+        default=DEFAULT_OUTPUT_FORMAT,
+        choices=["jpg", "png", "webp", "tiff", "bmp", "avif"],
+    )
+    parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY)
+    parser.add_argument(
+        "-b",
+        "--border",
+        nargs="?",
+        const=DEFAULT_BORDER_COLOR,
+        help="Border spec: COLOR or COLOR:WIDTH (e.g. black or #ffffff:40). If value omitted, defaults to black.",
+    )
+
+    dim = parser.add_argument_group("Dimensions")
+    dim.add_argument("-d", "--fixed", type=int, nargs=2, help="Fixed W H")
+    dim.add_argument("-s", "--square", action="store_true")
+    dim.add_argument("-p", "--portrait", action="store_true")
+    dim.add_argument("-l", "--landscape", action="store_true")
+    dim.add_argument("-r", "--ratio", help="Aspect Ratio (e.g., 21:9)")
+    dim.add_argument(
+        "-m", "--box", type=int, help="Max dimension (contains within box)"
+    )
+
+    dim.add_argument("-c", "--crop-percent", type=int)
+    dim.add_argument("-z", "--zoom-percent", type=int)
+    dim.add_argument("-S", "--scale-percent", type=int)
 
     args = parser.parse_args()
 
     # Compatibility: allow patterns like `-b *.png`.
     # If -b consumed a file token, treat it as an input file and keep border enabled with default color.
-    if args.border and not validate_color_string(args.border.split(':', 1)[0].strip()) and looks_like_file_token(args.border):
+    if (
+        args.border
+        and not validate_color_string(args.border.split(":", 1)[0].strip())
+        and looks_like_file_token(args.border)
+    ):
         args.files.insert(0, args.border)
         args.border = DEFAULT_BORDER_COLOR
 
@@ -231,10 +282,10 @@ def main():
         print("[Error] --crop-percent and --zoom-percent are mutually exclusive.")
         sys.exit(1)
 
-    for name in ('crop_percent', 'zoom_percent', 'scale_percent'):
+    for name in ("crop_percent", "zoom_percent", "scale_percent"):
         val = getattr(args, name)
         if val is not None and not (1 <= val <= 200):
-            print(f"[Error] {name.replace('_','-')} must be between 1 and 200.")
+            print(f"[Error] {name.replace('_', '-')} must be between 1 and 200.")
             sys.exit(1)
 
     # --- Suffix ---
@@ -247,9 +298,12 @@ def main():
         else:
             args.suffix = "_processed"
 
-    if args.crop_percent: args.suffix += f"_crop{args.crop_percent}"
-    if args.zoom_percent: args.suffix += f"_zoom{args.zoom_percent}"
-    if args.scale_percent: args.suffix += f"_scale{args.scale_percent}"
+    if args.crop_percent:
+        args.suffix += f"_crop{args.crop_percent}"
+    if args.zoom_percent:
+        args.suffix += f"_zoom{args.zoom_percent}"
+    if args.scale_percent:
+        args.suffix += f"_scale{args.scale_percent}"
 
     # --- Border ---
     border_color = None
@@ -258,8 +312,8 @@ def main():
         spec = args.border.strip()
         color_candidate = spec
         width_candidate = None
-        if ':' in spec:
-            color_candidate, width_candidate = spec.rsplit(':', 1)
+        if ":" in spec:
+            color_candidate, width_candidate = spec.rsplit(":", 1)
             color_candidate = color_candidate.strip()
             width_candidate = width_candidate.strip()
 
@@ -269,7 +323,9 @@ def main():
                 if width_candidate.isdigit():
                     border_width = int(width_candidate)
                 else:
-                    print(f"[Warning] Invalid border width '{width_candidate}'. Using default {DEFAULT_BORDER_WIDTH}.")
+                    print(
+                        f"[Warning] Invalid border width '{width_candidate}'. Using default {DEFAULT_BORDER_WIDTH}."
+                    )
         else:
             print("[Warning] Invalid border color. Skipping border.")
 
@@ -278,7 +334,7 @@ def main():
     global_out = Path.cwd() / args.output_dir
 
     if not args.files:
-        for p in Path.cwd().rglob('*'):
+        for p in Path.cwd().rglob("*"):
             if p.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS:
                 try:
                     rel_parts = p.relative_to(Path.cwd()).parts
@@ -296,21 +352,23 @@ def main():
         sys.exit(1)
 
     print(f"Starting processing on {len(files)} files using {args.workers} workers...")
-    
+
     ok_count = 0
-    
+
     # --- Multiprocessing Execution ---
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = []
         for f in files:
             # Determine output directory for this specific file
-            # If --pool is set, everything goes to global_out. 
+            # If --pool is set, everything goes to global_out.
             # If not, it goes to a subfolder relative to the source file.
             out_dir = global_out if args.pool else Path(f).parent / args.output_dir
-            
+
             # Submit task to the pool
             futures.append(
-                executor.submit(process_image, f, out_dir, args, border_color, border_width)
+                executor.submit(
+                    process_image, f, out_dir, args, border_color, border_width
+                )
             )
 
         # Process results as they complete
@@ -321,6 +379,7 @@ def main():
                 ok_count += 1
 
     print(f"\nDone. {ok_count}/{len(files)} successful.")
+
 
 if __name__ == "__main__":
     try:

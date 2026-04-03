@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.5 (Verbose Debug Logging & Timeout Fix)
+VERSION: 6.7 (Account Collection Hints)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,15 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-04-03] VERSION 6.7 UPDATE
+   - ADDED: Best-effort display of collections available to the current account during metadata prompt.
+   - MODIFIED: Collection prompt now shows account collection options (when retrievable) before input.
+
+[2026-04-03] VERSION 6.6 UPDATE
+   - ADDED: Empty (0-byte) local files are skipped during scan and never queued for upload.
+   - ADDED: Summary now reports the number of skipped empty files.
+   - ADDED: Defensive upload_worker guard to skip zero-byte files if encountered.
+   - MODIFIED: Collection metadata is now explicitly prompted, with safer fallback for restricted prefilled collections.
 [2026-03-24] VERSION 6.5 UPDATE
    - ADDED: --verbose / -v flag for detailed debug logging during uploads.
    - ADDED: HTTP socket timeout (30s connect, 300s read) to prevent infinite hangs.
@@ -112,7 +121,7 @@ final_results = {
 VERBOSE = False  # Set by --verbose flag
 
 # --- CONFIGURATION DEFAULTS ---
-DEFAULT_THREADS = 2
+DEFAULT_THREADS = 3
 MAX_RETRIES = 10
 RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
@@ -197,7 +206,50 @@ def get_input(prompt_text, required=False, default=None, valid_options=None):
             continue
         return val
 
-def collect_metadata(default_title, prefills=None):
+def get_account_collections(session):
+    """
+    Best-effort fetch of collections writable/available to the current account.
+    Returns a sorted list of collection identifiers, or [] on failure.
+    """
+    if not session:
+        return []
+
+    endpoints = [
+        "https://archive.org/services/xauthn/?op=userinfo",
+        "https://archive.org/services/xauthn/?op=account"
+    ]
+
+    for url in endpoints:
+        try:
+            resp = session.get(url, timeout=(10, 30))
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            continue
+
+        collections = []
+        if isinstance(data, dict):
+            if isinstance(data.get("collections"), list):
+                collections = data["collections"]
+            elif isinstance(data.get("user"), dict) and isinstance(data["user"].get("collections"), list):
+                collections = data["user"]["collections"]
+
+        out = []
+        for c in collections:
+            if isinstance(c, str) and c.strip():
+                out.append(c.strip())
+            elif isinstance(c, dict):
+                val = c.get("identifier") or c.get("name")
+                if isinstance(val, str) and val.strip():
+                    out.append(val.strip())
+
+        if out:
+            return sorted(set(out))
+
+    return []
+
+
+def collect_metadata(default_title, prefills=None, account_collections=None):
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
     print("Title: Human-readable name shown on the item page; keep it clear and descriptive.")
@@ -287,10 +339,21 @@ def collect_metadata(default_title, prefills=None):
         'data': 'opensource_media'
     }
     
-    if collection_default:
-        metadata['collection'] = collection_default
-    elif mediatype in collection_map:
-        metadata['collection'] = collection_map[mediatype]
+    public_collections = set(collection_map.values())
+    suggested_collection = collection_default
+    if suggested_collection and suggested_collection not in public_collections:
+        print(f"Warning: Prefilled collection '{suggested_collection}' may be restricted for your account.")
+        suggested_collection = collection_map.get(mediatype)
+    if not suggested_collection:
+        suggested_collection = collection_map.get(mediatype)
+
+    if account_collections:
+        print("Available collections for this account:")
+        print("  " + ", ".join(account_collections))
+
+    collection = get_input("Collection", required=False, default=suggested_collection)
+    if collection:
+        metadata['collection'] = collection
 
     if creator: metadata['creator'] = creator
     if description: metadata['description'] = description
@@ -491,7 +554,11 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
         return (False, "Cancelled by user")
 
     file_size = os.path.getsize(local_path)
-    
+    if file_size == 0:
+        tqdm.write(f"Skipping empty file: {remote_key}")
+        record_result('cancelled', remote_key)
+        return (False, "Skipped empty file (0 bytes)")
+
     display_name = remote_key
     if len(display_name) > 20:
         display_name = "..." + display_name[-17:]
@@ -633,7 +700,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.5) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.7) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if VERBOSE:
@@ -694,16 +761,17 @@ def main():
         metadata = {}
         is_new_item = False
         metadata_prefills = load_metadata_prefills(folder_path)
+        account_collections = get_account_collections(session)
 
         if item.exists:
             # Only ask update question if -m flag is provided
             if args.metadata:
                 if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                    metadata = collect_metadata(title_suggestion, prefills=metadata_prefills)
+                    metadata = collect_metadata(title_suggestion, prefills=metadata_prefills, account_collections=account_collections)
         else:
             print(f"  > New item detected.")
             is_new_item = True
-            metadata = collect_metadata(title_suggestion, prefills=metadata_prefills)
+            metadata = collect_metadata(title_suggestion, prefills=metadata_prefills, account_collections=account_collections)
 
         # 3. MD5 Scanning Phase
         print("\n" + "="*30)
@@ -747,7 +815,8 @@ def main():
         matched_count = 0
         upload_new_count = 0
         upload_update_count = 0
-        
+        skipped_empty_count = 0
+
         # Detect Uploads
         print(f"Scanning {len(local_file_map)} local files against {total_remote_originals} remote originals...")
         
@@ -757,7 +826,14 @@ def main():
                 
                 local_file = info['path']
                 rel_path = info['rel_path']
-                
+                local_size = os.path.getsize(local_file)
+
+                if local_size == 0:
+                    skipped_empty_count += 1
+                    tqdm.write(f"[SKIP EMPTY]  {rel_path}")
+                    scan_bar.update(1)
+                    continue
+
                 disp = rel_path if len(rel_path) < 30 else "..." + rel_path[-27:]
                 scan_bar.set_description(f"Check: {disp}")
                 
@@ -774,8 +850,6 @@ def main():
                     remote_info = remote_map[norm_name]
                     remote_size = remote_info['size']
                     remote_md5 = remote_info['md5']
-                    local_size = os.path.getsize(local_file)
-                    
                     # Fast size check first
                     if remote_size is not None and str(local_size) != str(remote_size):
                         should_upload = True
@@ -837,6 +911,7 @@ def main():
         print(f"{matched_label}:".ljust(28) + f"{matched_count}")
         print(f"To Upload (New):         {upload_new_count}")
         print(f"To Upload (Update):      {upload_update_count}")
+        print(f"Skipped Empty Files:     {skipped_empty_count}")
         print(f"Orphans (To Delete):     {orphan_count}")
         print("="*40)
 
@@ -1040,3 +1115,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+

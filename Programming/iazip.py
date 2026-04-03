@@ -44,10 +44,67 @@ import re
 import sys
 import argparse
 
+
+def _is_likely_plaintext_file(filepath):
+    """
+    Heuristic plaintext detector:
+    - Fast-skip common binary formats by extension.
+    - Reads a small byte sample and rejects NUL-containing content.
+    """
+    binary_exts = {
+        ".jpg", ".jpeg", ".jp2", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff",
+        ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+        ".mp3", ".wav", ".flac", ".aac", ".m4a",
+        ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".webm",
+        ".exe", ".dll", ".so", ".bin", ".iso", ".dmg",
+    }
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in binary_exts:
+        return False
+
+    try:
+        with open(filepath, "rb") as fh:
+            chunk = fh.read(8192)
+    except OSError:
+        return False
+
+    if not chunk:
+        return True
+    if b"\x00" in chunk:
+        return False
+    return True
+
+
+def _derive_prefix(filename, fallback_prefix):
+    """
+    Build a stable archive prefix for filenames with numeric sequences.
+    Examples:
+      page001_img001.jpeg -> page_img
+      Scan_001.jpg        -> Scan
+    """
+    # Original behavior: remove a trailing numeric counter if present.
+    match = re.search(r'^(.*?)(?:_|-)?\d+\.[a-zA-Z0-9]+$', filename)
+    if match and match.group(1):
+        prefix = match.group(1).strip('_-')
+    else:
+        prefix = fallback_prefix
+
+    # New behavior: normalize embedded digit runs so patterns like
+    # page001_img001/page002_img001 share the same group (page_img).
+    if prefix:
+        prefix = re.sub(r'\d+', '', prefix)
+        prefix = re.sub(r'[_-]{2,}', '_', prefix).strip('_-')
+
+    if not prefix:
+        prefix = "ia_archive_set"
+    return prefix
+
+
 def process_directory(base_dir, move_mode):
     base_dir = os.path.abspath(base_dir)
-    valid_exts = ('.jpg', '.jpeg', '.jp2', '.tif', '.tiff', '.bmp', '.png')
-    
+    image_exts = ('.jpg', '.jpeg', '.jp2', '.tif', '.tiff', '.bmp', '.png')
+
     # Setup pool directory only if move_mode is enabled
     pool_dir = None
     if move_mode:
@@ -59,30 +116,41 @@ def process_directory(base_dir, move_mode):
         file_groups = {}
 
         for f in files:
-            if f.lower().endswith(valid_exts):
-                # Regex isolates prefix (e.g., Scan_001.jpg -> Scan)
-                match = re.search(r'^(.*?)(?:_|-)?\d+\.[a-zA-Z0-9]+$', f)
-                
-                if match and match.group(1):
-                    prefix = match.group(1).strip('_-')
-                else:
-                    prefix = os.path.basename(root)
-                
-                if not prefix:
-                    prefix = "ia_archive_set"
+            lower_name = f.lower()
+            ext = os.path.splitext(lower_name)[1]
 
-                file_groups.setdefault(prefix, []).append(f)
+            if lower_name.endswith(image_exts):
+                prefix = _derive_prefix(f, os.path.basename(root))
+                file_groups.setdefault(("image", prefix, ""), []).append(f)
+                continue
 
-        for prefix, group_files in file_groups.items():
+            filepath = os.path.join(root, f)
+            if _is_likely_plaintext_file(filepath):
+                stem = os.path.splitext(f)[0]
+                # Only consider numbered plaintext files as part of a series.
+                if not re.search(r'\d', stem):
+                    continue
+                prefix = _derive_prefix(f, os.path.basename(root))
+                file_groups.setdefault(("text", prefix, ext), []).append(f)
+
+        for (group_kind, prefix, ext), group_files in file_groups.items():
             if not group_files:
                 continue
 
+            # Skip solitary files; only zip real series.
+            if len(group_files) < 2:
+                continue
+
             group_files.sort()
-            zip_name = f"{prefix}_images.zip"
+            if group_kind == "image":
+                zip_name = f"{prefix}_images.zip"
+            else:
+                ext_label = ext.lstrip(".") or "txt"
+                zip_name = f"{prefix}_{ext_label}_text.zip"
             zip_path = os.path.join(root, zip_name)
 
             print(f"Archiving {len(group_files)} files to {zip_name}...")
-            
+
             # Create the ZIP archive
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
                 for gf in group_files:
@@ -93,7 +161,7 @@ def process_directory(base_dir, move_mode):
                 rel_path = os.path.relpath(root, base_dir)
                 target_dir = os.path.normpath(os.path.join(pool_dir, rel_path))
                 os.makedirs(target_dir, exist_ok=True)
-                
+
                 for gf in group_files:
                     source_file = os.path.join(root, gf)
                     destination_file = os.path.join(target_dir, gf)
@@ -105,13 +173,14 @@ def process_directory(base_dir, move_mode):
                     os.remove(source_file)
                 print(f"Done. Originals deleted.")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IA Image Zipper: Archive image sets for Internet Archive unpacking.")
-    parser.add_argument('-m', '--move', action='store_true', 
+    parser.add_argument('-m', '--move', action='store_true',
                         help="Move original files to an external '_original' folder instead of deleting them.")
-    
+
     args = parser.parse_args()
-    
+
     current_working_directory = os.getcwd()
     try:
         process_directory(current_working_directory, args.move)

@@ -53,38 +53,52 @@ CANNY_HIGH = 150
 IMAGE_CONTOUR_MIN_AREA = 100
 
 # --- 4. CLASSIFICATION THRESHOLDS ---
-
-# BLANK Check
-# Page is BLANK if Text Lines < X  AND  Image Content < Y
-TH_BLANK_TEXT_MAX = 1   # Lowered to 1 to catch minimal text (e.g. Page 5)
-TH_BLANK_IMAGE_MAX = 5000
-TH_TEXT_PRESENT_MIN = 2  # Require at least this many lines to mark page as text.
-
-# BLANK Check (Standard Deviation)
-# If image std-dev is below this, it is considered BLANK (ignores noise/texture).
-TH_BLANK_STD_MAX = 10.0
-
-# STRONG TEXT/IMAGE categorization
-TH_TEXT_STRONG_MIN = 20
-TH_IMAGE_STRONG_MIN = 120000
-
-# Tuned for scanned old-book pages:
-# - Dense text pages create lots of small edges, so summed edge area can be misleading.
-# - True illustration/photo pages usually produce one very large connected contour.
-TH_IMAGE_LARGEST_MIN = 350000
-TH_IMAGE_AREA_RATIO_MIN = 0.18
-TH_IMAGE_EDGE_DENSITY_MIN = 0.03
-
-# Structural blank detector: low texture and low text count.
-TH_BLANK_LARGEST_MAX = 60000
-TH_BLANK_IMAGE_RATIO_MAX = 0.02
-TH_BLANK_EDGE_DENSITY_MAX = 0.02
-TH_BLANK_TEXT_SOFT_MAX = 35
-
-# For pages with both text and image, only split when text is substantial.
-TH_BOTH_TEXT_MIN = 100
-TH_BOTH_IMAGE_RATIO_MIN = 0.13
-TH_BOTH_LARGEST_MIN = 800000
+# Profile-driven thresholds so we can tune per collection without changing
+# existing behavior.
+THRESHOLD_PROFILES = {
+    # Existing behavior (kept as-is for backward compatibility).
+    "duotone": {
+        "blank_text_max": 1,
+        "blank_image_max": 5000,
+        "text_present_min": 2,
+        "blank_std_max": 10.0,
+        "text_strong_min": 20,
+        "image_strong_min": 120000,
+        "image_largest_min": 350000,
+        "image_area_ratio_min": 0.18,
+        "image_edge_density_min": 0.03,
+        # Only allow edge-density path to force image on low-text pages.
+        "image_text_guard_max": 10**9,
+        "blank_largest_max": 60000,
+        "blank_image_ratio_max": 0.02,
+        "blank_edge_density_max": 0.02,
+        "blank_text_soft_max": 35,
+        "both_text_min": 100,
+        "both_image_ratio_min": 0.13,
+        "both_largest_min": 800000,
+    },
+    # Tuned for the next old-book set where many text pages have strong structure.
+    "photoscan": {
+        "blank_text_max": 1,
+        "blank_image_max": 5000,
+        "text_present_min": 2,
+        "blank_std_max": 10.0,
+        "text_strong_min": 20,
+        "image_strong_min": 120000,
+        "image_largest_min": 2400000,
+        # Effectively disable ratio-only image detection for this profile.
+        "image_area_ratio_min": 0.60,
+        "image_edge_density_min": 0.033,
+        "image_text_guard_max": 200,
+        "blank_largest_max": 60000,
+        "blank_image_ratio_max": 0.02,
+        "blank_edge_density_max": 0.02,
+        "blank_text_soft_max": 35,
+        "both_text_min": 100,
+        "both_image_ratio_min": 0.13,
+        "both_largest_min": 800000,
+    },
+}
 
 # ==============================================================================
 
@@ -155,6 +169,8 @@ def classify_page_content(image_path, params, verbose=True):
                     "image_area": 0,
                     "std": std_val,
                 }
+
+        cfg = params["thresholds"]
 
         # Denoise
         kernel_noise = cv2.getStructuringElement(cv2.MORPH_RECT, MORPH_KERNEL_NOISE)
@@ -312,22 +328,25 @@ def classify_page_content(image_path, params, verbose=True):
         # DECISION LOGIC
         # ----------------------------------------------------------------------
 
-        has_text = text_lines_found >= TH_TEXT_PRESENT_MIN
+        has_text = text_lines_found >= cfg["text_present_min"]
 
         # Image detection: require strong, coherent image structure.
         has_image = (
-            largest_contour_area >= TH_IMAGE_LARGEST_MIN
+            largest_contour_area >= cfg["image_largest_min"]
             and (
-                image_area_ratio >= TH_IMAGE_AREA_RATIO_MIN
-                or edge_density >= TH_IMAGE_EDGE_DENSITY_MIN
+                image_area_ratio >= cfg["image_area_ratio_min"]
+                or (
+                    edge_density >= cfg["image_edge_density_min"]
+                    and text_lines_found <= cfg["image_text_guard_max"]
+                )
             )
         )
 
         is_blank = (
-            largest_contour_area <= TH_BLANK_LARGEST_MAX
-            and image_area_ratio <= TH_BLANK_IMAGE_RATIO_MAX
-            and edge_density <= TH_BLANK_EDGE_DENSITY_MAX
-            and text_lines_found <= TH_BLANK_TEXT_SOFT_MAX
+            largest_contour_area <= cfg["blank_largest_max"]
+            and image_area_ratio <= cfg["blank_image_ratio_max"]
+            and edge_density <= cfg["blank_edge_density_max"]
+            and text_lines_found <= cfg["blank_text_soft_max"]
         )
 
         if is_blank:
@@ -359,6 +378,7 @@ def classify_page_content(image_path, params, verbose=True):
 
 
 def process_images(target_dir, params, verbose=True):
+    cfg = params["thresholds"]
     image_extensions = ("*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.bmp")
     image_files = []
 
@@ -367,6 +387,7 @@ def process_images(target_dir, params, verbose=True):
 
     if verbose:
         print("--- CURRENT CONFIGURATION ---")
+        print(f"  Profile            = {params.get('profile', 'photoscan')}")
         if params.get("width_px"):
             print(f"  MODE               = Fixed Thresholds")
             print(f"  Width Requirement  = {params['width_px']} px")
@@ -383,18 +404,19 @@ def process_images(target_dir, params, verbose=True):
         else:
             print(f"  StdDev Blank Check = Disabled")
 
-        print(f"  TH_BLANK_TEXT_MAX   = {TH_BLANK_TEXT_MAX}")
-        print(f"  TH_TEXT_PRESENT_MIN = {TH_TEXT_PRESENT_MIN}")
-        print(f"  TH_IMAGE_LARGEST_MIN = {TH_IMAGE_LARGEST_MIN}")
-        print(f"  TH_IMAGE_AREA_RATIO_MIN = {TH_IMAGE_AREA_RATIO_MIN}")
-        print(f"  TH_IMAGE_EDGE_DENSITY_MIN = {TH_IMAGE_EDGE_DENSITY_MIN}")
-        print(f"  TH_BLANK_LARGEST_MAX = {TH_BLANK_LARGEST_MAX}")
-        print(f"  TH_BLANK_IMAGE_RATIO_MAX = {TH_BLANK_IMAGE_RATIO_MAX}")
-        print(f"  TH_BLANK_EDGE_DENSITY_MAX = {TH_BLANK_EDGE_DENSITY_MAX}")
-        print(f"  TH_BLANK_TEXT_SOFT_MAX = {TH_BLANK_TEXT_SOFT_MAX}")
-        print(f"  TH_BOTH_TEXT_MIN = {TH_BOTH_TEXT_MIN}")
-        print(f"  TH_BOTH_IMAGE_RATIO_MIN = {TH_BOTH_IMAGE_RATIO_MIN}")
-        print(f"  TH_BOTH_LARGEST_MIN = {TH_BOTH_LARGEST_MIN}")
+        print(f"  TH_BLANK_TEXT_MAX   = {cfg['blank_text_max']}")
+        print(f"  TH_TEXT_PRESENT_MIN = {cfg['text_present_min']}")
+        print(f"  TH_IMAGE_LARGEST_MIN = {cfg['image_largest_min']}")
+        print(f"  TH_IMAGE_AREA_RATIO_MIN = {cfg['image_area_ratio_min']}")
+        print(f"  TH_IMAGE_EDGE_DENSITY_MIN = {cfg['image_edge_density_min']}")
+        print(f"  TH_IMAGE_TEXT_GUARD_MAX = {cfg['image_text_guard_max']}")
+        print(f"  TH_BLANK_LARGEST_MAX = {cfg['blank_largest_max']}")
+        print(f"  TH_BLANK_IMAGE_RATIO_MAX = {cfg['blank_image_ratio_max']}")
+        print(f"  TH_BLANK_EDGE_DENSITY_MAX = {cfg['blank_edge_density_max']}")
+        print(f"  TH_BLANK_TEXT_SOFT_MAX = {cfg['blank_text_soft_max']}")
+        print(f"  TH_BOTH_TEXT_MIN = {cfg['both_text_min']}")
+        print(f"  TH_BOTH_IMAGE_RATIO_MIN = {cfg['both_image_ratio_min']}")
+        print(f"  TH_BOTH_LARGEST_MIN = {cfg['both_largest_min']}")
         print("-" * 30 + "\n")
 
     for ext in image_extensions:
@@ -473,10 +495,10 @@ def process_images(target_dir, params, verbose=True):
             elif has_text and has_image:
                 # BOTH only when both text and image are clearly substantial.
                 strong_image_for_both = (
-                    analysis.get("image_area_ratio", 0.0) >= TH_BOTH_IMAGE_RATIO_MIN
-                    or analysis.get("largest_contour_area", 0.0) >= TH_BOTH_LARGEST_MIN
+                    analysis.get("image_area_ratio", 0.0) >= cfg["both_image_ratio_min"]
+                    or analysis.get("largest_contour_area", 0.0) >= cfg["both_largest_min"]
                 )
-                if analysis["text_lines"] >= TH_BOTH_TEXT_MIN and strong_image_for_both:
+                if analysis["text_lines"] >= cfg["both_text_min"] and strong_image_for_both:
                     shutil.copy2(image_path, dirs["images"])
                     if verbose:
                         print(f"      -> Action: Copied to sorted/images")
@@ -485,7 +507,7 @@ def process_images(target_dir, params, verbose=True):
                     if verbose:
                         print(f"      -> Action: Moved to sorted/text")
                     stats["both"] += 1
-                elif analysis["text_lines"] >= TH_BOTH_TEXT_MIN:
+                elif analysis["text_lines"] >= cfg["both_text_min"]:
                     dest = dirs["text"]
                     shutil.move(image_path, dest)
                     if verbose:
@@ -582,6 +604,12 @@ def main():
     parser.add_argument(
         "--hx", "--height-px", type=int, help="Override height with fixed pixels"
     )
+    parser.add_argument(
+        "--profile",
+        choices=sorted(THRESHOLD_PROFILES.keys()),
+        default="photoscan",
+        help="Threshold profile. Use 'duotone' for previous behavior, 'photoscan' for stricter image gating.",
+    )
 
     args = parser.parse_args()
 
@@ -590,12 +618,15 @@ def main():
         return
 
     # Package params for clean passing
+    thresholds = THRESHOLD_PROFILES[args.profile].copy()
     params = {
         "std_threshold": args.std,
         "width_pct": args.wp,
         "height_pct": args.hp,
         "width_px": args.wx,
         "height_px": args.hx,
+        "profile": args.profile,
+        "thresholds": thresholds,
     }
 
     if args.report:
