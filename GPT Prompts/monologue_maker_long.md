@@ -1,4 +1,4 @@
-# YouTube Commentary Script Prompt — Version 2
+# YouTube Commentary Script Prompt — Version 3
 
 You are writing a YouTube commentary script. Work through all six steps in order, plus the standalone section between Step 5 and Step 6. Do not skip steps or combine them. Show your work at each step before proceeding.
 
@@ -58,15 +58,21 @@ This step has two parts. **Part A is the pre-loaded baseline** — documented me
 
 ---
 
-### PART A — PRE-LOADED CREATOR BASELINE: PENGUINZ0
+### PART A — PRE-LOADED CREATOR BASELINE
 
-This baseline was built from direct transcript analysis and carries documented confidence on every point. Do not override it with general assumptions about "casual YouTube voice" — this is specific to the creator, and several patterns directly contradict general YouTube conventions.
-
-**Note on negative findings:** The list of what this creator never does (A10) carries equal operational weight to the list of what they do. What does not happen is as important to enforce as what does. Both lists must be active simultaneously during script generation.
+**Select the baseline for the creator being scripted and apply it in full. Both baselines are documented below. Only one is active per script — confirm which creator before proceeding.**
 
 ---
 
-#### A1. SENTENCE ARCHITECTURE
+## BASELINE A1 — PENGUINZ0
+
+This baseline was built from direct transcript analysis and carries documented confidence on every point. Do not override it with general assumptions about "casual YouTube voice" — this is specific to the creator, and several patterns directly contradict general YouTube conventions.
+
+**Note on negative findings:** The list of what this creator never does (P-A10) carries equal operational weight to the list of what they do. What does not happen is as important to enforce as what does. Both lists must be active simultaneously during script generation.
+
+---
+
+#### P-A1. SENTENCE ARCHITECTURE
 
 Sentences do not know where they are going when they start. Clauses build clause by clause, each new clause prompted by the previous one, not by a pre-planned structure. The sentence discovers its endpoint mid-flight.
 
@@ -84,7 +90,7 @@ Short declarative clusters appear at the end of emotional beats — not as rheto
 
 ---
 
-#### A2. PARAGRAPH OPENERS — NATIVE LIST AND PROHIBITED LIST
+#### P-A2. PARAGRAPH OPENERS — NATIVE LIST AND PROHIBITED LIST
 
 This is the most operationally important section. The most common failure mode in mimicking this voice is using connector words as paragraph launchers. This does not happen.
 
@@ -113,7 +119,7 @@ This is the most operationally important section. The most common failure mode i
 
 ---
 
-#### A3. HOOK STRUCTURE — CREATOR-SPECIFIC PATTERN
+#### P-A3. HOOK STRUCTURE — CREATOR-SPECIFIC PATTERN
 
 Opening does not happen inside the viewer's experience. The default hook (viewer's experience first, subject second) is wrong for this creator.
 
@@ -129,7 +135,7 @@ Opening does not happen inside the viewer's experience. The default hook (viewer
 
 ---
 
-#### A4. HOW TO OPEN AND CLOSE TOPICS
+#### P-A4. HOW TO OPEN AND CLOSE TOPICS
 
 **Opening:** Front-loaded simple statement, then elaboration by addition. Never bury the lead — the first sentence states the thing plainly, and everything after it adds layers.
 
@@ -141,7 +147,7 @@ Opening does not happen inside the viewer's experience. The default hook (viewer
 
 ---
 
-#### A5. MORAL AND OPINION REGISTER
+#### P-A5. MORAL AND OPINION REGISTER
 
 Ethical positions get stated plainly and without elaborate justification. No building a philosophical case for why something is wrong — just declare it, sometimes twice, and move on. The conviction is in the flatness, not the argument.
 
@@ -151,7 +157,7 @@ Not a cynic. Engage with stories earnestly and let yourself be moved by them, th
 
 ---
 
-#### A6. VERBAL FINGERPRINT
+#### P-A6. VERBAL FINGERPRINT
 
 Specific words and phrases native to the creator:
 
@@ -175,7 +181,7 @@ Does not use:
 
 ---
 
-#### A7. SELF-NARRATION — REQUIRED PATTERN
+#### P-A7. SELF-NARRATION — REQUIRED PATTERN
 
 Always sounds like someone who found something out and is now telling you about it. Narrates the own discovery process throughout. This is not incidental — it is structural to the voice.
 
@@ -191,19 +197,19 @@ The script must preserve this. Every major revelation should carry the energy of
 
 ---
 
-#### A8. PERSONALITY-TO-ARGUMENT RATIO
+#### P-A8. PERSONALITY-TO-ARGUMENT RATIO
 
 Approximately **35% personality, 65% argument/reporting** in a standard commentary video. Personality breaks through at three predictable moments:
 
 1. **The opening** — always has a personality beat, usually the absurd self-insertion alongside legitimate examples
-2. **The extended analogy** — appears once per video, in the middle, runs far longer than necessary, see A9 Technique 2
+2. **The extended analogy** — appears once per video, in the middle, runs far longer than necessary, see P-A9 Technique 2
 3. **The warm close** — genuine affection for the subject or resolution, delivered flat, after the argument is complete
 
 Between these anchors primarily reporting and reasoning. The personality moments work because they are distributed and earned, not because they are frequent.
 
 ---
 
-#### A9. EXTENDED HUMOR MECHANICS — FULL TOOLKIT
+#### P-A9. EXTENDED HUMOR MECHANICS — FULL TOOLKIT
 
 **Technique 1: The Grandiose Deadpan**
 
@@ -259,9 +265,9 @@ Use a wrong word or slightly mangled phrase with complete confidence, as if it i
 
 ---
 
-#### A10. WHAT NEVER HAPPENS
+#### P-A10. WHAT NEVER HAPPENS
 
-These negative findings carry equal operational weight to the positive patterns in A1–A9. Enforcing this list is as important as applying the native patterns.
+These negative findings carry equal operational weight to the positive patterns in P-A1–P-A9. Enforcing this list is as important as applying the native patterns.
 
 - Rhetorical triplets of the "Not X. Not Y. Z." form
 - Elegant closing thesis statements that wrap up a paragraph's argument
@@ -276,27 +282,284 @@ These negative findings carry equal operational weight to the positive patterns 
 
 ---
 
+## BASELINE A2 — JENNY NICHOLSON
+
+This baseline was built from direct transcript and video analysis and carries documented confidence on every point. Do not override it with general assumptions about "essay YouTube voice" — this is specific to the creator, and several patterns directly contradict general long-form YouTube conventions.
+
+**Note on negative findings:** The list of what this creator never does (J-A10) carries equal operational weight to the list of what she does. Both lists must be active simultaneously during script generation.
+
+---
+
+#### J-A1. CORE IDENTITY AND PERSONA
+
+She presents as a specific, consistent person — not a critic-persona, not a character, not a brand. Key traits that appear across every video:
+
+- **Obsessive about niche things**: dark rides, specific lore, bad romance novels, church Easter plays. She knows more about her subject than anyone needs to.
+- **Principled about small injustices**: she treats petty grievances with the same seriousness as macro arguments — the pole they sat her behind, the bread basket.
+- **Self-aware about her own pettiness**: she names it, owns it, and then proceeds anyway.
+- **Zero image management**: she'll openly admit to riding the Carousel of Progress twice in one day, or spending hours on church Christmas plays. No defensiveness. No performance of coolness.
+- **Capable of genuine warmth and sadness but allergic to performing either.** Emotion appears rarely, briefly, and without cushioning — which makes it land harder.
+- **Intellectually honest even when it costs her**: she admits when she likes something she expected to hate, changes her mind mid-bit and says so, flags when a criticism is a bit hypocritical.
+
+What she is not: not an entertainer performing enthusiasm, not a culture journalist trying to be balanced, not a hater tearing things down for sport, not someone who needs the audience to think she's smart or cool.
+
+---
+
+#### J-A2. SENTENCE ARCHITECTURE AND SPOKEN REGISTER
+
+Conversational. Almost always sounds like she's talking to a specific friend — not addressing a crowd, not performing to a camera. The register is casual, first-person, immediate.
+
+**Characteristic sentence shapes:**
+- Statement. Flat follow-up that undercuts it.
+- Long analytical sentence... short declarative verdict.
+- Question, pause, answer that isn't really an answer.
+- "I [did X]. Which [observation]. [Consequence]."
+- Setup, setup, setup — then single word or image that lands the whole thing.
+
+**Pace and rhythm:**
+- Long setups, then short landings
+- Silence and understatement where another person would use emphasis
+- Never rushes to the joke — patience is a tool
+- Alternates between dense, fast-moving analytical stretches and sudden one-sentence pivots
+
+**Signature linguistic markers:**
+- **"I don't know"** — used not as a cop-out but as honest acknowledgment, often right after the absurdity of something has been established
+- **"I guess"** — hedging that signals she's still working it out, or being careful not to overstate
+- **"kind of," "sort of," "like"** — natural spoken connectives that signal tentativeness or approximation, not filler
+- **"which"** — used mid-sentence to pivot or add a secondary observation: "which is insane," "which makes sense," "which doesn't mean much"
+- **"okay"** — resets after a tangent or a particularly disturbing thing she just read aloud
+- **"anyway"** — dismisses something she's acknowledged but doesn't want to dwell on, or returns to the main thread
+- **"so"** — transitional, but also used to introduce conclusions she's just arrived at in real time
+- **"I mean"** — introduces a clarification or a concession
+- **Present tense narration** — describes past events in present tense to keep things immediate
+- **"this guy's a [x]"** — introduces characters or people with flat, contextless noun descriptions rather than names
+
+---
+
+#### J-A3. HOOK STRUCTURE — CREATOR-SPECIFIC PATTERN
+
+She almost never opens with a formal introduction, a thesis statement, or a title card announcing the subject. Instead she opens *in medias res* — already inside the thing.
+
+**Three documented cold open types:**
+
+1. **In medias res bit** — the video starts mid-sketch or mid-scene. You don't know what you're watching until it's over.
+
+2. **Personal history, specific and slightly embarrassing** — opens with a specific personal memory or credential: *"my friend Bailey put it on when I was sick with a 103 degree fever and kind of delirious."* / *"I barely resisted covering this when it debuted."* These are personal credentials stated without apology.
+
+3. **The clean factual statement with a twist** — *"on March 1st, 2022, the Walt Disney Company opened their newest experiment in themed entertainment... and it would also go out of business."* The twist lands in the same breath as the setup. You don't get time to form expectations before she subverts them.
+
+**What all three types share:** no wind-up, no promise of what's coming, no acknowledgment that the video is beginning. You're just in it.
+
+Shortly after the cold open — within the first few minutes — she establishes her personal relationship to the subject, the stakes of the video, and sometimes a brief, honest statement of the video's limits or changed scope. This is done quickly and conversationally, not formally. She is always honest about the limits of her authority. She never overclaims expertise she doesn't have, and she never underclaims expertise she does have.
+
+---
+
+#### J-A4. HOW TO OPEN AND CLOSE TOPICS
+
+**Opening:** She almost never starts with abstract principle. She zooms in before she zooms out — specific injustice or specific detail first, macro argument after. The specific emotional calibration happens before the abstraction arrives.
+
+**Closing — the three-beat ending structure (always in this order):**
+
+1. **The Verdict** — plain, direct, no hedging. Short. After everything that preceded it, it doesn't need to be long. *"It was born of pure greed."* These verdicts land like a single note after a long chord progression.
+
+2. **The Emotional Coda** — genuine, unironic, usually brief. She allows herself to feel something and states it plainly, without softening it with a joke. *"I feel sad for their sake that all their work has been for nothing. I even feel sad for this building."*
+
+3. **The Deflation** — pettiness reasserts itself. The large emotion collapses back into a small, specific, personal grievance. *"Also I'm still mad they sat me behind a pole."* This is not running away from the emotion — it is her character reasserting itself. The deflation doesn't undercut the emotion. It reasserts that she is a specific person with petty complaints who also happens to have just made a serious argument.
+
+The three beats are almost never separated by transition language. They run directly into each other. The tonal shift is the punctuation.
+
+**The pettiness as philosophical position:** Her willingness to end a long, serious argument with a small personal grievance is not a deflation of the argument — it's a statement about how she exists in the world: she takes things seriously *and* she holds petty grievances *and* she knows the difference between them *and* she doesn't feel the need to choose. The result is a voice that feels more honest and ultimately more trustworthy than one that maintains decorum throughout.
+
+---
+
+#### J-A5. MORAL AND OPINION REGISTER
+
+She corrects herself mid-analysis. She changes her mind. She says "never mind" when a theory doesn't pan out. She says "actually this one might be my favorite" contradicting something she said two minutes earlier. This makes the voice feel trustworthy — she's not managing a position, she's genuinely thinking.
+
+She doesn't soften controversial opinions with hedges designed to protect her from pushback. She doesn't perform uncertainty to seem humble. When she's sure, she says it plainly. When she's not sure, she says that too, but for real.
+
+She'll acknowledge an obvious counter-argument before anyone can make it, incorporate it honestly, and then explain why it doesn't change her conclusion. *"I'm not going to pretend Disney is a smile factory — obviously they've always been a for-profit business at the end of the day. But I have to wonder what the long-term implications of this business model will be."*
+
+She is never performatively enthusiastic. When she does express genuine enjoyment, it is specific and slightly embarrassing and completely convincing: *"I ride the Carousel of Progress every time I'm in Florida. Sometimes twice in one day."*
+
+---
+
+#### J-A6. VERBAL FINGERPRINT
+
+Specific words and phrases native to the creator:
+
+- **"I don't know"** — honest acknowledgment, not a cop-out
+- **"I guess"** — genuine hedging while working something out
+- **"which is insane" / "which makes sense" / "which doesn't mean much"** — mid-sentence secondary observation pivot
+- **"okay"** — reset after something disturbing or absurd
+- **"anyway"** — dismissal or return to thread
+- **"I mean"** — clarification or concession
+- **"this guy's a [noun]"** — character introduction by flat function description
+- **"this"** as a pointer — "this looks unbelievable," "this is my favorite line," "this is bad"
+- **Present tense for past events** — keeps things immediate
+
+She can pivot from analytically precise language (*"it diminishes the character's agency in anything they do because it basically splits them into two different characters"*) to immediate flat response (*"which: ugh."*) — the range signals that the analytical mode is chosen, not just how she defaults.
+
+Does not use:
+- Technical vocabulary when casual vocabulary will do
+- Abstract nouns where concrete images are available
+- Performed enthusiasm
+- "Utilize" when she could write "use"
+- Filler transitions ("moving on," "next up," "let's talk about")
+
+---
+
+#### J-A7. SELF-NARRATION — REQUIRED PATTERN
+
+She does the research *on camera*, narrating the process. This feels spontaneous even when it isn't, and it deepens the sense that she's genuinely thinking.
+
+- She narrates the act of looking things up: going to AO3 to check how many Rey/Kylo force bond fics predate The Last Jedi; looking up whether Cliff's Notes is trademarked mid-book-review.
+- She narrates dead ends and changes of direction: *"never mind," "actually I looked this up and—"*
+- She corrects herself publicly and immediately, without apology.
+
+The script must preserve this. It should feel like watching a smart person genuinely work something out, not like a pre-written argument being read aloud.
+
+---
+
+#### J-A8. PERSONALITY-TO-ARGUMENT RATIO AND STRUCTURAL ARCHITECTURE
+
+The density is variable and *intentional* — not a fixed ratio but a deliberate variation:
+
+- Long stretches of tight analytical writing with no humor — building the case
+- Then a run of rapid-fire observations where almost every sentence has a small payoff
+- Then a long, patient setup that earns a single small joke at the end
+- Then a serious passage that earns a sincere emotional beat
+
+She trusts the audience not to need constant stimulation. The slower, more serious sections don't feel like padding because they're doing structural work.
+
+**The seven-layer long-essay structure** (for scripts of substantial length):
+
+1. **Cold open** — already inside the thing, no formal introduction (see J-A3)
+2. **Credential + framing** — why her, why now; her personal relationship to the subject; honest statement of the video's limits; announcement of the structural device ("I've organized it into a numbered list")
+3. **Context and history** — longer than it appears to need to be. Every fact laid here becomes a piece of evidence she picks up later. The context isn't throat-clearing; it's load-bearing.
+4. **Numbered list or thematic sections** — the main body; tonal range is widest here; each section signals to the viewer there is a shape to the video; the numbers themselves are a comic device; she can delay her thesis because the accumulation of evidence *is* the argument
+5. **Pivot to the macro** — from the specific to the structural or systemic argument, usually unannounced; she just does it; it only works because the micro was established so thoroughly
+6. **The verdict** — plain, direct, no hedging; short; earned by everything that preceded it
+7. **Emotional coda → Deflation** — genuine feeling stated plainly, then pettiness reasserts itself
+
+**The through-line question:** Every long video has a single through-line question the whole video is trying to answer. She never states it explicitly. You feel it rather than hear it. Every section is either answering that question directly or building toward the conditions under which it can be answered.
+
+---
+
+#### J-A9. EXTENDED HUMOR MECHANICS — FULL TOOLKIT
+
+**Technique 1: Deliberate Naivety / The Logic Trap**
+
+Her most powerful device. She takes something at exact face value and follows the logic wherever it actually goes, refusing to make the silent accommodations the text is asking her to make. She just keeps asking "but why?" — not sarcastically, but with the sincere confusion of someone who actually needs an answer.
+
+- **Effect:** Doesn't feel like attack; feels like genuine confusion. Makes the target more absurd than hostile critics usually achieve, because she works from inside its own premises. Pulls the audience into the same reasoning — they start extending the logic forward before she gets there.
+- **Duration:** Can run across an entire section as an organizing mode, or land in a single question.
+- **Delivery:** Sincere confusion, not sarcasm.
+- **Examples:** *"so like what if he can shoot you with a gun faster than you can kill him with an app"* / *"who signed the papers? wasn't this filed in a courthouse? how has nobody found out?"*
+- **Script application:** In Step 4, audit the source material for premises that collapse when followed literally to their logical conclusion. Those are the targets.
+
+**Technique 2: Precision of Image**
+
+She finds the exact right image — not clever, not elevated, *right*. Slightly wrong scale or context. No fanfare.
+
+- **Trigger:** Any moment where a general description could be replaced by a specific, slightly-wrong-scale image that is funnier and more accurate.
+- **Duration:** A single phrase, usually.
+- **Delivery:** No fanfare. The specificity is the entire joke.
+- **Examples:** *"bungee corded a bunch of floppy avatar bodies onto these banshee"* / *"like a pony in a summer camp"* / *"he just holds it perfectly upright with both hands and then gingerly passes it off to his assistant just like in the movies"*
+- **Script application:** In Step 4, audit for moments where a specific concrete image would replace a general description and be both funnier and more precise.
+
+**Technique 3: Underreaction**
+
+Genuinely alarming things get small, tired responses. Huge revelations land with a flat "oh my God" or just "okay." The gap between the scale of the event and the scale of the response is where the humor lives.
+
+- **Trigger:** Any moment where the subject matter is genuinely alarming or absurd.
+- **Duration:** One word to one sentence. The underreaction must be brief to work.
+- **Delivery:** Flat, slightly tired. Not performed disinterest — the actual response of someone who has been looking at this for a long time.
+- **Examples:** *"then suddenly he just appears and he's in her house of course yeah"* / *"his plan works by the way. which is insane."* / *"and then he dies"*
+
+**Technique 4: Layered Parentheticals**
+
+She'll add a second observation mid-observation, which undercuts or complicates the first without ever abandoning it.
+
+- **Trigger:** Any moment where a second observation naturally occurs mid-analysis.
+- **Delivery:** Inserted seamlessly, as if she just noticed it while saying the first thing.
+- **Examples:** Reading a description of Justin's appearance: *"I assume he's still nude while he's saying this"* / *"I won't say worst — a different one was probably the worst — but you know my least favorite"*
+
+**Technique 5: Structural Ironic Reversal**
+
+She builds toward something that seems like it's going one direction and then drops out the floor. But she doesn't announce the reversal. It just happens.
+
+- **Trigger:** Any moment where her actual response contradicts what she seemed to be building toward.
+- **Delivery:** No announcement. The reversal is the only signal.
+- **Examples:** *"I was prepared to be a bitter hater because I hate motion simulators but I actually really liked it. I even waited 90 minutes to ride it again."*
+
+**Technique 6: Callbacks and Escalating Returns**
+
+She'll establish something early — a detail, a grievance, a joke — and return to it later in a slightly different form, often as the emotional button at the end of a long piece.
+
+- **Trigger:** Any detail in Act 1 that has escalation potential, or any grievance that is both petty and genuine.
+- **Duration:** The callback is brief; the setup can be anywhere in the script.
+- **Examples:** *"Also I'm still mad they sat me behind a pole"* — the final line of the Galactic Star Cruiser video, after a 4+ hour essay about corporate greed and institutional failure. The China Beach ad: established early, returned to again and again, treated as its own character in the piece.
+- **Script application:** In Step 4, identify the detail that could serve as the deflation callback in the three-beat ending. Plant it in Act 1.
+
+**Technique 7: Comedic Specificity as Punchline**
+
+The specificity is the joke. She doesn't generalize when she can be exact.
+
+- **Trigger:** Any moment where a general description could be replaced by a specific, precise, unexpected detail.
+- **Examples:** Not "it costs a lot" but "the survey asked whether guests would be willing to pay $900 to $1,000 per person." Not "he talks about his muscles" but "I do arms on Thursday so I'm definitely doing biceps on Valentine's Day." Not "the plot is contrived" but "he keeps these important political documents in a Christmas ornament."
+
+**Technique 8: The Three-Beat Emotional Structure**
+
+Build → Genuine Feeling → Deflation back into petty comedy. Her signature macro move. She earns something genuinely sad or sincere, delivers it without ironic cushioning, and then immediately drops back into pettiness. The deflation doesn't undercut the emotion — it reasserts her character over the material. See J-A4 for the full ending structure.
+
+---
+
+#### J-A10. WHAT NEVER HAPPENS
+
+These negative findings carry equal operational weight to the positive patterns in J-A1–J-A9.
+
+- Announced jokes — she never says "and here's the funny part"
+- Performed outrage — she underreacts, she doesn't overreact
+- Summarizing her own point after making it — she trusts the point
+- Filler transitions — "moving on," "next up," "let's talk about" — she just moves
+- Hedging the sincere moments — when she means something genuinely, she doesn't soften it with irony
+- Explaining why something is absurd — she describes it; the absurdity should be self-evident
+- Aggressive punchlines — humor is almost always low-key; laughs come from precision and understatement
+- Making fun of the audience — she's never positioned above the viewer; always one of us, just more annoyed about specific things
+- Recapping what she just said
+- Previewing what she's about to say
+- Explaining a joke after it lands (or doesn't)
+- Apologizing for going long
+- Padding with filler enthusiasm ("this is SO good," "you guys are going to LOVE this")
+- Addressing the audience with "you might be thinking—" or "as I'm sure you know—" (audience address is deliberate and specific when it appears — for pre-empting criticism, flagging an error, narrating live research, or issuing a rare direct instruction)
+- Thanking the audience for watching or asking them to like and subscribe in a performative way
+- Formal transitions ("Furthermore," "Moreover," "In contrast")
+- Never loses the thread of the main argument no matter how far the tangent goes
+
+---
+
 ### PART B — LIVE TRANSCRIPT STUDY
 
 Apply the following to the new reference transcript provided. The goal is not to re-derive the baseline from scratch — it is to check the baseline against current material and note any updates.
 
 Document:
 
-**B1. Sentence architecture — confirm or correct A1.** Does this transcript match the baseline patterns? Note any new chain connectors, new trailing-off behaviors, or changed hedge patterns.
+**B1. Sentence architecture — confirm or correct.** Does this transcript match the baseline patterns? Note any new chain connectors, new trailing-off behaviors, or changed hedge patterns.
 
-**B2. Paragraph openers — extend the native list.** Go through the transcript and document the first word or phrase of every paragraph. Add any new native openers to the A2 list. Flag any prohibited openers that appear — these should be treated as performance artifacts, not additions to the native list.
+**B2. Paragraph openers — extend the native list.** Go through the transcript and document the first word or phrase of every paragraph. Add any new native openers to the active baseline's list. Flag any prohibited openers that appear — these should be treated as performance artifacts, not additions to the native list.
 
-**B3. Hook structure — confirm or correct A3.** Does this video open with the grand sweeping claim pattern? Or does it use a different entry? Note any deviation.
+**B3. Hook structure — confirm or correct.** Does this video open with the documented hook pattern? Or does it use a different entry? Note any deviation.
 
-**B4. Verbal fingerprint — extend A6.** Note any new words, phrases, or references native to this transcript that are not in the baseline. Add them.
+**B4. Verbal fingerprint — extend.** Note any new words, phrases, or references native to this transcript that are not in the baseline. Add them.
 
-**B5. Self-narration — confirm A7.** Note the specific phrases used in this transcript for discovery narration.
+**B5. Self-narration — confirm.** Note the specific phrases used in this transcript for discovery narration.
 
-**B6. Humor mechanics — confirm or extend A9.** Note which techniques appear in this transcript. Note duration of any extended analogy. Note any new technique not in the baseline.
+**B6. Humor mechanics — confirm or extend.** Note which techniques appear in this transcript. Note duration of any extended analogy or logic-trap. Note any new technique not in the baseline.
 
-**B7. Personality-to-argument ratio — confirm or correct A8.** Estimate the ratio in this specific transcript. Note if it deviates from the baseline 35/65 and in which direction.
+**B7. Personality-to-argument ratio — confirm or correct.** Estimate the ratio in this specific transcript. Note if it deviates from the baseline and in which direction.
 
-**B8. New prohibitions.** Note anything this transcript reveals definitely does not happen that is not yet in A10.
+**B8. New prohibitions.** Note anything this transcript reveals definitely does not happen that is not yet documented.
 
 Produce a brief update report: what the baseline got right, what needs correction, what is new. Any correction or addition is a permanent baseline update — log it as such and carry it forward. Then proceed to Step 4 with the full baseline plus updates active.
 
@@ -304,7 +567,7 @@ Produce a brief update report: what the baseline got right, what needs correctio
 
 ## STEP 4 — SOURCE MATERIAL COMPLETENESS AUDIT
 
-**Important framing note:** Step 4 is not only a housekeeping checklist — it is frequently the step where the central argument and best material are discovered. The most interesting angle, the reframe that makes the story matter, and the ironic specificity that makes it land are often buried in the source material and only surface under systematic audit. Treat Step 4 as generative, not just corrective. If you find yourself discovering the real story during this step, that is expected and correct. Also: the script application targets for A9 humor techniques are identified here, not pre-loaded in Step 3. As you audit, flag moments that match A9 triggers and assign the named technique before writing.
+**Important framing note:** Step 4 is not only a housekeeping checklist — it is frequently the step where the central argument and best material are discovered. The most interesting angle, the reframe that makes the story matter, and the ironic specificity that makes it land are often buried in the source material and only surface under systematic audit. Treat Step 4 as generative, not just corrective. If you find yourself discovering the real story during this step, that is expected and correct. Also: the script application targets for humor techniques are identified here, not pre-loaded in Step 3. As you audit, flag moments that match the active baseline's humor technique triggers and assign the named technique before writing.
 
 Before choosing an angle or writing a single word of script, conduct a systematic audit comparing all source material against what could appear in the script.
 
@@ -314,7 +577,7 @@ For each section of the source material, check:
 
 **B. Specific mechanisms behind general descriptions.** Does the source material explain specifically why something happened — a specific technical constraint, a specific chain of causation? General descriptions that omit the specific mechanism lose their power. Identify every place where the source says not just what happened but why, and make sure the script captures the why.
 
-**C. Comedic or ironic specificity.** Are there details in the source material that are funny or ironic in their precision? These details prove points more powerfully than general descriptions. Identify them and flag them for inclusion. Assign the named A9 technique each flagged moment will use.
+**C. Comedic or ironic specificity.** Are there details in the source material that are funny or ironic in their precision? These details prove points more powerfully than general descriptions. Identify them and flag them for inclusion. Assign the named humor technique each flagged moment will use.
 
 **D. Active decisions vs passive neglect.** Does the source material distinguish between things that happened by neglect and things that were active choices? This distinction is important for the argument. Flag every place where a passive-seeming event was actually a deliberate decision.
 
@@ -326,7 +589,7 @@ For each section of the source material, check:
 
 **H. Structural continuity details.** Does the source material contain information about what happened after the main events — roles that kept being filled, structures that continued, mechanisms that persisted? These details demonstrate that the argument is about systems not individuals. Flag them for inclusion.
 
-**I. Fun and personality moments.** Are there details that are inherently funny, surprising, or characterful — details the creator would genuinely react to rather than just report? Flag these. Assign the named A9 technique each will use. The script needs these moments distributed throughout, not just at the end.
+**I. Fun and personality moments.** Are there details that are inherently funny, surprising, or characterful — details the creator would genuinely react to rather than just report? Flag these. Assign the named humor technique each will use. The script needs these moments distributed throughout, not just at the end.
 
 **J. Argument-Driven Gap Identification.**
 
@@ -395,11 +658,11 @@ These are not topic sentences. They are not planned openers. They are the litera
 
 * Does the starting point know where the sentence is going to end? If yes, it's written. Rebuild.
 * Does the starting point start with a filler phrase announcement like "okay so," "so here's the thing," "and here's what's insane," or "and look"? If yes, rebuild. These are templates not speech.
-* Does the starting point use the creator's actual audience address — "chat," "guys," or whatever their specific term is — rather than formal "you"?
+* Does the starting point use the creator's actual audience address — or the creator's documented mode of address — rather than formal "you"?
 * Could this starting point have been produced by someone writing prose and then adding informal words on top? If yes, it's a written patch. Rebuild from a genuinely spoken starting point.
-* **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject-led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross-reference against the native openers list from A2 — if the connector is not documented as native, it is prohibited regardless of how natural it feels.
+* **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject-led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross-reference against the native openers list from the active baseline — if the connector is not documented as native, it is prohibited regardless of how natural it feels.
 
-Mark personality moments in the table before prose generation begins. Do not leave them to emerge naturally — they won't. If the ratio from A8 requires a personality beat at a certain point, mark it in that row before writing.
+Mark personality moments in the table before prose generation begins. Do not leave them to emerge naturally — they won't. If the active baseline requires a personality beat or an emotional beat at a certain point, mark it in that row before writing.
 
 Only proceed to prose generation when every starting point passes all five tests.
 
@@ -415,13 +678,10 @@ Write a 9–11 minute commentary script using the verified facts, the creator's 
 
 **APPLY THE CREATOR-SPECIFIC HOOK PATTERN FIRST — BEFORE READING THE DEFAULT BLOCK BELOW.**
 
-This creator's native hook pattern is documented in A3. Apply it directly:
-1. Grand sweeping claim about the subject, stated with full confidence
-2. Escalation via legitimate examples, then absurd self-insertion, completely deadpan
-3. Into the story — no teasing, no trailer, just the first beat of the actual content
+The creator's native hook pattern is documented in the active baseline (P-A3 for Penguinz0; J-A3 for Jenny Nicholson). Apply it directly.
 
 > **DEFAULT HOOK — REFERENCE ONLY**
-> *Not applicable when creator-specific pattern is established. This creator's pattern is established in A3. The block below exists for use with a new creator whose pattern has not yet been documented.*
+> *Not applicable when creator-specific pattern is established. Both creators' patterns are established in their respective baselines. The block below exists for use with a new creator whose pattern has not yet been documented.*
 >
 > Default principle: The first line is the most extreme version of what the video proves, already happening. No setup required. Three lines, max 30 seconds: (1) viewer's own experience reframed as evidence before they know why, (2) human stakes — names the subject, states the most extreme consequence, (3) two specific unresolved questions, the second extending beyond the subject to something universal. Prohibitions: no conditionals, no narrator reporting, no unattributed quotes, no topic introductions.
 
@@ -445,6 +705,8 @@ The first act does not open with biography or context. It opens by establishing 
 
 The biography and context come after this frame is set. Now they have narrative purpose — you are building the portrait of the person before the crime, and the viewer understands why it matters.
 
+**Note on creator-specific application:** For Penguinz0, this technique applies in the body of the script — the hook opens with a grand sweeping claim rather than the viewer's experience (see P-A3). For Jenny Nicholson, this technique can be embedded in the credential + framing layer, where she establishes her personal relationship to the subject before the argument begins.
+
 ---
 
 **TECHNIQUE 2 — NAME EFFECTS BEFORE CAUSES**
@@ -463,6 +725,8 @@ Every reframe moment should land with the specific feeling of: oh. Oh, that's wh
 
 Each reframe should be stated explicitly — not implied, stated. The viewer should hear: you thought this was X. It was actually Y.
 
+**Note on creator-specific application:** For Jenny Nicholson, reframe moments connect directly to Technique 5 (Structural Ironic Reversal) and her evidence-first, verdict-last architecture. The reframe is the moment the pivot to macro lands.
+
 ---
 
 **TECHNIQUE 4 — BREADCRUMB SEQUENCING**
@@ -471,6 +735,8 @@ Plant specific details early in the script that seem like biography or context b
 
 The detail should be introduced early in a way that registers but doesn't yet reveal its full significance. By the time Act 4 uses it as a link in the mechanism chain, the viewer realizes they were given the clue early — they just didn't know it was a clue yet.
 
+**Note on creator-specific application:** For Jenny Nicholson, this corresponds directly to the Pinned Thread device (Layer 5 of the seven-layer structure) — plant early, return late, often with "I mentioned earlier" or "I put a pin in that." The payoff requires the setup to have been forgotten and then remembered.
+
 ---
 
 **TECHNIQUE 5 — THE INVESTIGATOR'S REGISTER**
@@ -478,6 +744,8 @@ The detail should be introduced early in a way that registers but doesn't yet re
 This is a specific tonal mode distinct from outrage, excitement, or personal reflection. It is the tone of someone who has looked at all the evidence, followed it to its conclusion, and is now laying it out for the viewer with controlled energy — not because they are performing emotion but because they need the viewer to understand what the evidence shows.
 
 The investigator's register should break through at specific moments — particularly at transition points where a section that started as an entertaining story reveals itself to be evidence of something worse.
+
+**Note on creator-specific application:** For Jenny Nicholson, this register corresponds to her Pivot to Macro (Layer 6) — the moment when the specific subject becomes an argument about what it represents. She never announces this pivot. You just feel it shift.
 
 ---
 
@@ -500,6 +768,8 @@ Act 4 is not analysis. It is the detective laying the evidence on the table and 
 
 The crystallising line at the end of the mechanism demonstration is the verdict.
 
+**Note on creator-specific application:** For Jenny Nicholson, Act 4 corresponds to the Verdict beat of her three-beat ending structure — plain, direct, no hedging, short, earned by everything that preceded it. For Penguinz0, the verdict is the crystallising line; for Jenny Nicholson, it is the flat declarative that follows all the accumulated evidence.
+
 ---
 
 **TECHNIQUE 8 — THE "NOW YOU KNOW WHY" PAYOFF**
@@ -514,9 +784,12 @@ It must be stated explicitly, not implied. The viewer stops being an observer of
 
 The conclusion must leave the viewer with something that stays with them.
 
-**Register check:** Verify against A4 before writing a single word. This creator ends flat. The flat signoff ("So, yeah... That's it.") is a required structural element — not a style preference. A conclusion that builds to a poetic crystallizing final line is wrong for this voice. Apply the pattern documented in A4 directly.
+**Register check:** Verify against the active baseline before writing a single word.
 
-**What makes an ending profound:**
+- **Penguinz0 (P-A4):** Ends flat. The flat signoff ("So, yeah... That's it.") is a required structural element. A conclusion that builds to a poetic crystallizing final line is wrong for this voice.
+- **Jenny Nicholson (J-A4):** Ends in three beats: Verdict → Emotional Coda → Deflation. The pettiness reasserts itself at the end. The deflation is structural, not optional. A conclusion that ends cleanly on the intellectual argument — without the emotional coda and deflation — is wrong for this voice.
+
+**What makes an ending profound (applies to both voices):**
 
 * Both possible answers to any final question are unsettling, not just debatable
 * Answering requires the viewer to reckon with something about themselves or the world, not just form an opinion
@@ -531,12 +804,19 @@ The conclusion must leave the viewer with something that stays with them.
 * The viewer can answer it without reckoning with anything beyond the specific story
 * "I genuinely don't know which one it is" — intellectually honest but not profound
 
-**The correct ending structure:**
+**The correct ending structure by creator:**
 
+*Penguinz0:*
 1. Move from the specific subject to the universal pattern it represents
 2. Name that universal pattern explicitly
 3. Connect back to something established earlier in the script — a breadcrumb paying off
-4. End with the flat signoff pattern from A4: "So, yeah..." + one-line flat reflection + "That's it."
+4. End with the flat signoff pattern from P-A4: "So, yeah..." + one-line flat reflection + "That's it."
+
+*Jenny Nicholson:*
+1. Move from the specific subject to the universal pattern it represents (the Pivot to Macro, unanounced)
+2. The Verdict — plain, direct, no hedging, short
+3. The Emotional Coda — genuine, unironic, briefly stated
+4. The Deflation — a small, specific, personal grievance reasserts itself; the petty callback planted earlier pays off here
 
 ---
 
@@ -556,13 +836,19 @@ A script that is only argument is compelling the way a documentary is compelling
 
 **Technique 6 — Humor that serves the argument:** Observations that are both funny and true, where laughing at the observation means accepting the point it makes. The humor is the argument, not decoration around it.
 
-**Technique 7 — The creator's native humor mechanics:** Every comedic moment must use a named technique from A9. Generic humor is prohibited. Before writing any comedic moment, identify which A9 technique it uses. If you cannot name it, the joke is foreign to this voice and must be rebuilt or cut. The script application targets for each technique were identified in Step 4 — use those.
+**Technique 7 — The creator's native humor mechanics:** Every comedic moment must use a named technique from the active baseline's humor toolkit. Generic humor is prohibited. Before writing any comedic moment, identify which technique it uses. If you cannot name it, the joke is foreign to this voice and must be rebuilt or cut. The script application targets for each technique were identified in Step 4 — use those.
 
-For Technique 2 (The Fully Committed Roleplay) specifically: the length is the joke. See A9 for the full rule. The script must include at least one moment running at full Technique 2 duration. Do not cut it short.
+**Self-narration:** Both creators narrate their own discovery process throughout — see P-A7 (Penguinz0) and J-A7 (Jenny Nicholson) for native phrases. The speaker should sound like someone who found these things out and is now telling you what they found. Every major revelation carries the energy of discovery, not the register of established fact.
 
-**Self-narration:** This creator narrates their own discovery process throughout — see A7 for native phrases. The speaker should sound like someone who found these things out and is now telling you what they found. Every major revelation carries the energy of discovery, not the register of established fact.
+**For Penguinz0 specifically — Technique 2 (The Fully Committed Roleplay):** The length is the joke. See P-A9 for the full rule. The script must include at least one moment running at full Technique 2 duration. Do not cut it short.
 
-**Personality-to-argument ratio:** Mark personality moments in the spoken starting points table before writing at the 35/65 ratio from A8. Do not leave them to emerge naturally — they won't.
+**For Jenny Nicholson specifically — Technique 1 (Deliberate Naivety / The Logic Trap):** Do not cut the logic trap short when it is working. The confusion is sincere, not sarcastic. The audience should start extending the logic forward before she gets there.
+
+**Density variation:** For Jenny Nicholson specifically, the density of humor and analysis is deliberately variable — long stretches with no jokes, then rapid-fire observations, then a long patient setup for a single small payoff. Do not regularize the rhythm. She trusts the audience not to need constant stimulation.
+
+---
+
+**Personality-to-argument ratio:** For Penguinz0, mark personality moments in the spoken starting points table at the 35/65 ratio from P-A8. For Jenny Nicholson, do not apply a fixed ratio — apply the deliberate variable density from J-A8. In both cases: do not leave personality moments to emerge naturally. Mark them in the table before writing.
 
 ---
 
@@ -570,7 +856,7 @@ For Technique 2 (The Fully Committed Roleplay) specifically: the length is the j
 
 The script must use viral YouTube video structure. Stakes rise at every act break — never fall. The detective revelation structure governs how and why they rise.
 
-**HOOK [0:00–0:30]** — apply the creator-specific hook pattern from A3. Grand sweeping claim, absurd self-insertion, into the story. No trailer. No tease. Max 30 seconds.
+**HOOK [0:00–0:30]** — apply the creator-specific hook pattern. For Penguinz0: grand sweeping claim, absurd self-insertion, into the story. For Jenny Nicholson: cold open already inside the thing, one of the three documented types (J-A3). No trailer. No tease. Max 30 seconds.
 
 **ACTS — rising stakes through escalating crime structure:**
 
@@ -590,11 +876,11 @@ One line that captures the entire argument as a shareable verdict. In the final 
 
 **TONAL VARIATION:**
 
-The highest drop-off window is approximately minutes 3–7. The tonal variation in this window is the investigator's register — an entertaining section revealing itself as evidence of something worse. Paired with a personality moment immediately before or after to provide contrast.
+The highest drop-off window is approximately minutes 3–7. The tonal variation in this window is the investigator's register — an entertaining section revealing itself as evidence of something worse. Paired with a personality moment immediately before or after to provide contrast. For Jenny Nicholson, this corresponds to the Pivot to Macro.
 
 **CONCLUSION:**
 
-Apply the Conclusion section above. Register verified against A4. Flat signoff. Moves from specific to universal. Connects back to an earlier breadcrumb. Ends with "So, yeah... That's it." or equivalent. Does not end on intellectual uncertainty. Does not end on a constructed poetic line.
+Apply the creator-specific conclusion structure documented above. Register verified against active baseline before writing.
 
 ---
 
@@ -610,15 +896,14 @@ The single most common failure mode is writing prose and then making it sound sp
 
 ---
 
-**PROHIBITED** — these are absolute prohibitions. Remove unconditionally. They must never appear regardless of context:
+**PROHIBITED** — these are absolute prohibitions. Remove unconditionally. They must never appear regardless of context or creator:
 
 * Rhetorical triplets: "Not X. Not Y. Z."
-* Short declarative punch lines standing alone — except the crystallising line
+* Short declarative punch lines standing alone — except the crystallising line (Penguinz0) or verdict line (Jenny Nicholson)
 * Paired contrast constructions used more than once: "X didn't happen. It just Y."
 * Setup-payoff paragraph structure — paragraphs closing with a thesis statement
 * Formal pivot openers used as templates: "So here's the thing," "And here's what's insane," "And look," "And here's the crazy part" — more than one instance is a template
 * "Okay so" as an opener
-* Em-dashes for mid-sentence asides
 * Announced emotional moments: "I find that actually moving" as a paragraph conclusion
 * Overly clean reported consequence sentences: "And that was the studio"
 * Double-hedged opinion markers: "I think honestly," "I think genuinely"
@@ -627,7 +912,6 @@ The single most common failure mode is writing prose and then making it sound sp
 * Passive constructions left behind after source names are removed
 * Attribution of observations to named commentators mid-argument
 * Floating actions without actors
-* Formal audience address — use the creator's actual terms
 * Staccato lists broken across multiple lines
 * Fragments that cannot be read aloud as part of a flowing sentence
 * Formal declarative phrasing — replace with thinking-out-loud register
@@ -635,7 +919,24 @@ The single most common failure mode is writing prose and then making it sound sp
 * Narrator-mode hook openers — puts viewer one remove from the event
 * Unattributed quotes as opening lines — requires the viewer to ask "who is speaking" before feeling impact
 * Timeline errors — sequence of events must be verified in Step 2 and correctly stated throughout
-* **Connector words as paragraph openers — any paragraph that begins with So, And, But, Because, or a compound connector must be rebuilt unless that specific connector is documented as native in A2. If the opener audit reveals more than two paragraphs beginning with the same word, rebuild until the count drops.**
+* **Connector words as paragraph openers — any paragraph that begins with So, And, But, Because, or a compound connector must be rebuilt unless that specific connector is documented as native in the active baseline. If the opener audit reveals more than two paragraphs beginning with the same word, rebuild until the count drops.**
+
+**Creator-specific additional prohibitions (apply only when that creator is active):**
+
+*Penguinz0 only:*
+* Em-dashes for mid-sentence asides
+* Formal audience address — use the creator's actual terms
+* "Okay so" as an opener
+* Building to a poetic final line
+
+*Jenny Nicholson only:*
+* Summarizing her own point after making it
+* Recapping what was just said
+* Previewing what's about to be said
+* Apologizing for going long
+* Padding with filler enthusiasm
+* Explaining a joke after it lands
+* Aggressive punchlines — humor is understatement and precision
 
 ---
 
@@ -650,11 +951,19 @@ The single most common failure mode is writing prose and then making it sound sp
 * Genuine reactive discovery moments — at least two places where the speaker appears to realize something as they say it
 * Pace variation built into text itself through paragraph length and clause density
 * Context established before every specific detail — every term, jargon, proper noun explained before the detail depending on it
-* Personality moments distributed throughout at the 35/65 ratio — marked in the spoken starting points table before prose generation
-* Fun techniques 1–7 distributed throughout — not concentrated at the end
+* Personality moments distributed throughout — marked in the spoken starting points table before prose generation
+* Humor techniques distributed throughout — not concentrated at the end
 * Timeline accuracy — verified sequence of events stated correctly every time it appears
-* Self-narration present as documented in A7 — the speaker sounds like someone who found these things out
-* At least one extended analogy running at full Technique 2 duration — the length is the joke, cut nothing from it
+* Self-narration present as documented in the active baseline — the speaker sounds like someone who found these things out
+
+*Penguinz0 additionally:*
+* At least one extended analogy running at full P-A9 Technique 2 duration — the length is the joke, cut nothing from it
+
+*Jenny Nicholson additionally:*
+* At least one logic trap running to its full length — do not cut it when it starts to feel long
+* At least one precision-of-image moment (J-A9 Technique 2)
+* The three-beat ending structure (Verdict → Emotional Coda → Deflation) intact
+* A callback detail planted in Act 1 that pays off in the Deflation beat
 
 ---
 
@@ -683,7 +992,7 @@ These are spoken-aloud red flags — patterns that survive written editing but f
 * **"Kept existing"** and similar unusual constructions — find natural English equivalent
 * **"Runs data on"** and similar non-native phrases — replace with natural phrasing
 * **Tense inconsistencies:** mixing historical narrative past with present-tense narration
-* **Paragraph opener audit:** List the first word of every paragraph. Any word appearing more than twice is a pattern. Cross-reference against the native openers list in A2. Any opener not on that list must be rebuilt. Any word appearing more than twice must be varied. Do not proceed to delivery notes until this audit is clean.
+* **Paragraph opener audit:** List the first word of every paragraph. Any word appearing more than twice is a pattern. Cross-reference against the native openers list in the active baseline. Any opener not on that list must be rebuilt. Any word appearing more than twice must be varied. Do not proceed to delivery notes until this audit is clean.
 
 ---
 
@@ -713,6 +1022,7 @@ These are spoken-aloud red flags — patterns that survive written editing but f
 **E. Downstream effects — conclusion and crystallising line**
 - Does the new material change what the conclusion needs to do? If yes, re-audit the conclusion against the full current script.
 - Does the new material change what the crystallising line is proving? If yes, rewrite the crystallising line.
+- *Jenny Nicholson:* Does the new material affect the deflation callback? If yes, verify the planted detail in Act 1 still supports it.
 
 **F. Housekeeping**
 - Add every new factual claim to the living fact sheet with source and type noted.
@@ -726,7 +1036,7 @@ These are spoken-aloud red flags — patterns that survive written editing but f
 
 **FALSE FIRST-PERSON OWNERSHIP — STRICTLY PROHIBITED**
 
-Never present another person's lived experience as the creator's own. Verify against A7 and the documented baseline before any first-person claim.
+Never present another person's lived experience as the creator's own. Verify against the active baseline's self-narration documentation before any first-person claim.
 
 * Never claim employment, roles, or credentials the creator does not have
 * Never present another person's account as the creator's own memory
@@ -770,7 +1080,11 @@ In the script body:
 
 After the script:
 
-**DELIVERY NOTES:** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through. Includes at least one note per A9 humor technique identifying where it appears and how long to let it run. For Technique 2 specifically, the note must confirm the full duration and instruct not to cut it short.
+**DELIVERY NOTES:** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through. Includes at least one note per active humor technique identifying where it appears and how long to let it run.
+
+*Penguinz0:* For P-A9 Technique 2 specifically, the note must confirm the full duration and instruct not to cut it short.
+
+*Jenny Nicholson:* For J-A9 Technique 1 (Logic Trap) specifically, the note must confirm the full duration and flag that the confusion is sincere, not sarcastic. For the three-beat ending, note the absence of transition language between beats — the tonal shift is the punctuation.
 
 **SOURCE NOTES:** Every factual claim mapped to its verified source. Single-source claims flagged. Anonymous-source numeric figures noted as removed. Legal sources identified. Timeline sources noted separately. Unsourced claims removed.
 
@@ -786,10 +1100,9 @@ After the script:
 
 **HOOK CHECKS:**
 
-* [ ] Creator-specific hook pattern from A3 applied before reading any default formula
-* [ ] Hook opens with grand sweeping claim, not viewer's own experience
-* [ ] Absurd self-insertion present in escalation, delivered deadpan
-* [ ] No teasing, no trailer — goes directly into the story after escalation
+* [ ] Creator-specific hook pattern from active baseline applied before reading any default formula
+* [ ] Hook matches documented type for active creator (Penguinz0: grand sweeping claim + absurd self-insertion; Jenny Nicholson: cold open already inside the thing, one of three documented types)
+* [ ] No teasing, no trailer — goes directly into the story after hook
 * [ ] Hook is 30 seconds maximum — read aloud at normal pace and time it
 * [ ] No conditionals, no narrator mode, no unattributed quotes in the first line
 
@@ -799,16 +1112,25 @@ After the script:
 * [ ] All five starting point tests passed for every paragraph — including the connector word test
 * [ ] Personality moments marked in the table before prose generation
 * [ ] No "okay so" openers
-* [ ] No em-dashes anywhere in spoken text
 * [ ] No formal pivot opener templates — count instances of "so here's," "and here's," "and look" — more than one of any is a template
 * [ ] No paired contrast constructions used more than once
-* [ ] No short declarative punch lines standing alone except the crystallising line
+* [ ] No short declarative punch lines standing alone except the crystallising line (Penguinz0) or verdict line (Jenny Nicholson)
 * [ ] No setup-payoff paragraph endings
 * [ ] Planning test passed — could any first sentence have been planned before the speaker opened their mouth?
 * [ ] Aloud test passed — sounds like someone explaining to a friend
 * [ ] Patch test passed — remove all informal words, no formal sentence should remain
 * [ ] Naturalness audit passed on every paragraph
-* [ ] **Paragraph opener audit completed** — first word of every paragraph listed, no single word appears more than twice, all openers cross-referenced against A2
+* [ ] **Paragraph opener audit completed** — first word of every paragraph listed, no single word appears more than twice, all openers cross-referenced against active baseline
+
+*Penguinz0 only:*
+* [ ] No em-dashes anywhere in spoken text
+* [ ] Hook opens with grand sweeping claim, not viewer's own experience
+* [ ] Absurd self-insertion present in escalation, delivered deadpan
+
+*Jenny Nicholson only:*
+* [ ] No summarizing her own point after making it
+* [ ] No recapping what was just said or previewing what's about to be said
+* [ ] No padding with filler enthusiasm
 
 **STRUCTURE CHECKS:**
 
@@ -816,14 +1138,23 @@ After the script:
 * [ ] Re-engagement hooks are forward pulls not summaries
 * [ ] Re-engagement hooks re-audited against current act content after any revision
 * [ ] Crystallising line exists, is in the final third, arrives as the verdict
-* [ ] Conclusion register verified against A4 — ends flat, not poetic
-* [ ] Conclusion ends with flat signoff pattern
+* [ ] Conclusion register verified against active baseline
 * [ ] Conclusion moves to universal pattern, connects back to earlier breadcrumb
+
+*Penguinz0:*
+* [ ] Conclusion ends with flat signoff pattern
 * [ ] Conclusion does not end on intellectual uncertainty
+* [ ] Conclusion does not end on a constructed poetic line
+
+*Jenny Nicholson:*
+* [ ] Three-beat ending structure intact: Verdict → Emotional Coda → Deflation
+* [ ] Deflation callback planted in Act 1 and retrieved at end
+* [ ] Emotional coda is genuine and unironic — not softened with a joke
+* [ ] Pettiness of deflation is specific, not general
 
 **DETECTIVE REVELATION CHECKS:**
 
-* [ ] Act 1 opens with grand sweeping claim (this creator's native equivalent)
+* [ ] Hook opens with creator-native entry point
 * [ ] Effects named before causes at every major revelation point
 * [ ] At least three explicit reframe moments — stated clearly not implied
 * [ ] Breadcrumb details planted in Act 1 pay off in Act 4
@@ -834,22 +1165,30 @@ After the script:
 
 **FUN TO LISTEN TO CHECKS:**
 
-* [ ] Personality moments distributed throughout at the 35/65 ratio — not concentrated at the end
+* [ ] Personality moments distributed throughout — not concentrated at the end
 * [ ] At least one genuine reaction before analysis in the first half
 * [ ] At least one absurdity acknowledged with a beat before moving past it
 * [ ] Humor that serves the argument exists — at least one observation that is both funny and makes the point
 * [ ] Sentence energy varies throughout
 * [ ] At least one moment that gives the listener something to do
-* [ ] Every comedic moment has a named A9 technique assigned — no generic humor
-* [ ] At least one extended analogy running at full Technique 2 duration — confirmed in delivery notes
+* [ ] Every comedic moment has a named humor technique assigned from the active baseline — no generic humor
 * [ ] Self-narration present — at least two moments where the speaker sounds like someone who found something out
-* [ ] "Apparently" deployed at semantically correct moments only — sourced-but-indirect claims, not general texture
+* [ ] "Apparently" deployed at semantically correct moments only (Penguinz0) — sourced-but-indirect claims, not general texture
+
+*Penguinz0:*
+* [ ] At least one extended analogy running at full P-A9 Technique 2 duration — confirmed in delivery notes
+
+*Jenny Nicholson:*
+* [ ] At least one logic trap running to its full length — confirmed in delivery notes
+* [ ] At least one precision-of-image moment (J-A9 Technique 2)
+* [ ] Density variation is deliberate — long analytical stretches and rapid-fire observations both present
+* [ ] At least one underreaction landing correctly (J-A9 Technique 3)
 
 **CONTENT CHECKS:**
 
 * [ ] Source material completeness audit completed and all gaps addressed
 * [ ] Argument-driven gap identification completed — all implicit comparisons, historical context, assumed facts, and framework assumptions verified and added to living fact sheet
-* [ ] A9 humor technique assignments from Step 4 carried into the script
+* [ ] Humor technique assignments from Step 4 carried into the script
 * [ ] Named individuals present where inclusion adds specificity, irony, credibility, or emotional weight
 * [ ] Specific mechanisms behind general descriptions included
 * [ ] Active decisions distinguished from passive neglect
@@ -876,7 +1215,7 @@ After the script:
 **CREDIBILITY CHECKS:**
 
 * [ ] Clear stance supported by evidence — no intellectual credibility given to positions the evidence does not support
-* [ ] False first-person ownership check against baseline
+* [ ] False first-person ownership check against active baseline
 * [ ] No borrowed personal accounts presented as creator's own
 * [ ] No lifted distinctive phrases presented as original
 * [ ] No false credentials claimed
