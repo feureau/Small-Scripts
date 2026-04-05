@@ -4644,7 +4644,7 @@ class VideoProcessorApp:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
 
                 nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation, info=get_video_info(temp_preproc))
-                if self.run_nvencc_command(nvencc_cmd) != 0:
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
@@ -4656,7 +4656,7 @@ class VideoProcessorApp:
                     subtitle_burn_path=nvencc_subburn_path,
                     info=info
                 )
-                if self.run_nvencc_command(nvencc_cmd) != 0:
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
                 fd, temp_audio = tempfile.mkstemp(
@@ -4686,7 +4686,7 @@ class VideoProcessorApp:
                     subtitle_burn_path=nvencc_subburn_path,
                     info=info
                 )
-                if self.run_nvencc_command(nvencc_cmd) != 0:
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             else:
                 cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
@@ -4986,26 +4986,69 @@ class VideoProcessorApp:
             cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         return cmd
 
-    def run_nvencc_command(self, cmd):
+    def run_nvencc_command(self, cmd, duration=None, progress_callback=None):
         global CURRENT_FFMPEG_PROCESS
         print("Running NVEncC command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
         CURRENT_FFMPEG_PROCESS = process
+        
+        carry = ""
+        progress_line_active = False
+        last_progress_len = 0
+        
         if process.stdout:
-            for line in iter(process.stdout.readline, ''):
-                if "\r" in line:
-                    progress_text = line.split("\r")[-1].strip()
-                    sys.stdout.write(f"\r{progress_text}")
-                    sys.stdout.flush()
+            while True:
+                ch = process.stdout.read(1)
+                if ch == "":
+                    if process.poll() is not None:
+                        # Flush any trailing text
+                        if carry.strip():
+                            line = carry.strip()
+                            sys.stdout.write(("\n" if progress_line_active else "") + line + "\n")
+                            sys.stdout.flush()
+                        break
+                    continue
+                
+                if ch in ("\r", "\n"):
+                    line = carry.strip()
+                    carry = ""
+                    if not line:
+                        continue
+                    
+                    # Progress Parsing for GUI
+                    if progress_callback:
+                        # Typical NVEncC progress: [ 10.5%] 1050/10000 frames...
+                        match = re.search(r'\[\s*(\d+\.?\d*)%\]', line)
+                        if match:
+                             try:
+                                 progress_callback(float(match.group(1)))
+                             except Exception: pass
+
+                    # Dynamic console update for progress-like lines
+                    is_progress = any(tok in line for tok in ("fps", "frames", "%", "remaining"))
+                    if is_progress:
+                        pad = " " * max(0, last_progress_len - len(line))
+                        sys.stdout.write("\r" + line + pad)
+                        sys.stdout.flush()
+                        progress_line_active = True
+                        last_progress_len = len(line)
+                    else:
+                        if progress_line_active:
+                            sys.stdout.write("\n")
+                            progress_line_active = False
+                            last_progress_len = 0
+                        sys.stdout.write(line + "\n")
+                        sys.stdout.flush()
                 else:
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
+                    carry += ch
+                    
             process.stdout.close()
         ret_code = process.wait()
         CURRENT_FFMPEG_PROCESS = None
-        sys.stdout.write("\n")
+        if progress_line_active:
+            sys.stdout.write("\n")
         return ret_code
 
     def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options, seek_start=None, seek_duration=None):

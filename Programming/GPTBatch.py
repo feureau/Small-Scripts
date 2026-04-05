@@ -2117,25 +2117,38 @@ def get_model_context_window(engine, model_name):
             ("gemini-2.5-flash", 1048576),
             ("gemini-2.0", 1048576),
             ("gemini-1.5", 1048576),
+            ("gemini-1.0", 32768),
         ],
         "ollama": [
+            ("qwen3.5", 131072),
+            ("qwen3", 65536),
             ("qwen2.5", 32768),
             ("qwen2", 32768),
+            ("qwen", 32768),
             ("llama3.3", 131072),
             ("llama3.2", 131072),
             ("llama3.1", 131072),
             ("llama3", 8192),
             ("mistral", 32768),
+            ("gemma3", 131072),
+            ("gemma2", 16384),
+            ("gemma", 8192),
             ("phi", 16384),
         ],
         "lmstudio": [
+            ("qwen3.5", 128000),
+            ("qwen3", 65536),
             ("qwen2.5", 32768),
             ("qwen2", 32768),
+            ("qwen", 32768),
             ("llama3.3", 131072),
             ("llama3.2", 131072),
-            ("llama3.1", 131072),
+            ("llama3.1", 128000),
             ("llama3", 8192),
             ("mistral", 32768),
+            ("gemma3", 131072),
+            ("gemma2", 16384),
+            ("gemma", 8192),
             ("phi", 16384),
         ],
     }
@@ -2143,7 +2156,7 @@ def get_model_context_window(engine, model_name):
     for needle, size in lookup.get(e, []):
         if needle in m:
             return size
-    return 8192
+    return 32768 # Increased default for newer environments
 
 
 def compute_chunk_budget(
@@ -2178,7 +2191,8 @@ def compute_chunk_budget(
         except Exception:
             cap = None
     if cap is not None:
-        available = min(available, cap)
+        # User defined cap overrides the context-aware calculation.
+        available = cap
 
     payload = max(int(min_chunk_tokens), int(available))
 
@@ -2550,8 +2564,14 @@ def process_file_group(
             if requested_ext
             else RAW_OUTPUT_FILE_EXTENSION
         )
+        
+        # --- NEW: Inject Chunk Suffix into Base Name ---
+        effective_base = base_name
+        if kwargs.get("chunk_index"):
+            effective_base = f"{base_name}_part{kwargs['chunk_index']}"
+            
         raw_path, log_path = determine_unique_output_paths(
-            base_name, kwargs.get("output_suffix", ""), out_folder, log_folder, ext
+            effective_base, kwargs.get("output_suffix", ""), out_folder, log_folder, ext
         )
 
     if "result_metadata" in kwargs:
@@ -2734,18 +2754,21 @@ def process_file_group(
                     )
 
             # 2. Handle Text Files
-            for filepath in text_files:
-                safe_path = file_map[filepath]
-                content, _, _, err = read_file_content(safe_path)
-                if err:
-                    raise ValueError(
-                        f"Error reading {os.path.basename(filepath)}: {err}"
-                    )
-                if add_filename_to_prompt:
-                    prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
-                prompt_parts.append(f"\n{content}\n")
-
-            file_content_all = "".join(prompt_parts)
+            chunk_override = kwargs.get("chunk_content_override")
+            if chunk_override:
+                file_content_all = chunk_override
+            else:
+                for filepath in text_files:
+                    safe_path = file_map[filepath]
+                    content, _, _, err = read_file_content(safe_path)
+                    if err:
+                        raise ValueError(
+                            f"Error reading {os.path.basename(filepath)}: {err}"
+                        )
+                    if add_filename_to_prompt:
+                        prompt_parts.append(f"\n--- File: {os.path.basename(filepath)} ---")
+                    prompt_parts.append(f"\n{content}\n")
+                file_content_all = "".join(prompt_parts)
 
             chunk_size_cap = kwargs.get("chunk_size", 4000)
             use_chunking = kwargs.get("enable_chunking", False)
@@ -4911,57 +4934,88 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         multipass_prompts = self._collect_multipass_prompts_from_ui(True)
 
         for batch in batches:
+            # --- NEW: Check for Job-Level Chunk Splitting ---
+            if self.enable_chunking_var.get() and self.split_chunks_into_jobs_var.get():
+                try:
+                    # 1. Identify Text Files in Batch
+                    image_files = [f for f in batch if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS]
+                    text_files = [f for f in batch if f not in image_files]
+                    
+                    if text_files:
+                        # 2. Accumulate Text Content
+                        all_text_parts = []
+                        for tf in text_files:
+                            content, _, _, err = read_file_content(tf)
+                            if err:
+                                console_log(f"Error reading {os.path.basename(tf)} for chunking: {err}", "ERROR")
+                                continue
+                            if self.add_filename_var.get():
+                                all_text_parts.append(f"\n--- File: {os.path.basename(tf)} ---\n")
+                            all_text_parts.append(content)
+                        
+                        full_content = "\n".join(all_text_parts)
+                        
+                        # 3. Calculate Chunk Budget
+                        # We use the current prompt to calculate budget
+                        budget = compute_chunk_budget(
+                            prompt_text=prompt_text,
+                            engine=self.engine_var.get(),
+                            model_name=mod,
+                            chunk_size_cap=self.chunk_size_var.get(),
+                        )
+                        
+                        # 4. Split into chunks
+                        chunks = build_semantic_chunks(
+                            full_content,
+                            budget["chunk_payload_tokens"],
+                            overlap_tokens=0, # No overlap for independent jobs usually
+                            encoding=budget.get("encoding"),
+                        )
+                        
+                        if len(chunks) > 1:
+                            console_log(f"Splitting {generate_group_base_name(batch)} into {len(chunks)} chunk jobs.", "INFO")
+                            for idx, chunk_text in enumerate(chunks):
+                                self.job_id_counter += 1
+                                jid = self.job_id_counter
+                                
+                                # Clone a base job data
+                                job_data = self._build_base_job_data(
+                                    jid, batch, prompt_text, mod, safe, total_delay, 
+                                    current_context, use_persistent_context,
+                                    multipass_enabled, multipass_count, multipass_prompts
+                                )
+                                
+                                # Inject Chunk Overrides
+                                # We treat the chunk as a 'virtual' file content override
+                                job_data["enable_chunking"] = False # Disable internal chunking
+                                job_data["filepaths_group"] = batch
+                                job_data["chunk_content_override"] = chunk_text
+                                job_data["chunk_index"] = idx + 1
+                                job_data["total_chunks"] = len(chunks)
+                                
+                                # Use a specialized base name for the UI
+                                display_name = f"{generate_group_base_name(batch)} [Part {idx+1}/{len(chunks)}]"
+                                
+                                self.job_registry[jid] = job_data
+                                self.job_queue.put(job_data)
+                                self.tree.insert(
+                                    "",
+                                    tk.END,
+                                    iid=jid,
+                                    values=(jid, display_name, "Pending", mod),
+                                )
+                            continue # Skip the normal job creation for this batch
+                except Exception as e:
+                    console_log(f"Pre-chunking failed: {e}. Falling back to normal job.", "ERROR")
+
+            # Normal single job creation (or fallback)
             self.job_id_counter += 1
             jid = self.job_id_counter
-            job_data = {
-                "job_id": jid,
-                "filepaths_group": batch,
-                "user_prompt": prompt_text,
-                "engine": self.engine_var.get(),
-                "model_name": mod,
-                "api_key": self.api_key,
-                "output_folder": self.output_dir_var.get(),
-                "add_filename_to_prompt": self.add_filename_var.get(),
-                "output_suffix": self.suffix_var.get()
-                + (
-                    sanitize_filename(current_context)
-                    if self.add_context_as_suffix_var.get() and current_context
-                    else ""
-                ),
-                "context_text": self.global_context_text_value
-                if use_persistent_context
-                else current_context,
-                "use_persistent_context": use_persistent_context,
-                "overwrite_original": self.overwrite_var.get(),
-                "output_under_input": self.output_under_input_var.get(),
-                "output_extension": self.output_ext_var.get(),
-                "stream_output": self.stream_var.get(),
-                "enable_web_search": self.ollama_search_var.get(),
-                "validate_json": self.validate_json_var.get(),
-                "validate_json_keys": self.validate_keys_var.get(),  # Pass new setting
-                "clean_markdown": self.clean_markdown_var.get(),
-                "save_log": self.save_log_var.get(),
-                "safety_settings": safe,
-                "job_delay_seconds": total_delay,
-                "sequential_upload": (self.upload_mode_var.get() == "sequential"),
-                "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
-                "rename_mode": self.rename_mode_var.get(),
-                "rename_method": self.rename_method_var.get(),
-                "enable_img_conversion": self.enable_img_conversion_var.get(),
-                "temp_img_fmt": self.temp_img_fmt_var.get(),
-                "img_quality": self.img_quality_var.get(),
-                "img_max_dim": self.img_max_dim_var.get(),
-                "force_conversion": self.force_conversion_var.get(),
-                "save_img_to_output": self.save_img_to_output_var.get(),
-                "enable_chunking": self.enable_chunking_var.get(),
-                "chunk_size": self.chunk_size_var.get(),
-                "model_prefix": self.model_prefix_var.get(),
-                "enable_multipass": multipass_enabled,
-                "multipass_count": multipass_count,
-                "multipass_prompts": multipass_prompts,
-                "enable_thinking": self.thinking_var.get(),
-                "result_metadata": {},  # Mutable container for returning data
-            }
+            job_data = self._build_base_job_data(
+                jid, batch, prompt_text, mod, safe, total_delay, 
+                current_context, use_persistent_context,
+                multipass_enabled, multipass_count, multipass_prompts
+            )
 
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
@@ -4971,6 +5025,59 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 iid=jid,
                 values=(jid, generate_group_base_name(batch), "Pending", mod),
             )
+
+    def _build_base_job_data(self, jid, batch, prompt_text, mod, safe, total_delay, 
+                            current_context, use_persistent_context,
+                            multipass_enabled, multipass_count, multipass_prompts):
+        return {
+            "job_id": jid,
+            "filepaths_group": batch,
+            "user_prompt": prompt_text,
+            "engine": self.engine_var.get(),
+            "model_name": mod,
+            "api_key": self.api_key,
+            "output_folder": self.output_dir_var.get(),
+            "add_filename_to_prompt": self.add_filename_var.get(),
+            "output_suffix": self.suffix_var.get()
+            + (
+                sanitize_filename(current_context)
+                if self.add_context_as_suffix_var.get() and current_context
+                else ""
+            ),
+            "context_text": self.global_context_text_value
+            if use_persistent_context
+            else current_context,
+            "use_persistent_context": use_persistent_context,
+            "overwrite_original": self.overwrite_var.get(),
+            "output_under_input": self.output_under_input_var.get(),
+            "output_extension": self.output_ext_var.get(),
+            "stream_output": self.stream_var.get(),
+            "enable_web_search": self.ollama_search_var.get(),
+            "validate_json": self.validate_json_var.get(),
+            "validate_json_keys": self.validate_keys_var.get(),
+            "clean_markdown": self.clean_markdown_var.get(),
+            "save_log": self.save_log_var.get(),
+            "safety_settings": safe,
+            "job_delay_seconds": total_delay,
+            "sequential_upload": (self.upload_mode_var.get() == "sequential"),
+            "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
+            "rename_mode": self.rename_mode_var.get(),
+            "rename_method": self.rename_method_var.get(),
+            "enable_img_conversion": self.enable_img_conversion_var.get(),
+            "temp_img_fmt": self.temp_img_fmt_var.get(),
+            "img_quality": self.img_quality_var.get(),
+            "img_max_dim": self.img_max_dim_var.get(),
+            "force_conversion": self.force_conversion_var.get(),
+            "save_img_to_output": self.save_img_to_output_var.get(),
+            "enable_chunking": self.enable_chunking_var.get(),
+            "chunk_size": self.chunk_size_var.get(),
+            "model_prefix": self.model_prefix_var.get(),
+            "enable_multipass": multipass_enabled,
+            "multipass_count": multipass_count,
+            "multipass_prompts": multipass_prompts,
+            "enable_thinking": self.thinking_var.get(),
+            "result_metadata": {},
+        }
 
     def requeue_failed(self):
         failed_ids = []
@@ -5425,9 +5532,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def _merge_completed_outputs_by_folder(self, output_paths):
         if not output_paths:
-            console_log(
-                "Merge Outputs: no completed output files found for this run.", "WARN"
-            )
             return
 
         folder_map = {}
@@ -5438,26 +5542,41 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             folder_map.setdefault(folder, []).append(p)
 
         if not folder_map:
-            console_log("Merge Outputs: no readable files to merge.", "WARN")
             return
 
         merged_count = 0
         for folder, files in folder_map.items():
             if not files:
                 continue
-            files_sorted = sorted(list(set(files)), key=natural_sort_key)
-            ext = os.path.splitext(files_sorted[0])[1] or RAW_OUTPUT_FILE_EXTENSION
-            base = build_merged_output_basename(files_sorted)
-            merged_path = find_unique(folder, base, ext)
-            try:
-                merge_output_text_files(files_sorted, merged_path)
-                merged_count += 1
-                console_log(
-                    f"Merged {len(files_sorted)} files -> {os.path.basename(merged_path)}",
-                    "SUCCESS",
-                )
-            except Exception as e:
-                console_log(f"Merge failed in folder '{folder}': {e}", "ERROR")
+            
+            # Group files by their logical "Base Name" (stripping _partX suffix)
+            groups = {}
+            for f in files:
+                stem = os.path.splitext(os.path.basename(f))[0]
+                # Remove _partN suffix if present
+                logical_base = re.sub(r"_part\d+$", "", stem)
+                groups.setdefault(logical_base, []).append(f)
+            
+            for logical_base, group_files in groups.items():
+                if len(group_files) <= 1 and not logical_base.endswith("_part1"):
+                    # Only one file and doesn't look like a chunked part, skip merging
+                    continue
+                
+                # Sort parts numerically
+                group_files_sorted = sorted(list(set(group_files)), key=natural_sort_key)
+                ext = os.path.splitext(group_files_sorted[0])[1] or RAW_OUTPUT_FILE_EXTENSION
+                
+                # If we have multiple parts, we merge them into the logical base name
+                merged_path = find_unique(folder, logical_base + "_merged", ext)
+                try:
+                    merge_output_text_files(group_files_sorted, merged_path)
+                    merged_count += 1
+                    console_log(
+                        f"Merged {len(group_files_sorted)} parts -> {os.path.basename(merged_path)}",
+                        "SUCCESS",
+                    )
+                except Exception as e:
+                    console_log(f"Merge failed for {logical_base} in '{folder}': {e}", "ERROR")
 
         if merged_count > 0:
             console_log(
