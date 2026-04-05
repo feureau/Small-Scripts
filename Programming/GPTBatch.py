@@ -2031,29 +2031,76 @@ def _token_split_fallback(text, max_tokens, encoding=None):
         return []
     max_tokens = max(1, int(max_tokens or 1))
     enc = encoding or _get_chunk_encoding()
+    
     if enc is not None:
         try:
             toks = enc.encode(text)
             if len(toks) <= max_tokens:
                 return [text]
+            
             parts = []
-            for i in range(0, len(toks), max_tokens):
-                parts.append(enc.decode(toks[i : i + max_tokens]))
-            return parts
+            remaining_text = text
+            while remaining_text:
+                # Try to find a safe split point near max_tokens
+                # We encode a prefix, but we want to split at a character-level space if possible.
+                prefix_toks = enc.encode(remaining_text[:max_tokens * 8]) # Overshoot to find safe split
+                if len(prefix_toks) <= max_tokens:
+                    parts.append(remaining_text)
+                    break
+                
+                # Decode exactly max_tokens to find the "hard" boundary
+                candidate_text = enc.decode(prefix_toks[:max_tokens])
+                
+                # Find the last space in the candidate_text to avoid word-splitting
+                last_space = candidate_text.rfind(' ')
+                if last_space != -1 and last_space > len(candidate_text) // 2:
+                    # Split at the last space
+                    split_pos = last_space
+                else:
+                    # No space found or it's too far back, use hard boundary
+                    split_pos = len(candidate_text)
+                
+                parts.append(remaining_text[:split_pos].strip())
+                remaining_text = remaining_text[split_pos:].lstrip()
+            return [p for p in parts if p]
         except Exception:
             pass
 
-    # Char fallback
+    # Char fallback (simpler space-aware)
     chunk_size_chars = max_tokens * 4
-    return [text[i : i + chunk_size_chars] for i in range(0, len(text), chunk_size_chars)]
+    parts = []
+    temp = text
+    while temp:
+        if len(temp) <= chunk_size_chars:
+            parts.append(temp)
+            break
+        cut = temp[:chunk_size_chars]
+        last_space = cut.rfind(' ')
+        if last_space != -1 and last_space > chunk_size_chars // 2:
+            split_at = last_space
+        else:
+            split_at = chunk_size_chars
+        parts.append(temp[:split_at].strip())
+        temp = temp[split_at:].lstrip()
+    return parts
 
 
 def _split_paragraph_into_sentence_units(paragraph):
     p = (paragraph or "").strip()
     if not p:
         return []
-    # Supports common western and CJK sentence boundaries.
-    pieces = re.split(r"(?<=[.!?。！？])\s+", p)
+    
+    # Try using pysbd first for high-accuracy splitting
+    if _pysbd_segmenter:
+        try:
+            return [s.strip() for s in _pysbd_segmenter.segment(p) if s and s.strip()]
+        except Exception:
+            pass
+
+    # Fallback to robust regex if pysbd fails or is missing
+    # Supports common western and CJK sentence boundaries, avoids splitting at common abbreviations.
+    pattern = r'(?<!\b(?:Mr|Mrs|Ms|Dr|Sr|Jr|Inc|Ltd|Co|Corp|U.S|v)\.)(?<=[.!?。！？])\s+'
+    pieces = re.split(pattern, p)
     pieces = [s.strip() for s in pieces if s and s.strip()]
     if len(pieces) <= 1:
         return [p]
@@ -3286,6 +3333,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         # --- NEW: Text Chunking ---
         self.enable_chunking_var = tk.BooleanVar(value=False)
         self.chunk_size_var = tk.IntVar(value=4000)
+        self.split_chunks_into_jobs_var = tk.BooleanVar(value=False)
         self.model_prefix_var = tk.BooleanVar(
             value=False
         )  # New: Prefix output folder with model name
@@ -3529,6 +3577,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             grid_c, from_=100, to=1000000, textvariable=self.chunk_size_var, width=10
         )
         self.chunk_size_spin.grid(row=0, column=1, sticky="w", padx=5)
+
+        self.split_chunks_check = ttk.Checkbutton(
+            grid_c,
+            text="Create Separate Job for each Chunk",
+            variable=self.split_chunks_into_jobs_var,
+        )
+        self.split_chunks_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Overlap/Force Cutoff removed; paragraph-packed chunking only.
 
@@ -4049,6 +4104,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         chunk_enabled = self.enable_chunking_var.get()
         state = "normal" if chunk_enabled else "disabled"
         self.chunk_size_spin.config(state=state)
+        self.split_chunks_check.config(state=state)
 
     def _on_multipass_count_change(self, *args):
         try:
@@ -4232,6 +4288,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
             set_var(self.enable_chunking_var, "enable_chunking", False)
             set_var(self.chunk_size_var, "chunk_size", 4000)
+            set_var(self.split_chunks_into_jobs_var, "split_chunks_into_jobs", False)
 
             set_var(self.enable_img_conversion_var, "enable_img_conversion", False)
             set_var(self.temp_img_fmt_var, "temp_img_fmt", "PNG")
@@ -4327,6 +4384,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "enable_thinking": self.thinking_var.get(),
             "enable_chunking": self.enable_chunking_var.get(),
             "chunk_size": self.chunk_size_var.get(),
+            "split_chunks_into_jobs": self.split_chunks_into_jobs_var.get(),
             "model_prefix": self.model_prefix_var.get(),
             "add_context_as_suffix": self.add_context_as_suffix_var.get(),
             "enable_multipass": self.enable_multipass_var.get(),
@@ -5528,15 +5586,18 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         isinstance(e, QuotaExhaustedError)
                         or "Quota exhausted" in err_str
                         or "429" in err_str
-                        or "503" in err_str
                         or "usage limit" in err_str.lower()
-                        or "Service Temporarily Unavailable" in err_str
                         or "Open WebUI: Server Connection Error" in err_str
+                    )
+                    is_temp_unavailable = (
+                        "503" in err_str
+                        or "Service Temporarily Unavailable" in err_str
+                        or "high demand" in err_str.lower()
                     )
                     is_model_unavailable = isinstance(
                         e, ModelUnavailableError
                     ) or is_model_unavailable_error_message(err_str)
-                    if is_quota or is_model_unavailable:
+                    if (is_quota or is_model_unavailable) and not is_temp_unavailable:
                         if is_model_unavailable:
                             console_log(
                                 f"Job {jid} Model Unavailable. Asking user to switch model...",
@@ -5637,7 +5698,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         "ERROR",
                     )
                     if attempt < MAX_RETRIES:
-                        wait_time = 60 if is_quota else 5
+                        wait_time = 60 if (is_quota or is_temp_unavailable) else 5
                         self.result_queue.put(
                             {"job_id": jid, "status": f"Retrying ({attempt})"}
                         )

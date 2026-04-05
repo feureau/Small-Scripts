@@ -198,6 +198,7 @@ DEFAULT_VIDEO_OFFSET_Y = "0"                        # Vertical video offset (pix
 DEFAULT_FRUC = False                                # Enable frame rate up-conversion. Default: False
 DEFAULT_FRUC_FPS = "60"                             # Target FPS for FRUC. Default: 60, Range: 30 to 120
 DEFAULT_BURN_SUBTITLES = True                       # Burn subtitles into video. Default: True
+DEFAULT_RENDER_BY_CHAPTERS = False                 # Render video by chapters if available. Default: False
 DEFAULT_USE_SHARPENING = True                       # Enable video sharpening. Default: True
 
 # --- Encoder Config Group ---
@@ -1416,6 +1417,27 @@ def get_subtitle_stream_info(file_path):
         print(f"[WARN] Could not get embedded subtitle info for {file_path}: {e}")
         return []
 
+def get_video_chapters(file_path):
+    """
+    Extracts chapter markers from a video file using ffprobe.
+    Returns a list of dicts: [{'start': 0.0, 'end': 10.0, 'title': 'Chapter 1'}, ...]
+    """
+    cmd = [FFPROBE_CMD, "-v", "error", "-show_chapters", "-print_format", "json", file_path]
+    try:
+        result = safe_ffprobe(cmd, "chapter extraction")
+        data = json.loads(result.stdout)
+        chapters = []
+        for i, ch in enumerate(data.get("chapters", [])):
+            start = float(ch.get("start_time", 0))
+            end = float(ch.get("end_time", 0))
+            tags = ch.get("tags", {})
+            title = tags.get("title", "").strip() or f"Chapter {i+1}"
+            chapters.append({"start_time": start, "end_time": end, "title": title})
+        return chapters
+    except Exception as e:
+        print(f"[WARN] Could not extract chapters for {file_path}: {e}")
+        return []
+
 def extract_embedded_subtitle(video_path, subtitle_index, temp_dir=None):
     temp_subtitle_path = ""
     try:
@@ -1480,6 +1502,7 @@ def get_job_hash(job_options):
         job_options.get('aspect_mode', ''),
         job_options.get('fruc', False),
         job_options.get('fruc_fps', ''),
+        str(job_options.get('render_by_chapters', False)),
         str(job_options.get('use_dynaudnorm', False)),
         job_options.get('dyn_frame_len', ''),
         job_options.get('dyn_gauss_win', ''),
@@ -1617,6 +1640,7 @@ class WorkflowPresetManager:
             "nvenc_superres_mode": DEFAULT_NVENC_SUPERRES_MODE,
             "nvenc_ngx_vsr_quality": DEFAULT_NVENC_NGX_VSR_QUALITY,
             "orientation": DEFAULT_ORIENTATION,
+            "render_by_chapters": DEFAULT_RENDER_BY_CHAPTERS,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
             "manual_bitrate": "0",
@@ -1894,6 +1918,7 @@ class VideoProcessorApp:
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
+        self.render_by_chapters_var = tk.BooleanVar(value=DEFAULT_RENDER_BY_CHAPTERS)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
         self.pad_color_var = tk.StringVar(value=DEFAULT_PAD_COLOR)
@@ -2198,10 +2223,15 @@ class VideoProcessorApp:
         backend_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
 
+        # Render by Chapters
+        cb_chapters = ttk.Checkbutton(basic_group, text="Render by Chapters (Split by metadata markers)", variable=self.render_by_chapters_var, command=lambda: self._update_selected_jobs('render_by_chapters'))
+        cb_chapters.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ToolTip(cb_chapters, "Detects chapter markers in the input file and renders each as a separate file named after its title.")
+
         # Preset
-        ttk.Label(basic_group, text="Preset:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Preset:").grid(row=2, column=0, sticky=tk.W, pady=2)
         preset_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_preset_var, values=[f"p{i}" for i in range(1, 8)], width=10, state="readonly")
-        preset_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        preset_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
 
         # Tune
@@ -3537,6 +3567,7 @@ class VideoProcessorApp:
             "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "close_gui_on_processing": self.close_gui_var.get(),
+            "render_by_chapters": self.render_by_chapters_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
@@ -4097,6 +4128,7 @@ class VideoProcessorApp:
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
+        self.render_by_chapters_var.set(options.get("render_by_chapters", DEFAULT_RENDER_BY_CHAPTERS))
         raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
         if raw_orientation == "vertical":
             self.merged_aspect_var.set(options.get("merged_aspect", options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)))
@@ -4410,10 +4442,46 @@ class VideoProcessorApp:
         name_parts.append(job_hash)
         
         safe_base_name = "_".join(filter(None, name_parts))
-        output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
         
+        # --- Chapter Processing Loop ---
+        chapters = []
+        if options.get("render_by_chapters"):
+            try:
+                chapters = get_video_chapters(job['video_path'])
+            except Exception as e:
+                print(f"[ERROR] Failed to extract chapters for {job['video_path']}: {e}")
+        
+        if not chapters:
+            chapters = [{
+                'index': 0,
+                'start_time': 0,
+                'end_time': None,
+                'title': None
+            }]
+        
+        total_chapters = len(chapters) if options.get("render_by_chapters") else 1
+        for i, chapter in enumerate(chapters):
+            ch_options = copy.deepcopy(options)
+            ch_output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
+            
+            if options.get("render_by_chapters"):
+                ch_title = chapter.get('title') or f"Chapter_{i+1}"
+                # Sanitize chapter title for filename
+                safe_ch_title = re.sub(r'[\\/*?:"<>|]', "", ch_title).strip().replace(" ", "_")
+                ch_output_file = os.path.join(output_dir, f"{safe_base_name}_{i+1:02d}_{safe_ch_title}.mp4")
+                print(f"\n[INFO] Processing Chapter {i+1}/{total_chapters}: {ch_title}")
+                
+                ch_options["seek_start"] = chapter['start_time']
+                if chapter['end_time'] is not None:
+                    ch_options["seek_duration"] = chapter['end_time'] - chapter['start_time']
+            
+            self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir)
+
+    def _process_single_render_segment(self, job, output_file, orientation, options, output_dir):
+        global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         ass_burn_path, temp_extracted_srt_path = None, None
         nvencc_subburn_path = None
+        encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         try:
             if options.get("burn_subtitles") and job.get('subtitle_path'):
                 # --- Calculate Target Resolution for Subtitles ---
@@ -4544,9 +4612,15 @@ class VideoProcessorApp:
                 else:
                     print("[WARN] Title burn enabled but no title text found (check JSON suffix or use override).")
             
-            duration = get_file_duration(job['video_path'])
-            max_dur = float(options.get('max_duration', 0))
-            if max_dur > 0: duration = min(duration, max_dur)
+            info = get_video_info(job['video_path'])
+            duration = options.get("seek_duration")
+            if duration is None:
+                duration = get_file_duration(job['video_path'])
+                max_dur = float(options.get('max_duration', 0))
+                if max_dur > 0: duration = min(duration, max_dur)
+
+            seek_start = options.get("seek_start")
+            seek_duration = options.get("seek_duration")
 
             if encoder_backend == "nvencc_with_ffmpeg":
                 fd, temp_preproc = tempfile.mkstemp(
@@ -4569,7 +4643,7 @@ class VideoProcessorApp:
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
 
-                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation)
+                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation, info=get_video_info(temp_preproc))
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
@@ -4579,7 +4653,8 @@ class VideoProcessorApp:
                     output_file,
                     options,
                     orientation,
-                    subtitle_burn_path=nvencc_subburn_path
+                    subtitle_burn_path=nvencc_subburn_path,
+                    info=info
                 )
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
@@ -4592,7 +4667,13 @@ class VideoProcessorApp:
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_audio
                 register_temp_file(temp_audio)
-                audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options)
+                audio_cmd = self.construct_ffmpeg_audio_prepass(
+                    job['video_path'], 
+                    temp_audio, 
+                    options, 
+                    seek_start=seek_start, 
+                    seek_duration=seek_duration
+                )
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
@@ -4602,7 +4683,8 @@ class VideoProcessorApp:
                     options,
                     orientation,
                     audio_source_path=temp_audio,
-                    subtitle_burn_path=nvencc_subburn_path
+                    subtitle_burn_path=nvencc_subburn_path,
+                    info=info
                 )
                 if self.run_nvencc_command(nvencc_cmd) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
@@ -4710,8 +4792,9 @@ class VideoProcessorApp:
             target_h = 1080
         return (target_w // 2) * 2, (target_h // 2) * 2
 
-    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None, subtitle_burn_path=None):
-        info = get_video_info(input_file)
+    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None, subtitle_burn_path=None, info=None):
+        if info is None:
+            info = get_video_info(input_file)
         is_hdr_output = options.get("output_format") == "hdr"
         bitrate_kbps, _, _ = self.compute_target_bitrate_kbps(options, info, input_file)
         target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
@@ -4813,6 +4896,20 @@ class VideoProcessorApp:
             "-i", input_file
         ]
 
+        seek_start = options.get("seek_start")
+        seek_duration = options.get("seek_duration")
+        if seek_start is not None and seek_duration is not None and info and info.get("framerate"):
+            fps = float(info["framerate"])
+            start_frame = int(round(float(seek_start) * fps))
+            end_frame = int(round((float(seek_start) + float(seek_duration)) * fps))
+            cmd.extend(["--trim", f"{start_frame}:{end_frame}"])
+        elif seek_start is not None:
+            cmd.extend(["--seek", str(seek_start)])
+            if seek_duration is not None:
+                # Fallback if no FPS info, though inaccurate
+                seek_to = float(seek_start) + float(seek_duration)
+                cmd.extend(["--seekto", str(seek_to)])
+
         cmd.extend(["--vbr", str(bitrate_kbps), "--max-bitrate", str(bitrate_kbps * 2)])
         # NVEncC preset mapping (FFmpeg p1..p7 -> NVEncC preset names)
         nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
@@ -4911,8 +5008,14 @@ class VideoProcessorApp:
         sys.stdout.write("\n")
         return ret_code
 
-    def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options):
-        cmd = [FFMPEG_CMD, "-y", "-i", input_file, "-vn", "-sn", "-dn"]
+    def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options, seek_start=None, seek_duration=None):
+        cmd = [FFMPEG_CMD, "-y"]
+        if seek_start is not None:
+            cmd.extend(["-ss", str(seek_start)])
+        cmd.extend(["-i", input_file])
+        if seek_duration is not None:
+            cmd.extend(["-t", str(seek_duration)])
+        cmd.extend(["-vn", "-sn", "-dn"])
         audio_cmd_parts = self.build_audio_segment(input_file, options)
         cmd.extend(audio_cmd_parts)
         cmd.append(output_audio)
@@ -4926,7 +5029,19 @@ class VideoProcessorApp:
         decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid", "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
         decoder = decoder_map.get(info["codec_name"], info["codec_name"]) if decoder_available else info["codec_name"]
         use_cuda_decoder = "_cuvid" in decoder
-        cmd = [FFMPEG_CMD, "-y", "-hide_banner"] + (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
+        
+        seek_start = options.get("seek_start")
+        seek_duration = options.get("seek_duration")
+        
+        cmd = [FFMPEG_CMD, "-y", "-hide_banner"]
+        if seek_start is not None:
+            cmd.extend(["-ss", str(seek_start)])
+            
+        cmd += (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
+        
+        if seek_duration is not None:
+            cmd.extend(["-t", str(seek_duration)])
+
         filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
         # For codecs without CUVID support (e.g. ProRes), frames are software-decoded to CPU.
         # CUDA filters (scale_cuda, overlay_cuda, etc.) need GPU frames, so we convert
@@ -5149,7 +5264,7 @@ class VideoProcessorApp:
         
         bitrate_kbps, max_duration, input_duration = self.compute_target_bitrate_kbps(options, info, file_path)
 
-        if max_duration > 0 and input_duration > max_duration:
+        if max_duration > 0 and input_duration > max_duration and seek_duration is None:
             # Insert -t before output file (last arg) to trim output
             # Current cmd structure: [...encoder... -f mp4 output_file]
             cmd.insert(len(cmd)-2, "-t")
