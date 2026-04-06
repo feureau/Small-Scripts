@@ -3095,7 +3095,8 @@ class ModelSelectionDialog(tk.Toplevel):
         self.parent = parent
         self.issue_type = issue_type
         self.issue_detail = issue_detail or ""
-        self.title("Quota Exhausted" if issue_type == "quota" else "Model Unavailable")
+        self.title("GPTBatcher - Quota Exhausted" if issue_type == "quota" else "GPTBatcher - Model Unavailable")
+        self.configure(bg=parent.DARK_BG)
         self.result = None
         self.fetch_callback = fetch_callback
         self.exhausted_set = exhausted_set
@@ -3173,6 +3174,11 @@ class ModelSelectionDialog(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         self.transient(parent)
+        
+        # Apply Dark Mode to the dialog's standard widgets
+        if hasattr(parent, "_apply_tk_theme"):
+            parent._apply_tk_theme(self)
+            
         self.wait_visibility()
         self._fit_to_content()
         self.grab_set()
@@ -3252,10 +3258,26 @@ class ModelSelectionDialog(tk.Toplevel):
 
 
 class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
+    # --- MODERN DARK MODE PALETTE ---
+    DARK_BG = "#1e1e1e"
+    DARK_SURFACE = "#252526"
+    DARK_FG = "#cccccc"
+    DARK_FG_MUTED = "#858585"
+    ACCENT = "#bb86fc"  # Vibrant Purple
+    ACCENT_HOVER = "#d1adff"
+    ACCENT_S_BG = "#264f78"  # Selection Blue
+    
+    # Status Colors (Optimized for Dark Mode)
+    STATUS_SUCCESS = "#2d4a2d" # Dark Green
+    STATUS_FAIL = "#4b2a2a"    # Dark Red
+    STATUS_RETRY = "#4b442a"   # Dark Gold
+    STATUS_WAIT = "#3a3a3a"    # Grey-Ish
+
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v26.6 (Gemini Files API Supported)")
-        self.geometry("1400x800")
+        self.title("Multimodal AI Batch Processor v26.17 (GPTBatcher) - Dark Mode")
+        self.configure(bg=self.DARK_BG)
+        self.geometry("1400x820")
 
         self.minsize(1100, 700)
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -3375,6 +3397,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.multipass_prompt_widgets = []
 
         self.create_widgets()
+        self.apply_theme()
+        
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
         self.engine_var.trace_add("write", self._update_folder_preview)
@@ -3395,8 +3419,90 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         cleanup_all_temp_folders()
         self._on_closing()
 
+    def apply_theme(self):
+        """Configure ttk styles and update standard tk widgets to Dark Mode."""
+        style = self.style
+        style.theme_use("clam")  # Use clam as base for better customizability
+
+        # Main Colors
+        bg = self.DARK_BG
+        surface = self.DARK_SURFACE
+        fg = self.DARK_FG
+        accent = self.ACCENT
+        select_bg = self.ACCENT_S_BG
+
+        # --- TTK STYLES ---
+        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 9))
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.configure("TLabelframe", background=bg, foreground=fg)
+        style.configure("TLabelframe.Label", background=bg, foreground=fg, font=("Segoe UI", 9, "bold"))
+
+        # Buttons
+        style.configure("TButton", background=surface, foreground=fg, borderwidth=1, focuscolor=accent)
+        style.map("TButton",
+                  background=[("active", "#3e3e42"), ("pressed", "#4e4e52")],
+                  foreground=[("active", "#ffffff")])
+
+        # Entries & Combos
+        style.configure("TEntry", fieldbackground=surface, foreground=fg, borderwidth=1, insertcolor=fg)
+        style.configure("TCombobox", fieldbackground=surface, foreground=fg, arrowcolor=fg)
+        style.map("TCombobox", fieldbackground=[("readonly", surface)])
+
+        # Notebook (Tabs)
+        style.configure("TNotebook", background=bg, borderwidth=0)
+        style.configure("TNotebook.Tab", background=surface, foreground=fg, padding=[10, 4])
+        style.map("TNotebook.Tab",
+                  background=[("selected", bg)],
+                  foreground=[("selected", accent)],
+                  expand=[("selected", [1, 1, 1, 0])])
+
+        # Treeview (Job List)
+        style.configure("Treeview", 
+                        background=surface, 
+                        foreground=fg, 
+                        fieldbackground=surface, 
+                        rowheight=25,
+                        borderwidth=0)
+        style.map("Treeview", 
+                  background=[("selected", select_bg)],
+                  foreground=[("selected", "#ffffff")])
+        style.configure("Treeview.Heading", background="#333333", foreground=fg, borderwidth=1, relief="flat")
+
+        # Scrollbars (Custom Look)
+        style.configure("Vertical.TScrollbar", background="#333333", arrowcolor=fg, troughcolor=bg, borderwidth=0)
+        style.configure("Horizontal.TScrollbar", background="#333333", arrowcolor=fg, troughcolor=bg, borderwidth=0)
+
+        # Apply to non-TTK widgets
+        self._apply_tk_theme(self)
+
+    def _apply_tk_theme(self, parent):
+        for widget in parent.winfo_children():
+            w_class = widget.winfo_class()
+            if w_class == "Text" or w_class == "ScrolledText":
+                widget.configure(bg=self.DARK_SURFACE, fg=self.DARK_FG, 
+                                 insertbackground=self.DARK_FG, 
+                                 padx=5, pady=5, borderwidth=1, relief="flat")
+            elif w_class == "Listbox":
+                widget.configure(bg=self.DARK_SURFACE, fg=self.DARK_FG, 
+                                 selectbackground=self.ACCENT_S_BG, 
+                                 selectforeground="#ffffff",
+                                 borderwidth=1, relief="flat")
+            elif w_class == "Frame" and not isinstance(widget, ttk.Frame):
+                widget.configure(bg=self.DARK_BG)
+            elif w_class == "Label" and not isinstance(widget, ttk.Label):
+                widget.configure(bg=self.DARK_BG, fg=self.DARK_FG)
+            elif w_class == "Canvas":
+                widget.configure(bg=self.DARK_BG, highlightthickness=0)
+            
+            # Recursive call
+            try:
+                self._apply_tk_theme(widget)
+            except Exception:
+                pass
+
     def create_widgets(self):
-        self.style = ttk.Style()  # Keep reference
+        self.style = ttk.Style()
 
         toolbar = ttk.Frame(self, padding=(10, 5))
         toolbar.pack(side=tk.TOP, fill=tk.X)
@@ -3425,7 +3531,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.api_status_label = ttk.Label(
             toolbar,
             text=f"API Key: {'Set' if self.api_key else 'Not Set'}",
-            foreground="blue",
+            foreground="skyblue",
         )
         self.api_status_label.pack(side=tk.RIGHT, padx=10)
         ttk.Button(toolbar, text="Update Key", command=self.prompt_for_api_key).pack(
@@ -5441,10 +5547,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         else ""
                     )
                     if tag:
-                        self.tree.tag_configure("success", background="#ccffcc")
-                        self.tree.tag_configure("fail", background="#ffcccc")
-                        self.tree.tag_configure("retry", background="#fff5cc")
-                        self.tree.tag_configure("wait", background="#ffe0b2")
+                        self.tree.tag_configure("success", background=self.STATUS_SUCCESS, foreground="#ccffcc")
+                        self.tree.tag_configure("fail", background=self.STATUS_FAIL, foreground="#ffcccc")
+                        self.tree.tag_configure("retry", background=self.STATUS_RETRY, foreground="#fff5cc")
+                        self.tree.tag_configure("wait", background=self.STATUS_WAIT, foreground="#ffe0b2")
                     if tag:
                         self.tree.item(jid, tags=(tag,))
         except queue.Empty:

@@ -826,7 +826,7 @@ class MainApp:
                         item.get("fileDetails"),
                         item.get("contentDetails")
                     )
-                    logger.info(f"\n[Processing Video]: {vd_obj.current_title[:60]}...")
+                    logger.info(f"\n[Processing Video]: {vd_obj.current_title[:60]}... (Original: {vd_obj.original_upload_filename or 'Unknown'})")
                     
                     yt_timestamps = set()
                     def get_ts(s):
