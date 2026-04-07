@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.17
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.19
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -35,10 +35,13 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
-### v26.17
-- ✅ **REBUILD**: Rewrote text chunking from the ground up with budget-aware semantic chunking and sequential carryover context.
-- ✅ **IMPROVEMENT**: Added deterministic seam de-duplication when stitching chunk outputs to reduce repeated boundary text.
 - ✅ **IMPROVEMENT**: Chunk token budget is now auto-computed from model context window with safety, output, and carry reserves; legacy chunk_size is treated as an optional cap.
+
+### v26.19
+- ✅ **IMPROVEMENT**: Removed hardcoded "gemini" filter from the Google Provider model list to expose all models (including Gemma).
+
+### v26.18
+- ✅ **IMPROVEMENT**: Increased retry limit for 503 UNAVAILABLE errors to 20 attempts (with 60s wait) to handle temporary model demand spikes more robustly.
 
 ### v26.16
 - ✅ **FEATURE**: Added interactive multipass prompt workflow with per-pass prompts and pass chaining.
@@ -434,6 +437,8 @@ LOG_SUBFOLDER_NAME = "processing_logs"
 FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
+MAX_RETRIES_503 = 20
+RETRY_DELAY_503 = 60
 
 
 def sanitize_filename(name):
@@ -1322,8 +1327,6 @@ def fetch_google_models(api_key):
         client = genai.Client(api_key=api_key)
         # client.models.list() returns internal model objects, we need the name
         models = [m.name for m in client.models.list()]
-        # Filter for models that likely support generation (not strictly necessary but good)
-        models = [m for m in models if "gemini" in m]
         models.sort(
             key=lambda x: (
                 0 if "latest" in x else 1 if "2.5" in x else 2 if "2.0" in x else 3,
@@ -5772,7 +5775,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         ]
 
             attempt = 0
-            while attempt < MAX_RETRIES:
+            current_max_retries = MAX_RETRIES
+            while attempt < current_max_retries:
                 attempt += 1
                 if self.processing_cancelled.is_set():
                     break
@@ -5918,19 +5922,26 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                 self.processing_cancelled.set()
                                 break
 
+                    if is_temp_unavailable:
+                        current_max_retries = MAX_RETRIES_503
+                    else:
+                        current_max_retries = MAX_RETRIES
+
                     console_log(
-                        f"Job {jid} Error (Attempt {attempt}/{MAX_RETRIES}): {e}",
+                        f"Job {jid} Error (Attempt {attempt}/{current_max_retries}): {e}",
                         "ERROR",
                     )
-                    if attempt < MAX_RETRIES:
-                        wait_time = 60 if (is_quota or is_temp_unavailable) else 5
+                    if attempt < current_max_retries:
+                        wait_time = (
+                            RETRY_DELAY_503 if (is_quota or is_temp_unavailable) else 5
+                        )
                         self.result_queue.put(
                             {"job_id": jid, "status": f"Retrying ({attempt})"}
                         )
                         time.sleep(wait_time)
                     else:
                         console_log(
-                            f"Job {jid} reached max retries. Marking as failed.",
+                            f"Job {jid} reached max retries ({current_max_retries}). Marking as failed.",
                             "ERROR",
                         )
                         [copy_failed_file(fp) for fp in job["filepaths_group"]]
