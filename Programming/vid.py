@@ -199,6 +199,7 @@ DEFAULT_FRUC = False                                # Enable frame rate up-conve
 DEFAULT_FRUC_FPS = "60"                             # Target FPS for FRUC. Default: 60, Range: 30 to 120
 DEFAULT_BURN_SUBTITLES = True                       # Burn subtitles into video. Default: True
 DEFAULT_RENDER_BY_CHAPTERS = False                 # Render video by chapters if available. Default: False
+DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER = False          # Split and export subtitles matching chapters. Default: False
 DEFAULT_USE_SHARPENING = True                       # Enable video sharpening. Default: True
 
 # --- Encoder Config Group ---
@@ -1463,6 +1464,72 @@ def extract_embedded_subtitle(video_path, subtitle_index, temp_dir=None):
         cleanup_single_temp_file(temp_subtitle_path)
         return None
 
+def split_srt_file(srt_file_path, output_path, chapter_start_sec, chapter_end_sec):
+    try:
+        with open(srt_file_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except Exception as e:
+        print(f"[ERROR] Could not read SRT {srt_file_path}: {e}")
+        return False
+        
+    def parse_srt_time(t_str):
+        h, m, s_ms = t_str.strip().split(':')
+        s, ms = s_ms.replace('.', ',').split(',')
+        return int(h)*3600 + int(m)*60 + int(s) + int(ms.ljust(3, '0')[:3])/1000.0
+
+    def format_srt_time(sec):
+        sec = max(0, sec)
+        h = int(sec // 3600)
+        m = int((sec % 3600) // 60)
+        s = int(sec % 60)
+        ms = int(round((sec % 1) * 1000))
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    blocks = content.strip().split('\n\n')
+    new_blocks = []
+    idx = 1
+    end_limit = chapter_end_sec if chapter_end_sec is not None else float('inf')
+    
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) >= 3:
+            time_line = lines[1]
+            if ' --> ' in time_line:
+                start_str, end_str = time_line.split(' --> ')
+                try:
+                    start_sec = parse_srt_time(start_str)
+                    end_sec = parse_srt_time(end_str)
+                    
+                    if start_sec >= end_limit or end_sec <= chapter_start_sec:
+                        continue
+                        
+                    new_start = start_sec - chapter_start_sec
+                    new_end = end_sec - chapter_start_sec
+                    
+                    new_start = max(0, new_start)
+                    chapter_duration = end_limit - chapter_start_sec
+                    new_end = min(new_end, chapter_duration) if chapter_duration != float('inf') else new_end
+                    
+                    if new_start >= new_end:
+                        continue
+                    
+                    text = '\n'.join(lines[2:])
+                    new_blocks.append(f"{idx}\n{format_srt_time(new_start)} --> {format_srt_time(new_end)}\n{text}")
+                    idx += 1
+                except Exception as e:
+                    debug_print(f"Skipping block due to parse error: {e}")
+        
+    if not new_blocks:
+        return False
+        
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write("\n\n".join(new_blocks) + "\n\n")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Could not write split SRT {output_path}: {e}")
+        return False
+
 def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, source_width=None):
     # Revised Defaults (roughly 50% of previous high-quality defaults)
     BITRATES = {
@@ -1503,6 +1570,7 @@ def get_job_hash(job_options):
         job_options.get('fruc', False),
         job_options.get('fruc_fps', ''),
         str(job_options.get('render_by_chapters', False)),
+        str(job_options.get('split_subtitles_by_chapter', False)),
         str(job_options.get('use_dynaudnorm', False)),
         job_options.get('dyn_frame_len', ''),
         job_options.get('dyn_gauss_win', ''),
@@ -1641,6 +1709,7 @@ class WorkflowPresetManager:
             "nvenc_ngx_vsr_quality": DEFAULT_NVENC_NGX_VSR_QUALITY,
             "orientation": DEFAULT_ORIENTATION,
             "render_by_chapters": DEFAULT_RENDER_BY_CHAPTERS,
+            "split_subtitles_by_chapter": DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
             "manual_bitrate": "0",
@@ -1919,6 +1988,7 @@ class VideoProcessorApp:
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.render_by_chapters_var = tk.BooleanVar(value=DEFAULT_RENDER_BY_CHAPTERS)
+        self.split_subtitles_by_chapter_var = tk.BooleanVar(value=DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
         self.pad_color_var = tk.StringVar(value=DEFAULT_PAD_COLOR)
@@ -2228,44 +2298,49 @@ class VideoProcessorApp:
         cb_chapters.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
         ToolTip(cb_chapters, "Detects chapter markers in the input file and renders each as a separate file named after its title.")
 
+        # Split Subtitles by Chapter
+        cb_split_subs = ttk.Checkbutton(basic_group, text="Export Subtitle chunks per split", variable=self.split_subtitles_by_chapter_var, command=lambda: self._update_selected_jobs('split_subtitles_by_chapter'))
+        cb_split_subs.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=20, pady=2)
+        ToolTip(cb_split_subs, "Splits the mapped subtitle file per chapter and saves it as a separate .srt alongside the video segment.")
+
         # Preset
-        ttk.Label(basic_group, text="Preset:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Preset:").grid(row=3, column=0, sticky=tk.W, pady=2)
         preset_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_preset_var, values=[f"p{i}" for i in range(1, 8)], width=10, state="readonly")
-        preset_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        preset_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
 
         # Tune
-        ttk.Label(basic_group, text="Tune:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Tune:").grid(row=4, column=0, sticky=tk.W, pady=2)
         tune_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_tune_var, values=["hq", "ll", "ull", "lossless"], width=10, state="readonly")
-        tune_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        tune_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
 
         # Codec
-        ttk.Label(basic_group, text="Codec:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Codec:").grid(row=5, column=0, sticky=tk.W, pady=2)
         self.video_codec_combo = ttk.Combobox(basic_group, textvariable=self.video_codec_var, values=["h264", "hevc", "av1"], width=10, state="readonly")
-        self.video_codec_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        self.video_codec_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(self.video_codec_combo, "Output codec. HDR requires HEVC or AV1.")
 
         # Profile SDR
-        ttk.Label(basic_group, text="Profile (SDR):").grid(row=4, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (SDR):").grid(row=6, column=0, sticky=tk.W, pady=2)
         profile_sdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_sdr_var, values=["high", "main", "baseline"], width=10, state="readonly")
-        profile_sdr_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_sdr_combo.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_sdr_combo, "NVENC Profile for SDR output.")
 
         # Profile HDR
-        ttk.Label(basic_group, text="Profile (HDR):").grid(row=5, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (HDR):").grid(row=7, column=0, sticky=tk.W, pady=2)
         profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
-        profile_hdr_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_hdr_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
 
         # FFmpeg CPU Threads
-        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=6, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=8, column=0, sticky=tk.W, pady=2)
         ffmpeg_threads_entry = ttk.Entry(basic_group, textvariable=self.ffmpeg_threads_var, width=10)
-        ffmpeg_threads_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_threads_entry.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_threads_entry, "FFmpeg `-threads` value. Use 0 for auto, or a positive integer.")
 
         # FFmpeg Process Priority
-        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=7, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=9, column=0, sticky=tk.W, pady=2)
         ffmpeg_priority_combo = ttk.Combobox(
             basic_group,
             textvariable=self.ffmpeg_priority_var,
@@ -2273,7 +2348,7 @@ class VideoProcessorApp:
             width=14,
             state="readonly"
         )
-        ffmpeg_priority_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_priority_combo.grid(row=9, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_priority_combo, "FFmpeg process priority (Windows). Non-Windows systems ignore this setting.")
 
         # GOP & B-Frames
@@ -3568,6 +3643,7 @@ class VideoProcessorApp:
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "close_gui_on_processing": self.close_gui_var.get(),
             "render_by_chapters": self.render_by_chapters_var.get(),
+            "split_subtitles_by_chapter": self.split_subtitles_by_chapter_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
@@ -4129,6 +4205,7 @@ class VideoProcessorApp:
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
         self.render_by_chapters_var.set(options.get("render_by_chapters", DEFAULT_RENDER_BY_CHAPTERS))
+        self.split_subtitles_by_chapter_var.set(options.get("split_subtitles_by_chapter", DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER))
         raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
         if raw_orientation == "vertical":
             self.merged_aspect_var.set(options.get("merged_aspect", options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)))
@@ -4460,22 +4537,46 @@ class VideoProcessorApp:
             }]
         
         total_chapters = len(chapters) if options.get("render_by_chapters") else 1
+        
+        # Subtitle split by chapter preprocessing
+        temp_extracted_srt = None
+        do_subtitle_split = options.get("render_by_chapters") and options.get("split_subtitles_by_chapter") and job.get('subtitle_path')
+        if do_subtitle_split:
+            sub = job['subtitle_path']
+            if sub.startswith("embedded:"):
+                idx = sub.split(":")[1]
+                temp_extracted_srt = extract_embedded_subtitle(job['video_path'], idx, output_dir)
+            else:
+                temp_extracted_srt = sub
+
         for i, chapter in enumerate(chapters):
             ch_options = copy.deepcopy(options)
             ch_output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
+            ch_srt_file = os.path.join(output_dir, f"{safe_base_name}.srt")
             
             if options.get("render_by_chapters"):
                 ch_title = chapter.get('title') or f"Chapter_{i+1}"
                 # Sanitize chapter title for filename
                 safe_ch_title = re.sub(r'[\\/*?:"<>|]', "", ch_title).strip().replace(" ", "_")
-                ch_output_file = os.path.join(output_dir, f"{safe_base_name}_{i+1:02d}_{safe_ch_title}.mp4")
+                base_chunk = f"{safe_base_name}_{i+1:02d}_{safe_ch_title}"
+                ch_output_file = os.path.join(output_dir, f"{base_chunk}.mp4")
+                ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
                 print(f"\n[INFO] Processing Chapter {i+1}/{total_chapters}: {ch_title}")
                 
                 ch_options["seek_start"] = chapter['start_time']
                 if chapter['end_time'] is not None:
                     ch_options["seek_duration"] = chapter['end_time'] - chapter['start_time']
+                    
+                if do_subtitle_split and temp_extracted_srt and os.path.exists(temp_extracted_srt):
+                    print(f"       -> Splitting subtitle chunk...")
+                    success = split_srt_file(temp_extracted_srt, ch_srt_file, chapter['start_time'], chapter['end_time'])
+                    if success:
+                        print(f"       -> Exported {os.path.basename(ch_srt_file)}")
             
             self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir)
+
+        if do_subtitle_split and temp_extracted_srt and job['subtitle_path'].startswith("embedded:"):
+            cleanup_single_temp_file(temp_extracted_srt)
 
     def _process_single_render_segment(self, job, output_file, orientation, options, output_dir):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR

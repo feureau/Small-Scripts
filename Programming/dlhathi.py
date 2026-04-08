@@ -18,7 +18,16 @@ def download_hathi_max_quality():
         return
 
     input_url = sys.argv[1]
-    base_id = re.search(r"id=([a-z0-9\.]+)", input_url).group(1)
+    base_id_match = re.search(r"id=([a-z0-9\.]+)", input_url)
+    if not base_id_match:
+        print("[!] Could not parse base ID from URL")
+        return
+    base_id = base_id_match.group(1)
+
+    start_seq = 1
+    seq_match = re.search(r"seq=(\d+)", input_url)
+    if seq_match:
+        start_seq = int(seq_match.group(1))
 
     # Setup Download Directory
     download_dir = os.path.join(os.getcwd(), f"{base_id}_600dpi_TIF")
@@ -49,7 +58,7 @@ def download_hathi_max_quality():
 
         print(f"[*] Starting sequence for {total_pages} pages at 600 DPI...")
 
-        for seq in range(1, total_pages + 1):
+        for seq in range(start_seq, total_pages + 1):
             driver.get(
                 f"https://babel.hathitrust.org/cgi/pt?id={base_id}&view=1up&seq={seq}"
             )
@@ -65,9 +74,10 @@ def download_hathi_max_quality():
                     )
                 )
                 if "active" not in download_sect.get_attribute("class"):
-                    header = driver.find_element(
-                        By.CSS_SELECTOR,
-                        "#download-options-header, .download-options h2",
+                    header = wait.until(
+                        EC.element_to_be_clickable(
+                            (By.CSS_SELECTOR, "#download-options-header, .download-options h2")
+                        )
                     )
                     driver.execute_script("arguments[0].click();", header)
                     time.sleep(1)
@@ -80,9 +90,10 @@ def download_hathi_max_quality():
                 time.sleep(1)  # Wait for resolution dropdown to update
 
                 # 3. Select 600 DPI / Full
-                res_dropdown = Select(
-                    driver.find_element(By.CSS_SELECTOR, "select[name='size']")
+                res_dropdown_el = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "select[name='size']"))
                 )
+                res_dropdown = Select(res_dropdown_el)
 
                 # Look for "600" or "Full" in the text
                 found_res = False
@@ -97,8 +108,10 @@ def download_hathi_max_quality():
                     res_dropdown.select_by_index(len(res_dropdown.options) - 1)
 
                 # 4. Click Download Button
-                download_btn = driver.find_element(
-                    By.CSS_SELECTOR, "button.download-button"
+                download_btn = wait.until(
+                    EC.element_to_be_clickable(
+                        (By.CSS_SELECTOR, "button.download-button, a[data-tracking-action='Download Image'], .download-options button.btn-primary")
+                    )
                 )
                 driver.execute_script("arguments[0].click();", download_btn)
 

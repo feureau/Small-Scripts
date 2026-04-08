@@ -54,7 +54,7 @@ def find_smart_gutter(image):
     weighted_score = darkness_projection * center_bias
     return search_start + np.argmax(weighted_score)
 
-def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, overlap_pct=0.03):
+def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, overlap_pct=0.03, simple_split=False):
     files_to_process = []
     for pattern in file_patterns:
         files_to_process.extend(glob.glob(pattern))
@@ -92,7 +92,10 @@ def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, 
             continue
 
         # 1. Find the gutter center
-        split_x = find_smart_gutter(img)
+        if simple_split:
+            split_x = w // 2
+        else:
+            split_x = find_smart_gutter(img)
         
         # 2. Calculate Adaptive Overlap
         # This creates a 'Shared Zone' centered on split_x
@@ -132,6 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("--rtl", action="store_true", help="Right-to-Left mode")
     parser.add_argument("--force", action="store_true", help="Force split portrait images")
     parser.add_argument("--overlap", type=float, default=0.03, help="Overlap percent (0.03 = 3%% of width)")
+    parser.add_argument("--simple", "-s", action="store_true", help="Split exactly by half (50/50)")
     
     args = parser.parse_args()
-    process_files(args.files, args.output, args.rtl, args.force, args.overlap)
+    process_files(args.files, args.output, args.rtl, args.force, args.overlap, args.simple)

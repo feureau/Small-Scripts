@@ -195,6 +195,13 @@ try:
 except ImportError:
     json_repair = None
 
+# --- OPTIONAL: PYSBD FOR SENTENCE SEGMENTATION ---
+try:
+    import pysbd
+    _pysbd_segmenter = pysbd.Segmenter(language="en", clean=False)
+except ImportError:
+    _pysbd_segmenter = None
+
 # --- GLOBAL CACHE FOR UPLOADED FILES (Deduplication) ---
 # Stores { "sha256_hash": types.File }
 UPLOADED_FILE_CACHE = {}
