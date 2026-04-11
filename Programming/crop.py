@@ -133,7 +133,21 @@ def process_image(path_str, output_dir, args, border_color, border_width):
         )
 
     # --- Crop / resize to target ---
-    img = ImageOps.fit(img, (target_w, target_h), RESAMPLING_FILTER)
+    if args.fit and border_color:
+        inner_w = target_w - (2 * border_width)
+        inner_h = target_h - (2 * border_width)
+        if inner_w > 0 and inner_h > 0:
+            scale = min(inner_w / img.width, inner_h / img.height)
+            new_w = int(img.width * scale)
+            new_h = int(img.height * scale)
+            img = img.resize((new_w, new_h), RESAMPLING_FILTER)
+    elif args.fit:
+        scale = min(target_w / img.width, target_h / img.height)
+        new_w = int(img.width * scale)
+        new_h = int(img.height * scale)
+        img = img.resize((new_w, new_h), RESAMPLING_FILTER)
+    else:
+        img = ImageOps.fit(img, (target_w, target_h), RESAMPLING_FILTER)
 
     # --- Crop Percent ---
     if args.crop_percent:
@@ -157,15 +171,19 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     final = img
     if border_color:
         try:
-            tw, th = final.size
+            tw, th = target_w, target_h
             iw = tw - (2 * border_width)
             ih = th - (2 * border_width)
             if iw > 0 and ih > 0:
-                # Fill the inner area exactly; may crop slightly to preserve uniform border width.
-                content = ImageOps.fit(final, (iw, ih), RESAMPLING_FILTER)
-                canvas = Image.new(final.mode, (tw, th), border_color)
-                px = (tw - content.width) // 2
-                py = (th - content.height) // 2
+                canvas = Image.new(img.mode, (tw, th), border_color)
+                if args.fit:
+                    content = img
+                    px = (tw - content.width) // 2
+                    py = (th - content.height) // 2
+                else:
+                    content = ImageOps.fit(img, (iw, ih), RESAMPLING_FILTER)
+                    px = (tw - content.width) // 2
+                    py = (th - content.height) // 2
                 if content.mode in ("RGBA", "LA"):
                     canvas.paste(content, (px, py), content)
                 else:
@@ -215,7 +233,7 @@ def main():
     )
     parser.add_argument("files", nargs="*")
     parser.add_argument(
-        "-o",
+        "-d",
         "--output-dir",
         default=DEFAULT_OUTPUT_SUBFOLDER,
         help="Subfolder name for output",
@@ -237,7 +255,7 @@ def main():
 
     parser.add_argument("-x", "--suffix", help="Custom filename suffix")
     parser.add_argument(
-        "-f",
+        "-o",
         "--output-format",
         default=DEFAULT_OUTPUT_FORMAT,
         choices=["jpg", "png", "webp", "tiff", "bmp", "avif"],
@@ -252,7 +270,7 @@ def main():
     )
 
     dim = parser.add_argument_group("Dimensions")
-    dim.add_argument("-d", "--fixed", type=int, nargs=2, help="Fixed W H")
+    dim.add_argument("-D", "--fixed", type=int, nargs=2, help="Fixed W H")
     dim.add_argument("-s", "--square", action="store_true")
     dim.add_argument("-p", "--portrait", action="store_true")
     dim.add_argument("-l", "--landscape", action="store_true")
@@ -261,6 +279,12 @@ def main():
         "-m", "--box", type=int, help="Max dimension (contains within box)"
     )
 
+    dim.add_argument(
+        "-f",
+        "--fit",
+        action="store_true",
+        help="Fit image by padding instead of cropping",
+    )
     dim.add_argument("-c", "--crop-percent", type=int)
     dim.add_argument("-z", "--zoom-percent", type=int)
     dim.add_argument("-S", "--scale-percent", type=int)

@@ -213,6 +213,13 @@ DEFAULT_NVENC_SPATIAL_AQ = "1"                      # Spatial AQ. Default: 1 (En
 DEFAULT_NVENC_TEMPORAL_AQ = "1"                     # Temporal AQ. Default: 1 (Enabled)
 DEFAULT_NVENC_BFRAMES = "4"                         # Number of B-frames. Default: 4
 DEFAULT_NVENC_B_REF_MODE = "middle"                 # B-frame reference mode. Default: middle
+DEFAULT_NVENCC_DECODE_MODE = "auto"                 # NVEncC decode mode. Options: auto, avhw, avsw
+DEFAULT_NVENCC_COLOR_TAG_MODE = "auto"              # NVEncC color tag mode. Options: auto, custom
+DEFAULT_NVENCC_COLOR_PRIM = "bt709"                 # NVEncC custom color primaries
+DEFAULT_NVENCC_COLOR_TRANSFER = "bt709"             # NVEncC custom transfer characteristics
+DEFAULT_NVENCC_COLOR_MATRIX = "bt709"               # NVEncC custom color matrix
+DEFAULT_NVENCC_OUTPUT_DEPTH = "auto"                # NVEncC output depth. Options: auto, 8, 10
+DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING = False      # Skip explicit --colorprim/--transfer/--colormatrix
 DEFAULT_FFMPEG_THREADS = "0"                        # FFmpeg CPU threads. Default: 0 (auto)
 DEFAULT_FFMPEG_PRIORITY = "normal"                  # FFmpeg process priority. Windows only. Default: normal
 DEFAULT_SHARPENING_ALGO = "unsharp"                 # Sharpening algorithm. Default: cas, Options: cas, unsharp
@@ -1793,6 +1800,13 @@ class WorkflowPresetManager:
             "nvenc_temporal_aq": DEFAULT_NVENC_TEMPORAL_AQ,
             "nvenc_bframes": DEFAULT_NVENC_BFRAMES,
             "nvenc_b_ref_mode": DEFAULT_NVENC_B_REF_MODE,
+            "nvencc_decode_mode": DEFAULT_NVENCC_DECODE_MODE,
+            "nvencc_color_tag_mode": DEFAULT_NVENCC_COLOR_TAG_MODE,
+            "nvencc_color_prim": DEFAULT_NVENCC_COLOR_PRIM,
+            "nvencc_color_transfer": DEFAULT_NVENCC_COLOR_TRANSFER,
+            "nvencc_color_matrix": DEFAULT_NVENCC_COLOR_MATRIX,
+            "nvencc_output_depth": DEFAULT_NVENCC_OUTPUT_DEPTH,
+            "nvencc_strict_no_color_tagging": DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING,
             "ffmpeg_threads": DEFAULT_FFMPEG_THREADS,
             "ffmpeg_priority": DEFAULT_FFMPEG_PRIORITY,
             "override_bitrate": False,
@@ -2077,6 +2091,19 @@ class VideoProcessorApp:
         self.nvenc_bframes_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_bframes'))
         self.nvenc_b_ref_mode_var = tk.StringVar(value=DEFAULT_NVENC_B_REF_MODE)
         self.nvenc_b_ref_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_b_ref_mode'))
+        self.nvencc_decode_mode_var = tk.StringVar(value=DEFAULT_NVENCC_DECODE_MODE)
+        self.nvencc_decode_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_decode_mode'))
+        self.nvencc_color_tag_mode_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_TAG_MODE)
+        self.nvencc_color_tag_mode_var.trace_add('write', lambda *args: [self._update_selected_jobs('nvencc_color_tag_mode'), self._toggle_nvencc_color_mode_controls()])
+        self.nvencc_color_prim_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_PRIM)
+        self.nvencc_color_prim_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_prim'))
+        self.nvencc_color_transfer_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_TRANSFER)
+        self.nvencc_color_transfer_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_transfer'))
+        self.nvencc_color_matrix_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_MATRIX)
+        self.nvencc_color_matrix_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_matrix'))
+        self.nvencc_output_depth_var = tk.StringVar(value=DEFAULT_NVENCC_OUTPUT_DEPTH)
+        self.nvencc_output_depth_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_output_depth'))
+        self.nvencc_strict_no_color_tagging_var = tk.BooleanVar(value=DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING)
         self.ffmpeg_threads_var = tk.StringVar(value=DEFAULT_FFMPEG_THREADS)
         self.ffmpeg_threads_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_threads'))
         self.ffmpeg_priority_var = tk.StringVar(value=DEFAULT_FFMPEG_PRIORITY)
@@ -2255,6 +2282,7 @@ class VideoProcessorApp:
         self._toggle_upscale_options()
         self._update_upscale_algo_options()
         self._toggle_superres_options()
+        self._toggle_nvencc_color_mode_controls()
         self._apply_backend_constraints()
         self._toggle_audio_norm_options()
         self._update_audio_options_ui() 
@@ -2333,14 +2361,26 @@ class VideoProcessorApp:
         profile_hdr_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
 
+        # Decode Mode (NVEncC)
+        ttk.Label(basic_group, text="Decode Mode:").grid(row=8, column=0, sticky=tk.W, pady=2)
+        decode_mode_combo = ttk.Combobox(
+            basic_group,
+            textvariable=self.nvencc_decode_mode_var,
+            values=["auto", "avhw", "avsw"],
+            width=10,
+            state="readonly"
+        )
+        decode_mode_combo.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(decode_mode_combo, "NVEncC input reader: auto (current logic), avhw (force hardware decode), avsw (force software decode).")
+
         # FFmpeg CPU Threads
-        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=8, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=9, column=0, sticky=tk.W, pady=2)
         ffmpeg_threads_entry = ttk.Entry(basic_group, textvariable=self.ffmpeg_threads_var, width=10)
-        ffmpeg_threads_entry.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_threads_entry.grid(row=9, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_threads_entry, "FFmpeg `-threads` value. Use 0 for auto, or a positive integer.")
 
         # FFmpeg Process Priority
-        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=9, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=10, column=0, sticky=tk.W, pady=2)
         ffmpeg_priority_combo = ttk.Combobox(
             basic_group,
             textvariable=self.ffmpeg_priority_var,
@@ -2348,7 +2388,7 @@ class VideoProcessorApp:
             width=14,
             state="readonly"
         )
-        ffmpeg_priority_combo.grid(row=9, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_priority_combo.grid(row=10, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_priority_combo, "FFmpeg process priority (Windows). Non-Windows systems ignore this setting.")
 
         # GOP & B-Frames
@@ -2395,6 +2435,73 @@ class VideoProcessorApp:
         temporal_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(temporal_combo, "Enable/Disable Temporal Adaptive Quantization.")
 
+
+        # NVEncC Color (Details)
+        color_group = ttk.LabelFrame(scroll_frame, text="NVEncC Color (Details)", padding=10)
+        color_group.pack(fill=tk.X, pady=5, padx=5)
+
+        ttk.Label(color_group, text="Color Tags:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        color_mode_combo = ttk.Combobox(
+            color_group,
+            textvariable=self.nvencc_color_tag_mode_var,
+            values=["auto", "custom"],
+            width=10,
+            state="readonly"
+        )
+        color_mode_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(color_mode_combo, "auto = derive SDR/HDR tags automatically. custom = use values below.")
+
+        ttk.Label(color_group, text="Output Depth:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.nvencc_output_depth_combo = ttk.Combobox(
+            color_group,
+            textvariable=self.nvencc_output_depth_var,
+            values=["auto", "8", "10"],
+            width=10,
+            state="readonly"
+        )
+        self.nvencc_output_depth_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(self.nvencc_output_depth_combo, "Output bit depth used by NVEncC. auto follows SDR/HDR mode.")
+
+        ttk.Label(color_group, text="Primaries:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.nvencc_color_prim_combo = ttk.Combobox(
+            color_group,
+            textvariable=self.nvencc_color_prim_var,
+            values=["bt709", "bt2020"],
+            width=12,
+            state="readonly"
+        )
+        self.nvencc_color_prim_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(color_group, text="Transfer:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.nvencc_color_transfer_combo = ttk.Combobox(
+            color_group,
+            textvariable=self.nvencc_color_transfer_var,
+            values=["bt709", "smpte2084", "arib-std-b67"],
+            width=12,
+            state="readonly"
+        )
+        self.nvencc_color_transfer_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(color_group, text="Matrix:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.nvencc_color_matrix_combo = ttk.Combobox(
+            color_group,
+            textvariable=self.nvencc_color_matrix_var,
+            values=["bt709", "bt2020nc"],
+            width=12,
+            state="readonly"
+        )
+        self.nvencc_color_matrix_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+
+        strict_color_tag_cb = ttk.Checkbutton(
+            color_group,
+            text="Strict: no extra color tagging",
+            variable=self.nvencc_strict_no_color_tagging_var,
+            command=lambda: self._update_selected_jobs('nvencc_strict_no_color_tagging')
+        )
+        strict_color_tag_cb.grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=2)
+        ToolTip(strict_color_tag_cb, "When enabled, omit --colorprim/--transfer/--colormatrix and keep only output depth.")
+
+        self._toggle_nvencc_color_mode_controls()
     def setup_presets_ui(self, parent):
         preset_frame = ttk.LabelFrame(parent, text="Workflow Presets", padding=10)
         preset_frame.pack(fill=tk.X, side=tk.TOP)
@@ -3448,6 +3555,19 @@ class VideoProcessorApp:
         if hasattr(self, "ngx_vsr_quality_combo"):
             self.ngx_vsr_quality_combo.config(state="readonly" if enable_ngx else "disabled")
 
+    def _toggle_nvencc_color_mode_controls(self):
+        is_custom = getattr(self, "nvencc_color_tag_mode_var", None) and self.nvencc_color_tag_mode_var.get() == "custom"
+        state = "readonly" if is_custom else "disabled"
+        for widget_name in [
+            "nvencc_output_depth_combo",
+            "nvencc_color_prim_combo",
+            "nvencc_color_transfer_combo",
+            "nvencc_color_matrix_combo",
+        ]:
+            widget = getattr(self, widget_name, None)
+            if widget:
+                widget.config(state=state)
+
     def _set_widget_state_recursive(self, widget, state):
         try:
             widget.configure(state=state)
@@ -3705,6 +3825,13 @@ class VideoProcessorApp:
             "nvenc_temporal_aq": self.nvenc_temporal_aq_var.get(),
             "nvenc_bframes": self.nvenc_bframes_var.get(),
             "nvenc_b_ref_mode": self.nvenc_b_ref_mode_var.get(),
+            "nvencc_decode_mode": self.nvencc_decode_mode_var.get(),
+            "nvencc_color_tag_mode": self.nvencc_color_tag_mode_var.get(),
+            "nvencc_color_prim": self.nvencc_color_prim_var.get(),
+            "nvencc_color_transfer": self.nvencc_color_transfer_var.get(),
+            "nvencc_color_matrix": self.nvencc_color_matrix_var.get(),
+            "nvencc_output_depth": self.nvencc_output_depth_var.get(),
+            "nvencc_strict_no_color_tagging": self.nvencc_strict_no_color_tagging_var.get(),
             "ffmpeg_threads": self.ffmpeg_threads_var.get(),
             "ffmpeg_priority": self.ffmpeg_priority_var.get(),
             "output_suffix_override": self.output_suffix_override_var.get(),
@@ -4281,6 +4408,13 @@ class VideoProcessorApp:
         self.nvenc_temporal_aq_var.set(options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ))
         self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
+        self.nvencc_decode_mode_var.set(options.get("nvencc_decode_mode", DEFAULT_NVENCC_DECODE_MODE))
+        self.nvencc_color_tag_mode_var.set(options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE))
+        self.nvencc_color_prim_var.set(options.get("nvencc_color_prim", DEFAULT_NVENCC_COLOR_PRIM))
+        self.nvencc_color_transfer_var.set(options.get("nvencc_color_transfer", DEFAULT_NVENCC_COLOR_TRANSFER))
+        self.nvencc_color_matrix_var.set(options.get("nvencc_color_matrix", DEFAULT_NVENCC_COLOR_MATRIX))
+        self.nvencc_output_depth_var.set(options.get("nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH))
+        self.nvencc_strict_no_color_tagging_var.set(options.get("nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
         self.ffmpeg_threads_var.set(options.get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
         self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
 
@@ -4572,6 +4706,8 @@ class VideoProcessorApp:
                     success = split_srt_file(temp_extracted_srt, ch_srt_file, chapter['start_time'], chapter['end_time'])
                     if success:
                         print(f"       -> Exported {os.path.basename(ch_srt_file)}")
+                        # Use chapter-local subtitle for burn-in on this segment.
+                        ch_options["segment_subtitle_path"] = ch_srt_file
             
             self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir)
 
@@ -4584,7 +4720,9 @@ class VideoProcessorApp:
         nvencc_subburn_path = None
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         try:
-            if options.get("burn_subtitles") and job.get('subtitle_path'):
+            segment_sub_path = options.get("segment_subtitle_path")
+            subtitle_input = segment_sub_path or job.get('subtitle_path')
+            if options.get("burn_subtitles") and subtitle_input:
                 # --- Calculate Target Resolution for Subtitles ---
                 # We need to know the final output resolution to set PlayResX/Y correctly in the ASS file
                 # so that text wrapping works as expected (especially for vertical/hybrid/4k).
@@ -4624,7 +4762,7 @@ class VideoProcessorApp:
                         sub_target_h = int(sub_target_w * den / num)
                     except: sub_target_h = 1080
 
-                sub_identifier = job.get('subtitle_path')
+                sub_identifier = subtitle_input
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
                     stream_index = int(sub_identifier.split(':')[1])
@@ -4973,7 +5111,7 @@ class VideoProcessorApp:
             
             if pad_left == 0 and pad_right == 0 and pad_top == 0 and pad_bottom == 0:
                 return None
-            return pad_left, pad_top, pad_right, pad_bottom
+            return pad_left, pad_top, pad_right, pad_bottom, fit_w, fit_h
 
         precrop = None
         use_precrop = (
@@ -4983,8 +5121,17 @@ class VideoProcessorApp:
         if use_precrop:
             precrop = _compute_center_crop(info["width"], info["height"], target_w, target_h)
         cuvid_codecs = {"h264", "hevc", "av1", "vp9", "mpeg1", "mpeg2", "vc1", "vp8", "mjpeg"}
-        use_avsw_reader = bool(precrop) or info.get("codec_name", "") not in cuvid_codecs
-
+        input_codec = str(info.get("codec_name", "")).lower()
+        # Auto decode mode should prefer hardware decode and only fall back
+        # to software decode when the input codec is not supported by avhw.
+        auto_use_avsw_reader = input_codec not in cuvid_codecs
+        decode_mode = str(options.get("nvencc_decode_mode", DEFAULT_NVENCC_DECODE_MODE)).lower()
+        if decode_mode == "avsw":
+            use_avsw_reader = True
+        elif decode_mode == "avhw":
+            use_avsw_reader = False
+        else:
+            use_avsw_reader = auto_use_avsw_reader
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         codec_map = {"h264": "h264", "hevc": "hevc", "av1": "av1"}
         codec_name = codec_map.get(selected_codec, "h264")
@@ -4999,15 +5146,12 @@ class VideoProcessorApp:
 
         seek_start = options.get("seek_start")
         seek_duration = options.get("seek_duration")
-        if seek_start is not None and seek_duration is not None and info and info.get("framerate"):
-            fps = float(info["framerate"])
-            start_frame = int(round(float(seek_start) * fps))
-            end_frame = int(round((float(seek_start) + float(seek_duration)) * fps))
-            cmd.extend(["--trim", f"{start_frame}:{end_frame}"])
-        elif seek_start is not None:
+        if seek_start is not None:
+            # Use time-based seek boundaries for split renders.
+            # Frame-based absolute trim (start:end) can force NVEncC to process
+            # from frame 0 up to `end`, which makes later chapters progressively slower.
             cmd.extend(["--seek", str(seek_start)])
             if seek_duration is not None:
-                # Fallback if no FPS info, though inaccurate
                 seek_to = float(seek_start) + float(seek_duration)
                 cmd.extend(["--seekto", str(seek_to)])
 
@@ -5037,11 +5181,35 @@ class VideoProcessorApp:
         if bref in ["disabled", "each", "middle", "auto"]:
             cmd.extend(["--bref-mode", bref])
 
-        if is_hdr_output:
-            cmd.extend(["--output-depth", "10", "--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc"])
-        else:
-            cmd.extend(["--output-depth", "8", "--colorprim", "bt709", "--transfer", "bt709", "--colormatrix", "bt709"])
+        color_tag_mode = str(options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE)).lower()
+        strict_no_color_tagging = bool(options.get("nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
 
+        auto_apply_color_tags = False
+        if color_tag_mode == "custom":
+            resolved_depth = str(options.get("nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH)).strip().lower()
+            if resolved_depth == "auto":
+                resolved_depth = "10" if is_hdr_output else "8"
+            if resolved_depth not in ["8", "10"]:
+                resolved_depth = "10" if is_hdr_output else "8"
+
+            color_prim = str(options.get("nvencc_color_prim", DEFAULT_NVENCC_COLOR_PRIM)).strip() or DEFAULT_NVENCC_COLOR_PRIM
+            color_transfer = str(options.get("nvencc_color_transfer", DEFAULT_NVENCC_COLOR_TRANSFER)).strip() or DEFAULT_NVENCC_COLOR_TRANSFER
+            color_matrix = str(options.get("nvencc_color_matrix", DEFAULT_NVENCC_COLOR_MATRIX)).strip() or DEFAULT_NVENCC_COLOR_MATRIX
+            auto_apply_color_tags = True
+        else:
+            resolved_depth = "10" if is_hdr_output else "8"
+            if is_hdr_output:
+                color_prim, color_transfer, color_matrix = "bt2020", "smpte2084", "bt2020nc"
+            else:
+                color_prim, color_transfer, color_matrix = "bt709", "bt709", "bt709"
+            # In auto mode, only apply explicit color tags when converting
+            # between SDR and HDR. If input/output are same color domain,
+            # keep tagging disabled by default.
+            auto_apply_color_tags = bool(info.get("is_hdr", False)) != bool(is_hdr_output)
+
+        cmd.extend(["--output-depth", resolved_depth])
+        if not strict_no_color_tagging and auto_apply_color_tags:
+            cmd.extend(["--colorprim", color_prim, "--transfer", color_transfer, "--colormatrix", color_matrix])
         upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
         resize_algo = None
         if upscale_algo == "nvvfx-superres":
@@ -5062,13 +5230,15 @@ class VideoProcessorApp:
             if aspect_mode == "pad":
                 ox = int(options.get("video_offset_x", "0"))
                 oy = int(options.get("video_offset_y", "0"))
-                pad_args = _compute_pad(info["width"], info["height"], target_w, target_h, ox, oy)
-                if not pad_args:
+                pad_res = _compute_pad(info["width"], info["height"], target_w, target_h, ox, oy)
+                if not pad_res:
                     output_res = f"{output_res},preserve_aspect_ratio=decrease"
+                else:
+                    pad_args = pad_res[:4]
             elif aspect_mode == "crop" and not precrop:
                 output_res = f"{output_res},preserve_aspect_ratio=increase"
             
-            cmd.extend(["--vpp-resize", f"algo={resize_algo}", "--output-res", output_res])
+            cmd.extend(["--vpp-resize", f"{resize_algo}", "--output-res", output_res])
             if pad_args:
                 pad_color_hex = options.get("pad_color", DEFAULT_PAD_COLOR).lstrip('#')
                 cmd.extend(["--vpp-pad", f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
@@ -5236,14 +5406,15 @@ class VideoProcessorApp:
             safe_algo = ffmpeg_upscale_algo
             if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
             
-            top_vf, top_cpu, _ = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
-            bot_vf, bot_cpu, _ = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo)
+            top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
+            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo)
+            total_h = top_h + bot_h
             
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
-                cpu_chain.append(f"lut3d=file='{safe_lut}'")
+                cpu_chain.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
                 algo = options.get("sharpening_algo")
@@ -5252,10 +5423,10 @@ class VideoProcessorApp:
                 else: cpu_chain.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
-                cpu_chain.append(f"subtitles=filename='{safe_ass}'")
+                cpu_chain.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{total_h}") 
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
-                cpu_chain.append(f"subtitles=filename='{safe_title_ass}'")
+                cpu_chain.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{total_h}")
             if not is_hdr_output: cpu_chain.append("format=nv12")
             
             # For "preprocess" backend, the output encoder is ffv1 (software), so we must NOT upload back to hardware.
@@ -5382,10 +5553,10 @@ class VideoProcessorApp:
                 else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
-                cpu_filters.append(f"subtitles=filename={safe_ass}")
+                cpu_filters.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{target_h}")
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
-                cpu_filters.append(f"subtitles=filename={safe_title_ass}")
+                cpu_filters.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
             if cpu_filters:
                 # One single trip to CPU for all the heavy lifting
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
@@ -5788,3 +5959,11 @@ if __name__ == "__main__":
     app = VideoProcessorApp(root, sorted(list(set(initial_files))), args.output_mode)
 
     root.mainloop()
+
+
+
+
+
+
+
+

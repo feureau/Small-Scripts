@@ -37,6 +37,10 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 - ✅ **IMPROVEMENT**: Chunk token budget is now auto-computed from model context window with safety, output, and carry reserves; legacy chunk_size is treated as an optional cap.
 
+### v26.20
+- ✅ **IMPROVEMENT**: Retry actions now reset existing jobs to Pending in-place instead of creating duplicate queue entries.
+- ✅ **BUGFIX**: Retrying chunk-split jobs now preserves each job's original chunk payload instead of recreating a full-content job.
+
 ### v26.19
 - ✅ **IMPROVEMENT**: Removed hardcoded "gemini" filter from the Google Provider model list to expose all models (including Gemma).
 
@@ -5201,33 +5205,22 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             vals = self.tree.item(item)["values"]
             status = str(vals[2])
             if status == "Failed" or status.startswith("Fail:"):
-                failed_ids.append(vals[0])
+                try:
+                    failed_ids.append(int(vals[0]))
+                except Exception:
+                    continue
 
         if not failed_ids:
             tkinter.messagebox.showinfo("Info", "No failed jobs found.")
             return
-        count = 0
-        for old_id in failed_ids:
-            if old_id in self.job_registry:
-                new_data = self.job_registry[old_id].copy()
-                self.job_id_counter += 1
-                new_id = self.job_id_counter
-                new_data["job_id"] = new_id
-                self.job_registry[new_id] = new_data
-                self.job_queue.put(new_data)
-                self.tree.insert(
-                    "",
-                    tk.END,
-                    iid=new_id,
-                    values=(
-                        new_id,
-                        generate_group_base_name(new_data["filepaths_group"]),
-                        "Pending",
-                        new_data["model_name"],
-                    ),
-                )
-                count += 1
-        console_log(f"Requeued {count} jobs.", "INFO")
+        retried, already_queued, skipped_running, skipped_missing = self._retry_jobs_in_place(
+            failed_ids
+        )
+        console_log(
+            f"Retry Failed: reset {retried} job(s) to Pending "
+            f"(already queued: {already_queued}, skipped running: {skipped_running}, missing: {skipped_missing}).",
+            "INFO",
+        )
 
     def undo_rename(self):
         sel_item = self.tree.focus()
@@ -5311,36 +5304,66 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if not selected_items:
             return
 
-        count = 0
+        selected_ids = []
         for item in selected_items:
             try:
-                old_id = int(item)
-                if old_id in self.job_registry:
-                    # Create a clone
-                    new_data = self.job_registry[old_id].copy()
-                    self.job_id_counter += 1
-                    new_id = self.job_id_counter
-                    new_data["job_id"] = new_id
-
-                    self.job_registry[new_id] = new_data
-                    self.job_queue.put(new_data)
-
-                    self.tree.insert(
-                        "",
-                        tk.END,
-                        iid=new_id,
-                        values=(
-                            new_id,
-                            generate_group_base_name(new_data["filepaths_group"]),
-                            "Pending",
-                            new_data["model_name"],
-                        ),
-                    )
-                    count += 1
+                selected_ids.append(int(item))
             except Exception:
                 pass
-        if count > 0:
-            console_log(f"Retrying {count} selected jobs...", "ACTION")
+        if not selected_ids:
+            return
+
+        retried, already_queued, skipped_running, skipped_missing = self._retry_jobs_in_place(
+            selected_ids
+        )
+        if retried > 0:
+            console_log(
+                f"Retry Selected: reset {retried} job(s) to Pending "
+                f"(already queued: {already_queued}, skipped running: {skipped_running}, missing: {skipped_missing}).",
+                "ACTION",
+            )
+
+    def _is_job_already_queued(self, job_id):
+        try:
+            with self.job_queue.mutex:
+                for queued_job in list(self.job_queue.queue):
+                    if int(queued_job.get("job_id", -1)) == int(job_id):
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def _retry_jobs_in_place(self, job_ids):
+        retried = 0
+        already_queued = 0
+        skipped_running = 0
+        skipped_missing = 0
+
+        for jid in job_ids:
+            if jid not in self.job_registry or not self.tree.exists(jid):
+                skipped_missing += 1
+                continue
+
+            current_status = str(self.tree.set(jid, "status") or "")
+            if (
+                current_status == "Running"
+                or current_status == "Waiting for User..."
+                or current_status.startswith("Retrying")
+            ):
+                skipped_running += 1
+                continue
+
+            self.tree.set(jid, "status", "Pending")
+            self.tree.item(jid, tags=())
+
+            if self._is_job_already_queued(jid):
+                already_queued += 1
+            else:
+                self.job_queue.put(self.job_registry[jid])
+
+            retried += 1
+
+        return retried, already_queued, skipped_running, skipped_missing
 
     def copy_job_name(self):
         selected = self.tree.selection()
@@ -6058,6 +6081,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

@@ -37,6 +37,10 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-04-11] VERSION 6.8 UPDATE
+   - ADDED: Automatic detection and renaming of DJI .LRF files to .MP4 with '_s' suffix.
+   - ADDED: --fix-lrf flag for automated LRF renaming without a prompt.
+
 [2026-04-03] VERSION 6.7 UPDATE
    - ADDED: Best-effort display of collections available to the current account during metadata prompt.
    - MODIFIED: Collection prompt now shows account collection options (when retrievable) before input.
@@ -89,6 +93,7 @@ CHANGE LOG
 """
 
 import sys
+import shutil
 import os
 import hashlib
 import queue
@@ -602,9 +607,6 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 upload_elapsed = time.time() - upload_start
                 vlog(f"  upload() returned for '{remote_key}' in {upload_elapsed:.1f}s")
                 
-                wrapped_file.close()
-                vlog(f"  ProgressWrapper closed for '{remote_key}'")
-
                 # CRITICAL LOOPHOLE FIX: Explicitly close responses to free connection pool slots immediately
                 if r:
                     for resp in r:
@@ -637,11 +639,6 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 return (False, f"Status {code}")
                 
             except Exception as e:
-                # Ensure file is closed on exception
-                if wrapped_file: 
-                    try: wrapped_file.close()
-                    except: pass
-                
                 if shutdown_event.is_set():
                     record_result('cancelled', remote_key)
                     return (False, "Cancelled")
@@ -672,6 +669,13 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 tqdm.write(f"Error uploading {remote_key}: {e}") # Print to console properly with tqdm
                 record_result('failed', f"{remote_key} ({str(e)})")
                 return (False, str(e))
+            finally:
+                if wrapped_file:
+                    try:
+                        wrapped_file.close()
+                        vlog(f"  wrapped_file closed for '{remote_key}'")
+                    except:
+                        pass
         
         tqdm.write(f"FAILED {display_name}: Max retries exceeded")
         vlog(f"  Max retries exceeded for '{remote_key}'")
@@ -680,6 +684,70 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
 
 
 
+
+
+def handle_dji_lrf(folder_path, auto_confirm=False):
+    """
+    Finds .LRF files, renames them to _s.MP4 for Archive.org compatibility.
+    Checks for collisions to prevent overwriting.
+    """
+    lrf_files = list(folder_path.rglob('*.[lL][rR][fF]'))
+    if not lrf_files:
+        return
+
+    print(f"\n[!] Detected {len(lrf_files)} DJI LRF files (unsupported by Archive.org).")
+    
+    if not auto_confirm:
+        try:
+            confirm = input("Rename them to .mp4 with '_s' suffix to allow upload? (y/n) [y]: ").strip().lower()
+            if confirm and confirm not in ['y', 'yes']:
+                print("Skipping LRF renaming.")
+                return
+        except KeyboardInterrupt:
+            print("\nSkipping LRF renaming.")
+            return
+
+    renamed = 0
+    skipped = 0
+    for p in lrf_files:
+        # DJI_0003.LRF -> DJI_0003_s.mp4
+        new_name = p.stem + "_s.mp4"
+        new_path = p.with_name(new_name)
+        
+        if new_path.exists():
+            tqdm.write(f"  [SKIP] {p.name} -> {new_name} (File already exists)")
+            skipped += 1
+            continue
+            
+        try:
+            p.rename(new_path)
+            renamed += 1
+        except Exception as e:
+            tqdm.write(f"  [ERROR] Could not rename {p.name}: {e}")
+            
+    if renamed > 0:
+        print(f"Successfully renamed {renamed} file(s).")
+    if skipped > 0:
+        print(f"Skipped {skipped} file(s) to avoid collisions.")
+
+
+def safe_rmtree(path, retries=5, delay=1.0):
+    """
+    Attempts to delete a directory tree, retrying on failure (common on Windows).
+    """
+    for i in range(retries):
+        try:
+            shutil.rmtree(path)
+            return True
+        except PermissionError:
+            if i < retries - 1:
+                vlog(f"PermissionError during rmtree, retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                raise
+        except Exception:
+            raise
+    return False
 
 
 def main():
@@ -692,6 +760,7 @@ def main():
     parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
     parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")
     parser.add_argument("--md5-verify", action="store_true", help="Enable MD5 comparison for files that already exist remotely by path")
+    parser.add_argument("--fix-lrf", action="store_true", help="Automatically rename DJI .LRF files to _s.MP4 without prompting")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable detailed debug logging for each upload step")
     args = parser.parse_args()
 
@@ -754,6 +823,9 @@ def main():
             sys.exit(1)
 
         folder_path = Path(folder_path_str)
+
+        # --- PRE-UPLOAD FIXES ---
+        handle_dji_lrf(folder_path, auto_confirm=args.fix_lrf)
 
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")
@@ -1104,6 +1176,21 @@ def main():
             print(f"URL: https://archive.org/details/{identifier}")
 
         print_report()
+
+        # --- POST-UPLOAD: Offer to delete local folder on full success ---
+        if not shutdown_event.is_set() and len(final_results['failed']) == 0 and len(final_results['cancelled']) == 0:
+            try:
+                answer = input(f"\nAll files uploaded successfully. Delete local folder '{folder_path}'? (y/n) [n]: ").strip().lower()
+                if answer == 'y':
+                    try:
+                        safe_rmtree(folder_path)
+                        print(f"Deleted: {folder_path}")
+                    except Exception as e:
+                        print(f"Error deleting folder: {e}")
+                else:
+                    print("Local folder kept.")
+            except KeyboardInterrupt:
+                print("\nSkipped deletion.")
 
     except KeyboardInterrupt:
         print("\n\n!!! KEYBOARD INTERRUPT DETECTED !!!")

@@ -41,7 +41,6 @@ if sys.platform == "win32":
         packages_dirs.append(site.getusersitepackages())
 
     try:
-        import torch
         torch_lib_path = os.path.join(os.path.dirname(torch.__file__), "lib")
         if os.path.exists(torch_lib_path):
             os.add_dll_directory(torch_lib_path)
@@ -125,7 +124,7 @@ def clean_url(url: str) -> str:
             return parsed._replace(query=urllib.parse.urlencode(new_query, doseq=True)).geturl()
         elif "youtu.be" in domain:
             return url.split('?')[0]
-        return url.split('?')[0]
+        return url
     except Exception:
         return url
 
@@ -200,12 +199,12 @@ def collect_input_files(paths_or_patterns):
                 path = os.path.abspath(path)
                 if os.path.isfile(path):
                     if is_media_file(path): files.add(path)
-                    elif is_text_file(path):
+                    elif path.lower().endswith(('.txt', '.lst')) and is_text_file(path):
                         try:
                             with open(path, 'r', encoding='utf-8') as f:
                                 for line in f:
                                     if line.strip().startswith("http"): urls.add(clean_url(line.strip()))
-                        except: pass
+                        except Exception: pass
     all_items = sorted(list(urls)) + sorted(list(files))
     if not all_items: print("⚠️ No supported media files or URLs found.")
     return all_items
@@ -213,7 +212,7 @@ def collect_input_files(paths_or_patterns):
 def format_srt_time(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-    milliseconds = int((seconds - int(seconds)) * 1000)
+    milliseconds = min(int((seconds - int(seconds)) * 1000), 999)
     return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02},{milliseconds:03}"
 
 # --- Validation & Processing ---
@@ -222,7 +221,7 @@ def has_valid_audio_track(file_path: str) -> bool:
         with av.open(file_path) as container:
             if len(container.streams.audio) > 0: return True
         return False
-    except: return False
+    except Exception: return False
 
 def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
     try:
@@ -231,7 +230,9 @@ def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
         temp_wav = os.path.join(wd, f"{base_name}_base.wav")
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", input_path, "-map", "0:a:0", "-ar", "16000", "-ac", "1", temp_wav], check=True)
         return temp_wav
-    except: return None
+    except Exception as e:
+        print(f"   ⚠️ Audio extraction failed: {e}")
+        return None
 
 def isolate_audio_with_demucs(input_path: str, output_dir: str = None, model="htdemucs_ft", shifts=2) -> str:
     try:
@@ -246,9 +247,9 @@ def isolate_audio_with_demucs(input_path: str, output_dir: str = None, model="ht
             if os.path.exists(final_wav): os.remove(final_wav)
             os.rename(expected_output, final_wav)
             try: shutil.rmtree(os.path.join(wd, model, base_name))
-            except: pass
+            except Exception: pass
             try: os.rmdir(os.path.join(wd, model))
-            except: pass
+            except Exception: pass
             gc.collect()
             return final_wav
         return None
@@ -293,15 +294,14 @@ def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD)
     if not load_vad_model(): return []
     (get_speech_timestamps, _, _, _, _) = vad_utils
     try:
-        container = av.open(audio_path)
-        audio_stream = container.streams.audio[0]
-        resampler = av.AudioResampler(format='fltp', layout='mono', rate=16000)
-        frames = []
-        for frame in container.decode(audio_stream):
-            frame.pts = None
-            for rf in resampler.resample(frame):
-                frames.append(rf.to_ndarray())
-        container.close()
+        with av.open(audio_path) as container:
+            audio_stream = container.streams.audio[0]
+            resampler = av.AudioResampler(format='fltp', layout='mono', rate=16000)
+            frames = []
+            for frame in container.decode(audio_stream):
+                frame.pts = None
+                for rf in resampler.resample(frame):
+                    frames.append(rf.to_ndarray())
         if not frames: return []
         wav_np = np.concatenate(frames, axis=1)
         wav = torch.from_numpy(wav_np)
@@ -320,11 +320,19 @@ def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD)
         return []
 
 def snap_to_vad(word_start, word_end, regions):
-    for start, end in regions:
+    # Whisper typically stretches the *start* of the word backwards into preceding silence.
+    # Because of this, a single word might incorrectly overlap multiple early static/noise regions.
+    # By searching the speech regions in reverse, we lock onto the chunk where the word
+    # actually ends (which is when it was actually spoken), ignoring any earlier noise chunks.
+    for start, end in reversed(regions):
         if max(word_start, start) < min(word_end, end):
             return max(word_start - 0.1, start), min(word_end + 0.1, end)
+            
+    # Fallback to proximity checking
+    for start, end in reversed(regions):
         if abs(word_start - end) < 0.2: return word_start, word_end 
         if abs(word_end - start) < 0.2: return word_start, word_end
+        
     return word_start, word_end
 
 # --- Processing Logic ---
@@ -338,7 +346,8 @@ def ensure_model_loaded(model_alias):
     if transcription_model is not None:
         transcription_model = None
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -383,6 +392,74 @@ def ensure_model_loaded(model_alias):
         # 3. Unknown Error
         raise e
 
+def resegment_by_phrase(data: dict) -> dict:
+    """Re-segment transcription data so each SRT entry contains one complete phrase/sentence.
+    Uses word-level timestamps to split on clause-ending punctuation."""
+    
+    # Heuristic Fix for Whisper Attention Stretching:
+    # Whisper often stretches the *start* of the very first word in a segment 
+    # backwards across any preceding background noise or silence. 
+    # We heuristically clamp any single word to a maximum of 1.0 second.
+    MAX_WORD_DURATION = 1.0
+    for seg in data.get('segments', []):
+        for w in seg.get('words', []):
+            if w['end'] - w['start'] > MAX_WORD_DURATION:
+                w['start'] = max(w['start'], w['end'] - MAX_WORD_DURATION)
+
+    # Flatten all words from all segments
+    all_words = []
+    for seg in data.get('segments', []):
+        for w in seg.get('words', []):
+            if w.get('word', '').strip():
+                all_words.append(w)
+
+    if not all_words:
+        return data
+
+    # Punctuation that marks phrase/clause boundaries
+    phrase_end_chars = {'.', ',', '!', '?', ';', ':'}
+
+    new_segments = []
+    current_words = []
+
+    def process_and_add_phrase(words_list):
+        if not words_list: return
+        
+        # 2. Heuristic Fix for DTW rogue alignment gaps:
+        # If Whisper aligned a word to early background noise, there will be a massive 
+        # time gap between that word and the rest of the sentence. We sweep these 
+        # rogue early words forward to rest naturally right before the real speech.
+        for i in range(len(words_list) - 2, -1, -1):
+            w_curr = words_list[i]
+            w_next = words_list[i+1]
+            if w_next['start'] - w_curr['end'] > 1.5:
+                # Gap is excessively large. Pull current word forward.
+                dur = w_curr['end'] - w_curr['start']
+                w_curr['end'] = w_next['start'] - 0.05
+                w_curr['start'] = max(0.0, w_curr['end'] - dur)
+                
+        phrase_text = ''.join(w['word'] for w in words_list).strip()
+        if phrase_text:
+            new_segments.append({
+                'start': words_list[0]['start'],
+                'end': words_list[-1]['end'],
+                'text': phrase_text,
+                'words': list(words_list)
+            })
+
+    for word in all_words:
+        current_words.append(word)
+        text = word['word'].strip()
+
+        if text and text[-1] in phrase_end_chars:
+            process_and_add_phrase(current_words)
+            current_words = []
+
+    # Remaining words with no trailing punctuation
+    process_and_add_phrase(current_words)
+
+    return {'segments': new_segments}
+
 def convert_data_to_srt(data: dict, srt_path: str):
     try:
         with open(srt_path, 'w', encoding='utf-8') as f:
@@ -394,7 +471,7 @@ def convert_data_to_srt(data: dict, srt_path: str):
                 f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
                 idx += 1
         return True
-    except: return False
+    except Exception: return False
 
 def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, str]:
     global transcription_model
@@ -448,8 +525,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
 
     try:
         ensure_model_loaded(args.model)
-        vad_param = args.vad_filter if args.vad_filter is not None else True
-        cleaned_data = try_transcribe(vad_param)
+        cleaned_data = try_transcribe(args.vad_filter)
     except Exception as e:
         print(f"   ⚠️  Model Error: {e}")
         # Fallback Logic
@@ -460,11 +536,11 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                 ensure_model_loaded(fb)
                 cleaned_data = try_transcribe(True)
                 if cleaned_data: break
-            except: pass
+            except Exception: pass
 
     if not cleaned_data: return False, "Transcription failed"
 
-    if args.use_vad and not args.isolate:
+    if args.use_vad:
         print("   🔍 Aligning with Silero VAD...")
         true_regions = detect_true_speech_regions(transcription_source, args.vad_threshold)
         if true_regions:
@@ -476,18 +552,22 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                     if w["start"] != old_s: c += 1
             print(f"      ↳ Aligned {c} words.")
 
+    # Re-segment so each SRT entry is one phrase/sentence
+    cleaned_data = resegment_by_phrase(cleaned_data)
+
     success = convert_data_to_srt(cleaned_data, final_srt_path)
 
     if not args.keep:
         for tmp in temp_files:
             try:
                 if os.path.exists(tmp): os.remove(tmp)
-            except: pass
+            except Exception: pass
 
     return success, final_srt_path
 
 def main():
     parser = argparse.ArgumentParser(description="Whisper Transcription Ultimate V5")
+    parser.add_argument('--version', action='version', version='%(prog)s 5.0')
     parser.add_argument("files", nargs="*", help="Files/URLs to process")
     parser.add_argument("-u", "--url", action="append", help="URLs")
     parser.add_argument("-o", "--output_dir", type=str)
@@ -505,7 +585,7 @@ def main():
 
     parser.add_argument("--use_vad", action="store_true", default=True)
     parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD)
-    parser.add_argument("--vad_filter", action="store_true", default=None)
+    parser.add_argument("--vad_filter", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--beam_size", type=int, default=5)
     parser.add_argument("--best_of", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0)
@@ -526,7 +606,7 @@ def main():
         args.isolate = True
         args.enhance = True
         args.cl = True
-        args.use_vad = False 
+        args.use_vad = True  # CHANGED: We want VAD enabled in HQ to snap timestamps!
         if 'isolate' not in args.pipeline: args.pipeline.append('isolate')
         if 'enhance' not in args.pipeline: args.pipeline.append('enhance')
         if 'cl' not in args.pipeline: args.pipeline.append('cl')
@@ -543,8 +623,10 @@ def main():
                 cb = subprocess.check_output(['powershell', '-NoProfile', '-Command', 'Get-Clipboard'], text=True).strip()
                 if cb.startswith(('http', 'www')): args.files.append(cb)
                 else:
-                    if not args.files: sys.exit(1)
-            except: pass
+                    if not args.files:
+                        print("❌ Clipboard does not contain a URL and no files were specified.")
+                        sys.exit(1)
+            except Exception: pass
 
     files_to_process = collect_input_files(args.files)
     if not files_to_process: return
@@ -577,7 +659,8 @@ def main():
                 os.remove(target)
                 
             gc.collect()
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
         except KeyboardInterrupt:
             print("\n🛑 Stopped by user."); sys.exit(0)
