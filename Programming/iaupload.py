@@ -3,14 +3,14 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.7 (Account Collection Hints)
+VERSION: 6.10 (GUI Metadata Entry)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
 ================================================================================
-1. STRICT UPDATE RULE: 
+1. STRICT UPDATE RULE:
    Any future modifications to this script MUST be documented in the "CHANGE LOG".
-   
+
 2. RECURSIVE NOTICE REQUIREMENT:
    This documentation block must be included in every version of the script.
 
@@ -37,6 +37,18 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-04-13] VERSION 6.10 UPDATE
+   - ADDED: Tkinter GUI for metadata entry with dark mode theme.
+   - ADDED: All basic and extended metadata fields in GUI.
+   - ADDED: Custom fields section with add/remove functionality.
+   - ADDED: Reset to Defaults, Clear buttons for each field.
+   - ADDED: Proceed to Upload and Cancel buttons.
+
+[2026-04-13] VERSION 6.9 UPDATE
+   - ADDED: Support for _meta.xml alongside metadata.xml for metadata file detection.
+   - ADDED: Extended metadata field support for XML and JSON: language, date, publisher, rights, contributor, source, coverage, temporal, spatial, citation, type, relation, format, and custom fields.
+   - ADDED: Interactive prompts for all additional metadata fields during upload.
+
 [2026-04-11] VERSION 6.8 UPDATE
    - ADDED: Automatic detection and renaming of DJI .LRF files to .MP4 with '_s' suffix.
    - ADDED: --fix-lrf flag for automated LRF renaming without a prompt.
@@ -102,10 +114,32 @@ import time
 import argparse
 import re
 import json
+import io
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from internetarchive import upload, get_session, get_item
+
+# Tkinter for GUI metadata entry
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+
+# Fix Windows console encoding for special characters
+if sys.platform == "win32":
+    try:
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
+        sys.stdin = io.TextIOWrapper(
+            sys.stdin.buffer, encoding="utf-8", errors="replace"
+        )
+    except Exception:
+        pass
 
 # --- TRY IMPORTING TQDM ---
 try:
@@ -118,11 +152,7 @@ except ImportError:
 # --- GLOBALS ---
 shutdown_event = threading.Event()
 results_lock = threading.Lock()
-final_results = {
-    'success': [],
-    'failed': [],
-    'cancelled': []
-}
+final_results = {"success": [], "failed": [], "cancelled": []}
 VERBOSE = False  # Set by --verbose flag
 
 # --- CONFIGURATION DEFAULTS ---
@@ -133,25 +163,29 @@ MAX_BACKOFF_TIME = 300
 CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 300
 
+
 def vlog(msg):
     """Print a verbose debug message with timestamp and thread ID."""
     if VERBOSE:
-        ts = time.strftime('%H:%M:%S')
+        ts = time.strftime("%H:%M:%S")
         tid = threading.current_thread().name
         tqdm.write(f"  [VERBOSE {ts} {tid}] {msg}")
 
+
 # --- HELPER CLASSES ---
+
 
 class ProgressWrapper:
     """Wraps file object to update tqdm bar on read."""
+
     def __init__(self, filepath, bar):
-        self._file = open(filepath, 'rb')
+        self._file = open(filepath, "rb")
         self._bar = bar
         self._len = os.path.getsize(filepath)
 
     def read(self, size=-1):
         if shutdown_event.is_set():
-            return b"" 
+            return b""
         data = self._file.read(size)
         self._bar.update(len(data))
         return data
@@ -168,41 +202,52 @@ class ProgressWrapper:
     def close(self):
         self._file.close()
 
+
 # --- HELPER FUNCTIONS ---
 
+
 def normalize_path(path_str):
-    return path_str.lower().replace('\\', '/').replace(' ', '_')
+    return path_str.lower().replace("\\", "/").replace(" ", "_")
+
 
 def calculate_md5(filepath, block_size=8192):
     md5 = hashlib.md5()
     try:
         with open(filepath, "rb") as f:
             for chunk in iter(lambda: f.read(block_size), b""):
-                if shutdown_event.is_set(): return None
+                if shutdown_event.is_set():
+                    return None
                 md5.update(chunk)
         return md5.hexdigest()
     except Exception:
         return None
 
+
 def print_requirements():
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("PRE-UPLOAD CHECKLIST")
-    print("="*50)
+    print("=" * 50)
     print("1. [TARGET FOLDER] Path to files.")
     print("2. [IDENTIFIER]    Unique URL slug.")
     print("3. [METADATA]      Title, Mediatype, etc.")
     print("-" * 50)
     input("Press Enter to continue...")
 
+
 def get_input(prompt_text, required=False, default=None, valid_options=None):
     while True:
-        display = f"{prompt_text} [{default}]: " if default is not None else f"{prompt_text}: "
+        display = (
+            f"{prompt_text} [{default}]: "
+            if default is not None
+            else f"{prompt_text}: "
+        )
         try:
             val = input(display).strip()
         except KeyboardInterrupt:
-            sys.exit(1) 
-            
-        if not val and default is not None: return default
+            sys.exit(1)
+
+        if not val and default is not None:
+            return default
         if required and not val:
             print("  Error: Required.")
             continue
@@ -210,6 +255,7 @@ def get_input(prompt_text, required=False, default=None, valid_options=None):
             print(f"  Error: Choose from {valid_options}")
             continue
         return val
+
 
 def get_account_collections(session):
     """
@@ -221,7 +267,7 @@ def get_account_collections(session):
 
     endpoints = [
         "https://archive.org/services/xauthn/?op=userinfo",
-        "https://archive.org/services/xauthn/?op=account"
+        "https://archive.org/services/xauthn/?op=account",
     ]
 
     for url in endpoints:
@@ -236,7 +282,9 @@ def get_account_collections(session):
         if isinstance(data, dict):
             if isinstance(data.get("collections"), list):
                 collections = data["collections"]
-            elif isinstance(data.get("user"), dict) and isinstance(data["user"].get("collections"), list):
+            elif isinstance(data.get("user"), dict) and isinstance(
+                data["user"].get("collections"), list
+            ):
                 collections = data["user"]["collections"]
 
         out = []
@@ -257,14 +305,20 @@ def get_account_collections(session):
 def collect_metadata(default_title, prefills=None, account_collections=None):
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
-    print("Title: Human-readable name shown on the item page; keep it clear and descriptive.")
-    print("Mediatype: One of the allowed categories; choose the closest match for the content.")
+    print(
+        "Title: Human-readable name shown on the item page; keep it clear and descriptive."
+    )
+    print(
+        "Mediatype: One of the allowed categories; choose the closest match for the content."
+    )
     print("Creator: Person, group, or organization responsible (optional).")
     print("Description: Short summary of the item contents and context (optional).")
     print("Tags: Comma-separated keywords for search and discovery (optional).")
     if prefills:
-        print("Found metadata file: fields are prefilled where available. Press Enter to keep defaults.")
-    
+        print(
+            "Found metadata file: fields are prefilled where available. Press Enter to keep defaults."
+        )
+
     title_default = prefills.get("title") if prefills else None
     if not title_default:
         title_default = default_title
@@ -275,9 +329,9 @@ def collect_metadata(default_title, prefills=None, account_collections=None):
         "Mediatype (data|image|audio|texts|movies|software)",
         required=True,
         default=mediatype_default,
-        valid_options=['data', 'image', 'audio', 'texts', 'movies', 'software']
+        valid_options=["data", "image", "audio", "texts", "movies", "software"],
     )
-    
+
     creator_default = prefills.get("creator") if prefills else None
     description_default = prefills.get("description") if prefills else None
     tags_default = prefills.get("tags") if prefills else None
@@ -285,69 +339,79 @@ def collect_metadata(default_title, prefills=None, account_collections=None):
     creator = get_input("Creator", required=False, default=creator_default)
     description = get_input("Description", required=False, default=description_default)
     subjects_val = get_input("Tags (comma sep)", required=False, default=tags_default)
-    subjects = [t.strip() for t in subjects_val.split(',')] if subjects_val else []
+    subjects = [t.strip() for t in subjects_val.split(",")] if subjects_val else []
 
     # --- LICENSE SELECTION ---
     print("\nSelect a License (Press Enter for GPLv3 default):")
     license_options = {
-        '1': ('GPLv3', 'https://www.gnu.org/licenses/gpl-3.0.html'),
-        '2': ('CC BY 4.0', 'https://creativecommons.org/licenses/by/4.0/'),
-        '3': ('CC BY-SA 4.0', 'https://creativecommons.org/licenses/by-sa/4.0/'),
-        '4': ('CC BY-ND 4.0', 'https://creativecommons.org/licenses/by-nd/4.0/'),
-        '5': ('CC BY-NC 4.0', 'https://creativecommons.org/licenses/by-nc/4.0/'),
-        '6': ('CC BY-NC-SA 4.0', 'https://creativecommons.org/licenses/by-nc-sa/4.0/'),
-        '7': ('CC BY-NC-ND 4.0', 'https://creativecommons.org/licenses/by-nc-nd/4.0/'),
-        '8': ('CC0 1.0 (Public Domain)', 'https://creativecommons.org/publicdomain/zero/1.0/'),
-        '9': ('PDM 1.0 (Public Domain Mark)', 'https://creativecommons.org/publicdomain/mark/1.0/'),
-        '0': ('Custom URL / None', None)
+        "1": ("GPLv3", "https://www.gnu.org/licenses/gpl-3.0.html"),
+        "2": ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"),
+        "3": ("CC BY-SA 4.0", "https://creativecommons.org/licenses/by-sa/4.0/"),
+        "4": ("CC BY-ND 4.0", "https://creativecommons.org/licenses/by-nd/4.0/"),
+        "5": ("CC BY-NC 4.0", "https://creativecommons.org/licenses/by-nc/4.0/"),
+        "6": ("CC BY-NC-SA 4.0", "https://creativecommons.org/licenses/by-nc-sa/4.0/"),
+        "7": ("CC BY-NC-ND 4.0", "https://creativecommons.org/licenses/by-nc-nd/4.0/"),
+        "8": (
+            "CC0 1.0 (Public Domain)",
+            "https://creativecommons.org/publicdomain/zero/1.0/",
+        ),
+        "9": (
+            "PDM 1.0 (Public Domain Mark)",
+            "https://creativecommons.org/publicdomain/mark/1.0/",
+        ),
+        "0": ("Custom URL / None", None),
     }
 
     for key, (name, _) in license_options.items():
         print(f"  [{key}] {name}")
 
     license_default = prefills.get("licenseurl") if prefills else None
-    
+
     # Map prefilled URL back to an option number if possible for display
-    default_key = '1' # GPLv3 default
+    default_key = "1"  # GPLv3 default
     if license_default:
         for k, (name, url) in license_options.items():
             if url == license_default:
                 default_key = k
                 break
         else:
-            default_key = '0' # Custom
+            default_key = "0"  # Custom
 
     choice = get_input("Choose license", default=default_key)
-    
+
     selected_url = None
     if choice in license_options:
         selected_url = license_options[choice][1]
-        
-    if choice == '0' or (choice not in license_options and choice):
+
+    if choice == "0" or (choice not in license_options and choice):
         # If they chose custom or typed a random string that isn't a key
         if choice not in license_options:
-            selected_url = choice # Treat as custom URL if not a key
+            selected_url = choice  # Treat as custom URL if not a key
         else:
-            selected_url = get_input("Custom License URL (leave empty for none)", default=license_default)
+            selected_url = get_input(
+                "Custom License URL (leave empty for none)", default=license_default
+            )
 
-    metadata = {'title': title, 'mediatype': mediatype}
+    metadata = {"title": title, "mediatype": mediatype}
     if selected_url:
-        metadata['licenseurl'] = selected_url
+        metadata["licenseurl"] = selected_url
 
     # Map mediatype to default community collection
     collection_map = {
-        'texts': 'opensource',
-        'audio': 'opensource_audio',
-        'movies': 'opensource_movies',
-        'image': 'opensource_image',
-        'software': 'open_source_software',
-        'data': 'opensource_media'
+        "texts": "opensource",
+        "audio": "opensource_audio",
+        "movies": "opensource_movies",
+        "image": "opensource_image",
+        "software": "open_source_software",
+        "data": "opensource_media",
     }
-    
+
     public_collections = set(collection_map.values())
     suggested_collection = collection_default
     if suggested_collection and suggested_collection not in public_collections:
-        print(f"Warning: Prefilled collection '{suggested_collection}' may be restricted for your account.")
+        print(
+            f"Warning: Prefilled collection '{suggested_collection}' may be restricted for your account."
+        )
         suggested_collection = collection_map.get(mediatype)
     if not suggested_collection:
         suggested_collection = collection_map.get(mediatype)
@@ -358,12 +422,764 @@ def collect_metadata(default_title, prefills=None, account_collections=None):
 
     collection = get_input("Collection", required=False, default=suggested_collection)
     if collection:
-        metadata['collection'] = collection
+        metadata["collection"] = collection
 
-    if creator: metadata['creator'] = creator
-    if description: metadata['description'] = description
-    if subjects: metadata['subject'] = subjects
+    if creator:
+        metadata["creator"] = creator
+    if description:
+        metadata["description"] = description
+    if subjects:
+        metadata["subject"] = subjects
+
+    # Additional optional fields from prefills
+    language_default = prefills.get("language") if prefills else None
+    date_default = prefills.get("date") if prefills else None
+    publisher_default = prefills.get("publisher") if prefills else None
+    rights_default = prefills.get("rights") if prefills else None
+    contributor_default = prefills.get("contributor") if prefills else None
+    source_default = prefills.get("source") if prefills else None
+    coverage_default = prefills.get("coverage") if prefills else None
+    temporal_default = prefills.get("temporal") if prefills else None
+    spatial_default = prefills.get("spatial") if prefills else None
+    citation_default = prefills.get("citation") if prefills else None
+    type_default = prefills.get("type") if prefills else None
+    relation_default = prefills.get("relation") if prefills else None
+    format_list = prefills.get("format") if prefills else None
+    custom_fields = prefills.get("_custom") if prefills else None
+
+    language = get_input(
+        "Language (e.g., en, zxx)", required=False, default=language_default
+    )
+    date = get_input("Date (e.g., 2024, 2024-01)", required=False, default=date_default)
+    publisher = get_input("Publisher", required=False, default=publisher_default)
+    rights = get_input(
+        "Rights (e.g., CC BY 4.0)", required=False, default=rights_default
+    )
+    contributor = get_input("Contributor", required=False, default=contributor_default)
+    source = get_input("Source", required=False, default=source_default)
+    coverage = get_input(
+        "Coverage (e.g., World, 1900-1950)", required=False, default=coverage_default
+    )
+    temporal = get_input(
+        "Temporal (e.g., 1900/1950)", required=False, default=temporal_default
+    )
+    spatial = get_input(
+        "Spatial (e.g., USA, Germany)", required=False, default=spatial_default
+    )
+    citation = get_input("Citation", required=False, default=citation_default)
+    item_type = get_input("Type", required=False, default=type_default)
+    relation = get_input(
+        "Relation (comma-separated URLs)", required=False, default=relation_default
+    )
+
+    if language:
+        metadata["language"] = language
+    if date:
+        metadata["date"] = date
+    if publisher:
+        metadata["publisher"] = publisher
+    if rights:
+        metadata["rights"] = rights
+    if contributor:
+        metadata["contributor"] = contributor
+    if source:
+        metadata["source"] = source
+    if coverage:
+        metadata["coverage"] = coverage
+    if temporal:
+        metadata["temporal"] = temporal
+    if spatial:
+        metadata["spatial"] = spatial
+    if citation:
+        metadata["citation"] = citation
+    if item_type:
+        metadata["type"] = item_type
+    if relation:
+        rel_list = [r.strip() for r in relation.split(",")]
+        metadata["relation"] = rel_list
+
+    if format_list:
+        if isinstance(format_list, list):
+            metadata["format"] = format_list
+
+    if custom_fields:
+        for key, val in custom_fields.items():
+            metadata[key] = val
+
     return metadata
+
+
+def show_metadata_gui(prefills=None):
+    if not TKINTER_AVAILABLE:
+        return None
+
+    if prefills is None:
+        prefills = {}
+
+    DARK_BG = "#1e1e1e"
+    DARK_FG = "#e0e0e0"
+    ENTRY_BG = "#2d2d2d"
+    BUTTON_BG = "#3a3a3a"
+    BUTTON_FG = "#e0e0e0"
+    ACCENT = "#007acc"
+    ACCENT_HOVER = "#005a9e"
+    RED = "#e74c3c"
+    RED_HOVER = "#c0392b"
+    LABEL_BG = "#1e1e1e"
+
+    LICENSE_OPTIONS = [
+        "GPLv3 (https://www.gnu.org/licenses/gpl-3.0.html)",
+        "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+        "CC BY-ND 4.0 (https://creativecommons.org/licenses/by-nd/4.0/)",
+        "CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)",
+        "CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)",
+        "CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)",
+        "CC0 1.0 (Public Domain) (https://creativecommons.org/publicdomain/zero/1.0/)",
+        "PDM 1.0 (Public Domain Mark) (https://creativecommons.org/publicdomain/mark/1.0/)",
+        "Custom URL",
+    ]
+
+    MEDIATYPE_OPTIONS = ["data", "image", "audio", "texts", "movies", "software"]
+
+    root = tk.Tk()
+    root.title("Internet Archive - Metadata Entry")
+    root.configure(bg=DARK_BG)
+    root.geometry("900x800")
+    root.minsize(800, 700)
+
+    fields = {}
+
+    def create_row(
+        parent,
+        label_text,
+        row,
+        is_required=False,
+        is_text=False,
+        text_height=1,
+        default_val="",
+        is_combo=False,
+        combo_options=None,
+        is_custom=False,
+    ):
+        lbl = tk.Label(
+            parent,
+            text=label_text + (" *" if is_required else ""),
+            bg=LABEL_BG,
+            fg=DARK_FG,
+            font=("Segoe UI", 10),
+            anchor="e",
+        )
+        lbl.grid(row=row, column=0, sticky="e", padx=(10, 5), pady=5)
+
+        if is_combo and combo_options:
+            var = tk.StringVar(value=default_val or combo_options[0])
+            combo = ttk.Combobox(
+                parent,
+                textvariable=var,
+                values=combo_options,
+                state="readonly",
+                width=40,
+            )
+            combo.grid(row=row, column=1, sticky="w", padx=(5, 5), pady=5)
+            fields[label_text] = var
+        elif is_text:
+            text_widget = tk.Text(
+                parent,
+                height=text_height,
+                bg=ENTRY_BG,
+                fg=DARK_FG,
+                font=("Segoe UI", 10),
+                relief="flat",
+                borderwidth=1,
+            )
+            text_widget.insert("1.0", default_val or "")
+            text_widget.grid(
+                row=row, column=1, columnspan=2, sticky="ew", padx=(5, 5), pady=5
+            )
+            fields[label_text] = text_widget
+        else:
+            entry_var = tk.StringVar(value=default_val or "")
+            entry = tk.Entry(
+                parent,
+                textvariable=entry_var,
+                bg=ENTRY_BG,
+                fg=DARK_FG,
+                font=("Segoe UI", 10),
+                relief="flat",
+                borderwidth=1,
+                insertbackground=DARK_FG,
+            )
+            entry.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
+            fields[label_text] = entry_var
+
+        clear_btn = tk.Button(
+            parent,
+            text="Clear",
+            bg=BUTTON_BG,
+            fg=BUTTON_FG,
+            font=("Segoe UI", 9),
+            relief="flat",
+            command=lambda: (
+                entry_var.set("")
+                if not is_text
+                else (text_widget.delete("1.0", "end"), entry_var.set(""))
+            )
+            if not is_combo
+            else (var.set(combo_options[0]) if combo_options else None),
+            width=6,
+        )
+        clear_btn.grid(row=row, column=2, padx=(2, 10), pady=5)
+
+        if is_custom:
+            remove_btn = tk.Button(
+                parent,
+                text="X",
+                bg=RED,
+                fg="white",
+                font=("Segoe UI", 9),
+                relief="flat",
+                width=3,
+            )
+            remove_btn.grid(row=row, column=3, padx=(2, 10), pady=5)
+            return remove_btn
+
+        return None
+
+    canvas = tk.Canvas(root, bg=DARK_BG, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas, bg=DARK_BG)
+
+    scrollable_frame.bind(
+        "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    title_label = tk.Label(
+        scrollable_frame,
+        text="Internet Archive Metadata",
+        bg=DARK_BG,
+        fg=ACCENT,
+        font=("Segoe UI", 16, "bold"),
+    )
+    title_label.grid(row=0, column=0, columnspan=4, pady=(15, 20))
+
+    if prefills:
+        info_label = tk.Label(
+            scrollable_frame,
+            text=f"Loaded {len(prefills)} fields from metadata file",
+            bg=DARK_BG,
+            fg="#888888",
+            font=("Segoe UI", 9),
+        )
+        info_label.grid(row=1, column=0, columnspan=4, pady=(0, 10))
+
+    section_row = 2
+    tk.Label(
+        scrollable_frame,
+        text="Required Fields",
+        bg=DARK_BG,
+        fg=ACCENT,
+        font=("Segoe UI", 12, "bold"),
+    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(10, 5))
+    section_row += 1
+
+    create_row(
+        scrollable_frame,
+        "Title",
+        section_row,
+        is_required=True,
+        default_val=prefills.get("title", ""),
+    )
+    section_row += 1
+    create_row(
+        scrollable_frame,
+        "Mediatype",
+        section_row,
+        is_required=True,
+        is_combo=True,
+        combo_options=MEDIATYPE_OPTIONS,
+        default_val=prefills.get("mediatype", ""),
+    )
+    section_row += 1
+    create_row(
+        scrollable_frame,
+        "Collection",
+        section_row,
+        default_val=prefills.get("collection", ""),
+    )
+    section_row += 1
+
+    tk.Label(
+        scrollable_frame,
+        text="Basic Fields",
+        bg=DARK_BG,
+        fg=ACCENT,
+        font=("Segoe UI", 12, "bold"),
+    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
+    section_row += 1
+
+    create_row(
+        scrollable_frame,
+        "Creator",
+        section_row,
+        default_val=prefills.get("creator", ""),
+    )
+    section_row += 1
+    create_row(
+        scrollable_frame,
+        "Description",
+        section_row,
+        is_text=True,
+        text_height=4,
+        default_val=prefills.get("description", ""),
+    )
+    section_row += 1
+    create_row(
+        scrollable_frame,
+        "Tags (comma sep)",
+        section_row,
+        default_val=prefills.get("tags", ""),
+    )
+    section_row += 1
+
+    license_var = tk.StringVar()
+    license_url_var = tk.StringVar(value=prefills.get("licenseurl", ""))
+
+    license_default = prefills.get("licenseurl", "")
+    default_license_idx = 0
+    for idx, opt in enumerate(LICENSE_OPTIONS):
+        if license_default in opt:
+            default_license_idx = idx
+            break
+
+    tk.Label(
+        scrollable_frame,
+        text="License",
+        bg=LABEL_BG,
+        fg=DARK_FG,
+        font=("Segoe UI", 10),
+        anchor="e",
+    ).grid(row=section_row, column=0, sticky="e", padx=(10, 5), pady=5)
+    license_combo = ttk.Combobox(
+        scrollable_frame,
+        textvariable=license_var,
+        values=LICENSE_OPTIONS,
+        state="readonly",
+        width=40,
+    )
+    license_combo.current(default_license_idx)
+    license_combo.grid(row=section_row, column=1, sticky="w", padx=(5, 5), pady=5)
+    fields["License"] = license_var
+
+    tk.Button(
+        scrollable_frame,
+        text="Clear",
+        bg=BUTTON_BG,
+        fg=BUTTON_FG,
+        font=("Segoe UI", 9),
+        relief="flat",
+        command=lambda: license_combo.current(0),
+    ).grid(row=section_row, column=2, padx=(2, 10), pady=5)
+    section_row += 1
+
+    tk.Label(
+        scrollable_frame,
+        text="License URL",
+        bg=LABEL_BG,
+        fg=DARK_FG,
+        font=("Segoe UI", 10),
+        anchor="e",
+    ).grid(row=section_row, column=0, sticky="e", padx=(10, 5), pady=5)
+    license_url_entry = tk.Entry(
+        scrollable_frame,
+        textvariable=license_url_var,
+        bg=ENTRY_BG,
+        fg=DARK_FG,
+        font=("Segoe UI", 10),
+        relief="flat",
+        borderwidth=1,
+        insertbackground=DARK_FG,
+    )
+    license_url_entry.grid(row=section_row, column=1, sticky="ew", padx=(5, 5), pady=5)
+    fields["License URL"] = license_url_var
+    tk.Button(
+        scrollable_frame,
+        text="Clear",
+        bg=BUTTON_BG,
+        fg=BUTTON_FG,
+        font=("Segoe UI", 9),
+        relief="flat",
+        command=lambda: license_url_var.set(""),
+    ).grid(row=section_row, column=2, padx=(2, 10), pady=5)
+    section_row += 1
+
+    def on_license_change(*args):
+        if license_var.get() == "Custom URL":
+            license_url_entry.config(state="normal")
+        else:
+            for opt in LICENSE_OPTIONS:
+                if opt == license_var.get():
+                    url_start = opt.find("http")
+                    if url_start > 0:
+                        license_url_var.set(opt[url_start:])
+                    break
+            license_url_entry.config(state="normal")
+
+    license_var.trace("w", on_license_change)
+
+    tk.Label(
+        scrollable_frame,
+        text="Extended Fields",
+        bg=DARK_BG,
+        fg=ACCENT,
+        font=("Segoe UI", 12, "bold"),
+    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
+    section_row += 1
+
+    extended_fields = [
+        ("Language", prefills.get("language", "")),
+        ("Date", prefills.get("date", "")),
+        ("Publisher", prefills.get("publisher", "")),
+        ("Rights", prefills.get("rights", "")),
+        ("Contributor", prefills.get("contributor", "")),
+        ("Source", prefills.get("source", "")),
+        ("Coverage", prefills.get("coverage", "")),
+        ("Temporal", prefills.get("temporal", "")),
+        ("Spatial", prefills.get("spatial", "")),
+        ("Type", prefills.get("type", "")),
+    ]
+
+    for field_name, default_val in extended_fields:
+        create_row(scrollable_frame, field_name, section_row, default_val=default_val)
+        section_row += 1
+
+    create_row(
+        scrollable_frame,
+        "Citation",
+        section_row,
+        is_text=True,
+        text_height=3,
+        default_val=prefills.get("citation", ""),
+    )
+    section_row += 1
+
+    create_row(
+        scrollable_frame,
+        "Relation (comma URLs)",
+        section_row,
+        default_val=prefills.get("relation", ""),
+    )
+    section_row += 1
+
+    format_val = ""
+    if prefills.get("format"):
+        if isinstance(prefills["format"], list):
+            format_val = ", ".join(prefills["format"])
+        else:
+            format_val = str(prefills["format"])
+    create_row(
+        scrollable_frame, "Format (comma sep)", section_row, default_val=format_val
+    )
+    section_row += 1
+
+    tk.Label(
+        scrollable_frame,
+        text="Custom Fields",
+        bg=DARK_BG,
+        fg=ACCENT,
+        font=("Segoe UI", 12, "bold"),
+    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
+    section_row += 1
+
+    custom_frame = tk.Frame(scrollable_frame, bg=DARK_BG)
+    custom_frame.grid(row=section_row, column=0, columnspan=4, sticky="ew", padx=10)
+    section_row += 1
+
+    custom_fields_data = []
+    if prefills.get("_custom"):
+        for key, val in prefills["_custom"].items():
+            custom_fields_data.append({"key": key, "value": str(val)})
+
+    def add_custom_row(key_val="", value_val=""):
+        row_idx = len(custom_fields_data)
+        key_var = tk.StringVar(value=key_val)
+        value_var = tk.StringVar(value=value_val)
+
+        key_entry = tk.Entry(
+            custom_frame,
+            textvariable=key_var,
+            bg=ENTRY_BG,
+            fg=DARK_FG,
+            font=("Segoe UI", 10),
+            relief="flat",
+            borderwidth=1,
+            insertbackground=DARK_FG,
+            width=20,
+        )
+        key_entry.grid(row=row_idx, column=0, padx=(0, 5), pady=2)
+
+        value_entry = tk.Entry(
+            custom_frame,
+            textvariable=value_var,
+            bg=ENTRY_BG,
+            fg=DARK_FG,
+            font=("Segoe UI", 10),
+            relief="flat",
+            borderwidth=1,
+            insertbackground=DARK_FG,
+            width=40,
+        )
+        value_entry.grid(row=row_idx, column=1, padx=(5, 5), pady=2)
+
+        clear_btn = tk.Button(
+            custom_frame,
+            text="Clear",
+            bg=BUTTON_BG,
+            fg=BUTTON_FG,
+            font=("Segoe UI", 9),
+            relief="flat",
+            command=lambda: (key_var.set(""), value_var.set("")),
+            width=6,
+        )
+        clear_btn.grid(row=row_idx, column=2, padx=(2, 5), pady=2)
+
+        remove_btn = tk.Button(
+            custom_frame,
+            text="X",
+            bg=RED,
+            fg="white",
+            font=("Segoe UI", 9),
+            relief="flat",
+            command=lambda r=row_idx: remove_custom_row(r),
+            width=3,
+        )
+        remove_btn.grid(row=row_idx, column=3, padx=(2, 0), pady=2)
+
+        custom_fields_data.append(
+            {
+                "key_var": key_var,
+                "value_var": value_var,
+                "key_entry": key_entry,
+                "value_entry": value_entry,
+                "remove_btn": remove_btn,
+            }
+        )
+        update_custom_rows()
+
+    def remove_custom_row(idx):
+        if idx < len(custom_fields_data):
+            item = custom_fields_data[idx]
+            item["key_entry"].destroy()
+            item["value_entry"].destroy()
+            item["remove_btn"].destroy()
+            custom_fields_data.pop(idx)
+            update_custom_rows()
+
+    def update_custom_rows():
+        for i, item in enumerate(custom_fields_data):
+            item["key_entry"].grid(row=i, column=0)
+            item["value_entry"].grid(row=i, column=1)
+            item["remove_btn"].grid(row=i, column=3)
+
+    for cf in custom_fields_data:
+        add_custom_row(cf.get("key", ""), cf.get("value", ""))
+
+    if not custom_fields_data:
+        add_custom_row()
+
+    add_custom_btn = tk.Button(
+        scrollable_frame,
+        text="+ Add Custom Field",
+        bg=BUTTON_BG,
+        fg=BUTTON_FG,
+        font=("Segoe UI", 10),
+        relief="flat",
+        command=lambda: add_custom_row(),
+    )
+    add_custom_btn.grid(
+        row=section_row, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 15)
+    )
+    section_row += 1
+
+    button_frame = tk.Frame(root, bg=DARK_BG, pady=15)
+    button_frame.pack(side="bottom", fill="x")
+
+    def reset_to_defaults():
+        fields["Title"].set(prefills.get("title", ""))
+        fields["Mediatype"].set(prefills.get("mediatype", MEDIATYPE_OPTIONS[0]))
+        fields["Collection"].set(prefills.get("collection", ""))
+        fields["Creator"].set(prefills.get("creator", ""))
+        if "Description" in fields:
+            fields["Description"].delete("1.0", "end")
+            fields["Description"].insert("1.0", prefills.get("description", ""))
+        fields["Tags (comma sep)"].set(prefills.get("tags", ""))
+
+        license_default = prefills.get("licenseurl", "")
+        default_idx = 0
+        for idx, opt in enumerate(LICENSE_OPTIONS):
+            if license_default in opt:
+                default_idx = idx
+                break
+        license_combo.current(default_idx)
+
+        for field_name, default_val in extended_fields:
+            if field_name in fields:
+                fields[field_name].set(default_val)
+
+        if "Citation" in fields:
+            fields["Citation"].delete("1.0", "end")
+            fields["Citation"].insert("1.0", prefills.get("citation", ""))
+        fields["Relation (comma URLs)"].set(prefills.get("relation", ""))
+        fields["Format (comma sep)"].set(format_val)
+
+        for item in custom_fields_data:
+            item["key_var"].set("")
+            item["value_var"].set("")
+
+    def on_proceed():
+        title_val = fields["Title"].get().strip()
+        if not title_val:
+            messagebox.showerror("Validation Error", "Title is required!")
+            return
+
+        mediatype_val = fields["Mediatype"].get().strip()
+        if mediatype_val not in MEDIATYPE_OPTIONS:
+            messagebox.showerror(
+                "Validation Error",
+                f"Mediatype must be one of: {', '.join(MEDIATYPE_OPTIONS)}",
+            )
+            return
+
+        metadata = {
+            "title": title_val,
+            "mediatype": mediatype_val,
+        }
+
+        collection_val = fields["Collection"].get().strip()
+        if collection_val:
+            metadata["collection"] = collection_val
+
+        creator_val = fields["Creator"].get().strip()
+        if creator_val:
+            metadata["creator"] = creator_val
+
+        if "Description" in fields:
+            desc_val = fields["Description"].get("1.0", "end").strip()
+            if desc_val:
+                metadata["description"] = desc_val
+
+        tags_val = fields["Tags (comma sep)"].get().strip()
+        if tags_val:
+            metadata["subject"] = [t.strip() for t in tags_val.split(",") if t.strip()]
+
+        license_url_val = license_url_var.get().strip()
+        if license_url_val:
+            metadata["licenseurl"] = license_url_val
+
+        for field_name, key_name in [
+            ("Language", "language"),
+            ("Date", "date"),
+            ("Publisher", "publisher"),
+            ("Rights", "rights"),
+            ("Contributor", "contributor"),
+            ("Source", "source"),
+            ("Coverage", "coverage"),
+            ("Temporal", "temporal"),
+            ("Spatial", "spatial"),
+            ("Type", "type"),
+        ]:
+            if field_name in fields:
+                val = fields[field_name].get().strip()
+                if val:
+                    metadata[key_name] = val
+
+        if "Citation" in fields:
+            citation_val = fields["Citation"].get("1.0", "end").strip()
+            if citation_val:
+                metadata["citation"] = citation_val
+
+        relation_val = fields["Relation (comma URLs)"].get().strip()
+        if relation_val:
+            metadata["relation"] = [
+                r.strip() for r in relation_val.split(",") if r.strip()
+            ]
+
+        format_val = fields["Format (comma sep)"].get().strip()
+        if format_val:
+            metadata["format"] = [f.strip() for f in format_val.split(",") if f.strip()]
+
+        for item in custom_fields_data:
+            key = item["key_var"].get().strip()
+            val = item["value_var"].get().strip()
+            if key and val:
+                metadata[key] = val
+
+        root.destroy()
+        return metadata
+
+    def on_cancel():
+        root.destroy()
+        return None
+
+    reset_btn = tk.Button(
+        button_frame,
+        text="Reset to Defaults",
+        bg=BUTTON_BG,
+        fg=BUTTON_FG,
+        font=("Segoe UI", 11),
+        relief="flat",
+        padx=20,
+        pady=8,
+        command=reset_to_defaults,
+    )
+    reset_btn.pack(side="left", padx=20)
+
+    cancel_btn = tk.Button(
+        button_frame,
+        text="Cancel",
+        bg=RED,
+        fg="white",
+        font=("Segoe UI", 11),
+        relief="flat",
+        padx=20,
+        pady=8,
+        command=on_cancel,
+    )
+    cancel_btn.pack(side="left", padx=10)
+
+    proceed_btn = tk.Button(
+        button_frame,
+        text="Proceed to Upload",
+        bg=ACCENT,
+        fg="white",
+        font=("Segoe UI", 11, "bold"),
+        relief="flat",
+        padx=25,
+        pady=8,
+        command=on_proceed,
+    )
+    proceed_btn.pack(side="right", padx=20)
+
+    style = ttk.Style()
+    style.theme_use("clam")
+    style.configure("Vertical.TScrollbar", background=BUTTON_BG, troughcolor=DARK_BG)
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", ENTRY_BG)],
+        background=[("readonly", BUTTON_BG)],
+        foreground=[("readonly", DARK_FG)],
+    )
+
+    root.mainloop()
+
+    return None
+
 
 def _xml_text(node):
     if node is None:
@@ -371,8 +1187,12 @@ def _xml_text(node):
     text = (node.text or "").strip()
     return text if text else None
 
+
 def load_metadata_xml(folder_path):
+    # Check for metadata.xml first, then _meta.xml
     xml_path = folder_path / "metadata.xml"
+    if not xml_path.exists():
+        xml_path = folder_path / "_meta.xml"
     if not xml_path.exists():
         return None
     try:
@@ -390,6 +1210,7 @@ def load_metadata_xml(folder_path):
         return None
 
     title = find_text(["title", "Title"])
+    identifier_xml = find_text(["identifier", "Identifier"])
     mediatype = find_text(["mediatype", "Mediatype"])
     creator = find_text(["creator", "Creator"])
     description = find_text(["description", "Description"])
@@ -402,16 +1223,127 @@ def load_metadata_xml(folder_path):
     subjects = [s for s in subjects if s]
     tags = ", ".join(subjects) if subjects else None
 
+    # Additional common fields
+    language = find_text(["language", "Language"])
+    date = find_text(["date", "Date"])
+    publisher = find_text(["publisher", "Publisher"])
+    rights = find_text(["rights", "Rights"])
+    contributor = find_text(["contributor", "Contributor"])
+    source = find_text(["source", "Source"])
+    coverage = find_text(["coverage", "Coverage"])
+    temporal = find_text(["temporal", "Temporal"])
+    spatial = find_text(["spatial", "Spatial"])
+    citation = find_text(["citation", "Citation"])
+    item_type = find_text(["type", "Type"])
+
+    # relation: support repeated nodes
+    relations = [_xml_text(n) for n in root.findall(".//relation")]
+    relations = [r for r in relations if r]
+    relation = ", ".join(relations) if relations else None
+
+    # format: support repeated nodes (list)
+    formats = [_xml_text(n) for n in root.findall(".//format")]
+    formats = [f for f in formats if f]
+
+    # Custom fields: capture any additional elements not in the standard list
+    custom_fields = {}
+    standard_fields = {
+        "title",
+        "Title",
+        "identifier",
+        "Identifier",
+        "mediatype",
+        "Mediatype",
+        "creator",
+        "Creator",
+        "description",
+        "Description",
+        "collection",
+        "Collection",
+        "licenseurl",
+        "LicenseURL",
+        "license",
+        "License",
+        "subject",
+        "tag",
+        "language",
+        "Language",
+        "date",
+        "Date",
+        "publisher",
+        "Publisher",
+        "rights",
+        "Rights",
+        "contributor",
+        "Contributor",
+        "relation",
+        "citation",
+        "Coverage",
+        "coverage",
+        "temporal",
+        "Temporal",
+        "spatial",
+        "Spatial",
+        "source",
+        "Source",
+        "type",
+        "Type",
+        "format",
+    }
+    for child in root:
+        if child.tag not in standard_fields and not child.tag.startswith("{"):
+            val = _xml_text(child)
+            if val:
+                custom_fields[child.tag] = val
+
     prefills = {}
-    if title: prefills["title"] = title
-    if mediatype: prefills["mediatype"] = mediatype
-    if creator: prefills["creator"] = creator
-    if description: prefills["description"] = description
-    if tags: prefills["tags"] = tags
-    if collection: prefills["collection"] = collection
-    if licenseurl: prefills["licenseurl"] = licenseurl
+    if title:
+        prefills["title"] = title
+    if identifier_xml:
+        prefills["identifier"] = identifier_xml
+    if mediatype:
+        prefills["mediatype"] = mediatype
+    if creator:
+        prefills["creator"] = creator
+    if description:
+        prefills["description"] = description
+    if tags:
+        prefills["tags"] = tags
+    if collection:
+        prefills["collection"] = collection
+    if licenseurl:
+        prefills["licenseurl"] = licenseurl
+    if language:
+        prefills["language"] = language
+    if date:
+        prefills["date"] = date
+    if publisher:
+        prefills["publisher"] = publisher
+    if rights:
+        prefills["rights"] = rights
+    if contributor:
+        prefills["contributor"] = contributor
+    if source:
+        prefills["source"] = source
+    if coverage:
+        prefills["coverage"] = coverage
+    if temporal:
+        prefills["temporal"] = temporal
+    if spatial:
+        prefills["spatial"] = spatial
+    if citation:
+        prefills["citation"] = citation
+    if item_type:
+        prefills["type"] = item_type
+    if relation:
+        prefills["relation"] = relation
+    if formats:
+        prefills["format"] = formats
+    if custom_fields:
+        prefills["_custom"] = custom_fields
 
     return prefills or None
+
 
 def load_metadata_json(folder_path):
     json_path = folder_path / "metadata.json"
@@ -438,6 +1370,7 @@ def load_metadata_json(folder_path):
         return None
 
     title = get_str(["title", "Title"])
+    identifier_json = get_str(["identifier", "Identifier"])
     mediatype = get_str(["mediatype", "Mediatype"])
     creator = None
     creator_val = data.get("creator")
@@ -457,7 +1390,7 @@ def load_metadata_json(folder_path):
     subjects_val = data.get("subject")
     if subjects_val is None:
         subjects_val = data.get("Subject")
-        
+
     if isinstance(subjects_val, list):
         subjects = [str(s).strip() for s in subjects_val if str(s).strip()]
         if subjects:
@@ -469,7 +1402,7 @@ def load_metadata_json(folder_path):
         tags_val = data.get("tags")
         if tags_val is None:
             tags_val = data.get("Tags")
-            
+
         if isinstance(tags_val, list):
             tag_list = [str(s).strip() for s in tags_val if str(s).strip()]
             if tag_list:
@@ -477,16 +1410,147 @@ def load_metadata_json(folder_path):
         elif isinstance(tags_val, str) and tags_val.strip():
             tags = tags_val.strip()
 
+    # Additional common fields
+    language = get_str(["language", "Language"])
+    date = get_str(["date", "Date"])
+    publisher = get_str(["publisher", "Publisher"])
+    rights = get_str(["rights", "Rights"])
+    contributor = get_str(["contributor", "Contributor"])
+    source = get_str(["source", "Source"])
+    coverage = get_str(["coverage", "Coverage"])
+    temporal = get_str(["temporal", "Temporal"])
+    spatial = get_str(["spatial", "Spatial"])
+    citation = get_str(["citation", "Citation"])
+    item_type = get_str(["type", "Type"])
+
+    # relation: list or comma-separated string
+    relation_val = data.get("relation")
+    if relation_val is None:
+        relation_val = data.get("Relation")
+    relation = None
+    if isinstance(relation_val, list):
+        rels = [str(r).strip() for r in relation_val if str(r).strip()]
+        if rels:
+            relation = ", ".join(rels)
+    elif isinstance(relation_val, str) and relation_val.strip():
+        relation = relation_val.strip()
+
+    # format: list
+    format_val = data.get("format")
+    if format_val is None:
+        format_val = data.get("Format")
+    formats = None
+    if isinstance(format_val, list):
+        fmt_list = [str(f).strip() for f in format_val if str(f).strip()]
+        if fmt_list:
+            formats = fmt_list
+    elif isinstance(format_val, str) and format_val.strip():
+        formats = [format_val.strip()]
+
+    # Custom fields: everything else
+    standard_keys = {
+        "title",
+        "Title",
+        "identifier",
+        "Identifier",
+        "mediatype",
+        "Mediatype",
+        "creator",
+        "Creator",
+        "description",
+        "Description",
+        "collection",
+        "Collection",
+        "licenseurl",
+        "LicenseURL",
+        "license",
+        "License",
+        "subject",
+        "Subject",
+        "tags",
+        "Tags",
+        "language",
+        "Language",
+        "date",
+        "Date",
+        "publisher",
+        "Publisher",
+        "rights",
+        "Rights",
+        "contributor",
+        "Contributor",
+        "relation",
+        "Relation",
+        "citation",
+        "Coverage",
+        "coverage",
+        "temporal",
+        "Temporal",
+        "spatial",
+        "Spatial",
+        "source",
+        "Source",
+        "type",
+        "Type",
+        "format",
+        "Format",
+    }
+    custom_fields = {}
+    for key, val in data.items():
+        if key not in standard_keys:
+            if isinstance(val, str) and val.strip():
+                custom_fields[key] = val.strip()
+            elif isinstance(val, list) and val:
+                custom_fields[key] = [str(v).strip() for v in val if str(v).strip()]
+
     prefills = {}
-    if title: prefills["title"] = title
-    if mediatype: prefills["mediatype"] = mediatype
-    if creator: prefills["creator"] = creator
-    if description: prefills["description"] = description
-    if tags: prefills["tags"] = tags
-    if collection: prefills["collection"] = collection
-    if licenseurl: prefills["licenseurl"] = licenseurl
+    if title:
+        prefills["title"] = title
+    if identifier_json:
+        prefills["identifier"] = identifier_json
+    if mediatype:
+        prefills["mediatype"] = mediatype
+    if creator:
+        prefills["creator"] = creator
+    if description:
+        prefills["description"] = description
+    if tags:
+        prefills["tags"] = tags
+    if collection:
+        prefills["collection"] = collection
+    if licenseurl:
+        prefills["licenseurl"] = licenseurl
+    if language:
+        prefills["language"] = language
+    if date:
+        prefills["date"] = date
+    if publisher:
+        prefills["publisher"] = publisher
+    if rights:
+        prefills["rights"] = rights
+    if contributor:
+        prefills["contributor"] = contributor
+    if source:
+        prefills["source"] = source
+    if coverage:
+        prefills["coverage"] = coverage
+    if temporal:
+        prefills["temporal"] = temporal
+    if spatial:
+        prefills["spatial"] = spatial
+    if citation:
+        prefills["citation"] = citation
+    if item_type:
+        prefills["type"] = item_type
+    if relation:
+        prefills["relation"] = relation
+    if formats:
+        prefills["format"] = formats
+    if custom_fields:
+        prefills["_custom"] = custom_fields
 
     return prefills or None
+
 
 def load_metadata_prefills(folder_path):
     # Prefer XML when both files exist to preserve existing behavior.
@@ -495,9 +1559,11 @@ def load_metadata_prefills(folder_path):
         return prefills
     return load_metadata_json(folder_path)
 
+
 def sanitize_identifier(raw_identifier):
     # Normalize to ASCII, replace spaces with underscores, and strip invalid chars
     import unicodedata
+
     norm = unicodedata.normalize("NFKD", raw_identifier)
     ascii_only = norm.encode("ascii", "ignore").decode("ascii")
     cleaned = ascii_only.replace(" ", "_")
@@ -507,39 +1573,41 @@ def sanitize_identifier(raw_identifier):
         return cleaned
     return cleaned[:100]
 
+
 def record_result(category, name):
     with results_lock:
         final_results[category].append(name)
 
+
 def print_report():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("FINAL REPORT")
-    print("="*60)
-    
-    s_count = len(final_results['success'])
-    f_count = len(final_results['failed'])
-    c_count = len(final_results['cancelled'])
-    
+    print("=" * 60)
+
+    s_count = len(final_results["success"])
+    f_count = len(final_results["failed"])
+    c_count = len(final_results["cancelled"])
+
     print(f"Successful: {s_count}")
     print(f"Failed:     {f_count}")
     print(f"Cancelled:  {c_count}")
-    
+
     if f_count > 0:
         print("-" * 60)
         print("FAILED FILES:")
-        for name in final_results['failed']:
+        for name in final_results["failed"]:
             print(f" [x] {name}")
-            
+
     if c_count > 0:
         print("-" * 60)
         print("CANCELLED FILES (Not uploaded):")
-        for i, name in enumerate(final_results['cancelled']):
+        for i, name in enumerate(final_results["cancelled"]):
             if i >= 10:
                 print(f" ... and {c_count - 10} more.")
                 break
             print(f" [-] {name}")
 
-    print("="*60)
+    print("=" * 60)
 
 
 try:
@@ -547,21 +1615,22 @@ try:
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
 except ImportError:
-    pass # Managed in main check
+    pass  # Managed in main check
 
 # ... (Previous imports)
 
+
 def upload_worker(identifier, file_data, metadata=None, position=0, session=None):
     remote_key, local_path = file_data
-    
+
     if shutdown_event.is_set():
-        record_result('cancelled', remote_key)
+        record_result("cancelled", remote_key)
         return (False, "Cancelled by user")
 
     file_size = os.path.getsize(local_path)
     if file_size == 0:
         tqdm.write(f"Skipping empty file: {remote_key}")
-        record_result('cancelled', remote_key)
+        record_result("cancelled", remote_key)
         return (False, "Skipped empty file (0 bytes)")
 
     display_name = remote_key
@@ -571,22 +1640,29 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
     vlog(f"START upload_worker for '{remote_key}' ({file_size:,} bytes)")
 
     # leave=False cleans up the bar line when done
-    with tqdm(total=file_size, unit='B', unit_scale=True, unit_divisor=1024, desc=display_name, 
-              position=position, leave=False, dynamic_ncols=True,
-              bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} | Speed: {rate_fmt} | Time: {elapsed}<{remaining}") as bar:
-        
+    with tqdm(
+        total=file_size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        desc=display_name,
+        position=position,
+        leave=False,
+        dynamic_ncols=True,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} | Speed: {rate_fmt} | Time: {elapsed}<{remaining}",
+    ) as bar:
         # RETRY LOOP for Rate Limits
         max_retries = MAX_RETRIES
         attempt = 0
-        backoff_time = RETRY_BACKOFF_START # Start wait for rate limits
-        
+        backoff_time = RETRY_BACKOFF_START  # Start wait for rate limits
+
         while attempt < max_retries:
             wrapped_file = None
             try:
-                vlog(f"  Attempt {attempt+1}/{max_retries} for '{remote_key}'")
+                vlog(f"  Attempt {attempt + 1}/{max_retries} for '{remote_key}'")
                 wrapped_file = ProgressWrapper(local_path, bar)
                 files_arg = {remote_key: wrapped_file}
-                
+
                 r = None
                 upload_start = time.time()
                 # Use the passed session if available to recycle connections
@@ -596,17 +1672,28 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                     vlog(f"  get_item('{identifier}') via session...")
                     item = get_item(identifier, archive_session=session)
                     vlog(f"  Calling item.upload() for '{remote_key}'...")
-                    r = item.upload(files=files_arg, metadata=metadata, verbose=False, retries=3,
-                                    request_kwargs={'timeout': (CONNECT_TIMEOUT, READ_TIMEOUT)})
+                    r = item.upload(
+                        files=files_arg,
+                        metadata=metadata,
+                        verbose=False,
+                        retries=3,
+                        request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
+                    )
                 else:
                     # Fallback to default global upload
                     vlog(f"  Calling upload() (no session) for '{remote_key}'...")
-                    r = upload(identifier, files=files_arg, metadata=metadata, verbose=False, retries=3,
-                               request_kwargs={'timeout': (CONNECT_TIMEOUT, READ_TIMEOUT)})
-                
+                    r = upload(
+                        identifier,
+                        files=files_arg,
+                        metadata=metadata,
+                        verbose=False,
+                        retries=3,
+                        request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
+                    )
+
                 upload_elapsed = time.time() - upload_start
                 vlog(f"  upload() returned for '{remote_key}' in {upload_elapsed:.1f}s")
-                
+
                 # CRITICAL LOOPHOLE FIX: Explicitly close responses to free connection pool slots immediately
                 if r:
                     for resp in r:
@@ -614,60 +1701,70 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                         resp.close()
 
                 if shutdown_event.is_set():
-                    record_result('cancelled', remote_key)
+                    record_result("cancelled", remote_key)
                     return (False, "Cancelled")
 
                 if r and r[0].status_code == 200:
                     vlog(f"  SUCCESS for '{remote_key}' (took {upload_elapsed:.1f}s)")
-                    record_result('success', remote_key)
+                    record_result("success", remote_key)
                     return (True, remote_key)
-                
+
                 # Check for rate limiting in status code (if 429 or 503 wasn't handled by custom adapter)
                 if r and r[0].status_code in [429, 503, 509]:
-                     tqdm.write(f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s...")
-                     vlog(f"  Rate limited ({r[0].status_code}), sleeping {backoff_time}s...")
-                     time.sleep(backoff_time)
-                     backoff_time = min(backoff_time * 1.5, MAX_BACKOFF_TIME) # Cap max sleep
-                     attempt += 1
-                     bar.reset() # Reset progress bar for retry
-                     continue
+                    tqdm.write(
+                        f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s..."
+                    )
+                    vlog(
+                        f"  Rate limited ({r[0].status_code}), sleeping {backoff_time}s..."
+                    )
+                    time.sleep(backoff_time)
+                    backoff_time = min(
+                        backoff_time * 1.5, MAX_BACKOFF_TIME
+                    )  # Cap max sleep
+                    attempt += 1
+                    bar.reset()  # Reset progress bar for retry
+                    continue
 
                 code = r[0].status_code if r else "Unknown"
                 tqdm.write(f"FAILED {display_name}: HTTP {code}")
                 vlog(f"  FAILED '{remote_key}' with HTTP {code}")
-                record_result('failed', f"{remote_key} (Status {code})")
+                record_result("failed", f"{remote_key} (Status {code})")
                 return (False, f"Status {code}")
-                
+
             except Exception as e:
                 if shutdown_event.is_set():
-                    record_result('cancelled', remote_key)
+                    record_result("cancelled", remote_key)
                     return (False, "Cancelled")
-                
+
                 error_str = str(e).lower()
                 vlog(f"  EXCEPTION for '{remote_key}': {type(e).__name__}: {e}")
-                
+
                 # Check specifically for network issues, bucket limits, or timeouts
                 retryable_errors = [
-                    "bucket_tasks_queued", 
-                    "reduce your request rate", 
-                    "timed out", 
-                    "connection aborted", 
+                    "bucket_tasks_queued",
+                    "reduce your request rate",
+                    "timed out",
+                    "connection aborted",
                     "connection reset",
-                    "remotely closed"
+                    "remotely closed",
                 ]
-                
+
                 if any(err in error_str for err in retryable_errors):
-                    tqdm.write(f"Rate Limit/Network issue for {display_name}: {e}. Pausing {backoff_time}s...")
+                    tqdm.write(
+                        f"Rate Limit/Network issue for {display_name}: {e}. Pausing {backoff_time}s..."
+                    )
                     vlog(f"  Retryable error, sleeping {backoff_time}s...")
                     time.sleep(backoff_time)
                     backoff_time = min(backoff_time * 1.5, MAX_BACKOFF_TIME)
                     attempt += 1
                     bar.reset()
                     continue
-                
+
                 # Real error
-                tqdm.write(f"Error uploading {remote_key}: {e}") # Print to console properly with tqdm
-                record_result('failed', f"{remote_key} ({str(e)})")
+                tqdm.write(
+                    f"Error uploading {remote_key}: {e}"
+                )  # Print to console properly with tqdm
+                record_result("failed", f"{remote_key} ({str(e)})")
                 return (False, str(e))
             finally:
                 if wrapped_file:
@@ -676,14 +1773,11 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                         vlog(f"  wrapped_file closed for '{remote_key}'")
                     except:
                         pass
-        
+
         tqdm.write(f"FAILED {display_name}: Max retries exceeded")
         vlog(f"  Max retries exceeded for '{remote_key}'")
-        record_result('failed', f"{remote_key} (Max Retries)")
+        record_result("failed", f"{remote_key} (Max Retries)")
         return (False, "Max Retries Exceeded (Rate Limit)")
-
-
-
 
 
 def handle_dji_lrf(folder_path, auto_confirm=False):
@@ -691,16 +1785,24 @@ def handle_dji_lrf(folder_path, auto_confirm=False):
     Finds .LRF files, renames them to _s.MP4 for Archive.org compatibility.
     Checks for collisions to prevent overwriting.
     """
-    lrf_files = list(folder_path.rglob('*.[lL][rR][fF]'))
+    lrf_files = list(folder_path.rglob("*.[lL][rR][fF]"))
     if not lrf_files:
         return
 
-    print(f"\n[!] Detected {len(lrf_files)} DJI LRF files (unsupported by Archive.org).")
-    
+    print(
+        f"\n[!] Detected {len(lrf_files)} DJI LRF files (unsupported by Archive.org)."
+    )
+
     if not auto_confirm:
         try:
-            confirm = input("Rename them to .mp4 with '_s' suffix to allow upload? (y/n) [y]: ").strip().lower()
-            if confirm and confirm not in ['y', 'yes']:
+            confirm = (
+                input(
+                    "Rename them to .mp4 with '_s' suffix to allow upload? (y/n) [y]: "
+                )
+                .strip()
+                .lower()
+            )
+            if confirm and confirm not in ["y", "yes"]:
                 print("Skipping LRF renaming.")
                 return
         except KeyboardInterrupt:
@@ -713,18 +1815,18 @@ def handle_dji_lrf(folder_path, auto_confirm=False):
         # DJI_0003.LRF -> DJI_0003_s.mp4
         new_name = p.stem + "_s.mp4"
         new_path = p.with_name(new_name)
-        
+
         if new_path.exists():
             tqdm.write(f"  [SKIP] {p.name} -> {new_name} (File already exists)")
             skipped += 1
             continue
-            
+
         try:
             p.rename(new_path)
             renamed += 1
         except Exception as e:
             tqdm.write(f"  [ERROR] Could not rename {p.name}: {e}")
-            
+
     if renamed > 0:
         print(f"Successfully renamed {renamed} file(s).")
     if skipped > 0:
@@ -755,13 +1857,44 @@ def main():
     parser = argparse.ArgumentParser(description="Archive.org Smart Uploader & Syncer")
     parser.add_argument("folder", nargs="?", help="Path to local folder")
     parser.add_argument("identifier", nargs="?", help="Unique Archive.org identifier")
-    parser.add_argument("-t", "--threads", type=int, default=DEFAULT_THREADS, help=f"Number of parallel upload/delete threads (default: {DEFAULT_THREADS})")
-    parser.add_argument("-s", "--sync", action="store_true", help="Sync mode (Upload/Update only)")
-    parser.add_argument("-o", "--orphan-deletion", action="store_true", help="Delete remote files that do not exist locally")
-    parser.add_argument("-m", "--metadata", action="store_true", help="Force metadata update prompt for existing items")
-    parser.add_argument("--md5-verify", action="store_true", help="Enable MD5 comparison for files that already exist remotely by path")
-    parser.add_argument("--fix-lrf", action="store_true", help="Automatically rename DJI .LRF files to _s.MP4 without prompting")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable detailed debug logging for each upload step")
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=DEFAULT_THREADS,
+        help=f"Number of parallel upload/delete threads (default: {DEFAULT_THREADS})",
+    )
+    parser.add_argument(
+        "-s", "--sync", action="store_true", help="Sync mode (Upload/Update only)"
+    )
+    parser.add_argument(
+        "-o",
+        "--orphan-deletion",
+        action="store_true",
+        help="Delete remote files that do not exist locally",
+    )
+    parser.add_argument(
+        "-m",
+        "--metadata",
+        action="store_true",
+        help="Force metadata update prompt for existing items",
+    )
+    parser.add_argument(
+        "--md5-verify",
+        action="store_true",
+        help="Enable MD5 comparison for files that already exist remotely by path",
+    )
+    parser.add_argument(
+        "--fix-lrf",
+        action="store_true",
+        help="Automatically rename DJI .LRF files to _s.MP4 without prompting",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable detailed debug logging for each upload step",
+    )
     args = parser.parse_args()
 
     global VERBOSE
@@ -769,7 +1902,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.7) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.10) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if VERBOSE:
@@ -778,7 +1911,7 @@ def main():
         print("--- Mode: SYNC (Uploads) ---")
     if args.orphan_deletion:
         print("--- Mode: DELETE (Orphan Removal Enabled) ---")
-    
+
     # 0. Auth
     try:
         session = get_session()
@@ -797,20 +1930,31 @@ def main():
             folder_path_str = folder_path_str.strip('"').strip("'")
         else:
             print_requirements()
-            folder_path_str = get_input("Target Folder", required=True).strip('"').strip("'")
-        
+            folder_path_str = (
+                get_input("Target Folder", required=True).strip('"').strip("'")
+            )
+
         if not os.path.isdir(folder_path_str):
             print("Error: Folder not found.")
             sys.exit(1)
 
+        folder_path = Path(folder_path_str)
+
+        # Load metadata prefills early to get identifier suggestion
+        metadata_prefills = load_metadata_prefills(folder_path)
+
         if not identifier:
-            # Suggest the folder name as default if possible
-            default_id = Path(folder_path_str).name if folder_path_str else None
+            # Suggest from metadata file first, then folder name
+            default_id = (
+                metadata_prefills.get("identifier") if metadata_prefills else None
+            )
+            if not default_id:
+                default_id = Path(folder_path_str).name if folder_path_str else None
             identifier = get_input("Identifier", required=True, default=default_id)
 
         # Store the suggested title before sanitizing the identifier
         title_suggestion = identifier
-        
+
         # Sanitize identifier to ensure IA-accepted bucket name
         sanitized_identifier = sanitize_identifier(identifier)
         if sanitized_identifier != identifier:
@@ -819,7 +1963,9 @@ def main():
 
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{4,100}", identifier):
             print("Error: Identifier is still invalid after sanitization.")
-            print("Please provide a valid identifier matching: ^[A-Za-z0-9][A-Za-z0-9_.-]{4,100}$")
+            print(
+                "Please provide a valid identifier matching: ^[A-Za-z0-9][A-Za-z0-9_.-]{4,100}$"
+            )
             sys.exit(1)
 
         folder_path = Path(folder_path_str)
@@ -832,72 +1978,115 @@ def main():
         item = get_item(identifier)
         metadata = {}
         is_new_item = False
-        metadata_prefills = load_metadata_prefills(folder_path)
         account_collections = get_account_collections(session)
 
         if item.exists:
-            # Only ask update question if -m flag is provided
             if args.metadata:
-                if get_input("Update metadata? (y/n)", default='n').lower() == 'y':
-                    metadata = collect_metadata(title_suggestion, prefills=metadata_prefills, account_collections=account_collections)
+                if get_input("Update metadata? (y/n)", default="n").lower() == "y":
+                    if TKINTER_AVAILABLE:
+                        try:
+                            metadata = show_metadata_gui(metadata_prefills)
+                            if metadata is None:
+                                print("Metadata entry cancelled.")
+                                sys.exit(0)
+                        except Exception as e:
+                            print(f"GUI failed: {e}, falling back to CLI...")
+                            metadata = collect_metadata(
+                                title_suggestion,
+                                prefills=metadata_prefills,
+                                account_collections=account_collections,
+                            )
+                    else:
+                        metadata = collect_metadata(
+                            title_suggestion,
+                            prefills=metadata_prefills,
+                            account_collections=account_collections,
+                        )
         else:
             print(f"  > New item detected.")
             is_new_item = True
-            metadata = collect_metadata(title_suggestion, prefills=metadata_prefills, account_collections=account_collections)
+            if TKINTER_AVAILABLE:
+                try:
+                    metadata = show_metadata_gui(metadata_prefills)
+                    if metadata is None:
+                        print("Metadata entry cancelled.")
+                        sys.exit(0)
+                except Exception as e:
+                    print(f"GUI failed: {e}, falling back to CLI...")
+                    metadata = collect_metadata(
+                        title_suggestion,
+                        prefills=metadata_prefills,
+                        account_collections=account_collections,
+                    )
+            else:
+                metadata = collect_metadata(
+                    title_suggestion,
+                    prefills=metadata_prefills,
+                    account_collections=account_collections,
+                )
 
         # 3. MD5 Scanning Phase
-        print("\n" + "="*30)
-        print("PHASE 1: CONTENT VERIFICATION" if args.md5_verify else "PHASE 1: PATH VERIFICATION")
-        print("="*30)
-        
+        print("\n" + "=" * 30)
+        print(
+            "PHASE 1: CONTENT VERIFICATION"
+            if args.md5_verify
+            else "PHASE 1: PATH VERIFICATION"
+        )
+        print("=" * 30)
+
         script_name = Path(sys.argv[0]).name
-        
+
         # 3a. Index Local Files
         print("Indexing local files...")
-        local_file_map = {} # normalized_path -> Path obj
-        for p in folder_path.rglob('*'):
+        local_file_map = {}  # normalized_path -> Path obj
+        for p in folder_path.rglob("*"):
             if p.is_file() and p.name != script_name:
                 rel_path = p.relative_to(folder_path).as_posix()
                 norm = normalize_path(rel_path)
-                local_file_map[norm] = {'path': p, 'rel_path': rel_path}
+                local_file_map[norm] = {"path": p, "rel_path": rel_path}
 
         # 3b. Index Remote Files
-        remote_map = {} # normalized_path -> dict with md5 and size
+        remote_map = {}  # normalized_path -> dict with md5 and size
         total_remote_files = 0
         total_remote_originals = 0
-        
+
         if item.exists:
             print("Fetching remote signatures...")
             total_remote_files = len(item.files)
             for f in item.files:
-                if 'name' in f and f['name'] != script_name:
-                    if f['source'] == 'original': # Only consider original files
+                if "name" in f and f["name"] != script_name:
+                    if f["source"] == "original":  # Only consider original files
                         total_remote_originals += 1
-                        norm_path = normalize_path(f['name'])
-                        
+                        norm_path = normalize_path(f["name"])
+
                         remote_map[norm_path] = {
-                            'md5': f.get('md5'),
-                            'size': f.get('size')
+                            "md5": f.get("md5"),
+                            "size": f.get("size"),
                         }
 
         # 3c. Comparison
-        files_to_upload = [] 
-        orphaned_files = [] # List of remote keys to delete
-        
+        files_to_upload = []
+        orphaned_files = []  # List of remote keys to delete
+
         matched_count = 0
         upload_new_count = 0
         upload_update_count = 0
         skipped_empty_count = 0
 
         # Detect Uploads
-        print(f"Scanning {len(local_file_map)} local files against {total_remote_originals} remote originals...")
-        
-        with tqdm(total=len(local_file_map), desc="Verifying", unit="file", dynamic_ncols=True) as scan_bar:
+        print(
+            f"Scanning {len(local_file_map)} local files against {total_remote_originals} remote originals..."
+        )
+
+        with tqdm(
+            total=len(local_file_map), desc="Verifying", unit="file", dynamic_ncols=True
+        ) as scan_bar:
             for norm_name, info in local_file_map.items():
-                if shutdown_event.is_set(): break
-                
-                local_file = info['path']
-                rel_path = info['rel_path']
+                if shutdown_event.is_set():
+                    break
+
+                local_file = info["path"]
+                rel_path = info["rel_path"]
                 local_size = os.path.getsize(local_file)
 
                 if local_size == 0:
@@ -908,10 +2097,10 @@ def main():
 
                 disp = rel_path if len(rel_path) < 30 else "..." + rel_path[-27:]
                 scan_bar.set_description(f"Check: {disp}")
-                
+
                 should_upload = False
                 status_msg = ""
-                
+
                 if norm_name not in remote_map:
                     # New path: no MD5 or size needed because there is no same-path remote file to compare against.
                     should_upload = True
@@ -920,8 +2109,8 @@ def main():
 
                 else:
                     remote_info = remote_map[norm_name]
-                    remote_size = remote_info['size']
-                    remote_md5 = remote_info['md5']
+                    remote_size = remote_info["size"]
+                    remote_md5 = remote_info["md5"]
                     # Fast size check first
                     if remote_size is not None and str(local_size) != str(remote_size):
                         should_upload = True
@@ -933,7 +2122,7 @@ def main():
                             local_md5 = calculate_md5(local_file)
                             if not local_md5:
                                 break
-    
+
                             if local_md5 != remote_md5:
                                 should_upload = True
                                 status_msg = f"[UPDATE MD5]  {rel_path}"
@@ -943,25 +2132,25 @@ def main():
                         else:
                             # Path and size match, treat as matched without downloading full file hash.
                             matched_count += 1
-                
+
                 if should_upload:
                     files_to_upload.append((rel_path, local_file))
                     tqdm.write(status_msg)
-                
+
                 scan_bar.update(1)
-            
+
             scan_bar.set_description("Scan Complete")
 
         # Detect Orphans (path-based)
         if item.exists:
             for f in item.files:
-                 if f['source'] == 'original' and f['name'] != script_name:
-                     norm = normalize_path(f['name'])
-                     
-                     if norm in local_file_map:
-                         continue 
-                         
-                     orphaned_files.append(f['name'])
+                if f["source"] == "original" and f["name"] != script_name:
+                    norm = normalize_path(f["name"])
+
+                    if norm in local_file_map:
+                        continue
+
+                    orphaned_files.append(f["name"])
 
         if shutdown_event.is_set():
             print("\nScan Cancelled.")
@@ -972,20 +2161,24 @@ def main():
         upload_count = len(files_to_upload)
         orphan_count = len(orphaned_files)
         total_local = len(local_file_map)
-        
-        print("\n" + "="*40)
+
+        print("\n" + "=" * 40)
         print("SUMMARY")
-        print("="*40)
+        print("=" * 40)
         print(f"Total Local Files:       {total_local}")
-        print(f"Total Remote Originals:  {total_remote_originals} (of {total_remote_files} total items)")
+        print(
+            f"Total Remote Originals:  {total_remote_originals} (of {total_remote_files} total items)"
+        )
         print("-" * 40)
-        matched_label = "Matched (MD5 Exact)" if args.md5_verify else "Matched (Path Exists)"
+        matched_label = (
+            "Matched (MD5 Exact)" if args.md5_verify else "Matched (Path Exists)"
+        )
         print(f"{matched_label}:".ljust(28) + f"{matched_count}")
         print(f"To Upload (New):         {upload_new_count}")
         print(f"To Upload (Update):      {upload_update_count}")
         print(f"Skipped Empty Files:     {skipped_empty_count}")
         print(f"Orphans (To Delete):     {orphan_count}")
-        print("="*40)
+        print("=" * 40)
 
         files_to_delete = []
 
@@ -1010,10 +2203,10 @@ def main():
             print(f"\nQueued {upload_count} files for upload...")
         if len(files_to_delete) > 0:
             print(f"Queued {len(files_to_delete)} files for DELETION...")
-        
+
         # 5. Execution Phase
         print("\n" * 1)
-        
+
         # --- UPLOADS ---
         if upload_count > 0:
             # OPTIMIZATION: Sort by size (Smallest First)
@@ -1026,23 +2219,35 @@ def main():
                 import requests
                 from requests.adapters import HTTPAdapter
                 from urllib3.util.retry import Retry
-                
+
                 # Get a proper ArchiveSession
                 custom_session = get_session()
-                
+
                 # Configure Retry and Pooling
                 retry_strategy = Retry(
                     total=5,
                     backoff_factor=1,
                     status_forcelist=[429, 500, 502, 503, 504],
-                    allowed_methods=["HEAD", "GET", "PUT", "POST", "DELETE", "OPTIONS", "TRACE"]
+                    allowed_methods=[
+                        "HEAD",
+                        "GET",
+                        "PUT",
+                        "POST",
+                        "DELETE",
+                        "OPTIONS",
+                        "TRACE",
+                    ],
                 )
-                
+
                 # Pool size must handle all threads + extra for overhead
-                adapter = HTTPAdapter(pool_connections=max_workers+5, pool_maxsize=max_workers+5, max_retries=retry_strategy)
-                
+                adapter = HTTPAdapter(
+                    pool_connections=max_workers + 5,
+                    pool_maxsize=max_workers + 5,
+                    max_retries=retry_strategy,
+                )
+
                 # Helper to mount adapter to ArchiveSession which might behave differently than requests.Session
-                if hasattr(custom_session, 'mount_http_adapter'):
+                if hasattr(custom_session, "mount_http_adapter"):
                     # Newer IA library support
                     custom_session.mount_http_adapter("https://", adapter)
                     custom_session.mount_http_adapter("http://", adapter)
@@ -1050,25 +2255,35 @@ def main():
                     # Fallback: hope it inherits from Session or has .mount
                     custom_session.mount("https://", adapter)
                     custom_session.mount("http://", adapter)
-                
-                vlog(f"Session configured: pool_connections={max_workers+5}, pool_maxsize={max_workers+5}")
+
+                vlog(
+                    f"Session configured: pool_connections={max_workers + 5}, pool_maxsize={max_workers + 5}"
+                )
                 vlog(f"HTTP timeout: connect=30s, read=300s")
-                
+
             except Exception as e:
                 print(f"Warning: Could not configure connection pool: {e}")
                 vlog(f"Session config exception: {type(e).__name__}: {e}")
                 # Fallback to standard session if mounting fails
                 if not custom_session:
-                     custom_session = get_session()
+                    custom_session = get_session()
 
             start_index = 0
-            main_bar = tqdm(total=upload_count, desc="Uploading", position=0, unit="file", dynamic_ncols=True)
+            main_bar = tqdm(
+                total=upload_count,
+                desc="Uploading",
+                position=0,
+                unit="file",
+                dynamic_ncols=True,
+            )
 
             if is_new_item:
                 # Upload the first (smallest) file to initialize the item
                 first_file = files_to_upload[0]
                 vlog(f"Creating new item with first file: '{first_file[0]}'")
-                success, msg = upload_worker(identifier, first_file, metadata, position=1, session=custom_session)
+                success, msg = upload_worker(
+                    identifier, first_file, metadata, position=1, session=custom_session
+                )
                 main_bar.update(1)
                 if not success:
                     main_bar.close()
@@ -1079,7 +2294,7 @@ def main():
                 metadata = None
 
             remaining_files = files_to_upload[start_index:]
-            
+
             if remaining_files:
                 slot_queue = queue.Queue()
                 for i in range(1, max_workers + 1):
@@ -1087,30 +2302,38 @@ def main():
 
                 def worker_wrapper(f_data):
                     vlog(f"worker_wrapper: waiting for slot for '{f_data[0]}'")
-                    slot = slot_queue.get() 
+                    slot = slot_queue.get()
                     vlog(f"worker_wrapper: got slot {slot} for '{f_data[0]}'")
                     try:
-                        return upload_worker(identifier, f_data, None, position=slot, session=custom_session)
+                        return upload_worker(
+                            identifier,
+                            f_data,
+                            None,
+                            position=slot,
+                            session=custom_session,
+                        )
                     finally:
-                        vlog(f"worker_wrapper: releasing slot {slot} (was '{f_data[0]}')")
+                        vlog(
+                            f"worker_wrapper: releasing slot {slot} (was '{f_data[0]}')"
+                        )
                         slot_queue.put(slot)
 
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     future_to_file = {
-                        executor.submit(worker_wrapper, fdata): fdata 
+                        executor.submit(worker_wrapper, fdata): fdata
                         for fdata in remaining_files
                     }
                     vlog(f"Submitted {len(future_to_file)} futures to executor")
-                    
+
                     completed_count = 0
                     pending = set(future_to_file.keys())
                     last_liveness = time.time()
-                    
+
                     while pending:
                         if shutdown_event.is_set():
                             executor.shutdown(wait=False, cancel_futures=True)
                             break
-                        
+
                         # Use timeout so we can periodically report liveness
                         done_batch = set()
                         try:
@@ -1118,7 +2341,9 @@ def main():
                                 done_batch.add(future)
                                 completed_count += 1
                                 fdata = future_to_file[future]
-                                vlog(f"Future completed for '{fdata[0]}' ({completed_count}/{len(future_to_file)})")
+                                vlog(
+                                    f"Future completed for '{fdata[0]}' ({completed_count}/{len(future_to_file)})"
+                                )
                                 main_bar.update(1)
                                 # Break out after processing done ones to re-check liveness
                                 if time.time() - last_liveness >= 60:
@@ -1127,31 +2352,40 @@ def main():
                             # Timeout fired with no new completions — this is expected,
                             # fall through to liveness reporting below
                             pass
-                        
+
                         pending -= done_batch
-                        
+
                         # Periodic liveness report if anything is still pending
                         if pending and time.time() - last_liveness >= 60:
                             last_liveness = time.time()
                             in_flight = [future_to_file[f][0] for f in pending]
                             if len(in_flight) <= 5:
-                                tqdm.write(f"  [LIVENESS] {len(in_flight)} file(s) still in-flight: {in_flight}")
+                                tqdm.write(
+                                    f"  [LIVENESS] {len(in_flight)} file(s) still in-flight: {in_flight}"
+                                )
                             else:
-                                tqdm.write(f"  [LIVENESS] {len(in_flight)} file(s) still in-flight (showing first 5): {in_flight[:5]}")
-            
+                                tqdm.write(
+                                    f"  [LIVENESS] {len(in_flight)} file(s) still in-flight (showing first 5): {in_flight[:5]}"
+                                )
+
             main_bar.close()
-
-
 
         # --- DELETIONS ---
         if len(files_to_delete) > 0 and not shutdown_event.is_set():
             print("\nStarting Deletions...")
             # Deletes are fast but we can thread them too
-            
-            del_bar = tqdm(total=len(files_to_delete), desc="Deleting", position=0, unit="file", dynamic_ncols=True)
-            
+
+            del_bar = tqdm(
+                total=len(files_to_delete),
+                desc="Deleting",
+                position=0,
+                unit="file",
+                dynamic_ncols=True,
+            )
+
             def delete_worker(fname):
-                if shutdown_event.is_set(): return
+                if shutdown_event.is_set():
+                    return
                 try:
                     # item.delete_file is synchronous
                     item.delete_file(fname)
@@ -1163,12 +2397,12 @@ def main():
                 futures = [executor.submit(delete_worker, f) for f in files_to_delete]
                 for f in as_completed(futures):
                     del_bar.update(1)
-            
+
             del_bar.close()
 
         # Ensure enough newline space based on thread count
         print("\n" * (max_workers + 1))
-        
+
         if shutdown_event.is_set():
             print("\nOperation Aborted by User.")
         else:
@@ -1178,10 +2412,20 @@ def main():
         print_report()
 
         # --- POST-UPLOAD: Offer to delete local folder on full success ---
-        if not shutdown_event.is_set() and len(final_results['failed']) == 0 and len(final_results['cancelled']) == 0:
+        if (
+            not shutdown_event.is_set()
+            and len(final_results["failed"]) == 0
+            and len(final_results["cancelled"]) == 0
+        ):
             try:
-                answer = input(f"\nAll files uploaded successfully. Delete local folder '{folder_path}'? (y/n) [n]: ").strip().lower()
-                if answer == 'y':
+                answer = (
+                    input(
+                        f"\nAll files uploaded successfully. Delete local folder '{folder_path}'? (y/n) [n]: "
+                    )
+                    .strip()
+                    .lower()
+                )
+                if answer == "y":
                     try:
                         safe_rmtree(folder_path)
                         print(f"Deleted: {folder_path}")
@@ -1200,9 +2444,6 @@ def main():
         print_report()
         os._exit(1)
 
+
 if __name__ == "__main__":
     main()
-
-
-
-

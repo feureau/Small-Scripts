@@ -1732,7 +1732,7 @@ class WorkflowPresetManager:
             "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
             "hybrid_top_aspect": "16:9",
-            "hybrid_top_mode": "crop",
+            "hybrid_top_mode": "pad",
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "fruc": DEFAULT_FRUC,
@@ -1974,6 +1974,7 @@ class VideoProcessorApp:
         self.output_mode = output_mode
         self.processing_jobs = []
         self.input_files = [] # New: Staging area for files
+        self.filtered_input_indices = [] # New: Indices for filtering
         self.preset_manager = WorkflowPresetManager()
         self._is_loading_job_to_gui = False
 
@@ -1986,6 +1987,10 @@ class VideoProcessorApp:
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
         self.output_suffix_override_var = tk.StringVar(value="")
+        self.input_filter_var = tk.StringVar(value="")
+        self.input_filter_inverse_var = tk.BooleanVar(value=False)
+        self.input_filter_var.trace_add("write", lambda *args: self.refresh_input_listbox())
+        self.input_filter_inverse_var.trace_add("write", lambda *args: self.refresh_input_listbox())
 
         self.output_mode_var = tk.StringVar(value=output_mode)
         self.resolution_var = tk.StringVar(value=DEFAULT_RESOLUTION)
@@ -2113,7 +2118,7 @@ class VideoProcessorApp:
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
-        self.hybrid_top_mode_var = tk.StringVar(value="crop")
+        self.hybrid_top_mode_var = tk.StringVar(value="pad")
         self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
         self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
@@ -2636,6 +2641,13 @@ class VideoProcessorApp:
         
         ttk.Button(input_toolbar, text="Add to Jobs (Scan Triggers)", command=self.promote_input_files_auto).pack(side=tk.LEFT, padx=2)
         ttk.Button(input_toolbar, text="Add to Jobs (Force Current Preset)", command=self.promote_input_files_manual).pack(side=tk.LEFT, padx=2)
+        
+        ttk.Label(input_toolbar, text="Filter:").pack(side=tk.LEFT, padx=(10, 2))
+        self.input_filter_entry = ttk.Entry(input_toolbar, textvariable=self.input_filter_var, width=15)
+        self.input_filter_entry.pack(side=tk.LEFT, padx=2)
+        
+        ttk.Checkbutton(input_toolbar, text="Inv", variable=self.input_filter_inverse_var).pack(side=tk.LEFT, padx=2)
+
         ttk.Button(input_toolbar, text="Remove Selected", command=self.remove_from_input_queue).pack(side=tk.RIGHT, padx=2)
         ttk.Button(input_toolbar, text="Clear Input", command=self.clear_input_queue).pack(side=tk.RIGHT, padx=2)
 
@@ -4085,10 +4097,30 @@ class VideoProcessorApp:
             video_path = os.path.abspath(video_path)
             if video_path not in self.input_files:
                 self.input_files.append(video_path)
-                self.input_listbox.insert(tk.END, os.path.basename(video_path))
+        
+        # Refresh visible list
+        self.refresh_input_listbox()
         
         # 2. Trigger Auto-Add Logic
         self.promote_input_files_auto(only_for_paths=file_paths)
+
+    def refresh_input_listbox(self):
+        search_term = self.input_filter_var.get().lower()
+        inverse = self.input_filter_inverse_var.get()
+        self.input_listbox.delete(0, tk.END)
+        self.filtered_input_indices = []
+        
+        for i, video_path in enumerate(self.input_files):
+            display_name = os.path.basename(video_path)
+            
+            show = True
+            if search_term:
+                match = search_term in display_name.lower()
+                show = not match if inverse else match
+            
+            if show:
+                self.input_listbox.insert(tk.END, display_name)
+                self.filtered_input_indices.append(i)
 
     def promote_input_files_auto(self, only_for_paths=None):
         # Scan triggers for files in Input Queue (or specific subset)
@@ -4206,7 +4238,9 @@ class VideoProcessorApp:
         if not preset: return
         
         for index in selected_indices:
-             video_path = self.input_files[index]
+             # Map listbox index to original input_files index
+             actual_index = self.filtered_input_indices[index]
+             video_path = self.input_files[actual_index]
              # Manual add should still auto-pick the best subtitle if one exists
              # so subtitle burn and JSON title discovery work without extra clicks.
              detected_subs = self._detect_subtitles_for_video(video_path)
@@ -4228,12 +4262,16 @@ class VideoProcessorApp:
         selected_indices = list(self.input_listbox.curselection())
         selected_indices.sort(reverse=True)
         for index in selected_indices:
-            del self.input_files[index]
-            self.input_listbox.delete(index)
+            actual_index = self.filtered_input_indices[index]
+            del self.input_files[actual_index]
+        
+        # After deletion, refresh the filter/view
+        self.refresh_input_listbox()
 
     def clear_input_queue(self):
         self.input_files.clear()
-        self.input_listbox.delete(0, tk.END)
+        self.input_filter_var.set("") # Clear filter when clearing all
+        self.refresh_input_listbox()
 
     def select_all_jobs(self):
         self.job_listbox.selection_set(0, tk.END); self.on_job_select(None)
@@ -4996,16 +5034,9 @@ class VideoProcessorApp:
         orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
         if orientation == "hybrid (stacked)":
-            width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
             target_w = width_map.get(res_key, 1080)
-            try:
-                num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
-                num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
-                top_h = (int(target_w * den_top / num_top) // 2) * 2
-                bot_h = (int(target_w * den_bot / num_bot) // 2) * 2
-                target_h = top_h + bot_h
-            except Exception:
-                target_h = 1920
+            target_h = (int(target_w * 16 / 9) // 2) * 2 # Standard vertical 9:16
             return target_w, target_h
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
@@ -5380,12 +5411,16 @@ class VideoProcessorApp:
         except ValueError: pass
         if orientation == "hybrid (stacked)":
             res_key = options.get('resolution')
-            width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+            # Fix width_map for vertical/hybrid consistency (720p should be 720 wide)
+            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
             target_w = width_map.get(res_key)
             if target_w is None: 
                 raise VideoProcessingError(f"Invalid resolution '{res_key}' for Hybrid mode.")
             
-            def get_block_filters(aspect_str, mode, upscale_algo):
+            # Target total height is fixed to 9:16 aspect of the width
+            total_h = (int(target_w * 16 / 9) // 2) * 2
+
+            def get_block_filters(aspect_str, mode, upscale_algo, override_h=None):
                 if not aspect_str: raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")
                 if not mode: raise VideoProcessingError("Missing Mode setting in preset (Hybrid block).")
                 if not upscale_algo: raise VideoProcessingError("Missing Upscale Algorithm setting in preset.")
@@ -5395,7 +5430,7 @@ class VideoProcessorApp:
                 except (ValueError, AttributeError):
                     raise VideoProcessingError(f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
                 
-                target_h = (int(target_w * den / num) // 2) * 2
+                target_h = override_h if override_h is not None else (int(target_w * den / num) // 2) * 2
                 scale = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={upscale_algo}"
                 if mode == 'stretch': return scale, "", target_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
@@ -5406,9 +5441,11 @@ class VideoProcessorApp:
             safe_algo = ffmpeg_upscale_algo
             if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
             
+            # Top block uses its own aspect ratio to determine height
             top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
-            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo)
-            total_h = top_h + bot_h
+            # Bottom block fills the remaining space
+            bot_h_needed = total_h - top_h
+            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo, override_h=bot_h_needed)
             
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []

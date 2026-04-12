@@ -1,126 +1,82 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-"""
-# =================================================================================== #
-#                                                                                     #
-#                                  FileRename.py                                      #
-#                                                                                     #
-# =================================================================================== #
+r"""
+# 📂 FileRename.py
+> **A powerful, safety-first bulk rename utility for power users.**
 
-A powerful and user-friendly command-line utility for bulk renaming files within
-a directory tree. This script searches for files based on a pattern and replaces
-a specified part of their names with a new string.
+Recursively searches directories for files matching a pattern and replaces specific strings or regex patterns within their names. Designed to be fast, recursive by default, and interactive for safety.
 
-It is designed to be safe and intuitive, featuring a recursive-by-default search
-and an interactive confirmation step to prevent accidental changes.
+---
 
--------------------------------------------------------------------------------------
-Version: 1.2
-Author: [Your Name Here]
-Date: 2025-08-15
--------------------------------------------------------------------------------------
+## 🚀 Key Features
+- 🔄 **Recursive by Default:** Automatically dives into subfolders.
+- 🛡️ **Interactive Safety:** Preview all changes before committing.
+- 🔍 **Flexible Matching:** Supports standard wildcards (*, ?) and Regular Expressions.
+- 🔠 **Case Sensitivity Control:** Optionally ignore case matching with `-i`.
+- 🛠️ **Multi-Action:** Prefix, suffix, extension changing, and sequencing support.
+- 🐚 **Shell Friendly:** Handles both quoted patterns and shell-expanded file lists.
 
----------------------------------
---         FEATURES          --
----------------------------------
+---
 
-*   RECURSIVE BY DEFAULT: Automatically searches the current directory and all of
-    its subdirectories for matching files. No special flags are needed for this,
-    making it fast and easy to use.
-
-*   INTERACTIVE CONFIRMATION: Displays a full list of all proposed changes and
-    waits for the user's explicit 'y' confirmation before renaming any files.
-    This is a critical safety feature to prevent mistakes.
-
-*   FLEXIBLE PATTERN MATCHING: Intelligently handles command-line arguments,
-    allowing the use of unquoted wildcards (like *.txt) in most shells.
-
-*   STRING REMOVAL: To remove a piece of a filename, simply provide an empty
-    string ("") as the replacement string.
-
-*   NON-RECURSIVE SEARCH OPTION: For cases where you only want to search the
-    current directory (and not subdirectories), use `-n` / `--non-recursive`.
-
-*   CROSS-PLATFORM: Works on Windows, macOS, and Linux.
-
----------------------------------
---           USAGE           --
----------------------------------
-
-The script is called from the command line with the following structure:
-
+## 🛠 Usage
+```bash
 python filerename.py [file_pattern] [old_string] [new_string] [options]
+```
 
---- ARGUMENTS ---
+### 📋 Arguments
+1.  **`file_pattern`**: The pattern to match (e.g., `*.txt`). Supports shell wildcards.
+2.  **`old_string`**: The substring or regex to find.
+3.  **`new_string`**: The replacement string (use `""` for deletion).
 
-1.  [file_pattern]:
-    The pattern to match files against. The shell's wildcard expansion is
-    supported. For simple cases, quotes are not needed.
-    Examples: *.txt, request-*.log, image_?.jpg
+### ⚙️ Options
+| Flag | Name | Description |
+| :--- | :--- | :--- |
+| `-i` | `--ignore-case` | Perform case-insensitive matching/replacement. |
+| `-r` | `--regex` | Treat `old_string` as a Regular Expression. |
+| `-n` | `--non-recursive` | Look only in the current directory (disable recursion). |
+| `-p` | `--prefix` | Prepends a string to the filename. |
+| `-s` | `--suffix` | Appends a string before the file extension. |
+| `-e` | `--extension` | Changes the file extension (e.g., `jpg`). |
+| `-o` | `--order` | Reorders files (e.g., `reverse`). |
+| `-h` | `--help` | Display this help documentation. |
 
-2.  [old_string]:
-    The exact string within the filenames that you want to replace. If the
-    string contains spaces, enclose it in quotes.
+---
 
-3.  [new_string]:
-    The string that will replace [old_string]. To delete [old_string]
-    entirely, use a pair of empty quotes (""). If the string contains spaces,
-    enclose it in quotes.
+## 💡 Examples
 
---- OPTIONS ---
+### 1. Basic Case-Insensitive Rename
+Match `.LRF` files and replace `.lrf` (ignoring case) with `_lowres.mp4`.
+```bash
+python filerename.py *.LRF .lrf _lowres.mp4 -i
+```
 
-  -n, --non-recursive
-    Disables the default recursive behavior and performs a "shallow" search,
-    meaning it will ONLY look for files in the current working directory.
+### 2. Recursive String Deletion
+Remove "_draft" from all `.docx` files in all subfolders.
+```bash
+python filerename.py *.docx "_draft" ""
+```
 
-  -s, --suffix
-    Appends a suffix to filenames before the extension.
+### 3. Regex Replacement
+Remove date patterns (e.g., `2024-04-15_`) from filenames.
+```bash
+python filerename.py * "\d{4}-\d{2}-\d{2}_" "" -r
+```
 
-  -h, --help
-    Displays this help message and exits.
+### 4. Changing Extensions
+Convert all `.jpeg` files in the current folder to `.jpg`.
+```bash
+python filerename.py *.jpeg -e jpg -n
+```
 
----------------------------------
---          EXAMPLES         --
----------------------------------
+---
 
-(Assume you have opened a terminal in your project's root folder)
+## ⚠️ Troubleshooting
+- **No files found?** Ensure you are in the correct directory. If using wildcards on Linux/macOS, try quoting the pattern (e.g., `"*.txt"`).
+- **Replacement didn't happen?** Check if you need the `-i` flag for case-insensitivity.
+- **Unexpected renames?** Always review the preview list during the interactive prompt.
 
-1. BASIC RECURSIVE RENAME:
-   Rename all '.log' files in the current folder AND all subfolders by changing
-   "backup" to "archived".
-
-   > python filerename.py *.log "backup" "archived"
-
-2. REMOVING A STRING (DELETION):
-   Recursively find all '.txt' files and remove the suffix "_draft" from their
-   names. This is the most common use case for the empty "" string.
-
-   > python filerename.py *.txt "_draft" ""
-
-3. SHALLOW SEARCH (NON-RECURSIVE):
-   Rename files ONLY in the current directory. Do not touch any subfolders.
-   Here, we change "temp_" to "final_" in all 'data-*.csv' files.
-
-   > python filerename.py data-*.csv "temp_" "final_" -n
-
-4. FILENAMES WITH SPACES:
-   Recursively rename files, replacing "Final Report" with "Official Document".
-   Quotes are necessary because of the spaces.
-
-   > python filerename.py *.docx "Final Report" "Official Document"
-
----------------------------------
---     INSTALLATION & SETUP    --
----------------------------------
-
-1.  Requires Python 3.
-2.  Save this script as `filerename.py`.
-3.  To run it from any directory, you can either:
-    a) Call it with its full path: `python C:\\path\\to\\scripts\\filerename.py ...`
-    b) [RECOMMENDED] Add the folder containing `filerename.py` to your system's
-       PATH environment variable. After doing this, you can simply type
-       `filerename.py ...` from any folder.
-
+---
+*Last updated: 2026-04-13*
 """
 
 import os
@@ -129,24 +85,31 @@ import glob
 import re
 
 def display_help():
-    """Prints the help message."""
+    """
+    Prints a detailed usage guide to the console.
+    
+    WHAT: Displays arguments, options, and multiple real-world examples.
+    WHY:  Manual print statements are used here instead of standard argparse help 
+          to maintain a legacy, high-contrast visual layout that mimics classic 
+          CLI tool documentation.
+    """
     print("Usage: python FileRename.py [file_pattern] [old_string] [new_string] [options]")
     print("\nRecursively renames files by replacing a string in their names or reordering them.")
     print("The search is RECURSIVE BY DEFAULT.")
     print("\nArguments:")
     print("  file_pattern   The file pattern to match (e.g., *.txt, \"**/*.log\").")
-    print("  old_string     The string (or regex pattern) to be replaced. (Optional if using --order)")
-    print("  new_string     The string to replace with. (Optional if using --order)")
+    print("  old_string     The string (or regex pattern) to be replaced. (Optional if using flags)")
+    print("  new_string     The string to replace with. (Optional if using flags)")
     print("\nOptions:")
+    print("  -i, --ignore-case    Perform case-insensitive matching/replacement")
     print("  -n, --non-recursive  Disables recursion and searches ONLY the current directory.")
     print("  -s, --suffix         Appends a suffix before file extension.")
-    print("  -r, --regex      Treats old_string as a Regular Expression.")
-    print("  -p, --prefix     Prepends a string to the filenames.")
-    print("  -o, --order      Apply a sequence/ordering (e.g., 'reverse' or 'r').")
-    print("  -e, --extension  Changes file extension (e.g., 'jpg' or '.jpg').")
-    print("  --replay-format  Converts Replay_YYYY-MM-DD_HH-MM-SS.ext to YYYY-MM-DD_HH-MM-SS_Rec-Replay.ext.")
+    print("  -r, --regex          Treats old_string as a Regular Expression.")
+    print("  -p, --prefix         Prepends a string to the filenames.")
+    print("  -o, --order          Apply a sequence/ordering (e.g., 'reverse' or 'r').")
+    print("  -e, --extension      Changes file extension (e.g., 'jpg' or '.jpg').")
+    print("  --replay-format      Converts Replay_YYYY-MM-DD_HH-MM-SS.ext to YYYY-MM-DD_HH-MM-SS_Rec-Replay.ext.")
     print("\nExamples:")
-    # ... (existing examples)
     print("  # Reverse the numbering of all .jpg files")
     print("  python FileRename.py *.jpg --order reverse")
     print("\nExamples:")
@@ -165,9 +128,21 @@ def display_help():
     print("\n  # Convert Replay_2026-03-09_04-03-59.mp4 -> 2026-03-09_04-03-59_Rec-Replay.mp4")
     print("  python FileRename.py Replay_*.mp4 --replay-format")
 
-def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, suffix=None, order=None, extension=None, replay_format=False):
+def rename_files(files_to_process, old_string=None, new_string=None, use_regex=False, prefix=None, suffix=None, order=None, extension=None, replay_format=False, ignore_case=False):
     """
     Proposes and executes file renames after user confirmation.
+    
+    WHAT: Orchestrates the renaming logic, from previewing changes to executing 
+          the os.rename calls.
+    WHY:  Renaming is separated into a dedicated function to keep the CLI parsing 
+          (main) clean and allow for future programmatic use of this script.
+          
+    Args:
+        files_to_process (list): List of file paths to evaluate.
+        old_string (str): The search pattern (literal or regex).
+        new_string (str): The replacement value.
+        ignore_case (bool): Whether to ignore case during matching.
+        ... (and other flags)
     """
     if not files_to_process:
         print("\nNo files matching the criteria were found.")
@@ -213,16 +188,23 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
             elif old_string is not None and new_string is not None:
                 if use_regex:
                     try:
-                        if re.search(old_string, original_filename):
-                            new_filename = re.sub(old_string, new_string, original_filename)
+                        flags = re.IGNORECASE if ignore_case else 0
+                        if re.search(old_string, original_filename, flags=flags):
+                            new_filename = re.sub(old_string, new_string, original_filename, flags=flags)
                             match_found = (new_filename != original_filename)
                     except re.error as e:
                         print(f"Error in Regex pattern: {e}")
                         return
                 else:
-                    if old_string in original_filename:
-                        new_filename = original_filename.replace(old_string, new_string)
-                        match_found = True
+                    if ignore_case:
+                        if old_string.lower() in original_filename.lower():
+                            # Use regex for case-insensitive literal replacement to be safe
+                            new_filename = re.sub(re.escape(old_string), new_string, original_filename, flags=re.IGNORECASE)
+                            match_found = True
+                    else:
+                        if old_string in original_filename:
+                            new_filename = original_filename.replace(old_string, new_string)
+                            match_found = True
 
             if prefix:
                 new_filename = prefix + new_filename
@@ -266,7 +248,10 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
     if confirm.lower() in ('y', 'yes'):
         print("\nRenaming files...")
         
-        # To avoid collisions during order/sequence changes, we use a two-step rename
+        # To avoid collisions during order/sequence changes, we use a two-step rename.
+        # WHY: If we try to rename '1.txt' to '2.txt' while '2.txt' still exists, 
+        #      the OS will throw an error. By renaming to a .tmp suffix first, 
+        #      we clear the names space before final assignment.
         if order:
             temp_changes = []
             for original, new in changes:
@@ -296,6 +281,16 @@ def rename_files(files_to_process, old_string=None, new_string=None, use_regex=F
         print("\nOperation cancelled. No files were changed.")
 
 def main():
+    """
+    Argparse-free CLI entry point.
+    
+    WHAT: Parses sys.argv, determines modes (regex, recursion, etc.), 
+          collects matching files via glob, and triggers rename_files.
+    WHY:  This script uses manual list-based parsing for flags because it handles 
+          variable-length positional arguments (multiple patterns) in a way 
+          that is more flexible than standard argparse for this specific 
+          wildcard use case.
+    """
     args = sys.argv[1:]
     if not args or "-h" in args or "--help" in args:
         display_help()
@@ -318,6 +313,13 @@ def main():
         use_regex = True
         if '-r' in args: args.remove('-r')
         if '--regex' in args: args.remove('--regex')
+    
+    # Ignore Case support
+    ignore_case = False
+    if '-i' in args or '--ignore-case' in args:
+        ignore_case = True
+        if '-i' in args: args.remove('-i')
+        if '--ignore-case' in args: args.remove('--ignore-case')
 
     # Order support
     order = None
@@ -390,12 +392,28 @@ def main():
     
     file_inputs = args
     
-    # If the user enters `*.txt`, the shell might expand it. We'll just use the first item as the pattern.
-    pattern = file_inputs[0]
+    # Handle patterns and expanded file lists
+    files_to_process = []
+    seen_files = set()
+
+    for pattern in file_inputs:
+        # If the user enters `*.txt`, the shell might expand it.
+        # The '**/' prefix is what enables glob to search subdirectories.
+        pathname = os.path.join('**', pattern) if recursive else pattern
+        matched = glob.glob(pathname, recursive=recursive)
+        for f in matched:
+            if os.path.isfile(f) and f not in seen_files:
+                files_to_process.append(f)
+                seen_files.add(f)
     
-    print(f"Searching for files matching pattern: '{pattern}'")
+    if not files_to_process:
+        print(f"\nNo files found matching patterns: {file_inputs}")
+        return
+
+    # Print summary of search
+    print(f"Searching for files matching pattern(s): {', '.join(file_inputs)}")
     if old_string is not None:
-        print(f"Replacing {'regex' if use_regex else 'string'}: '{old_string}' -> '{new_string}'")
+        print(f"Replacing {'regex' if use_regex else 'string'}{' (Case-Insensitive)' if ignore_case else ''}: '{old_string}' -> '{new_string}'")
     if prefix:
         print(f"Adding prefix: '{prefix}'")
     if suffix:
@@ -410,19 +428,7 @@ def main():
     print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-n flag used)'}")
     print("---------------------------------")
     
-    # Use the pattern to search with glob.
-    # The '**/' prefix is what enables glob to search subdirectories.
-    pathname = os.path.join('**', pattern) if recursive else pattern
-    files_to_process = glob.glob(pathname, recursive=recursive)
-    files_to_process = [f for f in files_to_process if os.path.isfile(f)] # Filter out directories
-        
-    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, suffix=suffix, order=order, extension=extension, replay_format=replay_format)
+    rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, suffix=suffix, order=order, extension=extension, replay_format=replay_format, ignore_case=ignore_case)
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-

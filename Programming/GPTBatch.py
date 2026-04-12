@@ -136,6 +136,9 @@ Developed by Feureau. Designed for efficiency, reliability, and precision in AI-
 ################################################################################
 import os
 
+# Diagnostic flags
+VERBOSE_DIAGNOSTICS = True
+
 # --- SUPPRESS GOOGLE/GRPC LOGGING NOISE ---
 os.environ["GRPC_VERBOSITY"] = "ERROR"
 os.environ["GLOG_minloglevel"] = "2"
@@ -4824,26 +4827,86 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             console_log(f"Failed to load file list: {e}", "ERROR")
             tkinter.messagebox.showerror("Load Error", str(e))
 
+    def _get_input_stems_map(self):
+        """Returns a dict of {stem_lower: stem_original} for all files in the current input list."""
+        input_files = list(self.files_var.get())
+        mapping = {}
+        for path in input_files:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            mapping[stem.lower()] = stem
+        
+        if VERBOSE_DIAGNOSTICS:
+            console_log(f"Input Stems Map (first 5): {list(mapping.keys())[:5]}", "DEBUG")
+        return mapping
+
+    def _parse_group_range(self, stem, input_stems_set):
+        """
+        Attempts to parse a group range from a filename stem.
+        Supports 'A_to_B' and 'merged_A_to_B'.
+        Returns (start_stem, end_stem) if valid, else None.
+        """
+        parse_stem = stem
+        # Handle "merged_" prefix if present
+        if parse_stem.lower().startswith("merged_"):
+            parse_stem = parse_stem[7:] # len("merged_")
+            
+        if "_to_" not in parse_stem:
+            return None
+            
+        parts = parse_stem.split("_to_")
+        # Try all possible split points in case filenames contain "_to_"
+        for i in range(1, len(parts)):
+            start = "_to_".join(parts[:i])
+            end = "_to_".join(parts[i:])
+            if start.lower() in input_stems_set and end.lower() in input_stems_set:
+                console_log(f"Matched range pattern: {start} TO {end}", "DEBUG")
+                return start, end
+        
+        console_log(f"Recognized '_to_' but parts not in current input list: {parse_stem}", "DEBUG")
+        return None
+
     def select_blank_output_files(self):
         out_dir = filedialog.askdirectory(parent=self, title="Select Output Folder to Scan for Blank Files")
         if not out_dir:
             return
 
         try:
+            input_stems_map = self._get_input_stems_map()
+            input_stems_set = set(input_stems_map.keys())
+            console_log(f"Scanning for blanks: {len(input_stems_set)} input stems tracked.", "DEBUG")
+            
             blank_stems = set()
+            blank_ranges = []
             count_scanned = 0
-            for root, _, files in os.walk(out_dir):
+            
+            input_files_set = set(os.path.abspath(p) for p in list(self.files_var.get()))
+            
+            for root, dirs, files in os.walk(out_dir):
+                # Skip log and failed folders to avoid false positives
+                dirs[:] = [d for d in dirs if d.lower() not in ["processing_logs", "failed"]]
+                
                 for file in files:
-                    file_path = os.path.join(root, file)
+                    file_path = os.path.abspath(os.path.join(root, file))
+                    if file_path in input_files_set:
+                        continue  # Don't treat input images as blank outputs
+                    
                     count_scanned += 1
                     try:
                         if os.path.getsize(file_path) == 0:
                             stem = os.path.splitext(file)[0]
                             blank_stems.add(stem.lower())
-                    except Exception:
-                        pass
+                            
+                            # Check if it's a range
+                            rng = self._parse_group_range(stem, input_stems_set)
+                            if rng:
+                                console_log(f"Detected blank range: {rng[0]} -> {rng[1]}", "INFO")
+                                blank_ranges.append(rng)
+                    except Exception as e:
+                        console_log(f"Error checking file {file}: {e}", "DEBUG")
             
-            if not blank_stems:
+            console_log(f"Scan result: {count_scanned} files scanned, {len(blank_stems)} blanks, {len(blank_ranges)} ranges.", "DEBUG")
+            
+            if not blank_stems and not blank_ranges:
                 tkinter.messagebox.showinfo("Scan Complete", f"Scanned {count_scanned} files.\nNo 0-byte (blank) files found in the selected folder.")
                 return
 
@@ -4852,7 +4915,16 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             
             for i, input_path in enumerate(input_files):
                 input_stem = os.path.splitext(os.path.basename(input_path))[0]
-                if input_stem.lower() in blank_stems:
+                lower_stem = input_stem.lower()
+                
+                is_blank = lower_stem in blank_stems
+                if not is_blank:
+                    for start, end in blank_ranges:
+                        if natural_sort_key(start) <= natural_sort_key(input_stem) <= natural_sort_key(end):
+                            is_blank = True
+                            break
+                            
+                if is_blank:
                     matched_indices.append(i)
 
             self.file_listbox.selection_clear(0, tk.END)
@@ -4861,9 +4933,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     self.file_listbox.selection_set(idx)
 
                 self.file_listbox.see(matched_indices[0])
-                tkinter.messagebox.showinfo("Selection Complete", f"Found {len(blank_stems)} blank files.\nSelected {len(matched_indices)} corresponding files in the input list.")
+                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} files.\nFound {len(blank_stems)} potential matches (direct or ranges).\nSelected {len(matched_indices)} corresponding files in the input list.")
             else:
-                tkinter.messagebox.showinfo("Selection Complete", f"Found {len(blank_stems)} blank files, but no files in the current input list matched their names.")
+                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} files.\nFound some candidates, but no current input files matched their stems or ranges.")
 
         except Exception as e:
             console_log(f"Error scanning for blank files: {e}", "ERROR")
@@ -4875,23 +4947,57 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             return
 
         try:
+            input_stems_map = self._get_input_stems_map()
+            input_stems_set = set(input_stems_map.keys())
+            console_log(f"Scanning missing: {len(input_stems_set)} input stems tracked.", "DEBUG")
+            
+            input_paths_list = list(self.files_var.get())
+            input_files_set = set(os.path.abspath(p) for p in input_paths_list)
+            
             out_stems = set()
+            out_ranges = []
             count_scanned = 0
-            for root, _, files in os.walk(out_dir):
+            for root, dirs, files in os.walk(out_dir):
+                # Skip log and failed folders to avoid false positives
+                dirs[:] = [d for d in dirs if d.lower() not in ["processing_logs", "failed"]]
+                
                 for file in files:
+                    file_path = os.path.abspath(os.path.join(root, file))
+                    if file_path in input_files_set:
+                        continue  # Skip our own input files
+                        
                     count_scanned += 1
                     try:
                         stem = os.path.splitext(file)[0]
-                        out_stems.add(stem.lower())
-                    except Exception:
-                        pass
+                        lstem = stem.lower()
+                        if lstem not in out_stems:
+                            out_stems.add(lstem)
+                            # Check if it's a range
+                            rng = self._parse_group_range(stem, input_stems_set)
+                            if rng:
+                                out_ranges.append(rng)
+                    except Exception as e:
+                        console_log(f"Error processing file {file}: {e}", "DEBUG")
+            
+            console_log(f"Scan result: {count_scanned} files scanned, {len(out_stems)} distinct stems, {len(out_ranges)} ranges found.", "DEBUG")
             
             input_files = list(self.files_var.get())
             matched_indices = []
             
             for i, input_path in enumerate(input_files):
                 input_stem = os.path.splitext(os.path.basename(input_path))[0]
-                if input_stem.lower() not in out_stems:
+                lower_stem = input_stem.lower()
+                
+                found = lower_stem in out_stems
+                if not found:
+                    for start, end in out_ranges:
+                        if natural_sort_key(start) <= natural_sort_key(input_stem) <= natural_sort_key(end):
+                            found = True
+                            # console_log(f"Input '{input_stem}' covered by range {start} to {end}", "DEBUG")
+                            break
+                
+                if not found:
+                    # console_log(f"Input '{input_stem}' marked MISSING", "DEBUG")
                     matched_indices.append(i)
 
             self.file_listbox.selection_clear(0, tk.END)
@@ -4902,7 +5008,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 self.file_listbox.see(matched_indices[0])
                 tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} output files.\nSelected {len(matched_indices)} input files with missing outputs.")
             else:
-                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} output files.\nAll input files have corresponding outputs currently.")
+                tkinter.messagebox.showinfo("Selection Complete", f"Scanned {count_scanned} output files.\nAll input files have corresponding outputs (direct or in ranges).")
 
         except Exception as e:
             console_log(f"Error scanning for missing output files: {e}", "ERROR")

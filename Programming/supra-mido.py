@@ -1,17 +1,144 @@
 #!/usr/bin/env python3
-"""
-SUPRA MIDI/Audio Metadata Tool - extract, export, and rename MIDI and audio files.
+r"""
+SUPRA MIDI/Audio Metadata Tool
 
-Examples:
-    python supra-mido.py "*.mid"
-    python supra-mido.py -e "*.mid"
-    python supra-mido.py --export-csv out.csv "*.mid"
-    python supra-mido.py -r "*.mid"
-    python supra-mido.py --rename --dry-run "*.mid"
-    python supra-mido.py -e -r "*.mid"
-    python supra-mido.py -r --xml merged_output.xml "*.mid"
-    python supra-mido.py -r --xml merged_output.xml "*.wav"
-    python supra-mido.py -r --xml merged_output.xml "*.mp3" "*.m4a"
+Extracts metadata from MIDI text events, enriches from MARC XML records,
+exports to CSV, and/or renames MIDI and audio files using configurable
+naming templates.
+
+Installation
+------------
+Requires Python 3.8+ and the mido library:
+
+    pip install mido
+
+Optional: progress bar support (recommended)
+
+    pip install tqdm
+
+Usage
+-----
+    python supra-mido.py [options] patterns [patterns ...]
+
+Arguments
+---------
+patterns          One or more glob patterns to match files. Must be quoted to
+                 avoid shell expansion. Examples: "*.mid", "*.wav", "*.mp3"
+
+Options
+-------
+-e, --export-csv [PATH]
+                 Export metadata to CSV file. If PATH is omitted, auto-generates
+                 filename (supra_metadata_YYYY-MM-DD_HHMMSS.csv). If PATH is a
+                 directory, writes to that directory.
+-r, --rename     Rename files using metadata and --name-format template.
+--dry-run       Preview rename actions without actually renaming files.
+                 Use with -r to test before committing.
+--name-format FORMAT
+                 Template for generating new filenames. Supports placeholders:
+                 {COMPOSER}, {PERFORMER}, {TITLE}, {LABEL}, {DRUID}, {FILENAME}.
+                 Default: "{COMPOSER} - {PERFORMER} - {TITLE}"
+--xml PATH      Optional merged MARC XML file. Used to fill missing COMPOSER,
+                 PERFORMER, and TITLE when not found in MIDI text events.
+
+Metadata Format
+-------------
+The tool reads metadata from two sources:
+
+1. MIDI Text Events (embedded in MIDI files)
+   Look for text events starting with "@" followed by a colon:
+
+       @COMPOSER: Johann Sebastian Bach
+       @PERFORMER: Glenn Gould
+       @TITLE: Goldberg Variations, BWV 998
+       @DRUID: bwv0998ar0301
+
+   Supported keys: COMPOSER, PERFORMER, TITLE, LABEL, DRUID, and any custom
+   key starting with @.
+
+2. MARC XML Records (external enrichment)
+   When --xml is provided, the tool looks up records by DRUID (a unique
+   identifier like "bwv0998ar0301" extracted from filename or @DRUID).
+   It extracts from MARC fields:
+   - 100$a$d  -> COMPOSER
+   - 700$a$e (with role: performer/instrumentalist/pianist) -> PERFORMER
+   - 245$a$b$n -> TITLE
+   - 240$a    -> TITLE (fallback)
+
+Naming Template
+------------
+The --name-format option uses curly-brace placeholders:
+
+    {COMPOSER}   - Composer name
+    {PERFORMER}  - Performer name
+    {TITLE}     - Title (work name)
+    {LABEL}     - Record label
+    {DRUID}     - Unique identifier from source
+    {FILENAME}   - Original filename (without extension)
+
+Empty placeholders are omitted from output. Invalid filename characters
+are removed. Result is truncated to 200 characters max.
+
+Default naming: "COMPOSER - PERFORMER - TITLE"
+
+If no metadata found, falls back to DRUID or original filename.
+
+File Handling
+------------
+Supported extensions:
+- MIDI: .mid, .midi
+- Audio: .wav, .mp3, .m4a, .flac, .ogg, .aiff, .aif, .wma
+
+On rename, if target name exists, appends " (N)" (e.g., "file (1).mid")
+to avoid collisions.
+
+Files are processed sequentially to handle large collections.
+
+Examples
+--------
+# Print metadata for all MIDI files
+python supra-mido.py "*.mid"
+
+# Export metadata to CSV
+python supra-mido.py --export-csv out.csv "*.mid"
+
+# Preview file renames (dry run)
+python supra-mido.py --rename --dry-run "*.mid"
+
+# Rename audio files with XML enrichment
+python supra-mido.py --rename --xml merged.xml "*.wav"
+
+# Custom naming template
+python supra-mido.py -r --name-format "{TITLE} - {PERFORMER}" "*.mid"
+
+# Combined: export CSV and rename in one pass
+python supra-mido.py -e -r --xml dataset.xml "*.mid" "*.wav"
+
+How It Works
+-----------
+1. Collect files matching glob patterns, deduplicate, sort alphanumerically.
+2. For each file:
+   a. If MIDI: parse all text events, extract @KEY: value pairs.
+   b. If audio: use filename only (DRUID can be inferred for XML lookup).
+3. If --xml provided: load MARC XML, index by DRUID.
+4. Enrich metadata: fill missing COMPOSER/PERFORMER/TITLE from XML.
+5. If --export-csv: write all metadata to CSV.
+6. If --rename: generate new name from template, handle collisions, rename.
+
+The XML lookup uses DRUID patterns (e.g., "bwv0998ar0301") to match records.
+If not in filename, tries to extract from @DRUID or uses filename stem.
+
+Exit Codes
+--------
+0   Success
+1   No files found, or XML file not found, or other error
+
+Maintenance
+-----------
+THIS DOCUMENTATION MUST BE KEPT UP TO DATE WITH ANY SCRIPT CHANGES.
+When adding new features, options, or changing behavior, update this
+docblock accordingly. Run [--help] or [-h] to verify documentation
+matches CLI behavior.
 """
 
 from __future__ import annotations
@@ -128,7 +255,11 @@ def _extract_performer_from_record(record: ET.Element) -> str:
             continue
         if not first_fallback:
             first_fallback = candidate
-        if any(token in e for e in e_all for token in ("instrumentalist", "performer", "pianist")):
+        if any(
+            token in e
+            for e in e_all
+            for token in ("instrumentalist", "performer", "pianist")
+        ):
             return candidate
 
     if first_fallback:
@@ -160,10 +291,12 @@ def load_xml_name_index(xml_path: Path) -> Dict[str, Dict[str, str]]:
         composer = ""
         fields_100 = _extract_datafields(record, "100")
         if fields_100:
-            composer = _join_name([
-                (_subfield_values(fields_100[0], "a") or [""])[0],
-                (_subfield_values(fields_100[0], "d") or [""])[0],
-            ])
+            composer = _join_name(
+                [
+                    (_subfield_values(fields_100[0], "a") or [""])[0],
+                    (_subfield_values(fields_100[0], "d") or [""])[0],
+                ]
+            )
 
         performer = _extract_performer_from_record(record)
 
@@ -171,11 +304,13 @@ def load_xml_name_index(xml_path: Path) -> Dict[str, Dict[str, str]]:
         fields_245 = _extract_datafields(record, "245")
         if fields_245:
             f245 = fields_245[0]
-            title = _clean_marc_text(" ".join(
-                (_subfield_values(f245, "a") or [])
-                + (_subfield_values(f245, "b") or [])
-                + (_subfield_values(f245, "n") or [])
-            ))
+            title = _clean_marc_text(
+                " ".join(
+                    (_subfield_values(f245, "a") or [])
+                    + (_subfield_values(f245, "b") or [])
+                    + (_subfield_values(f245, "n") or [])
+                )
+            )
         if not title:
             fields_240 = _extract_datafields(record, "240")
             if fields_240:
@@ -191,12 +326,16 @@ def load_xml_name_index(xml_path: Path) -> Dict[str, Dict[str, str]]:
     return index
 
 
-def enrich_metadata_with_xml(meta: Dict[str, str], file_path: Path, xml_index: Dict[str, Dict[str, str]]) -> None:
+def enrich_metadata_with_xml(
+    meta: Dict[str, str], file_path: Path, xml_index: Dict[str, Dict[str, str]]
+) -> None:
     """Fill missing naming metadata from XML index when available."""
     if not xml_index:
         return
 
-    druid = _best_druid_from_text(meta.get("@DRUID", "")) or _infer_druid_from_path(file_path)
+    druid = _best_druid_from_text(meta.get("@DRUID", "")) or _infer_druid_from_path(
+        file_path
+    )
     if not druid:
         return
 
@@ -426,9 +565,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="+",
         help='Glob pattern(s), e.g. "*.mid" "*.wav" "*.mp3". Quote patterns to avoid shell expansion.',
     )
-    parser.add_argument("-e", "--export-csv", nargs="?", const="__AUTO__", metavar="PATH")
-    parser.add_argument("-r", "--rename", action="store_true", help="Rename files using metadata.")
-    parser.add_argument("--dry-run", action="store_true", help="Preview rename actions.")
+    parser.add_argument(
+        "-e", "--export-csv", nargs="?", const="__AUTO__", metavar="PATH"
+    )
+    parser.add_argument(
+        "-r", "--rename", action="store_true", help="Rename files using metadata."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview rename actions."
+    )
     parser.add_argument(
         "--name-format",
         default=DEFAULT_RENAME_TEMPLATE,
@@ -494,7 +639,9 @@ def read_metadata_for_files(
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     export_csv = args.export_csv is not None
-    csv_output = default_export_filename() if args.export_csv == "__AUTO__" else args.export_csv
+    csv_output = (
+        default_export_filename() if args.export_csv == "__AUTO__" else args.export_csv
+    )
 
     print(f"Working directory: {Path.cwd()}")
     print(f"Patterns: {list(args.patterns)}")
@@ -524,8 +671,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Loaded {len(xml_index)} XML records from: {xml_path}")
 
     if args.rename and not export_csv:
-        print(f"\n--- {'DRY RUN: ' if args.dry_run else ''}Renaming {len(all_files)} files ---")
-        renamed = rename_files_sequential(all_files, args.dry_run, args.name_format, xml_index)
+        print(
+            f"\n--- {'DRY RUN: ' if args.dry_run else ''}Renaming {len(all_files)} files ---"
+        )
+        renamed = rename_files_sequential(
+            all_files, args.dry_run, args.name_format, xml_index
+        )
         print(f"{'Would rename' if args.dry_run else 'Renamed'} {renamed} files.")
         return 0
 
@@ -535,8 +686,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         export_to_csv(metadata_list, csv_output)
 
     if args.rename:
-        print(f"\n--- {'DRY RUN: ' if args.dry_run else ''}Renaming {len(metadata_list)} files ---")
-        renamed = rename_files_from_metadata(metadata_list, args.dry_run, args.name_format)
+        print(
+            f"\n--- {'DRY RUN: ' if args.dry_run else ''}Renaming {len(metadata_list)} files ---"
+        )
+        renamed = rename_files_from_metadata(
+            metadata_list, args.dry_run, args.name_format
+        )
         print(f"{'Would rename' if args.dry_run else 'Renamed'} {renamed} files.")
 
     if not export_csv and not args.rename:
