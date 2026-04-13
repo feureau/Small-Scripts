@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.10 (GUI Metadata Entry)
+VERSION: 6.18 (Console-Only Cleanup)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,31 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-04-13] VERSION 6.18 UPDATE
+   - REMOVED: Entire Tkinter GUI system and --gui flag.
+   - CLEANUP: Codebase is now strictly console-only for minimal weight.
+
+[2026-04-13] VERSION 6.17 UPDATE
+   - MODIFIED: Major GUI v2.0 overhaul. (REMOVED in 6.18)
+
+[2026-04-13] VERSION 6.16 UPDATE
+   - ADDED: Advanced range detection in folder names (e.g., 1900-1950).
+   - MODIFIED: Date field defaults to full YYYY-MM-DD.
+   - MODIFIED: Coverage and Temporal fields default to Year or Year Range.
+
+[2026-04-13] VERSION 6.15 UPDATE
+
+[2026-04-13] VERSION 6.14 UPDATE
+
+[2026-04-13] VERSION 6.13 UPDATE
+
+[2026-04-13] VERSION 6.12 UPDATE
+   - MODIFIED: GUI disabled by default. Console-only mode is now the default for metadata entry.
+   - ADDED: --gui flag to enable the Tkinter GUI for metadata entry.
+
+[2026-04-13] VERSION 6.11 UPDATE
+   - ADDED: --no-gui flag to disable GUI and use console-only mode for metadata entry.
+
 [2026-04-13] VERSION 6.10 UPDATE
    - ADDED: Tkinter GUI for metadata entry with dark mode theme.
    - ADDED: All basic and extended metadata fields in GUI.
@@ -104,30 +129,25 @@ CHANGE LOG
 ================================================================================
 """
 
-import sys
-import shutil
-import os
+import argparse
+import datetime
 import hashlib
+import io
+import json
+import os
 import queue
+import re
+import shutil
+import sys
 import threading
 import time
-import argparse
-import re
-import json
-import io
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from internetarchive import upload, get_session, get_item
+from pathlib import Path
 
-# Tkinter for GUI metadata entry
-try:
-    import tkinter as tk
-    from tkinter import ttk, messagebox
+from internetarchive import get_item, get_session, upload
 
-    TKINTER_AVAILABLE = True
-except ImportError:
-    TKINTER_AVAILABLE = False
+
 
 # Fix Windows console encoding for special characters
 if sys.platform == "win32":
@@ -154,10 +174,11 @@ shutdown_event = threading.Event()
 results_lock = threading.Lock()
 final_results = {"success": [], "failed": [], "cancelled": []}
 VERBOSE = False  # Set by --verbose flag
+COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", "zxx"]
 
 # --- CONFIGURATION DEFAULTS ---
-DEFAULT_THREADS = 3
-MAX_RETRIES = 10
+DEFAULT_THREADS = 6
+MAX_RETRIES = 20
 RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
 CONNECT_TIMEOUT = 30
@@ -208,6 +229,46 @@ class ProgressWrapper:
 
 def normalize_path(path_str):
     return path_str.lower().replace("\\", "/").replace(" ", "_")
+
+
+def extract_date_from_string(text):
+    """
+    Attempts to find dates and ranges in the string.
+    Returns a dict with 'date' (full YYYY-MM-DD or partial) and 'period' (Year or Range).
+    """
+    if not text:
+        return {"date": None, "period": None}
+
+    clean_text = text.strip().strip("\"").strip("'")
+
+    # 1. Look for year ranges: 1900-1950 or 1900/1950
+    range_match = re.search(r"(\d{4}[-/]\d{4})", clean_text)
+
+    # 2. Look for full date: YYYY-MM-DD
+    full_date_match = re.search(r"(\d{4}-\d{2}-\d{2})", clean_text)
+
+    # 3. Look for partial dates: YYYY-MM or YYYY
+    month_match = re.search(r"(\d{4}-\d{2})", clean_text)
+    year_match = re.search(r"(\d{4})", clean_text)
+
+    # Determine full_date
+    date_val = None
+    if full_date_match:
+        date_val = full_date_match.group(1)
+    elif month_match:
+        date_val = month_match.group(1)
+    elif year_match:
+        date_val = year_match.group(1)
+
+    # Determine period (Priority to Range, then Year)
+    period_val = None
+    if range_match:
+        # Standardize range to YYYY-YYYY or YYYY/YYYY (using dash as default for IA)
+        period_val = range_match.group(1).replace("/", "-")
+    elif year_match:
+        period_val = year_match.group(1)
+
+    return {"date": date_val, "period": period_val}
 
 
 def calculate_md5(filepath, block_size=8192):
@@ -302,7 +363,13 @@ def get_account_collections(session):
     return []
 
 
-def collect_metadata(default_title, prefills=None, account_collections=None):
+def collect_metadata(
+    default_title,
+    prefills=None,
+    account_collections=None,
+    suggested_date=None,
+    suggested_period=None,
+):
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
     print(
@@ -432,14 +499,19 @@ def collect_metadata(default_title, prefills=None, account_collections=None):
         metadata["subject"] = subjects
 
     # Additional optional fields from prefills
-    language_default = prefills.get("language") if prefills else None
-    date_default = prefills.get("date") if prefills else None
+    language_default = prefills.get("language") if prefills else "en"
+    date_default = prefills.get("date") if prefills else suggested_date
     publisher_default = prefills.get("publisher") if prefills else None
     rights_default = prefills.get("rights") if prefills else None
     contributor_default = prefills.get("contributor") if prefills else None
     source_default = prefills.get("source") if prefills else None
-    coverage_default = prefills.get("coverage") if prefills else None
-    temporal_default = prefills.get("temporal") if prefills else None
+
+    # Sync Rights with License selection if not prefilled
+    if choice in license_options and not rights_default:
+        rights_default = license_options[choice][0]
+
+    coverage_default = prefills.get("coverage") if prefills else suggested_period
+    temporal_default = prefills.get("temporal") if prefills else suggested_period
     spatial_default = prefills.get("spatial") if prefills else None
     citation_default = prefills.get("citation") if prefills else None
     type_default = prefills.get("type") if prefills else None
@@ -509,676 +581,213 @@ def collect_metadata(default_title, prefills=None, account_collections=None):
     return metadata
 
 
-def show_metadata_gui(prefills=None):
-    if not TKINTER_AVAILABLE:
-        return None
 
-    if prefills is None:
-        prefills = {}
-
-    DARK_BG = "#1e1e1e"
-    DARK_FG = "#e0e0e0"
-    ENTRY_BG = "#2d2d2d"
-    BUTTON_BG = "#3a3a3a"
-    BUTTON_FG = "#e0e0e0"
-    ACCENT = "#007acc"
-    ACCENT_HOVER = "#005a9e"
-    RED = "#e74c3c"
-    RED_HOVER = "#c0392b"
-    LABEL_BG = "#1e1e1e"
-
-    LICENSE_OPTIONS = [
-        "GPLv3 (https://www.gnu.org/licenses/gpl-3.0.html)",
-        "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
-        "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
-        "CC BY-ND 4.0 (https://creativecommons.org/licenses/by-nd/4.0/)",
-        "CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)",
-        "CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)",
-        "CC BY-NC-ND 4.0 (https://creativecommons.org/licenses/by-nc-nd/4.0/)",
-        "CC0 1.0 (Public Domain) (https://creativecommons.org/publicdomain/zero/1.0/)",
-        "PDM 1.0 (Public Domain Mark) (https://creativecommons.org/publicdomain/mark/1.0/)",
-        "Custom URL",
-    ]
-
-    MEDIATYPE_OPTIONS = ["data", "image", "audio", "texts", "movies", "software"]
-
-    root = tk.Tk()
-    root.title("Internet Archive - Metadata Entry")
-    root.configure(bg=DARK_BG)
-    root.geometry("900x800")
-    root.minsize(800, 700)
-
-    fields = {}
-
-    def create_row(
-        parent,
-        label_text,
-        row,
-        is_required=False,
-        is_text=False,
-        text_height=1,
-        default_val="",
-        is_combo=False,
-        combo_options=None,
-        is_custom=False,
-    ):
-        lbl = tk.Label(
-            parent,
-            text=label_text + (" *" if is_required else ""),
-            bg=LABEL_BG,
-            fg=DARK_FG,
-            font=("Segoe UI", 10),
-            anchor="e",
-        )
-        lbl.grid(row=row, column=0, sticky="e", padx=(10, 5), pady=5)
-
-        if is_combo and combo_options:
-            var = tk.StringVar(value=default_val or combo_options[0])
-            combo = ttk.Combobox(
-                parent,
-                textvariable=var,
-                values=combo_options,
-                state="readonly",
-                width=40,
-            )
-            combo.grid(row=row, column=1, sticky="w", padx=(5, 5), pady=5)
-            fields[label_text] = var
-        elif is_text:
-            text_widget = tk.Text(
-                parent,
-                height=text_height,
-                bg=ENTRY_BG,
-                fg=DARK_FG,
-                font=("Segoe UI", 10),
-                relief="flat",
-                borderwidth=1,
-            )
-            text_widget.insert("1.0", default_val or "")
-            text_widget.grid(
-                row=row, column=1, columnspan=2, sticky="ew", padx=(5, 5), pady=5
-            )
-            fields[label_text] = text_widget
-        else:
-            entry_var = tk.StringVar(value=default_val or "")
-            entry = tk.Entry(
-                parent,
-                textvariable=entry_var,
-                bg=ENTRY_BG,
-                fg=DARK_FG,
-                font=("Segoe UI", 10),
-                relief="flat",
-                borderwidth=1,
-                insertbackground=DARK_FG,
-            )
-            entry.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
-            fields[label_text] = entry_var
-
-        clear_btn = tk.Button(
-            parent,
-            text="Clear",
-            bg=BUTTON_BG,
-            fg=BUTTON_FG,
-            font=("Segoe UI", 9),
-            relief="flat",
-            command=lambda: (
-                entry_var.set("")
-                if not is_text
-                else (text_widget.delete("1.0", "end"), entry_var.set(""))
-            )
-            if not is_combo
-            else (var.set(combo_options[0]) if combo_options else None),
-            width=6,
-        )
-        clear_btn.grid(row=row, column=2, padx=(2, 10), pady=5)
-
-        if is_custom:
-            remove_btn = tk.Button(
-                parent,
-                text="X",
-                bg=RED,
-                fg="white",
-                font=("Segoe UI", 9),
-                relief="flat",
-                width=3,
-            )
-            remove_btn.grid(row=row, column=3, padx=(2, 10), pady=5)
-            return remove_btn
-
-        return None
-
-    canvas = tk.Canvas(root, bg=DARK_BG, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
-    scrollable_frame = tk.Frame(canvas, bg=DARK_BG)
-
-    scrollable_frame.bind(
-        "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    title_label = tk.Label(
-        scrollable_frame,
-        text="Internet Archive Metadata",
-        bg=DARK_BG,
-        fg=ACCENT,
-        font=("Segoe UI", 16, "bold"),
-    )
-    title_label.grid(row=0, column=0, columnspan=4, pady=(15, 20))
-
-    if prefills:
-        info_label = tk.Label(
-            scrollable_frame,
-            text=f"Loaded {len(prefills)} fields from metadata file",
-            bg=DARK_BG,
-            fg="#888888",
-            font=("Segoe UI", 9),
-        )
-        info_label.grid(row=1, column=0, columnspan=4, pady=(0, 10))
-
-    section_row = 2
-    tk.Label(
-        scrollable_frame,
-        text="Required Fields",
-        bg=DARK_BG,
-        fg=ACCENT,
-        font=("Segoe UI", 12, "bold"),
-    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(10, 5))
-    section_row += 1
-
-    create_row(
-        scrollable_frame,
-        "Title",
-        section_row,
-        is_required=True,
-        default_val=prefills.get("title", ""),
-    )
-    section_row += 1
-    create_row(
-        scrollable_frame,
-        "Mediatype",
-        section_row,
-        is_required=True,
-        is_combo=True,
-        combo_options=MEDIATYPE_OPTIONS,
-        default_val=prefills.get("mediatype", ""),
-    )
-    section_row += 1
-    create_row(
-        scrollable_frame,
-        "Collection",
-        section_row,
-        default_val=prefills.get("collection", ""),
-    )
-    section_row += 1
-
-    tk.Label(
-        scrollable_frame,
-        text="Basic Fields",
-        bg=DARK_BG,
-        fg=ACCENT,
-        font=("Segoe UI", 12, "bold"),
-    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
-    section_row += 1
-
-    create_row(
-        scrollable_frame,
-        "Creator",
-        section_row,
-        default_val=prefills.get("creator", ""),
-    )
-    section_row += 1
-    create_row(
-        scrollable_frame,
-        "Description",
-        section_row,
-        is_text=True,
-        text_height=4,
-        default_val=prefills.get("description", ""),
-    )
-    section_row += 1
-    create_row(
-        scrollable_frame,
-        "Tags (comma sep)",
-        section_row,
-        default_val=prefills.get("tags", ""),
-    )
-    section_row += 1
-
+    sec_context.columnconfigure(0, weight=1)
+    sec_context.columnconfigure(1, weight=1)
+    
+    create_field(sec_context, "Coverage", 0, 0, default_val=prefills.get("coverage", suggested_period or ""))
+    create_field(sec_context, "Temporal", 0, 1, default_val=prefills.get("temporal", suggested_period or ""))
+    create_field(sec_context, "Spatial", 1, 0, default_val=prefills.get("spatial", ""))
+    
+    # 5. LEGAL & LICENSING
+    sec_legal = create_section(content_frame, "Legal & Licensing", 2, 0, colspan=2)
+    sec_legal.columnconfigure(0, weight=2)
+    sec_legal.columnconfigure(1, weight=1)
+    sec_legal.columnconfigure(2, weight=1)
+    
     license_var = tk.StringVar()
     license_url_var = tk.StringVar(value=prefills.get("licenseurl", ""))
-
-    license_default = prefills.get("licenseurl", "")
-    default_license_idx = 0
+    
+    # Custom creation for License due to its complexity
+    tk.Label(sec_legal, text="License Selection", bg=DARK_BG, fg=DARK_FG, font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w", padx=5)
+    license_combo = ttk.Combobox(sec_legal, textvariable=license_var, values=LICENSE_OPTIONS, state="readonly", width=50)
+    license_combo.grid(row=1, column=0, sticky="ew", padx=5)
+    
+    # Map current URL to license combo
+    def_idx = 0
     for idx, opt in enumerate(LICENSE_OPTIONS):
-        if license_default in opt:
-            default_license_idx = idx
+        if prefills.get("licenseurl", "") in opt:
+            def_idx = idx
             break
-
-    tk.Label(
-        scrollable_frame,
-        text="License",
-        bg=LABEL_BG,
-        fg=DARK_FG,
-        font=("Segoe UI", 10),
-        anchor="e",
-    ).grid(row=section_row, column=0, sticky="e", padx=(10, 5), pady=5)
-    license_combo = ttk.Combobox(
-        scrollable_frame,
-        textvariable=license_var,
-        values=LICENSE_OPTIONS,
-        state="readonly",
-        width=40,
-    )
-    license_combo.current(default_license_idx)
-    license_combo.grid(row=section_row, column=1, sticky="w", padx=(5, 5), pady=5)
+    license_combo.current(def_idx)
     fields["License"] = license_var
 
-    tk.Button(
-        scrollable_frame,
-        text="Clear",
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        font=("Segoe UI", 9),
-        relief="flat",
-        command=lambda: license_combo.current(0),
-    ).grid(row=section_row, column=2, padx=(2, 10), pady=5)
-    section_row += 1
-
-    tk.Label(
-        scrollable_frame,
-        text="License URL",
-        bg=LABEL_BG,
-        fg=DARK_FG,
-        font=("Segoe UI", 10),
-        anchor="e",
-    ).grid(row=section_row, column=0, sticky="e", padx=(10, 5), pady=5)
-    license_url_entry = tk.Entry(
-        scrollable_frame,
-        textvariable=license_url_var,
-        bg=ENTRY_BG,
-        fg=DARK_FG,
-        font=("Segoe UI", 10),
-        relief="flat",
-        borderwidth=1,
-        insertbackground=DARK_FG,
-    )
-    license_url_entry.grid(row=section_row, column=1, sticky="ew", padx=(5, 5), pady=5)
-    fields["License URL"] = license_url_var
-    tk.Button(
-        scrollable_frame,
-        text="Clear",
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        font=("Segoe UI", 9),
-        relief="flat",
-        command=lambda: license_url_var.set(""),
-    ).grid(row=section_row, column=2, padx=(2, 10), pady=5)
-    section_row += 1
+    create_field(sec_legal, "License URL", 0, 1, default_val=prefills.get("licenseurl", ""))
+    # Fix the reference in sync below
+    license_url_entry_var = fields["License URL"]
+    
+    create_field(sec_legal, "Rights", 0, 2, default_val=prefills.get("rights", ""))
 
     def on_license_change(*args):
-        if license_var.get() == "Custom URL":
-            license_url_entry.config(state="normal")
-        else:
+        selection = license_var.get()
+        if selection != "Custom URL":
             for opt in LICENSE_OPTIONS:
-                if opt == license_var.get():
+                if opt == selection:
+                    # Sync Rights field
+                    rights_name = opt.split(" (")[0]
+                    if "Rights" in fields:
+                        fields["Rights"].set(rights_name)
+                    # Sync URL
                     url_start = opt.find("http")
                     if url_start > 0:
-                        license_url_var.set(opt[url_start:])
+                        url = opt[url_start:].rstrip(")")
+                        fields["License URL"].set(url)
                     break
-            license_url_entry.config(state="normal")
-
     license_var.trace("w", on_license_change)
 
-    tk.Label(
-        scrollable_frame,
-        text="Extended Fields",
-        bg=DARK_BG,
-        fg=ACCENT,
-        font=("Segoe UI", 12, "bold"),
-    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
-    section_row += 1
-
-    extended_fields = [
-        ("Language", prefills.get("language", "")),
-        ("Date", prefills.get("date", "")),
-        ("Publisher", prefills.get("publisher", "")),
-        ("Rights", prefills.get("rights", "")),
-        ("Contributor", prefills.get("contributor", "")),
-        ("Source", prefills.get("source", "")),
-        ("Coverage", prefills.get("coverage", "")),
-        ("Temporal", prefills.get("temporal", "")),
-        ("Spatial", prefills.get("spatial", "")),
-        ("Type", prefills.get("type", "")),
-    ]
-
-    for field_name, default_val in extended_fields:
-        create_row(scrollable_frame, field_name, section_row, default_val=default_val)
-        section_row += 1
-
-    create_row(
-        scrollable_frame,
-        "Citation",
-        section_row,
-        is_text=True,
-        text_height=3,
-        default_val=prefills.get("citation", ""),
-    )
-    section_row += 1
-
-    create_row(
-        scrollable_frame,
-        "Relation (comma URLs)",
-        section_row,
-        default_val=prefills.get("relation", ""),
-    )
-    section_row += 1
-
-    format_val = ""
+    # 6. EXTRAS (Citation, Relation, Format)
+    sec_extras = create_section(content_frame, "Relationships & Formats", 3, 0, colspan=2)
+    sec_extras.columnconfigure(0, weight=2)
+    sec_extras.columnconfigure(1, weight=1)
+    sec_extras.columnconfigure(2, weight=1)
+    
+    create_field(sec_extras, "Citation", 0, 0, is_text=True, text_height=3, default_val=prefills.get("citation", ""))
+    create_field(sec_extras, "Relation (comma URLs)", 0, 1, default_val=prefills.get("relation", ""))
+    
+    f_val = ""
     if prefills.get("format"):
-        if isinstance(prefills["format"], list):
-            format_val = ", ".join(prefills["format"])
-        else:
-            format_val = str(prefills["format"])
-    create_row(
-        scrollable_frame, "Format (comma sep)", section_row, default_val=format_val
-    )
-    section_row += 1
+        f_val = ", ".join(prefills["format"]) if isinstance(prefills["format"], list) else str(prefills["format"])
+    create_field(sec_extras, "Format (comma sep)", 0, 2, default_val=f_val)
 
-    tk.Label(
-        scrollable_frame,
-        text="Custom Fields",
-        bg=DARK_BG,
-        fg=ACCENT,
-        font=("Segoe UI", 12, "bold"),
-    ).grid(row=section_row, column=0, columnspan=4, sticky="w", padx=10, pady=(15, 5))
-    section_row += 1
-
-    custom_frame = tk.Frame(scrollable_frame, bg=DARK_BG)
-    custom_frame.grid(row=section_row, column=0, columnspan=4, sticky="ew", padx=10)
-    section_row += 1
-
+    # 7. CUSTOM FIELDS (Dynamic)
+    sec_custom = create_section(content_frame, "Custom Metadata", 4, 0, colspan=2)
+    custom_container = tk.Frame(sec_custom, bg=DARK_BG)
+    custom_container.pack(fill="x")
+    
     custom_fields_data = []
-    if prefills.get("_custom"):
-        for key, val in prefills["_custom"].items():
-            custom_fields_data.append({"key": key, "value": str(val)})
+    
+    def add_custom_row(key_val="", val_val=""):
+        idx = len(custom_fields_data)
+        row_frame = tk.Frame(custom_container, bg=DARK_BG)
+        row_frame.pack(fill="x", pady=2)
+        
+        k_var = tk.StringVar(value=key_val)
+        v_var = tk.StringVar(value=val_val)
+        
+        k_ent = tk.Entry(row_frame, textvariable=k_var, bg=ENTRY_BG, fg=DARK_FG, relief="flat", width=25)
+        k_ent.pack(side="left", padx=5)
+        
+        v_ent = tk.Entry(row_frame, textvariable=v_var, bg=ENTRY_BG, fg=DARK_FG, relief="flat", width=50)
+        v_ent.pack(side="left", padx=5, fill="x", expand=True)
+        
+        def remove_row():
+            row_frame.destroy()
+            custom_fields_data.remove(row_data)
+            
+        rem_btn = tk.Button(row_frame, text="X", bg=RED, fg="white", relief="flat", width=3, command=remove_row)
+        rem_btn.pack(side="right", padx=5)
+        
+        row_data = {"key_var": k_var, "value_var": v_var}
+        custom_fields_data.append(row_data)
 
-    def add_custom_row(key_val="", value_val=""):
-        row_idx = len(custom_fields_data)
-        key_var = tk.StringVar(value=key_val)
-        value_var = tk.StringVar(value=value_val)
+    # 8. ACCOUNT COLLECTIONS (Reference)
+    if account_collections:
+        sec_accounts = create_section(content_frame, "Account Collections (Ref)", 5, 0, colspan=2)
+        c_str = ", ".join(account_collections)
+        tk.Label(
+            sec_accounts,
+            text=f"Available for your account: {c_str}",
+            bg=DARK_BG,
+            fg="#888888",
+            font=("Segoe UI", 9, "italic"),
+            wraplength=900,
+            justify="left",
+        ).pack(fill="x", padx=5)
 
-        key_entry = tk.Entry(
-            custom_frame,
-            textvariable=key_var,
-            bg=ENTRY_BG,
-            fg=DARK_FG,
-            font=("Segoe UI", 10),
-            relief="flat",
-            borderwidth=1,
-            insertbackground=DARK_FG,
-            width=20,
-        )
-        key_entry.grid(row=row_idx, column=0, padx=(0, 5), pady=2)
-
-        value_entry = tk.Entry(
-            custom_frame,
-            textvariable=value_var,
-            bg=ENTRY_BG,
-            fg=DARK_FG,
-            font=("Segoe UI", 10),
-            relief="flat",
-            borderwidth=1,
-            insertbackground=DARK_FG,
-            width=40,
-        )
-        value_entry.grid(row=row_idx, column=1, padx=(5, 5), pady=2)
-
-        clear_btn = tk.Button(
-            custom_frame,
-            text="Clear",
-            bg=BUTTON_BG,
-            fg=BUTTON_FG,
-            font=("Segoe UI", 9),
-            relief="flat",
-            command=lambda: (key_var.set(""), value_var.set("")),
-            width=6,
-        )
-        clear_btn.grid(row=row_idx, column=2, padx=(2, 5), pady=2)
-
-        remove_btn = tk.Button(
-            custom_frame,
-            text="X",
-            bg=RED,
-            fg="white",
-            font=("Segoe UI", 9),
-            relief="flat",
-            command=lambda r=row_idx: remove_custom_row(r),
-            width=3,
-        )
-        remove_btn.grid(row=row_idx, column=3, padx=(2, 0), pady=2)
-
-        custom_fields_data.append(
-            {
-                "key_var": key_var,
-                "value_var": value_var,
-                "key_entry": key_entry,
-                "value_entry": value_entry,
-                "remove_btn": remove_btn,
-            }
-        )
-        update_custom_rows()
-
-    def remove_custom_row(idx):
-        if idx < len(custom_fields_data):
-            item = custom_fields_data[idx]
-            item["key_entry"].destroy()
-            item["value_entry"].destroy()
-            item["remove_btn"].destroy()
-            custom_fields_data.pop(idx)
-            update_custom_rows()
-
-    def update_custom_rows():
-        for i, item in enumerate(custom_fields_data):
-            item["key_entry"].grid(row=i, column=0)
-            item["value_entry"].grid(row=i, column=1)
-            item["remove_btn"].grid(row=i, column=3)
-
-    for cf in custom_fields_data:
-        add_custom_row(cf.get("key", ""), cf.get("value", ""))
-
-    if not custom_fields_data:
-        add_custom_row()
-
-    add_custom_btn = tk.Button(
-        scrollable_frame,
-        text="+ Add Custom Field",
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        font=("Segoe UI", 10),
-        relief="flat",
-        command=lambda: add_custom_row(),
-    )
-    add_custom_btn.grid(
-        row=section_row, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 15)
-    )
-    section_row += 1
-
-    button_frame = tk.Frame(root, bg=DARK_BG, pady=15)
+    # --- BUTTON BAR (FOOTER) ---
+    button_frame = tk.Frame(root, bg=DARK_BG, pady=20, borderwidth=1, relief="flat")
     button_frame.pack(side="bottom", fill="x")
+    
+    # Separator
+    tk.Frame(button_frame, bg=BORDER, height=1).place(relx=0, rely=0, relwidth=1)
 
     def reset_to_defaults():
-        fields["Title"].set(prefills.get("title", ""))
-        fields["Mediatype"].set(prefills.get("mediatype", MEDIATYPE_OPTIONS[0]))
-        fields["Collection"].set(prefills.get("collection", ""))
-        fields["Creator"].set(prefills.get("creator", ""))
-        if "Description" in fields:
-            fields["Description"].delete("1.0", "end")
-            fields["Description"].insert("1.0", prefills.get("description", ""))
-        fields["Tags (comma sep)"].set(prefills.get("tags", ""))
+        if messagebox.askyesno("Reset", "Reset all fields to defaults?"):
+            fields["Title"].set(prefills.get("title", ""))
+            fields["Mediatype"].set(prefills.get("mediatype", MEDIATYPE_OPTIONS[0]))
+            fields["Collection"].set(prefills.get("collection", ""))
+            fields["Creator"].set(prefills.get("creator", ""))
+            fields["Tags (comma sep)"].set(prefills.get("tags", ""))
+            
+            if "Description" in fields:
+                fields["Description"].delete("1.0", "end")
+                fields["Description"].insert("1.0", prefills.get("description", ""))
 
-        license_default = prefills.get("licenseurl", "")
-        default_idx = 0
-        for idx, opt in enumerate(LICENSE_OPTIONS):
-            if license_default in opt:
-                default_idx = idx
-                break
-        license_combo.current(default_idx)
+            # Reset Extended & Properties
+            prop_fields = ["Date", "Language", "Type", "Publisher", "Contributor", "Source", "Coverage", "Temporal", "Spatial", "Rights"]
+            for f in prop_fields:
+                if f in fields:
+                    if f == "Date": fields[f].set(prefills.get("date", suggested_date or ""))
+                    elif f == "Language": fields[f].set(prefills.get("language", "en"))
+                    elif f == "Coverage": fields[f].set(prefills.get("coverage", suggested_period or ""))
+                    elif f == "Temporal": fields[f].set(prefills.get("temporal", suggested_period or ""))
+                    else: fields[f].set(prefills.get("rights", "") if f == "Rights" else "")
 
-        for field_name, default_val in extended_fields:
-            if field_name in fields:
-                fields[field_name].set(default_val)
-
-        if "Citation" in fields:
-            fields["Citation"].delete("1.0", "end")
-            fields["Citation"].insert("1.0", prefills.get("citation", ""))
-        fields["Relation (comma URLs)"].set(prefills.get("relation", ""))
-        fields["Format (comma sep)"].set(format_val)
-
-        for item in custom_fields_data:
-            item["key_var"].set("")
-            item["value_var"].set("")
+            if "Citation" in fields:
+                fields["Citation"].delete("1.0", "end")
+                fields["Citation"].insert("1.0", prefills.get("citation", ""))
+            
+            fields["Relation (comma URLs)"].set(prefills.get("relation", ""))
+            
+            f_val = ""
+            if prefills.get("format"):
+                f_val = ", ".join(prefills["format"]) if isinstance(prefills["format"], list) else str(prefills["format"])
+            fields["Format (comma sep)"].set(f_val)
 
     def on_proceed():
-        title_val = fields["Title"].get().strip()
-        if not title_val:
-            messagebox.showerror("Validation Error", "Title is required!")
+        t_val = fields["Title"].get().strip()
+        if not t_val:
+            messagebox.showerror("Error", "Title is required!")
             return
-
-        mediatype_val = fields["Mediatype"].get().strip()
-        if mediatype_val not in MEDIATYPE_OPTIONS:
-            messagebox.showerror(
-                "Validation Error",
-                f"Mediatype must be one of: {', '.join(MEDIATYPE_OPTIONS)}",
-            )
-            return
-
+        
         metadata = {
-            "title": title_val,
-            "mediatype": mediatype_val,
+            "title": t_val,
+            "mediatype": fields["Mediatype"].get()
         }
-
-        collection_val = fields["Collection"].get().strip()
-        if collection_val:
-            metadata["collection"] = collection_val
-
-        creator_val = fields["Creator"].get().strip()
-        if creator_val:
-            metadata["creator"] = creator_val
-
+        
+        # Simple string fields
+        for f, k in [("Collection", "collection"), ("Creator", "creator"), 
+                     ("Date", "date"), ("Language", "language"), ("Publisher", "publisher"),
+                     ("Rights", "rights"), ("Contributor", "contributor"), ("Source", "source"),
+                     ("Coverage", "coverage"), ("Temporal", "temporal"), ("Spatial", "spatial"),
+                     ("Type", "type"), ("License URL", "licenseurl")]:
+            if f in fields:
+                val = fields[f].get().strip()
+                if val: metadata[k] = val
+        
+        # Text fields
         if "Description" in fields:
-            desc_val = fields["Description"].get("1.0", "end").strip()
-            if desc_val:
-                metadata["description"] = desc_val
-
-        tags_val = fields["Tags (comma sep)"].get().strip()
-        if tags_val:
-            metadata["subject"] = [t.strip() for t in tags_val.split(",") if t.strip()]
-
-        license_url_val = license_url_var.get().strip()
-        if license_url_val:
-            metadata["licenseurl"] = license_url_val
-
-        for field_name, key_name in [
-            ("Language", "language"),
-            ("Date", "date"),
-            ("Publisher", "publisher"),
-            ("Rights", "rights"),
-            ("Contributor", "contributor"),
-            ("Source", "source"),
-            ("Coverage", "coverage"),
-            ("Temporal", "temporal"),
-            ("Spatial", "spatial"),
-            ("Type", "type"),
-        ]:
-            if field_name in fields:
-                val = fields[field_name].get().strip()
-                if val:
-                    metadata[key_name] = val
-
+            d = fields["Description"].get("1.0", "end").strip()
+            if d: metadata["description"] = d
         if "Citation" in fields:
-            citation_val = fields["Citation"].get("1.0", "end").strip()
-            if citation_val:
-                metadata["citation"] = citation_val
+            c = fields["Citation"].get("1.0", "end").strip()
+            if c: metadata["citation"] = c
+            
+        # List fields
+        tags = fields["Tags (comma sep)"].get().strip()
+        if tags: metadata["subject"] = [t.strip() for t in tags.split(",") if t.strip()]
+        
+        rel = fields["Relation (comma URLs)"].get().strip()
+        if rel: metadata["relation"] = [r.strip() for r in rel.split(",") if r.strip()]
+        
+        fmt = fields["Format (comma sep)"].get().strip()
+        if fmt: metadata["format"] = [f.strip() for f in fmt.split(",") if f.strip()]
 
-        relation_val = fields["Relation (comma URLs)"].get().strip()
-        if relation_val:
-            metadata["relation"] = [
-                r.strip() for r in relation_val.split(",") if r.strip()
-            ]
-
-        format_val = fields["Format (comma sep)"].get().strip()
-        if format_val:
-            metadata["format"] = [f.strip() for f in format_val.split(",") if f.strip()]
-
+        # Custom fields
         for item in custom_fields_data:
-            key = item["key_var"].get().strip()
-            val = item["value_var"].get().strip()
-            if key and val:
-                metadata[key] = val
+            k = item["key_var"].get().strip()
+            v = item["value_var"].get().strip()
+            if k and v: metadata[k] = v
 
+        result_capture["metadata"] = metadata
         root.destroy()
-        return metadata
 
     def on_cancel():
-        root.destroy()
-        return None
+        if messagebox.askyesno("Cancel", "Discard changes and cancel upload?"):
+            result_capture["metadata"] = None
+            root.destroy()
 
-    reset_btn = tk.Button(
-        button_frame,
-        text="Reset to Defaults",
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        font=("Segoe UI", 11),
-        relief="flat",
-        padx=20,
-        pady=8,
-        command=reset_to_defaults,
-    )
-    reset_btn.pack(side="left", padx=20)
 
-    cancel_btn = tk.Button(
-        button_frame,
-        text="Cancel",
-        bg=RED,
-        fg="white",
-        font=("Segoe UI", 11),
-        relief="flat",
-        padx=20,
-        pady=8,
-        command=on_cancel,
-    )
-    cancel_btn.pack(side="left", padx=10)
-
-    proceed_btn = tk.Button(
-        button_frame,
-        text="Proceed to Upload",
-        bg=ACCENT,
-        fg="white",
-        font=("Segoe UI", 11, "bold"),
-        relief="flat",
-        padx=25,
-        pady=8,
-        command=on_proceed,
-    )
-    proceed_btn.pack(side="right", padx=20)
-
-    style = ttk.Style()
-    style.theme_use("clam")
-    style.configure("Vertical.TScrollbar", background=BUTTON_BG, troughcolor=DARK_BG)
-    style.map(
-        "TCombobox",
-        fieldbackground=[("readonly", ENTRY_BG)],
-        background=[("readonly", BUTTON_BG)],
-        foreground=[("readonly", DARK_FG)],
-    )
-
-    root.mainloop()
-
-    return None
 
 
 def _xml_text(node):
@@ -1902,7 +1511,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.10) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.18) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if VERBOSE:
@@ -1939,6 +1548,17 @@ def main():
             sys.exit(1)
 
         folder_path = Path(folder_path_str)
+
+        # Extract suggested date and period from folder name early
+        date_info = extract_date_from_string(folder_path.name)
+        suggested_date = date_info["date"]
+        suggested_period = date_info["period"]
+
+        # Default to today if no date found
+        if not suggested_date:
+            suggested_date = datetime.date.today().strftime("%Y-%m-%d")
+        if not suggested_period:
+            suggested_period = datetime.date.today().strftime("%Y")
 
         # Load metadata prefills early to get identifier suggestion
         metadata_prefills = load_metadata_prefills(folder_path)
@@ -1983,47 +1603,23 @@ def main():
         if item.exists:
             if args.metadata:
                 if get_input("Update metadata? (y/n)", default="n").lower() == "y":
-                    if TKINTER_AVAILABLE:
-                        try:
-                            metadata = show_metadata_gui(metadata_prefills)
-                            if metadata is None:
-                                print("Metadata entry cancelled.")
-                                sys.exit(0)
-                        except Exception as e:
-                            print(f"GUI failed: {e}, falling back to CLI...")
-                            metadata = collect_metadata(
-                                title_suggestion,
-                                prefills=metadata_prefills,
-                                account_collections=account_collections,
-                            )
-                    else:
-                        metadata = collect_metadata(
-                            title_suggestion,
-                            prefills=metadata_prefills,
-                            account_collections=account_collections,
-                        )
-        else:
-            print(f"  > New item detected.")
-            is_new_item = True
-            if TKINTER_AVAILABLE:
-                try:
-                    metadata = show_metadata_gui(metadata_prefills)
-                    if metadata is None:
-                        print("Metadata entry cancelled.")
-                        sys.exit(0)
-                except Exception as e:
-                    print(f"GUI failed: {e}, falling back to CLI...")
                     metadata = collect_metadata(
                         title_suggestion,
                         prefills=metadata_prefills,
                         account_collections=account_collections,
+                        suggested_date=suggested_date,
+                        suggested_period=suggested_period,
                     )
-            else:
-                metadata = collect_metadata(
-                    title_suggestion,
-                    prefills=metadata_prefills,
-                    account_collections=account_collections,
-                )
+        else:
+            print(f"  > New item detected.")
+            is_new_item = True
+            metadata = collect_metadata(
+                title_suggestion,
+                prefills=metadata_prefills,
+                account_collections=account_collections,
+                suggested_date=suggested_date,
+                suggested_period=suggested_period,
+            )
 
         # 3. MD5 Scanning Phase
         print("\n" + "=" * 30)
