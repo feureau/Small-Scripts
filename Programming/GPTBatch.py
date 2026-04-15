@@ -3316,7 +3316,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.processing_paused = threading.Event()
         self.processing_cancelled = threading.Event()
-        self.worker_thread = None
+        self.worker_threads = []
+        self.successful_output_paths = []
+        self.successful_output_lock = threading.Lock()
+        self.model_switch_lock = threading.Lock()
         self.job_id_counter = 0
 
         self.files_var = tk.Variable(value=list(command_line_files or []))
@@ -3412,6 +3415,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.enable_multipass_var = tk.BooleanVar(value=False)
         self.multipass_count_var = tk.IntVar(value=1)
         self.multipass_prompt_widgets = []
+
+        self.concurrent_jobs_var = tk.IntVar(value=1)
 
         self.create_widgets()
         self.apply_theme()
@@ -3958,6 +3963,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             delay_frame, from_=0, to=60, textvariable=self.delay_sec_var, width=3
         ).pack(side=tk.LEFT, padx=2)
         ttk.Label(delay_frame, text="s").pack(side=tk.LEFT)
+
+        ttk.Label(delay_frame, text="  |  Concurrent Jobs:").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            delay_frame, from_=1, to=100, textvariable=self.concurrent_jobs_var, width=4
+        ).pack(side=tk.LEFT, padx=2)
 
         # === TAB: Image & Format ===
         tab_img = ttk.Frame(self.notebook, padding=10)
@@ -5506,20 +5516,26 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def start_processing(self):
         if not self.job_queue.empty() and (
-            not self.worker_thread or not self.worker_thread.is_alive()
+            not getattr(self, "worker_threads", None) or not any(t.is_alive() for t in self.worker_threads)
         ):
             self.current_run_merge_outputs = self.merge_outputs_var.get()
             self.processing_cancelled.clear()
             self.processing_paused.clear()
-            self.worker_thread = threading.Thread(target=self._worker, daemon=True)
-            self.worker_thread.start()
+            self.successful_output_paths = []
+            
+            concurrent_jobs = max(1, self.concurrent_jobs_var.get())
+            self.worker_threads = []
+            for _ in range(concurrent_jobs):
+                t = threading.Thread(target=self._worker, daemon=True)
+                t.start()
+                self.worker_threads.append(t)
             self.start_btn.config(state="disabled")
             self.pause_btn.config(state="normal", text="Pause")
             self.stop_btn.config(state="normal")
             self.clear_btn.config(state="disabled")
 
     def stop_processing(self):
-        if self.worker_thread and self.worker_thread.is_alive():
+        if getattr(self, "worker_threads", None) and any(t.is_alive() for t in self.worker_threads):
             if tkinter.messagebox.askokcancel("Stop", "Cancel current processing?"):
                 self.processing_cancelled.set()
                 self.stop_btn.config(state="disabled")
@@ -5694,7 +5710,26 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         self.tree.item(jid, tags=(tag,))
         except queue.Empty:
             pass
-        finally:
+        
+        workers_alive = False
+        if getattr(self, "worker_threads", None):
+            workers_alive = any(t.is_alive() for t in self.worker_threads)
+
+        if self.start_btn["state"] == "disabled" and not workers_alive:
+            self.start_btn.config(state="normal")
+            self.pause_btn.config(state="disabled", text="Pause")
+            self.stop_btn.config(state="disabled")
+            self.clear_btn.config(state="normal")
+            console_log("All jobs completed.", "SUCCESS")
+            if self.current_run_merge_outputs:
+                with self.successful_output_lock:
+                    paths_to_merge = list(self.successful_output_paths)
+                self._merge_completed_outputs_by_folder(paths_to_merge)
+            
+            if self.hibernate_var.get() and not self.processing_cancelled.is_set():
+                console_log("Hibernating system as requested by user...", "WARN")
+                os.system("shutdown /h")
+        else:
             self.after(100, self._check_result_queue)
 
     def update_tree_models(self, new_model_name):
@@ -5832,7 +5867,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def _worker(self):
         console_log("Worker thread started.", "INFO")
         first_job = True
-        successful_output_paths = []
         while not self.job_queue.empty():
             if self.processing_cancelled.is_set():
                 break
@@ -5928,7 +5962,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                             else None
                         )
                         if out_path and os.path.isfile(out_path):
-                            successful_output_paths.append(out_path)
+                            with self.successful_output_lock:
+                                self.successful_output_paths.append(out_path)
                         self.result_queue.put({"job_id": jid, "status": "Completed"})
                         break
                     else:
@@ -5963,100 +5998,108 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         e, ModelUnavailableError
                     ) or is_model_unavailable_error_message(err_str)
                     if (is_quota or is_model_unavailable) and not is_temp_unavailable:
-                        if is_model_unavailable:
-                            console_log(
-                                f"Job {jid} Model Unavailable. Asking user to switch model...",
-                                "WARN",
-                            )
-                        else:
-                            console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
-                        self.result_queue.put(
-                            {"job_id": jid, "status": "Waiting for User..."}
-                        )
-                        self.exhausted_models.add(params["model_name"])
-                        event_container = {"event": threading.Event(), "result": None}
-                        issue_type = (
-                            "model_unavailable" if is_model_unavailable else "quota"
-                        )
-                        issue_detail = ""
-                        if is_model_unavailable:
-                            issue_detail = preview_text(err_str, 240)
-                        self.after(
-                            0,
-                            lambda: self._ask_user_for_new_model(
-                                params["engine"],
-                                params["model_name"],
-                                event_container,
-                                issue_type=issue_type,
-                                issue_detail=issue_detail,
-                            ),
-                        )
-                        event_container["event"].wait()
-                        user_result = event_container["result"]
-                        if user_result:
-                            new_engine, new_model = user_result
-                            console_log(
-                                f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)",
-                                "ACTION",
-                            )
-                            self.global_runtime_overrides = {
-                                "engine": new_engine,
-                                "model_name": new_model,
-                            }
-                            params["engine"] = new_engine
-                            params["model_name"] = new_model
-                            if new_engine == "google":
-                                params["api_key"] = self.api_key
-                                if isinstance(params.get("safety_settings"), dict):
-                                    params["safety_settings"] = [
-                                        types.SafetySetting(
-                                            category="HARM_CATEGORY_HARASSMENT",
-                                            threshold="BLOCK_NONE",
-                                        ),
-                                        types.SafetySetting(
-                                            category="HARM_CATEGORY_HATE_SPEECH",
-                                            threshold="BLOCK_NONE",
-                                        ),
-                                        types.SafetySetting(
-                                            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                                            threshold="BLOCK_NONE",
-                                        ),
-                                        types.SafetySetting(
-                                            category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                                            threshold="BLOCK_NONE",
-                                        ),
-                                    ]
-                            self.after(0, lambda: self.update_tree_models(new_model))
-                            self.result_queue.put({"job_id": jid, "status": "Running"})
-                            attempt -= 1
-                            continue
-                        else:
+                        with self.model_switch_lock:
+                            # Verify if another thread already resolved the model switch
+                            if self.global_runtime_overrides and (self.global_runtime_overrides["engine"] != params["engine"] or self.global_runtime_overrides["model_name"] != params["model_name"]):
+                                params["engine"] = self.global_runtime_overrides["engine"]
+                                params["model_name"] = self.global_runtime_overrides["model_name"]
+                                attempt -= 1
+                                continue
+                            
                             if is_model_unavailable:
                                 console_log(
-                                    "User cancelled model switch for unavailable model. Marking job as failed.",
+                                    f"Job {jid} Model Unavailable. Asking user to switch model...",
                                     "WARN",
                                 )
-                                [copy_failed_file(fp) for fp in job["filepaths_group"]]
-                                self.result_queue.put(
-                                    {"job_id": jid, "status": "Failed"}
+                            else:
+                                console_log(f"Job {jid} Quota Hit. Asking user...", "WARN")
+                            self.result_queue.put(
+                                {"job_id": jid, "status": "Waiting for User..."}
+                            )
+                            self.exhausted_models.add(params["model_name"])
+                            event_container = {"event": threading.Event(), "result": None}
+                            issue_type = (
+                                "model_unavailable" if is_model_unavailable else "quota"
+                            )
+                            issue_detail = ""
+                            if is_model_unavailable:
+                                issue_detail = preview_text(err_str, 240)
+                            self.after(
+                                0,
+                                lambda: self._ask_user_for_new_model(
+                                    params["engine"],
+                                    params["model_name"],
+                                    event_container,
+                                    issue_type=issue_type,
+                                    issue_detail=issue_detail,
+                                ),
+                            )
+                            event_container["event"].wait()
+                            user_result = event_container["result"]
+                            if user_result:
+                                new_engine, new_model = user_result
+                                console_log(
+                                    f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)",
+                                    "ACTION",
                                 )
-                                if params.get("stop_queue_on_model_unavailable", True):
+                                self.global_runtime_overrides = {
+                                    "engine": new_engine,
+                                    "model_name": new_model,
+                                }
+                                params["engine"] = new_engine
+                                params["model_name"] = new_model
+                                if new_engine == "google":
+                                    params["api_key"] = self.api_key
+                                    if isinstance(params.get("safety_settings"), dict):
+                                        params["safety_settings"] = [
+                                            types.SafetySetting(
+                                                category="HARM_CATEGORY_HARASSMENT",
+                                                threshold="BLOCK_NONE",
+                                            ),
+                                            types.SafetySetting(
+                                                category="HARM_CATEGORY_HATE_SPEECH",
+                                                threshold="BLOCK_NONE",
+                                            ),
+                                            types.SafetySetting(
+                                                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                                threshold="BLOCK_NONE",
+                                            ),
+                                            types.SafetySetting(
+                                                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                                                threshold="BLOCK_NONE",
+                                            ),
+                                        ]
+                                self.after(0, lambda: self.update_tree_models(new_model))
+                                self.result_queue.put({"job_id": jid, "status": "Running"})
+                                attempt -= 1
+                                continue
+                            else:
+                                if is_model_unavailable:
                                     console_log(
-                                        "Auto-stop enabled: stopping remaining queue after model-unavailable cancellation.",
+                                        "User cancelled model switch for unavailable model. Marking job as failed.",
                                         "WARN",
                                     )
+                                    [copy_failed_file(fp) for fp in job["filepaths_group"]]
+                                    self.result_queue.put(
+                                        {"job_id": jid, "status": "Failed"}
+                                    )
+                                    if params.get("stop_queue_on_model_unavailable", True):
+                                        console_log(
+                                            "Auto-stop enabled: stopping remaining queue after model-unavailable cancellation.",
+                                            "WARN",
+                                        )
+                                        self.processing_cancelled.set()
+                                    break
+                                else:
+                                    console_log(
+                                        "User cancelled model switch for quota error. Stopping batch job.",
+                                        "WARN",
+                                    )
+                                    self.result_queue.put(
+                                        {"job_id": jid, "status": "Cancelled"}
+                                    )
                                     self.processing_cancelled.set()
-                                break
-                            else:
-                                console_log(
-                                    "User cancelled model switch for quota error. Stopping batch job.",
-                                    "WARN",
-                                )
-                                self.result_queue.put(
-                                    {"job_id": jid, "status": "Cancelled"}
-                                )
-                                self.processing_cancelled.set()
-                                break
+                                    break
 
                     if is_temp_unavailable:
                         current_max_retries = MAX_RETRIES_503
@@ -6084,18 +6127,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         self.result_queue.put({"job_id": jid, "status": "Failed"})
                         break
 
-        if (
-            getattr(self, "current_run_merge_outputs", False)
-            and not self.processing_cancelled.is_set()
-        ):
-            self._merge_completed_outputs_by_folder(successful_output_paths)
+            # Note: Hibernation is handled by the main thread in _check_result_queue instead when all workers are done.
+            # But just in case, we won't hibernate per worker.
 
-        # Check for hibernation request (if not cancelled by user)
-        if self.hibernate_var.get() and not self.processing_cancelled.is_set():
-            console_log("Hibernating system as requested by user...", "WARN")
-            os.system("shutdown /h")
-
-        console_log("Worker thread finished.", "INFO")
+        console_log("Worker thread closing.", "INFO")
         self.after(0, self._reset_gui)
 
 

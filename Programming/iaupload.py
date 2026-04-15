@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-01-19
-VERSION: 6.18 (Console-Only Cleanup)
+VERSION: 6.20 (Filename Truncation Safeguard)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,17 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-04-15] VERSION 6.20 UPDATE
+   - ADDED: Automatic filename truncation for path components exceeding 230 bytes.
+   - ADDED: IA rejects uploads with path components > 230 bytes; script now auto-truncates
+           while preserving extension and appending a short hash for uniqueness.
+   - ADDED: Warning printed when a filename is truncated during the scan phase.
+
+[2026-04-15] VERSION 6.19 UPDATE
+   - ADDED: "Skip to Defaults" shortcut during metadata questionnaire.
+   - ADDED: Typing '!!' at any prompt auto-accepts all remaining fields with their defaults.
+   - ADDED: Descriptive hint shown at the start of METADATA PREPARATION section.
+
 [2026-04-13] VERSION 6.18 UPDATE
    - REMOVED: Entire Tkinter GUI system and --gui flag.
    - CLEANUP: Codebase is now strictly console-only for minimal weight.
@@ -175,6 +186,7 @@ results_lock = threading.Lock()
 final_results = {"success": [], "failed": [], "cancelled": []}
 VERBOSE = False  # Set by --verbose flag
 COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", "zxx"]
+_skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_THREADS = 6
@@ -224,11 +236,59 @@ class ProgressWrapper:
         self._file.close()
 
 
+# --- CONSTANTS ---
+IA_MAX_PATH_COMPONENT_BYTES = 230  # IA rejects path components longer than 230 bytes
+
 # --- HELPER FUNCTIONS ---
 
 
 def normalize_path(path_str):
     return path_str.lower().replace("\\", "/").replace(" ", "_")
+
+
+def truncate_path_components(rel_path, max_bytes=IA_MAX_PATH_COMPONENT_BYTES):
+    """
+    Ensure every component of a relative path is at most `max_bytes` bytes (UTF-8).
+    If a component (typically a filename) is too long, it is truncated while
+    preserving the file extension and appending a short hash for uniqueness.
+    Returns (new_path, was_truncated).
+    """
+    parts = rel_path.replace("\\", "/").split("/")
+    changed = False
+    new_parts = []
+
+    for part in parts:
+        encoded = part.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            new_parts.append(part)
+            continue
+
+        # Need to truncate this component
+        changed = True
+
+        # Separate stem and extension (keep extension intact)
+        dot_idx = part.rfind(".")
+        if dot_idx > 0:
+            stem = part[:dot_idx]
+            ext = part[dot_idx:]  # e.g. ".jpg"
+        else:
+            stem = part
+            ext = ""
+
+        # Build a short hash from the ORIGINAL full name for uniqueness
+        short_hash = hashlib.md5(encoded).hexdigest()[:8]
+        suffix = f"_{short_hash}{ext}"  # e.g. "_a1b2c3d4.jpg"
+        suffix_bytes = len(suffix.encode("utf-8"))
+
+        # Truncate the stem so that stem + suffix fits within max_bytes
+        budget = max_bytes - suffix_bytes
+        stem_encoded = stem.encode("utf-8")
+        # Trim byte-by-byte then decode safely (avoid splitting multi-byte chars)
+        truncated_stem = stem_encoded[:budget].decode("utf-8", errors="ignore").rstrip()
+        new_part = truncated_stem + suffix
+        new_parts.append(new_part)
+
+    return "/".join(new_parts), changed
 
 
 def extract_date_from_string(text):
@@ -296,6 +356,14 @@ def print_requirements():
 
 
 def get_input(prompt_text, required=False, default=None, valid_options=None):
+    global _skip_to_defaults
+
+    # If skip mode is active, immediately return the default (or empty string)
+    if _skip_to_defaults:
+        val = default if default is not None else ""
+        print(f"  {prompt_text}: {val}  [default]")
+        return val
+
     while True:
         display = (
             f"{prompt_text} [{default}]: "
@@ -306,6 +374,14 @@ def get_input(prompt_text, required=False, default=None, valid_options=None):
             val = input(display).strip()
         except KeyboardInterrupt:
             sys.exit(1)
+
+        # '!!' triggers skip-to-defaults for this and all remaining prompts
+        if val == "!!":
+            _skip_to_defaults = True
+            val = default if default is not None else ""
+            print(f"  >> Skipping to defaults. Remaining fields will use their default values.")
+            print(f"  >> {prompt_text}: {val}")
+            return val
 
         if not val and default is not None:
             return default
@@ -370,6 +446,9 @@ def collect_metadata(
     suggested_date=None,
     suggested_period=None,
 ):
+    global _skip_to_defaults
+    _skip_to_defaults = False  # Reset at the start of each metadata collection
+
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
     print(
@@ -381,6 +460,8 @@ def collect_metadata(
     print("Creator: Person, group, or organization responsible (optional).")
     print("Description: Short summary of the item contents and context (optional).")
     print("Tags: Comma-separated keywords for search and discovery (optional).")
+    print()
+    print("  TIP: Type !! at any prompt to skip all remaining fields and use their defaults.")
     if prefills:
         print(
             "Found metadata file: fields are prefilled where available. Press Enter to keep defaults."
@@ -1511,7 +1592,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.18) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.20) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if VERBOSE:
@@ -1730,7 +1811,14 @@ def main():
                             matched_count += 1
 
                 if should_upload:
-                    files_to_upload.append((rel_path, local_file))
+                    # Truncate path components that exceed IA's 230-byte limit
+                    safe_rel_path, was_truncated = truncate_path_components(rel_path)
+                    if was_truncated:
+                        tqdm.write(
+                            f"[TRUNCATED]   '{rel_path}'\n"
+                            f"           -> '{safe_rel_path}'"
+                        )
+                    files_to_upload.append((safe_rel_path, local_file))
                     tqdm.write(status_msg)
 
                 scan_bar.update(1)

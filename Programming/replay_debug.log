@@ -1,0 +1,88 @@
+2026-04-15 13:02:55 | ================================================================================
+2026-04-15 13:02:55 | START organize_and_count_files dry_run=False cwd=E:\GitHub\Small-Scripts\Programming
+2026-04-15 13:02:55 | CONFIG base_replay_name=Replay base_horz_name=Horz container_full_label=Full container_replay_label=Replay file_limit=15
+2026-04-15 13:02:55 | STEP 1 START consolidate existing folders
+2026-04-15 13:02:55 | consolidate_all_organized_folders START
+2026-04-15 13:02:55 | replay_videos_final=0 horz_videos_final=0
+2026-04-15 13:02:55 | distribute_files base_folder_name=Replay input_count=0
+2026-04-15 13:02:55 | distribute_files base_folder_name=Replay chunk_count=0
+2026-04-15 13:02:55 | distribute_files base_folder_name=Horz input_count=0
+2026-04-15 13:02:55 | distribute_files base_folder_name=Horz chunk_count=0
+2026-04-15 13:02:55 | final_replay_data_count=0 final_horz_data_count=0
+2026-04-15 13:02:55 | STEP 3 START finalize temp folders
+2026-04-15 13:02:55 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:02:55 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:02:55 | totals replay_total=0 horz_total=0
+2026-04-15 13:02:55 | STEP 4 START group into containers
+2026-04-15 13:02:55 | group_into_container skipping empty container label=Full total_count=0 child_prefix=Horz
+2026-04-15 13:02:55 | group_into_container skipping empty container label=Replay total_count=0 child_prefix=Replay
+2026-04-15 13:02:55 | STEP 4 COMPLETE
+2026-04-15 13:02:55 | STEP 5 START write root total
+2026-04-15 13:02:55 | STEP 5 COMPLETE replay_total=0 horz_total=0 grand_total=0
+2026-04-15 13:02:55 | DONE organize_and_count_files success
+2026-04-15 13:03:31 | ================================================================================
+2026-04-15 13:03:31 | START organize_and_count_files dry_run=False cwd=E:\GitHub\Small-Scripts\Programming
+2026-04-15 13:03:31 | CONFIG base_replay_name=Replay base_horz_name=Horz container_full_label=Full container_replay_label=Replay file_limit=15
+2026-04-15 13:03:31 | STEP 1 START consolidate existing folders
+2026-04-15 13:03:31 | consolidate_all_organized_folders START
+2026-04-15 13:03:31 | replay_videos_final=0 horz_videos_final=0
+2026-04-15 13:03:31 | distribute_files base_folder_name=Replay input_count=0
+2026-04-15 13:03:31 | distribute_files base_folder_name=Replay chunk_count=0
+2026-04-15 13:03:31 | distribute_files base_folder_name=Horz input_count=0
+2026-04-15 13:03:31 | distribute_files base_folder_name=Horz chunk_count=0
+2026-04-15 13:03:31 | final_replay_data_count=0 final_horz_data_count=0
+2026-04-15 13:03:31 | STEP 3 START finalize temp folders
+2026-04-15 13:03:31 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:03:31 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:03:31 | totals replay_total=0 horz_total=0
+2026-04-15 13:03:31 | STEP 4 START group into containers
+2026-04-15 13:03:31 | group_into_container skipping empty container label=Full total_count=0 child_prefix=Horz
+2026-04-15 13:03:31 | group_into_container skipping empty container label=Replay total_count=0 child_prefix=Replay
+2026-04-15 13:03:31 | STEP 4 COMPLETE
+2026-04-15 13:03:31 | STEP 5 START write root total
+2026-04-15 13:03:31 | STEP 5 COMPLETE replay_total=0 horz_total=0 grand_total=0
+2026-04-15 13:03:31 | DONE organize_and_count_files success
+2026-04-15 13:04:09 | ================================================================================
+2026-04-15 13:04:09 | START organize_and_count_files dry_run=False cwd=E:\GitHub\Small-Scripts\Programming
+2026-04-15 13:04:09 | CONFIG base_replay_name=Replay base_horz_name=Horz container_full_label=Full container_replay_label=Replay file_limit=15
+2026-04-15 13:04:09 | STEP 1 START consolidate existing folders
+2026-04-15 13:04:09 | consolidate_all_organized_folders START
+2026-04-15 13:04:09 | replay_videos_final=0 horz_videos_final=0
+2026-04-15 13:04:09 | distribute_files base_folder_name=Replay input_count=0
+2026-04-15 13:04:09 | distribute_files base_folder_name=Replay chunk_count=0
+2026-04-15 13:04:09 | distribute_files base_folder_name=Horz input_count=0
+2026-04-15 13:04:09 | distribute_files base_folder_name=Horz chunk_count=0
+2026-04-15 13:04:09 | final_replay_data_count=0 final_horz_data_count=0
+2026-04-15 13:04:09 | STEP 3 START finalize temp folders
+2026-04-15 13:04:09 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:04:09 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:04:09 | totals replay_total=0 horz_total=0
+2026-04-15 13:04:09 | STEP 4 START group into containers
+2026-04-15 13:04:09 | group_into_container skipping empty container label=Full total_count=0 child_prefix=Horz
+2026-04-15 13:04:09 | group_into_container skipping empty container label=Replay total_count=0 child_prefix=Replay
+2026-04-15 13:04:09 | STEP 4 COMPLETE
+2026-04-15 13:04:09 | STEP 5 START write root total
+2026-04-15 13:04:09 | STEP 5 COMPLETE replay_total=0 horz_total=0 grand_total=0
+2026-04-15 13:04:09 | DONE organize_and_count_files success
+2026-04-15 13:13:13 | ================================================================================
+2026-04-15 13:13:13 | START organize_and_count_files dry_run=False cwd=E:\GitHub\Small-Scripts\Programming
+2026-04-15 13:13:13 | CONFIG base_replay_name=Replay base_horz_name=Horz container_full_label=Full container_replay_label=Replay file_limit=15
+2026-04-15 13:13:13 | STEP 1 START consolidate existing folders
+2026-04-15 13:13:13 | consolidate_all_organized_folders START
+2026-04-15 13:13:13 | replay_videos_final=0 horz_videos_final=0
+2026-04-15 13:13:13 | distribute_files base_folder_name=Replay input_count=0
+2026-04-15 13:13:13 | distribute_files base_folder_name=Replay chunk_count=0
+2026-04-15 13:13:13 | distribute_files base_folder_name=Horz input_count=0
+2026-04-15 13:13:13 | distribute_files base_folder_name=Horz chunk_count=0
+2026-04-15 13:13:13 | final_replay_data_count=0 final_horz_data_count=0
+2026-04-15 13:13:13 | STEP 3 START finalize temp folders
+2026-04-15 13:13:13 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:13:13 | finalize_folders result total_count=0 final_names=[]
+2026-04-15 13:13:13 | totals replay_total=0 horz_total=0
+2026-04-15 13:13:13 | STEP 4 START group into containers
+2026-04-15 13:13:13 | group_into_container skipping empty container label=Full total_count=0 child_prefix=Horz
+2026-04-15 13:13:13 | group_into_container skipping empty container label=Replay total_count=0 child_prefix=Replay
+2026-04-15 13:13:13 | STEP 4 COMPLETE
+2026-04-15 13:13:13 | STEP 5 START write root total
+2026-04-15 13:13:13 | STEP 5 COMPLETE replay_total=0 horz_total=0 grand_total=0
+2026-04-15 13:13:13 | DONE organize_and_count_files success
