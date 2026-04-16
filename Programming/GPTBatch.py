@@ -209,6 +209,130 @@ try:
 except ImportError:
     _pysbd_segmenter = None
 
+# --- OPTIONAL: RICH DASHBOARD ---
+DASHBOARD_LOCK = threading.Lock()
+DASHBOARD_MIN_COL_WIDTH = 58
+DASHBOARD_PREVIEW_CHARS = 120
+
+try:
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.console import Console
+    from rich.box import ROUNDED
+    from rich.columns import Columns
+    from rich.table import Table
+    RICH_AVAILABLE = True
+    RICH_CONSOLE = Console()
+
+    class StreamDashboard:
+        def __init__(self):
+            self.active_jobs = {}
+            self.lock = threading.Lock()
+            self.live = None
+
+        def start(self):
+            with self.lock:
+                self.live = Live(self._generate_group(), console=RICH_CONSOLE, refresh_per_second=4)
+                self.live.start()
+
+        def stop(self):
+            with self.lock:
+                if self.live:
+                    self.live.stop()
+                    self.live = None
+
+        def _clean_preview(self, text):
+            compact = re.sub(r'\x1b\[[0-9;]*m', '', text or '')
+            compact = re.sub(r'\s+', ' ', compact).strip()
+            if len(compact) > DASHBOARD_PREVIEW_CHARS:
+                compact = '...' + compact[-(DASHBOARD_PREVIEW_CHARS - 3):]
+            return compact
+
+        def _plain_title(self, title):
+            title_text = str(title or '')
+            title_text = title_text.replace('[bold]', '').replace('[/bold]', '')
+            return re.sub(r'\s+', ' ', title_text).strip()
+
+        def _column_count(self, item_count):
+            try:
+                width = int(getattr(RICH_CONSOLE.size, 'width', 120) or 120)
+            except Exception:
+                width = 120
+            cols = max(1, width // DASHBOARD_MIN_COL_WIDTH)
+            return min(max(1, item_count), cols)
+
+        def _chunk_jobs(self, jobs, col_count):
+            buckets = [[] for _ in range(max(1, col_count))]
+            for idx, item in enumerate(jobs):
+                buckets[idx % len(buckets)].append(item)
+            return buckets
+
+        def _build_compact_table(self, jobs_chunk):
+            table = Table(
+                show_header=True,
+                header_style='bold',
+                expand=True,
+                box=None,
+                pad_edge=False,
+                show_edge=False,
+            )
+            table.add_column('Job', ratio=3, overflow='fold')
+            table.add_column('State', width=7, no_wrap=True)
+            table.add_column('Preview', ratio=5, overflow='fold')
+
+            for _, data in jobs_chunk:
+                state_style = 'bright_black' if data.get('thinking') else 'cyan'
+                state_text = 'Think' if data.get('thinking') else 'Output'
+                table.add_row(
+                    self._plain_title(data.get('title')),
+                    f'[{state_style}]{state_text}[/{state_style}]',
+                    self._clean_preview(data.get('text', '')),
+                )
+            return table
+
+        def _generate_group(self):
+            if not self.active_jobs:
+                return Panel('Waiting for streams...', title='Status', box=ROUNDED)
+
+            jobs = list(self.active_jobs.items())
+            col_count = self._column_count(len(jobs))
+            chunks = self._chunk_jobs(jobs, col_count)
+            tables = [self._build_compact_table(chunk) for chunk in chunks if chunk]
+            return Columns(tables, equal=True, expand=True)
+
+        def add_job(self, jid, title):
+            with self.lock:
+                self.active_jobs[jid] = {'title': title, 'text': '', 'thinking': False}
+                if self.live:
+                    self.live.update(self._generate_group())
+
+        def update_job(self, jid, chunk_text, is_thinking=False):
+            with self.lock:
+                if jid in self.active_jobs:
+                    self.active_jobs[jid]['text'] += chunk_text
+                    self.active_jobs[jid]['thinking'] = is_thinking
+                    if VERBOSE_DIAGNOSTICS:
+                        pass
+                elif VERBOSE_DIAGNOSTICS:
+                    print(f'[DEBUG DASHBOARD] Job {jid} NOT FOUND in active_jobs keys: {list(self.active_jobs.keys())}')
+
+                if self.live:
+                    self.live.update(self._generate_group())
+
+        def remove_job(self, jid):
+            with self.lock:
+                if jid in self.active_jobs:
+                    del self.active_jobs[jid]
+                if self.live:
+                    self.live.update(self._generate_group())
+
+    STREAM_DASHBOARD = StreamDashboard()
+
+except ImportError:
+    RICH_AVAILABLE = False
+    STREAM_DASHBOARD = None
+    RICH_CONSOLE = None
+
 # --- GLOBAL CACHE FOR UPLOADED FILES (Deduplication) ---
 # Stores { "sha256_hash": types.File }
 UPLOADED_FILE_CACHE = {}
@@ -709,7 +833,12 @@ def console_log(msg, type="INFO"):
         icon = "☁️"
     elif type == "STREAM":
         icon = "🌊"
-    print(f"[{timestamp}] {icon} {msg}")
+    line = f"[{timestamp}] {icon} {msg}"
+    with DASHBOARD_LOCK:
+        if RICH_AVAILABLE and STREAM_DASHBOARD and STREAM_DASHBOARD.live and STREAM_DASHBOARD.live.is_started:
+            RICH_CONSOLE.print(line)
+        else:
+            print(line)
 
 
 def human_bytes(num):
@@ -1484,6 +1613,17 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
     return response_text
 
 
+def publish_stream_chunk(job_id, text, is_thinking=False):
+    if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD and STREAM_DASHBOARD.live and STREAM_DASHBOARD.live.is_started:
+        if job_id is not None:
+            if VERBOSE_DIAGNOSTICS:
+                # Limit logging as this is called frequently
+                pass 
+            STREAM_DASHBOARD.update_job(job_id, text, is_thinking)
+        return True
+    return False
+
+
 def call_google_gemini_api(
     prompt_text,
     api_key,
@@ -1558,9 +1698,15 @@ def call_google_gemini_api(
         if stream_output:
             if cancellation_event and cancellation_event.is_set():
                 raise CancellationError("Cancelled before generation.")
+            if VERBOSE_DIAGNOSTICS:
+                console_log(f"DEBUG API CALL START: model={model_name} stream=True", "DEBUG")
+            
             response = client.models.generate_content_stream(
                 model=model_name, contents=contents, config=config
             )
+            
+            if VERBOSE_DIAGNOSTICS:
+                console_log(f"DEBUG API CALL RETURNED: response_type={type(response)}", "DEBUG")
         else:
             if cancellation_event and cancellation_event.is_set():
                 raise CancellationError("Cancelled before generation.")
@@ -1571,14 +1717,27 @@ def call_google_gemini_api(
         if stream_output:
             full_text = ""
             thinking_text = ""
-            print(
-                f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True
-            )
+            job_id = kwargs.get("job_id")
+            rich_active = globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD and STREAM_DASHBOARD.live and STREAM_DASHBOARD.live.is_started
+            
+            if VERBOSE_DIAGNOSTICS:
+                console_log(f"DEBUG STREAM START: job_id={job_id} ({type(job_id)}) rich_active={rich_active}", "DEBUG")
+            
+            if not rich_active:
+                print(
+                    f"\n--- [STREAM] Google Gemini ({model_name}) ---\n", end="", flush=True
+                )
             thinking_active = False
             thinking_started = False
             thinking_ended = False
             output_started = False
             for chunk in response:
+                if VERBOSE_DIAGNOSTICS:
+                    try:
+                        console_log(f"DEBUG RAW CHUNK: job_id={job_id} candidates={getattr(chunk, 'candidates', 'N/A')}", "DEBUG")
+                    except Exception as e:
+                        console_log(f"DEBUG CHUNK LOG ERROR: {e}", "DEBUG")
+                
                 if cancellation_event and cancellation_event.is_set():
                     raise CancellationError("Cancelled during streaming.")
 
@@ -1591,67 +1750,79 @@ def call_google_gemini_api(
                             and hasattr(part, "text")
                             and part.text
                         ):
-                            if not thinking_started:
-                                print(
-                                    "\n--- [THINKING START] ---\n", end="", flush=True
-                                )
-                                thinking_started = True
-                            thinking_active = True
-                            # Print thought in gray (ANSI 90m)
-                            print(f"\033[90m{part.text}\033[0m", end="", flush=True)
-                            thinking_text += part.text
+                            raw_thinking = part.text
+                            if not rich_active:
+                                if not thinking_started:
+                                    print(
+                                        "\n--- [THINKING START] ---\n", end="", flush=True
+                                    )
+                                    thinking_started = True
+                                thinking_active = True
+                                # Print thought in gray (ANSI 90m)
+                                print(f"\033[90m{raw_thinking}\033[0m", end="", flush=True)
+                            else:
+                                publish_stream_chunk(job_id, raw_thinking, is_thinking=True)
+                            thinking_text += raw_thinking
 
                         # 2. Handle Regular Text (can also contain <think> tags from some models)
                         elif hasattr(part, "text") and part.text:
                             text_part = part.text
                             # Fallback: check if the text itself contains <think> tags
-                            # (Some models might not use the dedicated 'thought' part yet)
                             if "<think>" in text_part or "</think>" in text_part:
-                                if "<think>" in text_part:
-                                    thinking_active = True
-                                    if not thinking_started:
-                                        print(
-                                            "\n--- [THINKING START] ---\n",
-                                            end="",
-                                            flush=True,
-                                        )
-                                        thinking_started = True
-                                # Simple colorization for tags within a text part
-                                colored_text = text_part.replace(
-                                    "<think>", "\033[90m<think>"
-                                ).replace("</think>", "</think>\033[0m")
-                                print(colored_text, end="", flush=True)
-                                if "</think>" in text_part:
-                                    thinking_active = False
-                                    if not thinking_ended:
-                                        print(
-                                            "\n--- [THINKING END] ---\n",
-                                            end="",
-                                            flush=True,
-                                        )
-                                        thinking_ended = True
+                                if rich_active:
+                                    # Very basic heuristic for rich active
+                                    # Since we don't know mid-string precisely, let's just push it all as thinking if it opens with think
+                                    publish_stream_chunk(job_id, text_part, is_thinking=("<think>" in text_part and "</think>" not in text_part))
+                                else:
+                                    if "<think>" in text_part:
+                                        thinking_active = True
+                                        if not thinking_started:
+                                            print(
+                                                "\n--- [THINKING START] ---\n",
+                                                end="",
+                                                flush=True,
+                                            )
+                                            thinking_started = True
+                                    # Simple colorization for tags within a text part
+                                    colored_text = text_part.replace(
+                                        "<think>", "\033[90m<think>"
+                                    ).replace("</think>", "</think>\033[0m")
+                                    print(colored_text, end="", flush=True)
+                                    if "</think>" in text_part:
+                                        thinking_active = False
+                                        if not thinking_ended:
+                                            print(
+                                                "\n--- [THINKING END] ---\n",
+                                                end="",
+                                                flush=True,
+                                            )
+                                            thinking_ended = True
                             else:
-                                if not output_started and not thinking_active:
-                                    if thinking_started and not thinking_ended:
+                                if rich_active:
+                                    publish_stream_chunk(job_id, text_part, is_thinking=False)
+                                else:
+                                    if not output_started and not thinking_active:
+                                        if thinking_started and not thinking_ended:
+                                            print(
+                                                "\n--- [THINKING END] ---\n",
+                                                end="",
+                                                flush=True,
+                                            )
+                                            thinking_ended = True
                                         print(
-                                            "\n--- [THINKING END] ---\n",
-                                            end="",
-                                            flush=True,
+                                            "\n--- [OUTPUT START] ---\n", end="", flush=True
                                         )
-                                        thinking_ended = True
-                                    print(
-                                        "\n--- [OUTPUT START] ---\n", end="", flush=True
-                                    )
-                                    output_started = True
-                                print(text_part, end="", flush=True)
+                                        output_started = True
+                                    print(text_part, end="", flush=True)
 
                             # Strip <think>...</think> tags before accumulating
                             clean_part = re.sub(r"<think>.*?</think>", "", text_part, flags=re.DOTALL)
                             clean_part = clean_part.replace("<think>", "").replace("</think>", "")
                             full_text += clean_part
-            if output_started:
-                print("\n--- [OUTPUT END] ---\n", end="", flush=True)
-            print("\n----------------------------------------------\n", flush=True)
+            if not rich_active:
+                if output_started:
+                    print("\n--- [OUTPUT END] ---\n", end="", flush=True)
+                print("\n----------------------------------------------\n", flush=True)
             # Fallback: if model returned only thinking with no output text
             if not full_text.strip() and thinking_text.strip():
                 console_log(
@@ -1753,6 +1924,7 @@ def _call_openai_compatible_chat(
     stream_output=False,
     cancellation_event=None,
     enable_thinking=False,
+    job_id=None,
 ):
     headers = {"Content-Type": "application/json"}
     images_data_list = images_data_list or []
@@ -1820,11 +1992,17 @@ def _call_openai_compatible_chat(
             thinking_text = ""
             thinking_started = False
             thinking_ended = False
-            print(
-                f"\n--- [STREAM] {engine_label} ({model_name}) ---\n",
-                end="",
-                flush=True,
-            )
+            rich_active = globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD and STREAM_DASHBOARD.live and STREAM_DASHBOARD.live.is_started
+            
+            if VERBOSE_DIAGNOSTICS:
+                console_log(f"DEBUG OPENAI STREAM START: job_id={job_id} ({type(job_id)}) rich_active={rich_active}", "DEBUG")
+            
+            if not rich_active:
+                print(
+                    f"\n--- [STREAM] {engine_label} ({model_name}) ---\n",
+                    end="",
+                    flush=True,
+                )
             for line in response.iter_lines():
                 if cancellation_event and cancellation_event.is_set():
                     raise CancellationError(
@@ -1860,10 +2038,13 @@ def _call_openai_compatible_chat(
                                 stitched_think.append(t)
                     thinking_part = "".join(stitched_think)
                 if thinking_part and enable_thinking:
-                    if not thinking_started:
-                        print("\n--- [THINKING START] ---\n", end="", flush=True)
-                        thinking_started = True
-                    print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
+                    if rich_active:
+                        publish_stream_chunk(job_id, thinking_part, is_thinking=True)
+                    else:
+                        if not thinking_started:
+                            print("\n--- [THINKING START] ---\n", end="", flush=True)
+                            thinking_started = True
+                        print(f"\033[90m{thinking_part}\033[0m", end="", flush=True)
                     thinking_text += thinking_part
 
                 content = delta.get("content", "")
@@ -1876,13 +2057,17 @@ def _call_openai_compatible_chat(
                                 stitched.append(txt)
                     content = "".join(stitched)
                 if content:
-                    if thinking_started and not thinking_ended:
-                        print("\n--- [THINKING END] ---\n", end="", flush=True)
-                        thinking_ended = True
-                    print(content, end="", flush=True)
+                    if rich_active:
+                        publish_stream_chunk(job_id, content, is_thinking=False)
+                    else:
+                        if thinking_started and not thinking_ended:
+                            print("\n--- [THINKING END] ---\n", end="", flush=True)
+                            thinking_ended = True
+                        print(content, end="", flush=True)
                     full_text += content
 
-            print("\n\n-----------------------------------------\n", flush=True)
+            if not rich_active:
+                print("\n\n-----------------------------------------\n", flush=True)
             if VERBOSE_DIAGNOSTICS:
                 console_log(
                     f"DEBUG {engine_label.upper()} STREAM RESPONSE: chars={len(full_text)}",
@@ -1950,6 +2135,7 @@ def call_ollama_api(
             stream_output=stream_output,
             cancellation_event=cancellation_event,
             enable_thinking=enable_thinking,
+            job_id=kwargs.get("job_id"),
         )
         return out
     except Exception as e:
@@ -1975,6 +2161,7 @@ def call_lmstudio_api(
             stream_output=stream_output,
             cancellation_event=cancellation_event,
             enable_thinking=enable_thinking,
+            job_id=kwargs.get("job_id"),
         )
         return out
     except Exception as e:
@@ -2387,6 +2574,7 @@ def process_chunks_sequentially(
     google_file_objects,
     kwargs,
     cancellation_event=None,
+    job_id=None,
 ):
     if not chunks:
         chunks = [""]
@@ -2448,6 +2636,7 @@ def process_chunks_sequentially(
             enable_thinking=kwargs.get("enable_thinking", False),
             clean_markdown=False,
             cancellation_event=cancellation_event,
+            job_id=job_id,
         )
 
         if resp and str(resp).strip().startswith("Error"):
@@ -2533,6 +2722,14 @@ def process_file_group(
             f"DEBUG JOB FILES: {[os.path.basename(p) for p in filepaths_group]}",
             "DEBUG",
         )
+        
+    job_id = kwargs.get("job_id", base_name)
+    if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+        part_info = ""
+        if kwargs.get("chunk_index") and kwargs.get("total_chunks"):
+            part_info = f" [Part {kwargs.get('chunk_index')}/{kwargs.get('total_chunks')}]"
+        title = f"[bold]{base_name}{part_info}[/bold] ({engine}) [#{job_id}]"
+        STREAM_DASHBOARD.add_job(job_id, title)
 
     # --- CHECK FOR EMPTY FILES ---
     for fp in filepaths_group:
@@ -2891,6 +3088,7 @@ def process_file_group(
                     google_file_objects=google_file_objects,
                     kwargs=kwargs,
                     cancellation_event=cancellation_event,
+                    job_id=job_id,
                 )
 
                 pass_turns.append(
@@ -2982,6 +3180,8 @@ def process_file_group(
                     f"Filename unchanged: {os.path.basename(original_path)}", "WARN"
                 )
 
+            if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+                STREAM_DASHBOARD.remove_job(job_id)
             return None
 
         # --- JSON VALIDITY CHECK ---
@@ -3039,9 +3239,13 @@ def process_file_group(
         if "result_metadata" in kwargs:
             kwargs["result_metadata"]["raw_output_saved"] = True
         console_log(f"Saved: {os.path.basename(raw_path)}", "SUCCESS")
+        if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+            STREAM_DASHBOARD.remove_job(job_id)
         return None
 
     except Exception as e:
+        if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+            STREAM_DASHBOARD.remove_job(job_id)
         log_data.update({"status": "Failure", "error": str(e)})
 
         # Check for Quota/429 errors to prevent writing them to file
@@ -3438,7 +3642,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def _handle_sigint(self, signum, frame):
         console_log(f"Received signal {signum}. Exiting and cleaning up...", "WARN")
-        cleanup_all_temp_folders()
         self._on_closing()
 
     def apply_theme(self):
@@ -3951,23 +4154,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             row=16, column=0, columnspan=3, sticky="w", pady=(5, 0)
         )
 
-        # --- Delay Controls ---
-        delay_frame = ttk.Frame(tab_out)
-        delay_frame.grid(row=17, column=0, columnspan=3, sticky="w", pady=(5, 0))
-        ttk.Label(delay_frame, text="Delay between jobs:").pack(side=tk.LEFT)
-        ttk.Spinbox(
-            delay_frame, from_=0, to=60, textvariable=self.delay_min_var, width=3
-        ).pack(side=tk.LEFT, padx=2)
-        ttk.Label(delay_frame, text="m").pack(side=tk.LEFT)
-        ttk.Spinbox(
-            delay_frame, from_=0, to=60, textvariable=self.delay_sec_var, width=3
-        ).pack(side=tk.LEFT, padx=2)
-        ttk.Label(delay_frame, text="s").pack(side=tk.LEFT)
-
-        ttk.Label(delay_frame, text="  |  Concurrent Jobs:").pack(side=tk.LEFT)
-        ttk.Spinbox(
-            delay_frame, from_=1, to=100, textvariable=self.concurrent_jobs_var, width=4
-        ).pack(side=tk.LEFT, padx=2)
+        # Delay and Concurrent Jobs moved to the bottom panel
 
         # === TAB: Image & Format ===
         tab_img = ttk.Frame(self.notebook, padding=10)
@@ -4136,6 +4323,24 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         btn_area = ttk.Frame(right_frame, padding=10)
         btn_area.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # --- Execution Settings (Concurrent & Delay) ---
+        btn_row_exec = ttk.Frame(btn_area)
+        btn_row_exec.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+        ttk.Label(btn_row_exec, text="Concurrent jobs:").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            btn_row_exec, from_=1, to=100, textvariable=self.concurrent_jobs_var, width=4
+        ).pack(side=tk.LEFT, padx=(2, 15))
+        ttk.Label(btn_row_exec, text="Delay between jobs:").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            btn_row_exec, from_=0, to=60, textvariable=self.delay_min_var, width=3
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Label(btn_row_exec, text="m").pack(side=tk.LEFT)
+        ttk.Spinbox(
+            btn_row_exec, from_=0, to=60, textvariable=self.delay_sec_var, width=3
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Label(btn_row_exec, text="s").pack(side=tk.LEFT)
+
         btn_row1 = ttk.Frame(btn_area)
         btn_row1.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
         btn_row2 = ttk.Frame(btn_area)
@@ -4462,6 +4667,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
             set_var(self.delay_min_var, "delay_min", 0)
             set_var(self.delay_sec_var, "delay_sec", 0)
+            set_var(self.concurrent_jobs_var, "concurrent_jobs", 1)
             set_var(self.upload_mode_var, "upload_mode", "parallel")
             set_var(
                 self.stop_queue_on_model_unavailable_var,
@@ -4517,6 +4723,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "save_log": self.save_log_var.get(),
             "delay_min": self.delay_min_var.get(),
             "delay_sec": self.delay_sec_var.get(),
+            "concurrent_jobs": self.concurrent_jobs_var.get(),
             "upload_mode": self.upload_mode_var.get(),
             "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
             "add_filename_to_prompt": self.add_filename_var.get(),
@@ -4605,12 +4812,43 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 self.preset_var.set("")
 
     def _on_closing(self):
-        if self.worker_thread and self.worker_thread.is_alive():
-            self.processing_cancelled.set()
-            self.worker_thread.join(timeout=1.0)
+        self.processing_cancelled.set()
+
+        threads_to_join = []
+        legacy_worker = getattr(self, "worker_thread", None)
+        if legacy_worker is not None:
+            threads_to_join.append(legacy_worker)
+
+        worker_list = getattr(self, "worker_threads", None)
+        if isinstance(worker_list, list):
+            threads_to_join.extend(worker_list)
+
+        current = threading.current_thread()
+        seen = set()
+        for t in threads_to_join:
+            if not t:
+                continue
+            if id(t) in seen:
+                continue
+            seen.add(id(t))
+            try:
+                if t is not current and t.is_alive():
+                    t.join(timeout=1.0)
+            except Exception:
+                pass
+
+        if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+            try:
+                STREAM_DASHBOARD.stop()
+            except Exception:
+                pass
+
         cleanup_all_temp_folders()
-        self.destroy()
-        sys.exit(0)
+
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def toggle_overwrite(self):
         st = "disabled" if self.overwrite_var.get() else "normal"
@@ -5523,6 +5761,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.processing_paused.clear()
             self.successful_output_paths = []
             
+            if globals().get("RICH_AVAILABLE") and getattr(self, "stream_var", None) and self.stream_var.get() and STREAM_DASHBOARD:
+                STREAM_DASHBOARD.start()
+            
             concurrent_jobs = max(1, self.concurrent_jobs_var.get())
             self.worker_threads = []
             for _ in range(concurrent_jobs):
@@ -5716,6 +5957,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             workers_alive = any(t.is_alive() for t in self.worker_threads)
 
         if self.start_btn["state"] == "disabled" and not workers_alive:
+            if globals().get("RICH_AVAILABLE") and STREAM_DASHBOARD:
+                STREAM_DASHBOARD.stop()
             self.start_btn.config(state="normal")
             self.pause_btn.config(state="disabled", text="Pause")
             self.stop_btn.config(state="disabled")
@@ -5908,7 +6151,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 continue
             self.result_queue.put({"job_id": jid, "status": "Running"})
             params = job.copy()
-            params.pop("job_id")
+            # Keep job_id in params so it passes down via kwargs to streams
+            
             if params.get("use_persistent_context"):
                 params["context_text"] = self.global_context_text_value
 
@@ -6222,6 +6466,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
