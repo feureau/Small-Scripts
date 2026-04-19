@@ -922,6 +922,9 @@ def build_job_config_snapshot(
         "chunk_overlap_tokens": 180,
         "chunk_output_tail_tokens": 120,
         "chunk_safety_margin_pct": 0.15,
+        "split_chunks_into_jobs": False,
+        "merge_chunks": True,
+        "merge_outputs": False,
         "stop_queue_on_model_unavailable": True,
         "context_text": "",
         "use_persistent_context": False,
@@ -3603,6 +3606,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.enable_chunking_var = tk.BooleanVar(value=False)
         self.chunk_size_var = tk.IntVar(value=4000)
         self.split_chunks_into_jobs_var = tk.BooleanVar(value=False)
+        self.merge_chunks_var = tk.BooleanVar(value=True) # New: Merge parts back when chunking
         self.model_prefix_var = tk.BooleanVar(
             value=False
         )  # New: Prefix output folder with model name
@@ -3938,6 +3942,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.split_chunks_into_jobs_var,
         )
         self.split_chunks_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+
+        self.merge_chunks_check = ttk.Checkbutton(
+            grid_c,
+            text="Merge Chunks back into Single File When Done",
+            variable=self.merge_chunks_var,
+        )
+        self.merge_chunks_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         # Overlap/Force Cutoff removed; paragraph-packed chunking only.
 
@@ -4650,6 +4661,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.enable_chunking_var, "enable_chunking", False)
             set_var(self.chunk_size_var, "chunk_size", 4000)
             set_var(self.split_chunks_into_jobs_var, "split_chunks_into_jobs", False)
+            set_var(self.merge_chunks_var, "merge_chunks", True)
 
             set_var(self.enable_img_conversion_var, "enable_img_conversion", False)
             set_var(self.temp_img_fmt_var, "temp_img_fmt", "PNG")
@@ -4748,6 +4760,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "enable_chunking": self.enable_chunking_var.get(),
             "chunk_size": self.chunk_size_var.get(),
             "split_chunks_into_jobs": self.split_chunks_into_jobs_var.get(),
+            "merge_chunks": self.merge_chunks_var.get(),
             "model_prefix": self.model_prefix_var.get(),
             "add_context_as_suffix": self.add_context_as_suffix_var.get(),
             "enable_multipass": self.enable_multipass_var.get(),
@@ -5757,6 +5770,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             not getattr(self, "worker_threads", None) or not any(t.is_alive() for t in self.worker_threads)
         ):
             self.current_run_merge_outputs = self.merge_outputs_var.get()
+            self.current_run_merge_chunks = self.merge_chunks_var.get()
             self.processing_cancelled.clear()
             self.processing_paused.clear()
             self.successful_output_paths = []
@@ -5964,7 +5978,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.stop_btn.config(state="disabled")
             self.clear_btn.config(state="normal")
             console_log("All jobs completed.", "SUCCESS")
-            if self.current_run_merge_outputs:
+            if self.current_run_merge_outputs or self.current_run_merge_chunks:
                 with self.successful_output_lock:
                     paths_to_merge = list(self.successful_output_paths)
                 self._merge_completed_outputs_by_folder(paths_to_merge)
