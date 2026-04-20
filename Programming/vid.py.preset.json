@@ -286,7 +286,7 @@
             "upscale_algo": "bicubic",
             "output_format": "sdr",
             "video_codec": "h264",
-            "encoder_backend": "nvencc_video_with_ffmpeg_audio",
+            "encoder_backend": "ffmpeg_only",
             "nvenc_superres_mode": "1",
             "nvenc_ngx_vsr_quality": "1",
             "fruc": false,
