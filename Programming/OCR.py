@@ -3,6 +3,7 @@ import argparse
 import easyocr
 import sys
 import glob
+import gc
 import logging
 from pathlib import Path
 from PIL import Image
@@ -28,13 +29,32 @@ def get_unique_path(base_path):
 def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_mode=False):
     print("Loading EasyOCR model... (this may take a moment)")
     
-    # Auto-detect GPU
+    # Auto-detect GPU with detailed diagnostics
     try:
         import torch
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print(f"Running on: {device.upper()}")
+        gpu_available = torch.cuda.is_available()
+        device = 'cuda' if gpu_available else 'cpu'
+        
+        print(f"\n--- GPU Diagnostics ---")
+        print(f"  PyTorch version : {torch.__version__}")
+        print(f"  CUDA built-in   : {torch.version.cuda or 'NO (CPU-only PyTorch build)'}")
+        
+        if gpu_available:
+            gpu_name = torch.cuda.get_device_name(0)
+            vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"  GPU detected    : {gpu_name}")
+            print(f"  VRAM            : {vram_total:.1f} GB")
+            print(f"  STATUS          : ✅ Using GPU")
+        else:
+            if not torch.version.cuda:
+                print(f"  STATUS          : ❌ CPU-only (reinstall PyTorch with CUDA to enable GPU)")
+                print(f"  Fix             : pip install torch --index-url https://download.pytorch.org/whl/cu121")
+            else:
+                print(f"  STATUS          : ❌ CUDA built-in but no GPU found")
+        print(f"-----------------------\n")
     except ImportError:
         device = 'cpu'
+        print("\n[WARN] PyTorch not installed. Running on CPU.\n")
 
     try:
         reader = easyocr.Reader(['en'], gpu=(device=='cuda'))
@@ -66,12 +86,13 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
     mode_name = "RAW LINES" if use_lines_mode else "PARAGRAPH"
     print(f"Found {len(files_to_process)} file(s). Mode: {mode_name}")
     
-    for file_path in files_to_process:
+    total = len(files_to_process)
+    for file_idx, file_path in enumerate(files_to_process, 1):
         p = Path(file_path)
         if not p.exists() or not p.is_file():
             continue
 
-        print(f"Processing: {p.name}...", end='\r')
+        print(f"\n[{file_idx}/{total}] Processing: {p.name}")
         
         # Determine output path
         if global_out_path:
@@ -90,6 +111,8 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
             # Load image with PIL to support more formats (including complex TIFFs)
             # Convert to RGB to ensure consistency for EasyOCR
             with Image.open(p) as img:
+                w, h = img.size
+                print(f"         Image size: {w}x{h}")
                 img_input = np.array(img.convert('RGB'))
 
             # --- MODE 1: RAW LINES (Opt-in via --lines) ---
@@ -102,6 +125,9 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
                 for (box, text, conf) in result:
                     if conf > threshold:
                         valid_lines.append(text)
+                        print(f"         [{conf:.0%}] {text}")
+                    else:
+                        print(f"         [{conf:.0%}] (skipped) {text}")
                 full_text = "\n".join(valid_lines)
 
             # --- MODE 2: PARAGRAPH (Default) ---
@@ -113,6 +139,9 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
                 # result format is [[box, text], [box, text]]
                 text_blocks = []
                 for (box, text) in result:
+                    # Show a preview (first 120 chars) of each paragraph block
+                    preview = text[:120] + ("..." if len(text) > 120 else "")
+                    print(f"         » {preview}")
                     text_blocks.append(text)
                 full_text = "\n\n".join(text_blocks)
 
@@ -121,10 +150,28 @@ def process_images(input_patterns, output_folder=None, threshold=0.4, use_lines_
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(full_text)
                 
-            print(f"Done: {p.name} -> {output_file.name}      ")
+            print(f"      ✓ Saved: {output_file.name}")
             
         except Exception as e:
-            print(f"\nFailed to process {p.name}: {e}")
+            print(f"      ✗ Failed: {e}")
+        finally:
+            # Free memory after each image to prevent progressive slowdown
+            # Large NumPy arrays and CUDA tensors can accumulate if not explicitly released
+            try:
+                del img_input
+            except NameError:
+                pass
+            try:
+                del result
+            except NameError:
+                pass
+            gc.collect()
+            if device == 'cuda':
+                try:
+                    import torch
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
     print("\nAll tasks completed.")
 
