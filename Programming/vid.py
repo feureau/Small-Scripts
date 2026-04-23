@@ -511,7 +511,35 @@ def safe_ffprobe(cmd, operation="operation"):
     except Exception as e:
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
-def escape_ffmpeg_filter_path(path):
+def get_safe_filter_path(path, base_dir=None):
+    """
+    Returns a path that is safe for use within an FFmpeg or NVEncC filter string.
+    If base_dir is provided, it tries to calculate a relative path to avoid
+    'poisoned' characters (like commas or colons) in parent directories.
+    """
+    if not path:
+        return ""
+    
+    target_path = str(path)
+    
+    if base_dir:
+        try:
+            # Try to get relative path from base_dir to target_path
+            rel = os.path.relpath(target_path, base_dir)
+            # If the relative path starts with '..', it means it's outside the base_dir.
+            # We only use relative paths if they go "deeper" or stay within the same tree.
+            # However, for robustness, as long as it's the same drive, it's usually safer.
+            if not rel.startswith(".."):
+                target_path = rel
+        except ValueError:
+            # This happens on Windows if paths are on different drives
+            pass
+
+    # Convert \ to / and escape characters for the tool's parser
+    p = target_path.replace('\\', '/')
+    return p
+
+def escape_ffmpeg_filter_path(path, base_dir=None):
     """
     Escapes a path for use within an FFmpeg filter (e.g., subtitles, lut3d).
     Uses a double-escaping strategy suitable for UNQUOTED filter arguments,
@@ -520,8 +548,9 @@ def escape_ffmpeg_filter_path(path):
     """
     if not path:
         return ""
-    # Convert \ to /
-    p = str(path).replace('\\', '/')
+    
+    # Try getting a safe relative path first
+    p = get_safe_filter_path(path, base_dir)
     
     # Double escape characters that FFmpeg uses as delimiters.
     # We use \\ so that after the first parse, a single \ remains
@@ -543,7 +572,7 @@ def get_file_duration(file_path):
     except Exception:
         return 0.0
 
-def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None, priority="normal"):
+def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None, priority="normal", cwd=None):
     global CURRENT_FFMPEG_PROCESS
     try:
         popen_kwargs = {
@@ -558,6 +587,8 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
         creationflags = get_windows_creationflags_for_priority(priority)
         if creationflags:
             popen_kwargs["creationflags"] = creationflags
+        if cwd:
+            popen_kwargs["cwd"] = cwd
         process = subprocess.Popen(cmd, **popen_kwargs)
         CURRENT_FFMPEG_PROCESS = process
 
@@ -4516,7 +4547,7 @@ class VideoProcessorApp:
             self.job_listbox.insert(actual_index + 1, new_job['display_name'])
             offset += 1
 
-    def build_audio_segment(self, file_path, options):
+    def build_audio_segment(self, file_path, options, base_dir=None):
         if options.get("audio_passthrough"):
             return ["-map", "0:a?", "-c:a", "copy"]
 
@@ -4576,7 +4607,7 @@ class VideoProcessorApp:
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
-                safe_sofa = escape_ffmpeg_filter_path(sofa_path)
+                safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
                 fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
@@ -4747,16 +4778,18 @@ class VideoProcessorApp:
                         # Use chapter-local subtitle for burn-in on this segment.
                         ch_options["segment_subtitle_path"] = ch_srt_file
             
-            self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir)
+            base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
+            self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir, base_dir=base_dir)
 
         if do_subtitle_split and temp_extracted_srt and job['subtitle_path'].startswith("embedded:"):
             cleanup_single_temp_file(temp_extracted_srt)
 
-    def _process_single_render_segment(self, job, output_file, orientation, options, output_dir):
+    def _process_single_render_segment(self, job, output_file, orientation, options, output_dir, base_dir=None):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         ass_burn_path, temp_extracted_srt_path = None, None
         nvencc_subburn_path = None
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
+        base_dir = base_dir or os.getcwd()
         try:
             segment_sub_path = options.get("segment_subtitle_path")
             subtitle_input = segment_sub_path or job.get('subtitle_path')
@@ -4915,13 +4948,14 @@ class VideoProcessorApp:
                     ass_burn_path,
                     options,
                     title_ass_path,
-                    encoder_backend="preprocess"
+                    encoder_backend="preprocess",
+                    base_dir=base_dir
                 )
-                if self.run_ffmpeg_command(pre_cmd, duration, options=options) != 0:
+                if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
 
-                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation, info=get_video_info(temp_preproc))
-                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
+                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation, info=get_video_info(temp_preproc), base_dir=base_dir)
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
@@ -4931,9 +4965,10 @@ class VideoProcessorApp:
                     options,
                     orientation,
                     subtitle_burn_path=nvencc_subburn_path,
-                    info=info
+                    info=info,
+                    base_dir=base_dir
                 )
-                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
                 fd, temp_audio = tempfile.mkstemp(
@@ -4951,7 +4986,7 @@ class VideoProcessorApp:
                     seek_start=seek_start, 
                     seek_duration=seek_duration
                 )
-                if self.run_ffmpeg_command(audio_cmd, duration, options=options) != 0:
+                if self.run_ffmpeg_command(audio_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
                 nvencc_cmd = self.construct_nvencc_command(
@@ -4961,13 +4996,14 @@ class VideoProcessorApp:
                     orientation,
                     audio_source_path=temp_audio,
                     subtitle_burn_path=nvencc_subburn_path,
-                    info=info
+                    info=info,
+                    base_dir=base_dir
                 )
-                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress) != 0:
+                if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             else:
-                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path)
-                if self.run_ffmpeg_command(cmd, duration, options=options) != 0: 
+                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options, title_ass_path, base_dir=base_dir)
+                if self.run_ffmpeg_command(cmd, duration, options=options, cwd=base_dir) != 0: 
                     raise VideoProcessingError(f"Error encoding {job['video_path']}")
             
             print(f"File finalized => {output_file}")
@@ -5062,7 +5098,7 @@ class VideoProcessorApp:
             target_h = 1080
         return (target_w // 2) * 2, (target_h // 2) * 2
 
-    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None, subtitle_burn_path=None, info=None):
+    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None, subtitle_burn_path=None, info=None, base_dir=None):
         if info is None:
             info = get_video_info(input_file)
         is_hdr_output = options.get("output_format") == "hdr"
@@ -5284,16 +5320,18 @@ class VideoProcessorApp:
             cmd.extend(["--audio-copy"])
 
         if subtitle_burn_path:
-            safe_sub = str(subtitle_burn_path).replace("\\", "/").replace(",", r"\,")
+            # Use relative path to avoid "poisoned" parent directory names
+            safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir)
             cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         return cmd
 
-    def run_nvencc_command(self, cmd, duration=None, progress_callback=None):
+    def run_nvencc_command(self, cmd, duration=None, progress_callback=None, cwd=None):
         global CURRENT_FFMPEG_PROCESS
         print("Running NVEncC command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   env=env, text=True, encoding='utf-8', errors='replace', bufsize=1)
+                                   env=env, text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                   cwd=cwd)
         CURRENT_FFMPEG_PROCESS = process
         
         carry = ""
@@ -5366,7 +5404,7 @@ class VideoProcessorApp:
         cmd.append(output_audio)
         return cmd
 
-    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None, encoder_backend="ffmpeg"):
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None, encoder_backend="ffmpeg", base_dir=None):
         options = options or job['options']
         file_path = job['video_path']
         info = get_video_info(file_path)
@@ -5402,7 +5440,7 @@ class VideoProcessorApp:
         ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
-        audio_cmd_parts = self.build_audio_segment(file_path, options)
+        audio_cmd_parts = self.build_audio_segment(file_path, options, base_dir=base_dir)
         audio_fc_str = ""
         try:
             audio_fc_index = audio_cmd_parts.index("-filter_complex")
@@ -5450,7 +5488,7 @@ class VideoProcessorApp:
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
-                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
                 cpu_chain.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"): cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
@@ -5459,10 +5497,10 @@ class VideoProcessorApp:
                 if algo == "cas": cpu_chain.append(f"cas=strength={strength}")
                 else: cpu_chain.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path:
-                safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
+                safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
                 cpu_chain.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{total_h}") 
             if title_ass_path:
-                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
+                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
                 cpu_chain.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{total_h}")
             if not is_hdr_output: cpu_chain.append("format=nv12")
             
@@ -5580,7 +5618,7 @@ class VideoProcessorApp:
                     else:
                         vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
-                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"))
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
                 cpu_filters.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"): cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
@@ -5589,10 +5627,10 @@ class VideoProcessorApp:
                 if algo == "cas": cpu_filters.append(f"cas=strength={strength}")
                 else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
             if ass_burn_path:
-                safe_ass = escape_ffmpeg_filter_path(ass_burn_path)
+                safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
                 cpu_filters.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{target_h}")
             if title_ass_path:
-                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path)
+                safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
                 cpu_filters.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
             if cpu_filters:
                 # One single trip to CPU for all the heavy lifting
@@ -5824,7 +5862,7 @@ class VideoProcessorApp:
         self.root.after(0, lambda: self.progress_bar.config(value=0))
         self.root.after(0, lambda: self.start_button.config(state="normal"))
 
-    def run_ffmpeg_command(self, cmd, duration=None, options=None):
+    def run_ffmpeg_command(self, cmd, duration=None, options=None, cwd=None):
         # Force dynamic progress + verbose diagnostics in console for easier debugging.
         prepared_cmd = list(cmd)
         insert_flags = []
@@ -5844,7 +5882,7 @@ class VideoProcessorApp:
         print("Running FFmpeg command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in prepared_cmd))
         print(f"[INFO] FFmpeg CPU settings: threads={ffmpeg_threads}, priority={ffmpeg_priority}")
-        return safe_ffmpeg_execution(prepared_cmd, "video encoding", duration, self.update_progress, priority=ffmpeg_priority)
+        return safe_ffmpeg_execution(prepared_cmd, "video encoding", duration, self.update_progress, priority=ffmpeg_priority, cwd=cwd)
 
     def verify_output_file(self, file_path, options=None):
         print(f"--- Verifying output: {os.path.basename(file_path)} ---")
