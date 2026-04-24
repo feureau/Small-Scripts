@@ -83,6 +83,7 @@ fail during processing are logged to a specified error file for easy retries.
 | `--description` | `-d` | Download video description to a `.description` file (default). |
 | `--comments`    | `-C` | Download video comments into the metadata file (default). |
 | `--language`| `-l` | Language code for audio/subs (e.g., 'id', 'es'). |
+| `--combine-transcripts`| `-c` | Combine all downloaded transcripts into a single `.md` file. |
 
 ### gallery-dl Options (for image content in Download Mode)
 | Flag | Short | Description |
@@ -1084,7 +1085,7 @@ def process_json3_subtitle(json3_path):
         with open(srt_path, 'w', encoding='utf-8') as f:
             f.write("\n".join(srt_entries))
             
-        return f"Created {os.path.basename(txt_path)} and {os.path.basename(srt_path)}"
+        return f"Created {os.path.basename(txt_path)} and {os.path.basename(srt_path)}", txt_path
 
     except Exception as e:
         return f"Error processing JSON3: {e}"
@@ -1156,7 +1157,7 @@ def process_text_subtitle(subtitle_path):
         with open(txt_path, 'w', encoding='utf-8') as f:
             f.write("\n\n".join(paragraphs).strip())
 
-        return f"Created {os.path.basename(txt_path)}"
+        return f"Created {os.path.basename(txt_path)}", txt_path
     except Exception as e:
         return f"Error converting subtitle to plaintext ({os.path.basename(subtitle_path)}): {e}"
 
@@ -1198,7 +1199,7 @@ def run_updates():
     print("\n--- ✅ Update process finished ---")
     sys.exit(0)
 
-def run_download_task(task_type, identifier, title, args, original_url, task_id=None, slot_label=None):
+def run_download_task(task_type, identifier, title, args, original_url, task_id=None, slot_label=None, channel=None, upload_date=None):
     """Dispatches and runs a single media download task."""
     command_list, display_title, tool_name = None, "", ""
     
@@ -1311,8 +1312,15 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
             subtitle_msgs = []
             if task_type == YTDLP_TASK and subtitle_mode:
                 subtitle_candidates = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
+                subtitle_paths = []
                 for subtitle_file in subtitle_candidates:
-                    subtitle_msgs.append(process_text_subtitle(subtitle_file))
+                    res = process_text_subtitle(subtitle_file)
+                    if isinstance(res, tuple):
+                        msg, txt_path = res
+                        subtitle_paths.append(txt_path)
+                        subtitle_msgs.append(msg)
+                    else:
+                        subtitle_msgs.append(res)
                 if args.verbose and subtitle_msgs:
                     for msg in subtitle_msgs:
                         emit_message(f"[SUBTITLE] {msg}")
@@ -1349,10 +1357,10 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
 
             if subtitle_msgs:
                 update_task_status(task_id, state="SUCCESS", phase="done", percent="100.0", speed="--", eta="00:00")
-                return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str} ({len(subtitle_msgs)} subtitle text file(s) created)")
+                return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str} ({len(subtitle_msgs)} subtitle text file(s) created)", subtitle_paths)
             
             update_task_status(task_id, state="SUCCESS", phase="done", percent="100.0", speed="--", eta="00:00")
-            return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str}")
+            return ("SUCCESS", f"Finished {tool_name}: {display_title}{ext_str}", [])
         else:
             error_message = stderr.strip().replace('\n', ' ')
             
@@ -1374,14 +1382,14 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
             # A non-fatal error is only a "SUCCESS with warnings" if a file was actually created.
             if is_non_fatal_error and download_successful:
                 update_task_status(task_id, state="SUCCESS", phase="done-with-warnings", percent="100.0", speed="--", eta="00:00")
-                return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}")
+                return ("SUCCESS", f"Completed {tool_name} with warnings: {display_title} :: {error_message}", [])
             else:
                 update_task_status(task_id, state="FAILURE", phase="failed", speed="--", eta="--")
-                return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}")
+                return ("FAILURE", f"Failed {tool_name}: {display_title} :: {error_message}", [])
 
     except Exception as e:
         update_task_status(task_id, state="FAILURE", phase="exception", speed="--", eta="--")
-        return ("FAILURE", f"Error running {tool_name} for {display_title}: {e}")
+        return ("FAILURE", f"Error running {tool_name} for {display_title}: {e}", [])
     finally:
         if process:
             with process_lock:
@@ -1490,7 +1498,9 @@ def get_tasks_from_url(url):
                     if not entry_url and entry.get('ie_key') == 'Youtube':
                          entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
                     title = entry.get("title") or entry.get("title") or f"Media_{entry.get('id', 'unknown')}"
-                    ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url))
+                    channel = entry.get("channel") or entry.get("uploader") or "Unknown Channel"
+                    upload_date = entry.get("upload_date") or "00000000"
+                    ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url, channel, upload_date))
 
                 if data.get('_type') == 'playlist' and 'entries' in data:
                     for entry in data['entries']:
@@ -1508,17 +1518,17 @@ def get_tasks_from_url(url):
         
         # If discovery found nothing but it's YouTube, force use of yt-dlp
         if not ytdlp_tasks and is_youtube:
-            ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url))
+            ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000"))
 
-        return ytdlp_tasks if ytdlp_tasks else [(GALLERYDL_TASK, url, url, url)]
+        return ytdlp_tasks if ytdlp_tasks else [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")]
 
     except subprocess.CalledProcessError as e:
         if is_youtube:
-            return [(YTDLP_TASK, url, "YouTube Content", url)]
+            return [(YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000")]
         
         stderr_lower = e.stderr.lower()
         if "no video formats found" in stderr_lower or "unsupported url" in stderr_lower or "no media found" in stderr_lower:
-            return [(GALLERYDL_TASK, url, url, url)]
+            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")]
         else:
             raise Exception(f"yt-dlp failed to fetch info: {e.stderr.strip()}")
     except FileNotFoundError:
@@ -1627,16 +1637,17 @@ def process_url(url, index, total_urls, args):
 
             emit_message(f"[{slot_label}] Found {len(tasks)} item(s) to download.")
 
-            for i, (task_type, target_url, title, original_url) in enumerate(tasks, 1):
+            for i, task in enumerate(tasks, 1):
+                task_type, target_url, title, original_url, channel, upload_date = task
                 task_id = f"{index}:{i}:{int(time.time() * 1000)}"
-                status, message = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label)
+                status, message, t_paths = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label, channel=channel, upload_date=upload_date)
                 log_message(args.log_file, status, original_url, message)
                 if status == "FAILURE":
                     with failed_urls_lock:
                         failed_urls.append({'original_url': original_url, 'target_url': target_url, 'title': title, 'message': message})
                 elif status == "SUCCESS":
                     with success_urls_lock:
-                        success_urls.append({'original_url': original_url, 'target_url': target_url, 'title': title, 'message': message})
+                        success_urls.append({'original_url': original_url, 'target_url': target_url, 'title': title, 'message': message, 'transcript_paths': t_paths, 'channel': channel, 'upload_date': upload_date})
                 emit_message(f"[{slot_label} #{i}/{len(tasks)}] {'✅' if status == 'SUCCESS' else '❌'} {message}")
             
             emit_message(f"[{slot_label}] ✅ Finished processing URL: {url}")
@@ -1647,6 +1658,69 @@ def process_url(url, index, total_urls, args):
         with failed_urls_lock:
             failed_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
         emit_message(f"[{slot_label}] ❌ CRITICAL FAILURE for {url} :: {message}")
+
+def combine_all_transcripts(success_list):
+    """Combines all downloaded transcripts into a single Markdown file."""
+    # Determine dynamic filename based on channel and latest date
+    channels = [item.get('channel') for item in success_list if item.get('transcript_paths') and item.get('channel')]
+    dates = [item.get('upload_date') for item in success_list if item.get('transcript_paths') and item.get('upload_date')]
+    
+    main_channel = "Combined"
+    if channels:
+        # Use the most frequent channel name
+        main_channel = max(set(channels), key=channels.count)
+    
+    latest_date = ""
+    if dates:
+        latest_date = max(dates)
+        if latest_date == "00000000":
+            latest_date = datetime.datetime.now().strftime('%Y%m%d')
+    else:
+        latest_date = datetime.datetime.now().strftime('%Y%m%d')
+        
+    safe_channel = sanitize_filename(main_channel)
+    output_file = f"{safe_channel} - {latest_date}.md"
+    
+    emit_message(f"--- 📝 Combining transcripts into {output_file} ---")
+    
+    combined_content = ["# Combined Transcripts\n"]
+    found_any = False
+    
+    for item in success_list:
+        paths = item.get('transcript_paths', [])
+        if not paths:
+            continue
+        
+        title = item.get('title', 'Untitled')
+        url = item.get('target_url', 'Unknown URL')
+        
+        for path in paths:
+            if not os.path.exists(path):
+                continue
+            
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                
+                if content:
+                    combined_content.append(f"## [{title}]({url})\n")
+                    combined_content.append(f"File: `{os.path.basename(path)}`\n\n")
+                    combined_content.append(content)
+                    combined_content.append("\n\n---\n")
+                    found_any = True
+            except Exception as e:
+                emit_message(f"  ❌ Error reading {path}: {e}")
+                
+    if not found_any:
+        emit_message("  ⚠️ No transcript content found to combine.")
+        return
+
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("\n".join(combined_content))
+        emit_message(f"  ✅ Successfully created {output_file}")
+    except Exception as e:
+        emit_message(f"  ❌ Error writing {output_file}: {e}")
 
 def signal_handler(sig, frame):
     """Handles Ctrl-C by shutting down the executor and terminating child processes."""
@@ -1695,6 +1769,7 @@ def main():
     ytdlp_group.add_argument("-C", "--comments", action="store_true", help="Download video comments into the metadata file.")
     ytdlp_group.add_argument("-l", "--language", type=str, help="Language code for audio/subs (e.g., 'id', 'es').")
     ytdlp_group.add_argument("-j", "--json3", action="store_true", help="Download json3 subtitles (word-level timing).")
+    ytdlp_group.add_argument("-c", "--combine-transcripts", action="store_true", help="Combine all downloaded transcripts into a single .md file.")
     
     gallerydl_group = parser.add_argument_group('gallery-dl Options (for image content in Download Mode)')
     gallerydl_group.add_argument("-gD", "--g-directory", type=str, help="Output directory for downloaded images.")
@@ -1730,9 +1805,14 @@ def main():
     
     is_any_specific_flag = any([
         args.video, args.audio_only, args.srt, args.thumbnail, args.description,
-        args.metadata, args.comments, args.g_write_metadata, args.json3
+        args.metadata, args.comments, args.g_write_metadata, args.json3,
+        args.combine_transcripts
     ])
     args.default_download = not is_any_specific_flag
+    
+    # If combine-transcripts is set, implicitly enable srt/subtitles if no other mode is set
+    if args.combine_transcripts and not any([args.video, args.audio_only, args.srt, args.json3]):
+        args.srt = True
     
     start_live_ui(len(urls_to_process), args)
     emit_message(f"✅ Starting processing for {len(urls_to_process)} URLs with {PARALLEL_DOWNLOADS} parallel workers...")
@@ -1756,6 +1836,10 @@ def main():
                 emit_message(message)
 
     stop_live_ui()
+    
+    if args.combine_transcripts:
+        combine_all_transcripts(success_urls)
+        
     print("🎉 All tasks completed.")
     
     if success_urls:
