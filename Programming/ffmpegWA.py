@@ -154,7 +154,7 @@ Use these flags to override the default settings. Run with `-h` or `--help` for 
   bits to complex scenes. Using `maxrate` and `bufsize` creates a buffer and hard limit,
   ensuring the file size does not exceed the target, even with complex content.
 - **Resolution Capping (`scale`):** The `scale` filter uses `force_original_aspect_ratio='decrease'`
-  which is the key to resizing the video to fit *inside* a 1080x1080 box without
+  which is the key to resizing the video to fit *inside* a configurable box (default 1080x1080) without
   distortion. The `pad` filter was intentionally removed to prevent letterboxing,
   resulting in an output resolution that matches the video's aspect ratio (e.g.,
   1080x607 for widescreen, 607x1080 for portrait).
@@ -199,12 +199,15 @@ import argparse
 
 # --- Default Script Configuration ---
 DEFAULT_CONFIG = {
-    "target_mb": 8.7,
+    "target_mb": 179,
     "max_duration": 15,  # Default duration when -s is used without argument
     "output_folder": "compressed_videos",
     "loudness_target": -9,
     "loudness_range": 7,
     "true_peak": -1.0,
+    "width": 1080,
+    "height": 1080,
+    "scale": None,
 }
 
 VIDEO_EXTENSIONS = ["mp4", "mov", "mkv", "avi", "webm"]
@@ -225,7 +228,13 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
         print(f"   [INFO] Target video bitrate: {int(video_bitrate / 1000)} kbps")
 
         stream = ffmpeg.input(input_path, ss=start_time, t=duration)
-        video = stream.video.filter('scale', w=1080, h=1080, force_original_aspect_ratio='decrease')
+        
+        if config.get('scale') is not None:
+            w_expr = f"trunc(iw*{config['scale']}/2)*2"
+            h_expr = f"trunc(ih*{config['scale']}/2)*2"
+            video = stream.video.filter('scale', w=w_expr, h=h_expr)
+        else:
+            video = stream.video.filter('scale', w=config['width'], h=config['height'], force_original_aspect_ratio='decrease')
 
         audio = None
         if audio_stream_exists:
@@ -348,6 +357,9 @@ def main():
     parser.add_argument("-l", "--loudness", type=float, default=DEFAULT_CONFIG['loudness_target'], help="Loudness target in LUFS. Smaller negative numbers are louder.")
     parser.add_argument("-r", "--lra", type=int, default=DEFAULT_CONFIG['loudness_range'], help="Loudness Range (LRA). Lower values mean more compression.")
     parser.add_argument("-p", "--peak", type=float, default=DEFAULT_CONFIG['true_peak'], help="True Peak ceiling in dBTP.")
+    parser.add_argument("--width", type=int, default=DEFAULT_CONFIG['width'], help="Maximum width for resolution capping.")
+    parser.add_argument("--height", type=int, default=DEFAULT_CONFIG['height'], help="Maximum height for resolution capping.")
+    parser.add_argument("--scale", type=float, default=DEFAULT_CONFIG['scale'], help="Scale multiplier (e.g., 0.25 for quarter size). Overrides --width and --height.")
     
     args = parser.parse_args()
 
@@ -365,6 +377,9 @@ def main():
         'loudness_target': args.loudness,
         'loudness_range': args.lra,
         'true_peak': args.peak,
+        'width': args.width,
+        'height': args.height,
+        'scale': args.scale,
     }
 
     current_working_dir = os.getcwd()

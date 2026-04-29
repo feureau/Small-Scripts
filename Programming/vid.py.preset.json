@@ -308,7 +308,7 @@
             "horizontal_aspect": "16:9",
             "vertical_aspect": "9:16",
             "merged_aspect": "16:9",
-            "burn_subtitles": true,
+            "burn_subtitles": false,
             "override_bitrate": false,
             "manual_bitrate": "68000",
             "max_size_mb": "0",
