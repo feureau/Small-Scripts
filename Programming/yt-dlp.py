@@ -868,7 +868,11 @@ def emit_message(message):
         ui_dirty_event.set()
         return
     with print_lock:
-        print(message, flush=True)
+        try:
+            print(message, flush=True)
+        except UnicodeEncodeError:
+            # Fallback: Strip non-ASCII characters if printing fails
+            print(message.encode('ascii', 'ignore').decode('ascii'), flush=True)
 
 def update_task_status(task_id, **updates):
     """Thread-safe task status update for live UI."""
@@ -975,16 +979,19 @@ def start_live_ui(total_urls, args):
     ui_render_thread = threading.Thread(target=render_live_ui, args=(total_urls,), daemon=True)
     ui_render_thread.start()
 
-def stop_live_ui():
+def stop_live_ui(immediate=False):
     global ui_render_thread, ui_enabled
     if not ui_enabled:
         return
     ui_stop_event.set()
     ui_dirty_event.set()
     if ui_render_thread:
-        ui_render_thread.join(timeout=1.5)
+        # If immediate, don't wait for the thread to join
+        if not immediate:
+            ui_render_thread.join(timeout=0.5)
     with print_lock:
-        sys.stdout.write("\x1b[H\x1b[J")
+        # Move cursor to end and clear
+        sys.stdout.write("\x1b[?25h") # Show cursor
         sys.stdout.flush()
     ui_enabled = False
     ui_render_thread = None
@@ -1091,25 +1098,50 @@ def process_json3_subtitle(json3_path):
         return f"Error processing JSON3: {e}"
 
 def extract_subtitle_paths_from_output(output_text):
-    """Extract subtitle file paths from yt-dlp output."""
+    """Extract subtitle file paths and metadata from yt-dlp output."""
     subtitle_exts = ('.json3', '.srt', '.vtt', '.ass', '.lrc')
-    patterns = [
-        r'Writing video subtitles to:\s*(.+)$',
-        r'Destination:\s*(.+)$',
-    ]
-    paths = set()
-
+    results = []
+    current_is_auto = False
+    
+    # ANSI escape code stripper
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    
     for raw_line in output_text.splitlines():
-        line = raw_line.strip()
+        # Strip ANSI codes and whitespace
+        line = ansi_escape.sub('', raw_line).strip()
+        
+        # Check if this line indicates the start of a subtitle block
+        if "Writing video subtitles to:" in line:
+            current_is_auto = False
+        elif "Writing auto-generated subtitles to:" in line:
+            current_is_auto = True
+            
+        # Match destinations
+        # We look for "to: " or "Destination: " followed by the path
+        patterns = [
+            r'(?:Writing (?:video|auto-generated) subtitles to:|Destination:)\s*(.+)$',
+        ]
+        
         for pattern in patterns:
             match = re.search(pattern, line)
-            if not match:
-                continue
-            candidate = match.group(1).strip().strip('"').strip("'")
-            if candidate.lower().endswith(subtitle_exts):
-                paths.add(candidate)
-
-    return sorted(paths)
+            if match:
+                path = match.group(1).strip().strip('"').strip("'")
+                if path.lower().endswith(subtitle_exts):
+                    results.append({
+                        'path': path,
+                        'is_auto': current_is_auto,
+                        'ext': os.path.splitext(path)[1].lower()
+                    })
+    
+    # Remove duplicates
+    seen = set()
+    unique_results = []
+    for r in results:
+        if r['path'] not in seen:
+            unique_results.append(r)
+            seen.add(r['path'])
+            
+    return unique_results
 
 def process_text_subtitle(subtitle_path):
     """Converts SRT/VTT/ASS/LRC subtitle files to plaintext .txt."""
@@ -1313,14 +1345,52 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
             if task_type == YTDLP_TASK and subtitle_mode:
                 subtitle_candidates = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
                 subtitle_paths = []
-                for subtitle_file in subtitle_candidates:
-                    res = process_text_subtitle(subtitle_file)
+                
+                if subtitle_candidates:
+                    # Filter for only those that actually exist on disk now
+                    subtitle_candidates = [s for s in subtitle_candidates if os.path.exists(s['path'])]
+                
+                if subtitle_candidates:
+                    # 1. Prioritize: Manual > Auto, Lang match > other, SRT > others
+                    target_lang = (args.language if args.language else 'en').lower()
+                    
+                    def score_subtitle(sub):
+                        score = 0
+                        if not sub['is_auto']: score += 1000
+                        
+                        # Check language in path (e.g. video.en.srt)
+                        path_lower = sub['path'].lower()
+                        if f".{target_lang}." in path_lower or path_lower.endswith(f".{target_lang}"):
+                             score += 500
+                        
+                        if sub['ext'] == '.srt': score += 100
+                        if sub['ext'] == '.json3' and args.json3: score += 200
+                        
+                        return score
+
+                    subtitle_candidates.sort(key=score_subtitle, reverse=True)
+                    
+                    # Pick the best one
+                    best_sub = subtitle_candidates[0]
+                    other_subs = subtitle_candidates[1:]
+                    
+                    # 2. Process the best one
+                    res = process_text_subtitle(best_sub['path'])
                     if isinstance(res, tuple):
                         msg, txt_path = res
                         subtitle_paths.append(txt_path)
                         subtitle_msgs.append(msg)
                     else:
                         subtitle_msgs.append(res)
+                    
+                    # 3. Cleanup: Delete all other subtitle candidates from disk
+                    for other in other_subs:
+                        try:
+                            if os.path.exists(other['path']):
+                                os.remove(other['path'])
+                        except Exception as e:
+                            pass
+                
                 if args.verbose and subtitle_msgs:
                     for msg in subtitle_msgs:
                         emit_message(f"[SUBTITLE] {msg}")
@@ -1402,7 +1472,7 @@ def run_text_extraction_task(url):
     data = None
 
     try:
-        command = [*YTDLP_PATH, '--dump-json', '--skip-download', '--ignore-no-formats-error', url]
+        command = [*YTDLP_PATH, '--ignore-config', '--dump-json', '--skip-download', '--ignore-no-formats-error', url]
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         data = result.stdout
     except subprocess.CalledProcessError:
@@ -1480,24 +1550,30 @@ def normalize_url(url):
     return url
 
 def get_tasks_from_url(url):
-    """Determines if a URL is for yt-dlp or gallery-dl and returns a list of tasks."""
+    """Determines if a URL is for yt-dlp or gallery-dl and returns (tasks, collection_title)."""
     url = normalize_url(url)
     is_youtube = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
     
-    command = [*YTDLP_PATH, "--dump-json", "--flat-playlist", "--ignore-no-formats-error", url]
+    command = [*YTDLP_PATH, '--ignore-config', '--dump-json', '--flat-playlist', '--ignore-no-formats-error', url]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         ytdlp_tasks = []
+        collection_title = None
+        
         for line in result.stdout.strip().splitlines():
             try:
                 data = json.loads(line)
                 
+                # Capture the playlist/collection title if this is the top-level entry
+                if not collection_title:
+                    collection_title = data.get('title') or data.get('playlist_title') or data.get('uploader')
+
                 # Helper to process a single entry
                 def add_ytdlp_task(entry, original_url):
                     entry_url = entry.get('webpage_url') or entry.get('url')
                     if not entry_url and entry.get('ie_key') == 'Youtube':
                          entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                    title = entry.get("title") or entry.get("title") or f"Media_{entry.get('id', 'unknown')}"
+                    title = entry.get("title") or f"Media_{entry.get('id', 'unknown')}"
                     channel = entry.get("channel") or entry.get("uploader") or "Unknown Channel"
                     upload_date = entry.get("upload_date") or "00000000"
                     ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url, channel, upload_date))
@@ -1520,15 +1596,18 @@ def get_tasks_from_url(url):
         if not ytdlp_tasks and is_youtube:
             ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000"))
 
-        return ytdlp_tasks if ytdlp_tasks else [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")]
+        if ytdlp_tasks:
+            return ytdlp_tasks, (collection_title or "Links")
+        else:
+            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")], "Links"
 
     except subprocess.CalledProcessError as e:
         if is_youtube:
-            return [(YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000")]
+            return [(YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000")], "YouTube Content"
         
         stderr_lower = e.stderr.lower()
         if "no video formats found" in stderr_lower or "unsupported url" in stderr_lower or "no media found" in stderr_lower:
-            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")]
+            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")], "Gallery"
         else:
             raise Exception(f"yt-dlp failed to fetch info: {e.stderr.strip()}")
     except FileNotFoundError:
@@ -1537,7 +1616,20 @@ def get_tasks_from_url(url):
 def build_ytdlp_command(target_url, args):
     video_url = target_url
     output_tmpl = OUTPUT_TEMPLATE_FOLDER if getattr(args, 'individual_folder', False) else OUTPUT_TEMPLATE
-    command_list = [*YTDLP_PATH, '--no-warnings', '--newline', '--progress-delta', '2', '-o', output_tmpl]
+    
+    # Base command: ignore config files and explicitly disable sidecar files by default
+    command_list = [
+        *YTDLP_PATH, 
+        '--ignore-config',
+        '--no-warnings', 
+        '--no-colors', 
+        '--newline', 
+        '--progress-delta', '2', 
+        '-o', output_tmpl,
+        '--no-write-thumbnail',
+        '--no-write-info-json',
+        '--no-write-description'
+    ]
 
     if args.verbose:
         command_list.append('-v')
@@ -1570,7 +1662,8 @@ def build_ytdlp_command(target_url, args):
         command_list.extend(['-f', f'ba[language={lang_code}]/ba' if lang_code else 'ba', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0'])
 
     if wants_thumbnail:
-        command_list.append("--write-thumbnail")
+        # Re-enable if explicitly requested
+        command_list.extend(["--write-thumbnail", "--convert-thumbnails", "webp"])
 
     if wants_metadata:
         command_list.append("--write-info-json")
@@ -1597,16 +1690,30 @@ def build_ytdlp_command(target_url, args):
 
 def build_gallerydl_command(url, args, title=None):
     command_list = [GALLERYDL_PATH]
+    
+    # Base behavior: use internal config isolation
+    # Note: gallery-dl uses -c for config, but no direct --ignore-config. 
+    # We use -c /dev/null if we wanted to truly ignore, but better to just be explicit.
+    
     if args.verbose: command_list.append("--verbose")
+    
+    # If no media is requested, add --no-download
+    wants_media = getattr(args, 'default_download', False) or args.video or args.audio_only or args.thumbnail
+    if not wants_media:
+        command_list.append("--no-download")
+
     if getattr(args, 'individual_folder', False) and title:
         safe_title = sanitize_filename(title)
         command_list.extend(["-d", os.path.join(os.getcwd(), safe_title)])
     elif args.g_directory: 
         command_list.extend(["-D", args.g_directory])
+    
     if args.g_archive: command_list.extend(["-A", args.g_archive])
     if args.g_no_skip: command_list.append("--no-skip")
+    
     if args.g_write_metadata or getattr(args, 'default_download', False):
         command_list.append("--write-metadata")
+    
     if args.g_options: command_list.extend(shlex.split(args.g_options))
     command_list.append(url)
     return command_list
@@ -1629,10 +1736,27 @@ def process_url(url, index, total_urls, args):
                     success_urls.append({'original_url': url, 'target_url': url, 'title': url, 'message': message})
             emit_message(f"[{slot_label}] {'✅' if status == 'SUCCESS' else '❌'} Finished: {url} :: {message}")
         else: # Download Mode
-            tasks = get_tasks_from_url(url)
+            tasks, collection_title = get_tasks_from_url(url)
             if not tasks:
                 log_message(args.log_file, "SKIPPED", url, "No downloadable content found during discovery.")
                 emit_message(f"[{slot_label}] ⏩ Skipped: {url} (No content found)")
+                return
+
+            is_playlist = len(tasks) > 1
+            if is_playlist or args.get_links:
+                # Save links to a file
+                safe_title = sanitize_filename(collection_title or "Links")
+                links_filename = f"{safe_title} - Links.txt"
+                try:
+                    with open(links_filename, "w", encoding="utf-8") as f:
+                        for t in tasks:
+                            f.write(f"{t[1]}\n") # t[1] is the target_url
+                    emit_message(f"[{slot_label}] ✅ Saved {len(tasks)} link(s) to: {links_filename}")
+                except Exception as e:
+                    emit_message(f"[{slot_label}] ❌ Error saving links file: {e}")
+
+            if args.get_links:
+                emit_message(f"[{slot_label}] ℹ️ Link extraction mode: skipping downloads for {url}")
                 return
 
             emit_message(f"[{slot_label}] Found {len(tasks)} item(s) to download.")
@@ -1723,19 +1847,27 @@ def combine_all_transcripts(success_list):
         emit_message(f"  ❌ Error writing {output_file}: {e}")
 
 def signal_handler(sig, frame):
-    """Handles Ctrl-C by shutting down the executor and terminating child processes."""
-    stop_live_ui()
-    with print_lock:
-        print("\n\n⚠️ Ctrl-C detected! Forcing shutdown...", flush=True)
+    """Handles Ctrl-C by immediately terminating all child processes and exiting."""
+    # Set the stop event first to stop any new tasks
     if 'executor' in globals() and executor:
         executor.shutdown(wait=False, cancel_futures=True)
+
+    # Immediately signal the UI to stop without waiting
+    stop_live_ui(immediate=True)
+    
+    with print_lock:
+        print("\n\n⚠️ Ctrl-C detected! Terminating all processes...", flush=True)
+    
+    # Kill all running child processes immediately
     with process_lock:
         for proc in list(running_processes):
             try:
-                proc.terminate()
-            except ProcessLookupError:
+                # Use kill() for more immediate termination on Windows/Unix
+                proc.kill()
+            except:
                 pass
-    print("Shutdown complete. Exiting.", flush=True)
+    
+    # Exit immediately to avoid hanging on thread joins or other locks
     os._exit(1)
 
 def main():
@@ -1755,6 +1887,7 @@ def main():
     general_group = parser.add_argument_group('General Options')
     general_group.add_argument("-L", "--log-file", type=str, default="processing_log.txt", help="File to save a verbose, timestamped log (default: processing_log.txt).")
     general_group.add_argument("-oE", "--output-errors", type=str, default="errors.txt", help="File to save the clean list of URLs that failed (default: errors.txt).")
+    general_group.add_argument("-gl", "--get-links", action="store_true", help="Extract and save all video links to a text file and exit (skip download).")
     general_group.add_argument("-V", "--verbose", action="store_true", help="Show all underlying output for debugging.")
     general_group.add_argument("--no-live-ui", action="store_true", help="Disable dynamic terminal status UI and use plain scrolling logs.")
     general_group.add_argument("-F", "--individual-folder", action="store_true", help="Download each item into its own individual folder.")
@@ -1840,12 +1973,12 @@ def main():
     if args.combine_transcripts:
         combine_all_transcripts(success_urls)
         
-    print("🎉 All tasks completed.")
+    print("--- All tasks completed ---")
     
     if success_urls:
         with print_lock:
             print("\n" + "="*80)
-            print("✅ SUCCESSFUL TASKS SUMMARY")
+            print("[SUCCESS] SUCCESSFUL TASKS SUMMARY")
             print("="*80)
             for succ in success_urls:
                 print(f"- Title: {succ.get('title', 'Unknown')}")
@@ -1857,7 +1990,7 @@ def main():
         try:
             with open(args.log_file, "a", encoding="utf-8") as f:
                 f.write("\n" + "="*80 + "\n")
-                f.write("✅ SUCCESSFUL TASKS SUMMARY\n")
+                f.write("[SUCCESS] SUCCESSFUL TASKS SUMMARY\n")
                 f.write("="*80 + "\n")
                 for succ in success_urls:
                     f.write(f"- Title: {succ.get('title', 'Unknown')}\n")
@@ -1870,13 +2003,13 @@ def main():
     elif not failed_urls:
         with print_lock:
             print("\n" + "="*80)
-            print(f"✅ ALL {len(urls_to_process)} TASKS COMPLETED SUCCESSFULLY (No items processed)")
+            print(f"[SUCCESS] ALL {len(urls_to_process)} TASKS COMPLETED SUCCESSFULLY (No items processed)")
             print("="*80 + "\n")
 
     if failed_urls:
         with print_lock:
             print("\n" + "="*80)
-            print("❌ FAILED TASKS SUMMARY")
+            print("[FAILURE] FAILED TASKS SUMMARY")
             print("="*80)
             for fail in failed_urls:
                 print(f"- Title: {fail.get('title', 'Unknown')}")
@@ -1887,7 +2020,7 @@ def main():
         try:
             with open(args.log_file, "a", encoding="utf-8") as f:
                 f.write("\n" + "="*80 + "\n")
-                f.write("❌ FAILED TASKS SUMMARY\n")
+                f.write("[FAILURE] FAILED TASKS SUMMARY\n")
                 f.write("="*80 + "\n")
                 for fail in failed_urls:
                     f.write(f"- Title: {fail.get('title', 'Unknown')}\n")

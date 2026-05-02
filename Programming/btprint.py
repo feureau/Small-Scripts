@@ -132,7 +132,7 @@ class ConfigManager:
         "keyword": "BlueTooth Printer",
         "protocol": "TSPL",
         "paper_width_mm": 100,
-        "fixed_label_height_mm": 0,
+        "fixed_label_height_mm": 150,
         "dots_per_mm": 8,
         "feed_extra_dots": 0,
         "add_height_margin_mm": 0,
@@ -640,9 +640,21 @@ def image_to_bitmap(pil_image, cfg):
         bg.paste(pil_image, mask=pil_image.split()[-1])
         pil_image = bg
     w, h = pil_image.size
-    if w > target_w:
-        ratio = target_w / w
+
+    # Scale to fit width
+    ratio = target_w / w if w > target_w else 1.0
+
+    # Also scale to fit height when a fixed label height is set
+    fixed_h = cfg.get("fixed_label_height_mm", 0)
+    if fixed_h > 0:
+        target_h = fixed_h * cfg["dots_per_mm"]
+        h_ratio = target_h / (h * ratio)      # check projected height after width-scaling
+        if h_ratio < 1.0:
+            ratio *= h_ratio                   # shrink further to fit height
+
+    if ratio < 1.0:
         pil_image = pil_image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+
     img = pil_image.convert('L')
     if should_invert: img = ImageOps.invert(img)
     img = img.convert('1')

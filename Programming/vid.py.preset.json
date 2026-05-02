@@ -164,7 +164,7 @@
             "horizontal_aspect": "16:9",
             "vertical_aspect": "9:16",
             "merged_aspect": "16:9",
-            "burn_subtitles": true,
+            "burn_subtitles": false,
             "override_bitrate": false,
             "manual_bitrate": "12000",
             "max_size_mb": "0",
@@ -275,7 +275,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": false,
+            "on_scan_subs": true,
             "auto_detect_subs": false,
             "suffix_filter": null
         }
@@ -419,7 +419,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": false,
+            "on_scan_subs": true,
             "auto_detect_subs": false,
             "suffix_filter": null
         }
@@ -967,7 +967,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": true,
+            "on_scan_subs": false,
             "auto_detect_subs": false,
             "suffix_filter": null
         }

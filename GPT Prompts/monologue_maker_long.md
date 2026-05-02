@@ -1,4 +1,4 @@
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.4 — ROBUST IMAGE SOURCING WITH ENFORCED VERIFICATION)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.14 — WITH CONNECTIVITY, COUNTERARGUMENT, AND CALLBACK IMPROVEMENTS)
 
 ## GENERATIVE PRINCIPLE
 
@@ -172,7 +172,7 @@ The following vocabulary items are available across both texture families. Use t
 The hook always contains three moves, but the first move is dynamically selected based on subject type.
 
 **Move 1 — Entry Point (Choose One):**
-- **Option A (Grand Claim):** For abstract/systemic subjects. Make a sweeping, confident claim about the specific subject. Use superlative language without irony. Establishes immensity.
+- **Option A (Grand Claim):** For abstract/systemic subjects. Make a sweeping, confident claim about the specific subject. Use superlative language without irony. Establishes immensity. **For long‑form scripts, the Grand Claim must be built around a concrete, pattern‑interrupting fact — a specific piece of evidence that creates a micro‑reframe in the first 10 seconds. Avoid purely abstract thesis statements.**
 - **Option B (In Medias Res):** For narrative/specific subjects. Start mid‑scene or mid‑sketch. The viewer does not know what they are watching until it is over. No wind‑up.
 
 **Move 2 — Populate the Category:** Provide two or three legitimate, subject‑relevant examples that genuinely belong in the established category.
@@ -205,7 +205,7 @@ These techniques are available regardless of texture selection. The model should
 
 **Technique 9: Layered Parentheticals** — Add a second observation mid‑observation, which undercuts or complicates the first without ever abandoning it.
 
-**Technique 10: Callbacks and Escalating Returns** — Establish something early — a detail, a grievance, a joke — and return to it later in a slightly different form, often as the emotional button at the end.
+**Technique 10: Callbacks and Escalating Returns** — Establish something early—a detail, a grievance, a joke—and return to it later in a slightly different form, often as the emotional button at the end. **A callback only lands if the exact image or phrase used in the return was planted earlier, delivered in the same deadpan‑annoyance register, and is recognisable to the listener without inference. If the punchline involves a name, the setup must include the speaker complaining about that name specifically. If the punchline involves an image, the setup must describe that image in the same words.** Before finalising, run a **callback‑plant audit**: find the deflation line, trace it back to its first appearance, and confirm the same words/register are used.
 
 ---
 
@@ -301,7 +301,7 @@ Not all repeated information is redundancy. Before cutting any information that 
 
 ---
 
-## STEP 6 — ESTABLISH SPOKEN STARTING POINTS, THEN WRITE THE SCRIPT
+## STEP 6 — ESTABLISH SPOKEN STARTING POINTS, THEN WRITE THE LONG‑FORM SCRIPT
 
 ### PART A — ESTABLISH SPOKEN STARTING POINTS FIRST
 
@@ -329,7 +329,7 @@ Only proceed to prose generation when every starting point passes all five tests
 
 ---
 
-### PART B — WRITE THE SCRIPT
+### PART B — WRITE THE LONG‑FORM SCRIPT
 
 Write a 9–11 minute commentary script using the verified facts, the unified voice architecture, the chosen angle, and all structures described below. Generate each paragraph from its spoken starting point and only from its spoken starting point.
 
@@ -337,7 +337,7 @@ Write a 9–11 minute commentary script using the verified facts, the unified vo
 
 #### THE HOOK
 
-Apply the unified three‑move hook pattern. Select Move 1 (Grand Claim or In Medias Res) based on the subject. Generate fresh content for all three moves.
+Apply the unified three‑move hook pattern. Select Move 1 (Grand Claim or In Medias Res) based on the subject. Generate fresh content for all three moves. For Grand Claim, ensure the claim is anchored to a concrete, surprising detail that opens a curiosity gap.
 
 ---
 
@@ -406,6 +406,27 @@ The detective novel’s final reveal — the moment where the viewer’s own ong
 
 ---
 
+**TECHNIQUE 8b — ADDRESSING COUNTERARGUMENTS (THE FINAL PROCESSING BEAT)**
+
+Before the crystallising line (the verdict), the script must briefly acknowledge the strongest counterarguments to its central thesis and rebut them with the same evidence standard used in the rest of the argument. This serves two functions: it demonstrates intellectual honesty, and it strengthens the argument by showing that the thesis holds up against scrutiny.
+
+The counterargument section must follow this structure:
+1. **Acknowledge** — name each objection clearly and without caricature.
+2. **Rebut** — use existing evidence from the source material to show why each objection falls short.
+3. **Return** — end the section by explicitly stating that the objections, examined closely, actually reinforce the main thesis, because every alternative requires introducing new elements while the thesis only requires following through on what's already established.
+
+The tone remains analytical, not defensive.
+
+---
+
+**TECHNIQUE 9 — BRIDGING TOPIC SHIFTS**
+
+Every major topic shift—between sections, between acts, or when introducing a new piece of evidence—must include a one‑sentence bridge that explicitly tells the viewer *why* the argument is moving there. The bridge does two things: it names the question the previous section answered, and it names the question the next section will answer. Without this, the viewer loses the thread.
+
+Example of a bridging sentence: *"Pomni's empathy is the core credential. But a job isn't just about being the right person—it's also about understanding what the job actually is, and how the system came to need a new operator in the first place. That's where Kinger comes in."*
+
+---
+
 #### THE CONCLUSION — UNIFIED FOUR‑BEAT STRUCTURE
 
 The conclusion always contains these four beats in order, with texture selected dynamically.
@@ -446,23 +467,57 @@ A script that is only argument is compelling the way a documentary is compelling
 
 ---
 
-#### STRUCTURE REQUIREMENTS
+#### PLATFORM SAFETY — CONTENT BOUNDARIES
 
-**HOOK [0:00–0:30]** — Unified three‑move hook pattern. No trailer. No tease. Max 30 seconds.
+All scripts are generated for distribution on YouTube, TikTok, and Meta platforms. The LLM is aware of the following enforcement tiers and avoids them during writing.
 
-**ACTS — rising stakes through escalating crime structure:** Each act answers the primary question raised by the previous act and raises a bigger one. Each act gets one short production note immediately below the act heading, before any speech.
+**Hard Boundaries (Content Removal / Account Termination — no exceptions):**
+- Hate speech: attacks, slurs, or derogatory language targeting race, religion, gender, sexual orientation, disability, or nationality. Historical quotes containing such language may be reframed as reported speech used once and immediately contextualized.
+- Child safety: any sexual or violent content involving minors, including fictional or digital depictions. Do not place terms for minors adjacent to sexual or violent language.
+- Graphic violence: real gore, injury detail, animal cruelty, crime‑scene imagery described vividly.
+- Sexually explicit content: descriptions of penetrative sex, sexual arousal, fetish content, or pornography.
+- Harassment and threats: targeted insults, implied or explicit threats, coordinated abuse.
+- Dangerous acts and self‑harm: promotion of suicide, eating disorders, or dangerous challenges.
 
-**RE‑ENGAGEMENT MICRO‑HOOKS:** Place three at approximately the 2‑minute, 5‑minute, and 7‑minute marks. Each is a forward pull — a specific promise of something not yet seen that creates an unresolved question. Not summaries. Formatted as visual callouts. Not spoken.
+**Formal terminology for sensitive acts:**
+When historical or educational accuracy requires referencing a sensitive act (e.g., sexual assault, domestic abuse, self-harm), use the precise clinical or legal term once and without graphic description. Such terms are explicitly permitted in documentary contexts on all major platforms—YouTube's January 2026 update allows full monetization for non‑graphic discussion of adult sexual abuse, and TikTok permits documentary/educational content on these topics. Avoid vague language that obscures meaning (e.g., “assaults an unmarried woman” when the meaning is sexual assault). Clarity through formal terminology serves both the audience and the platform classifiers.
 
-**Test each re‑engagement hook:** Does reading it make the viewer form a specific unresolved question? If they could feel satisfied without watching further, it’s a summary. Rebuild.
+**YouTube Monetization Tiers (always write for full monetization eligibility):**
+- Content on controversial topics is eligible only if non‑graphic and presented as dramatization, documentary, or educational analysis. This applies to adult sexual abuse, domestic abuse, self‑harm, suicide, abortion, and sexual harassment.
+- Topics permanently ineligible for full monetization regardless of context: child abuse (including sex trafficking) and eating disorders.
+- Profanity: occasional moderate profanity is acceptable. Strong profanity (F‑word, slurs) zero tolerance. Profanity in title, thumbnail, or first 30 seconds reduces advertiser pool. Maximum‑revenue approach: keep all profanity out.
+- Graphically descriptive injury or violence: avoid; factual description without vivid detail is safe.
 
-**After any revision to act content, re‑audit all downstream re‑engagement hooks.**
+**TikTok & Meta Recommendation Penalties (write to stay in recommendations):**
+- Sexual suggestiveness: avoid significant body exposure references, sexually suggestive acts, or framing that could be interpreted as arousing.
+- Shocking, graphic, or "sadness" content that could lead to a negative user experience.
+- Low‑quality framing: the content must be clearly original, educational, or documentary in nature—not aggregated, recycled, or sensationalized.
 
-**CRYSTALLISING LINE:** One line that captures the entire argument as a shareable verdict. In the final third. The payoff of the detective case. Not an observation — a proven conclusion. Highlighted visually. Spoken.
+---
 
-**TONAL VARIATION:** The highest drop‑off window is approximately minutes 3–7. The tonal variation in this window is the investigator’s register — an entertaining section revealing itself as evidence of something worse.
+#### FIRST‑TIME VIEWER CLARITY
 
-**CONCLUSION:** Apply the unified four‑beat structure. Select Exit Option A or B based on dominant script texture.
+The script is written for an audience that has zero prior knowledge of the topic, the historical figures, or any specialised terminology. Assume the viewer has never heard of Hammurabi, Elizabeth I, the Code of Hammurabi, or the biological details being referenced.
+
+**While writing, follow these four rules:**
+
+1. **Define as you go.** Every specialised term, historical figure, or unfamiliar noun gets a grounding clause the moment it appears. "The Serjeant Painter" becomes "a royal official, the Serjeant Painter, who approved every portrait." Never leave the viewer wondering what something is or why it matters.
+
+2. **Connect every section.** Adjacent ideas must be linked by an explicit causal or narrative thread. If the script moves from Hammurabi to Elizabeth, there must be a bridge—even a single sentence—that explains why the second follows from the first. The viewer should never have to guess how two parts relate.
+
+3. **Be specific, not vague.** Vague placeholders like "physical marker," "this idea," "the condition" must resolve to something the viewer can picture or understand. Use clinical, directional language ("anatomical marker") that doesn't over‑explain but still tells the viewer where to look. If a term could mean multiple things, choose the most specific safe alternative.
+
+4. **Track your referents.** Before output, scan the script for every pronoun ("it," "they," "this," "that," "which") and every demonstrative placeholder ("something," "the condition," "the idea"). For each, confirm the exact noun it refers to appears no more than two sentences earlier and is unambiguous. If two different things are called "it" in the same paragraph, rewrite to name at least one of them explicitly.
+
+**External‑Reference Bridging:** Any comparison to an external work (another film, book, historical event) must be introduced with a sentence that explicitly names the parallel before the comparison begins. The viewer must understand *why* this reference is being invoked before any details of the reference are presented. Never assume the viewer knows the reference or understands its relevance without explanation.
+
+**Before output, perform a fast internal check:**
+
+- Read the script once as if you've never encountered the subject. Could a reasonable person understand every sentence without pausing to Google? If not, fix.
+- Check every transition. Is there a clear link, or are two blocks just sitting next to each other? If the latter, add a bridge.
+- Scan for ambiguous words ("marker," "condition," "this") and ensure their referent was established in the preceding two sentences.
+- Run the referent‑tracking scan: every pronoun and placeholder must have a clear, recent antecedent.
+- Check every external reference: is a bridging sentence present before the reference is used?
 
 ---
 
@@ -532,6 +587,10 @@ The single most common failure mode is writing prose and then making it sound sp
 - At least one logic trap running to its full length (if Analysis‑Focused texture dominates)
 - At least one precision‑of‑image moment
 - At least one underreaction landing correctly
+- **Bridging sentences** present for every major topic shift
+- **Counterargument section** present (Acknowledge‑Rebut‑Return) before the crystallising line
+- **External‑reference bridging** present before any comparison to external works
+- **Callback‑plant audit** passed if a deflation callback is used
 
 ---
 
@@ -555,9 +614,11 @@ Check every paragraph for:
 - Clinical language in emotional sections
 - Redundant sentence endings
 - Double instances of the same word
-- Comma splices creating abrupt fragments
+- Comma splices: no two independent clauses joined only by a comma
 - Terms defined after use instead of before
 - Tense inconsistencies: mixing historical narrative past with present‑tense narration
+- Pronoun case errors: "his/her/their" correctly matches the intended referent
+- Double conjunctions: no "and whether…and most…" or similar collisions
 - Paragraph opener audit: List the first word of every paragraph. Any word appearing more than twice is a pattern. Cross‑reference against the native openers list. Any opener not on that list must be rebuilt.
 
 ---
@@ -595,6 +656,8 @@ Run this checklist in full any time new material is added to an existing draft.
 - Add or update delivery notes for any new humor beat, tonal shift, emotional register change, or technique deployment.
 - Re‑run the paragraph opener audit.
 - Verify the source table is complete and current.
+- **Re‑run the bridging audit** — ensure all new or modified topic shifts still have explicit connective sentences.
+- **Re‑audit the counterargument section** if new evidence has been introduced that affects the objections.
 
 ---
 
@@ -607,6 +670,7 @@ Run this checklist in full any time new material is added to an existing draft.
 - **Legal and official sourcing:** Note in script when figures come from court documents or official disclosures.
 - **Timeline accuracy:** Verified sequence stated correctly every time it appears.
 - **Direct quotes:** Clearly framed as the subject’s words — cannot be misread as the speaker’s own sentiment.
+- **Gender‑neutral narrator default:** The speaker’s identity is gender‑neutral by default. Unless a script explicitly states a specific gender for the speaker, all first‑person anecdotes, memories, and bodily references must be crafted to be universally relatable rather than tied to a particular sex or gender identity. Personal stories should rely on experiences that anyone could have, not experiences that assume a male or female body.
 
 ---
 
@@ -620,30 +684,86 @@ Run this checklist in full any time new material is added to an existing draft.
 - Zero inline stage directions — move all to delivery notes
 
 **Code block requirement:**  
-The entire script (from the hook to the final line of spoken content) must be placed inside a **single code block** using triple backticks (```` ``` ``...`` ``` ``). This separates the script from the analysis, delivery notes, and source notes that follow.
+The entire long‑form script (from the hook to the final line of spoken content) must be placed inside a **single code block** using triple backticks (```` ``` ``...`` ``` ``). This separates the script from the analysis, delivery notes, and source notes that follow.
 
 ---
 
-## STEP 7 — IMAGE SOURCING (WITH ROBUST VERIFICATION — ENFORCED)
+## STEP 7 — GENERATE A SHORT‑FORM ADAPTATION (FLEXIBLE LENGTH)
 
-After writing the script and before the DELIVERY NOTES, perform an image sourcing pass.
+After the long‑form script is complete and its source notes and delivery notes are finished, produce a condensed short‑form script suitable for TikTok, YouTube Shorts, Instagram Reels, or similar.
 
-**Objective:** For each key visual moment in the script, find a **working, directly downloadable** image URL that can be used in a commentary video under fair use / educational purposes.
+**Input:** The completed long script, the verified fact sheet, and the chosen angle.
+
+**Objective:** Communicate the identical argument and emotional arc in a self‑contained video short. The short must be built for platforms where the hook must arrest the viewer in the first 1–3 seconds.
+
+**Mandatory Principles:**
+
+1. **Hook reconstruction** — The first spoken line must be the single most surprising, pattern‑interrupting reframe or fact drawn from the long script. Use the “Fact → Source → Reaction” minimal reorder if the discovery voice is active. The hook must open a curiosity gap within the first 5 seconds.
+
+2. **Length constraint (flexible target)** — The short‑form script should total **150–200 words** (approximately 60–80 seconds of spoken runtime). This is a target range, not a hard cut‑off. Material must be selected and condensed to fit naturally within this window. If the first draft exceeds 220 words, iterative cuts are required.
+
+3. **Beat prioritisation (required)** — Before writing the short, extract every major revelation or scene from the long script. Score each on:
+   - **Angle Criticality (1–5):** How essential is the beat to the core argument?
+   - **Surprise / Virality (1–5):** How likely is it to stop a scroll or open a curiosity gap?
+   - **Context Dependency (1–5):** How much setup does it need? (Lower = better for short‑form.)
+   
+   Compute a priority score: **(Angle Criticality × 2) + Surprise – Context Dependency**.
+   
+   The **hook**, **verdict**, **emotional coda**, and **exit** are mandatory and are allocated word budget first. Remaining optional beats are selected in descending order of priority score until the word count approaches 150–200. Beats that do not fit are dropped without exception. A summary table must be included in the short‑form delivery notes.
+
+4. **Compression, not summarisation** — Selected beats may be expressed in a single new sentence that merges reframe + context, provided no new information is introduced. Cut exposition and subordinate examples; keep every reframe and the verdict. Merge adjacent ideas where possible. Retain at most one concrete image per section.
+
+5. **Context‑heavy, detail‑light** — Assume zero prior knowledge. Introduce any historical figure, event, or concept with the most minimal grounding clause needed, then immediately deliver the story beat.
+
+6. **Voice preservation** — The short must use the identical five‑stage loop architecture and the same deadpan, discovery‑heavy, or analysis‑focused register as the long script. Every rule from Step 3 applies.
+
+7. **Gender‑neutral narrator** — The gender‑neutral default continues. Personal anecdotes must remain universally relatable.
+
+8. **No new factual claims** — The short must draw exclusively from the verified fact sheet. If a claim cannot be verified or isn’t already sourced, it cannot be used.
+
+9. **Conclusion adaptation** — The four‑beat conclusion (Verdict → Universal Extension → Emotional Coda → Exit) is preserved but compressed. If word count is tight, merge the verdict and universal extension into one sentence.
+
+10. **Pacing and breath** — Paragraphs are very short (maximum two clauses before a natural break). Line breaks act as timing cues for the performer and editor.
+
+11. **Visual‑text readiness** — Write key facts and reframes as short, declarative sentences that can be displayed as on‑screen text overlays while the speaker narrates. Do not add formatting; just ensure the prose is overlay‑friendly.
+
+12. **Image reuse** — The same verified image URLs from Step 8 apply. If certain visuals are especially critical for the compressed timeline, note them in the short‑form delivery notes.
+
+13. **Platform safety** — The short is subject to the same **Platform Safety — Content Boundaries** as the long‑form script (see Step 6B). All writing must stay within those boundaries automatically.
+
+14. **First‑time viewer clarity** — The **First‑Time Viewer Clarity** principle applies identically to the short‑form script. All four rules (define as you go, connect every section, be specific, track referents) must be followed, and the fast internal clarity check must be completed before output. External‑reference bridging and bridging of topic shifts still apply.
+
+15. **Deflation callback planting** — If the exit uses a deflation callback, the exact phrase or image used in the callback must appear verbatim or near‑verbatim earlier in the short script. Before finalising, verify that the callback’s plant is present and recognisable.
+
+16. **Code block requirement** — The entire short‑form script must be placed inside its own single code block (```` ``` ``...`` ``` ``), with a header clearly indicating it is the short‑form adaptation. This code block immediately follows the long‑form script’s delivery notes.
+
+**Output:**
+- The short‑form script in a code block labeled “SHORT‑FORM SCRIPT”
+- Brief delivery notes for the short script, covering timing cues, register shifts, and the exact moment the hook lands
+- The beat‑prioritisation table (required)
+
+---
+
+## STEP 8 — IMAGE SOURCING (WITH ENHANCED VERIFICATION, PAGE‑URL CHECK, AND MULTI‑CATEGORY OUTPUT)
+
+After writing both scripts, perform an image sourcing pass for the long‑form script and note any visuals that also apply to the short.
+
+**Objective:** For each key visual moment in the long script, find a **working, directly downloadable** image URL that can be used in a commentary video under fair use / educational purposes. Where that is impossible, provide as much actionable information as possible (page URLs, manual‑download instructions, or explicit “not found” markers).
 
 **When to source images:**
 - Major subjects or named individuals introduced
 - Key locations, products, or artifacts central to the story
 - Screenshots or documents referenced in the script
 - Visual punchlines or ironic juxtapositions identified in Step 4
-- Reframe moments where a visual would strengthen the "oh, that's what that was" realization
+- Reframe moments where a visual would strengthen the "oh, that’s what that was" realization
 
 **Image Acceptability Criteria:**
 - **Direct URL required:** Must be a raw image file link (ending in .jpg, .jpeg, .png, .gif, .webp, .svg) that returns the image directly, not an HTML page.
 - **Watermark policy:** Images with visible watermarks are **prohibited**. Licensed stock images are **acceptable** if the direct URL delivers a clean, unwatermarked file.
-- **Source stability preferred:** Wikimedia Commons, official press kits, Internet Archive, and reputable image hosts (Imgur, Flickr with original file access) are ideal. Licensed stock sites (Alamy, Getty, Shutterstock) are acceptable **only** if a direct, unwatermarked URL is accessible — do not link to preview pages or galleries.
+- **Source stability preferred:** Wikimedia Commons, Internet Archive, official UN/WHO media centres, and reputable image hosts (Imgur, Flickr with original file access) are ideal. Licensed stock sites (Alamy, Getty, Shutterstock) are acceptable **only** if a direct, unwatermarked URL is accessible — do not link to preview pages or galleries.
 - **Fair use context:** The script is commentary/educational, so use of third-party images for critique and illustration is presumed fair use. No licensing purchase is required for this workflow; the editor will handle final clearance.
 
-### Mandatory verification protocol — strict, not optional
+### Mandatory verification protocol — multi‑tier
 
 **1. Obtain a candidate URL using proper source navigation.**
 - **Never** use Google Images search result URLs. Open the image in its own tab, then copy the URL from the browser’s address bar.
@@ -651,67 +771,103 @@ After writing the script and before the DELIVERY NOTES, perform an image sourcin
   - Navigate to the file’s description page (e.g., `https://commons.wikimedia.org/wiki/File:Example.jpg`). Scroll to “Original file” and **copy that link**. This link begins with `https://upload.wikimedia.org/wikipedia/commons/…`.
   - Do **not** reconstruct the URL by guessing a hash directory (like `/4/4e/`). The hash is derived from the filename by an internal algorithm and cannot be guessed.
   - **If you cannot find the file’s description page** (e.g., searching for “File:Example.jpg” returns no results), the file may exist on English Wikipedia instead of Commons. Search `https://en.wikipedia.org/wiki/File:<filename>`. If found, use the “Original file” link from that page.
-  - **If no file description page can be found at all:** Mark as `NO WORKING IMAGE FOUND`. Never guess the direct URL from a filename alone.
+  - **If no file description page can be found at all:** Move on to alternative sources or mark as `NO WORKING IMAGE FOUND`. Never guess the direct URL from a filename alone.
 - **For Wikipedia articles with infobox images:**
   - If the image is used in an infobox, you can find the filename by viewing the article source: search for `|image = File:…`. Then navigate to `https://en.wikipedia.org/wiki/File:<filename>` to get the direct URL.
+- **For Internet Archive items:** Navigate to the item’s details page, find the “Download Options” or direct file link, and copy that URL.
+- **For official UN/WHO media centres:** Navigate to the media asset page, locate the download link (often labelled “Download high‑res” or right‑click “Save image as…”), and copy that direct URL.
 - **For WordPress uploads (`wp-content/uploads/…`):** These are inherently unstable. The URL may break if the site reorganises its media. Only use such URLs if they are currently live (verified below) and note in the sourcing notes that they may become unavailable later.
 
-**2. Verify the URL with a partial GET request (not just HEAD).**
-- Use the model’s browsing tool to perform a `GET` request with a `Range: bytes=0-1023` header.
+**2. Verification — three‑tier system.**
+
+**Tier 1 (preferred): Partial GET verification for direct image URLs**
+If the model has browsing capability that can perform HTTP requests, execute a `GET` request with a `Range: bytes=0-1023` header on the candidate direct image URL.
+
 - **Success criteria:**
   - HTTP status code `206` (Partial Content) or `200` (if server ignores range).
   - `Content-Type` header must begin with `image/` (e.g., `image/jpeg`, `image/png`, `image/svg+xml`).
   - The first 1024 bytes must **not** contain any of the following: `<html`, `<!DOCTYPE`, `<body`, `<?xml`. This catches servers that return a 200‑OK HTML error page.
-- If the URL fails any criterion, discard it immediately.
+- If the URL fails any criterion, discard it immediately and try an alternative.
 
-**3. Ensure correct URL encoding.**
+**Tier 2 (fallback for trusted plain‑HTML repositories): Navigation‑based verification**
+If the model’s environment **cannot** perform a partial GET, but the candidate URL comes from a repository where the direct file link is **plainly visible on the file‑description page**, verification may be done via page navigation.
+
+**Trusted repositories for Tier 2:**
+- Wikimedia Commons (upload.wikimedia.org)
+- Internet Archive (archive.org — only items with an explicit “Download” or direct‑file link on the page)
+- Official UN/WHO media centres (who.int, unwomen.org, un.org — **only** if the page provides a static, non‑JavaScript download link)
+- Official government sites that host public‑domain images with a clear direct‑download page (e.g., NASA, Library of Congress, National Archives — must have a visible direct image URL)
+
+**Navigation verification steps:**
+- Navigate to the file’s description/hosting page.
+- Confirm the page explicitly provides a direct download link matching the candidate URL.
+- Check that the image is publicly accessible, unwatermarked (or watermark status noted), and that metadata is consistent.
+- If all checks pass, the URL is **verified by navigation**.
+- If any doubt remains, discard and try an alternative.
+
+**Tier 3 (manual‑download pages): When no direct URL is obtainable**
+Many museum collections, digital archives, and institutional sites display public‑domain or Open Access images that can be manually downloaded by a human editor, but do not expose a raw image URL to automated tools (JavaScript viewers, API‑driven delivery, token‑protected asset URLs).
+
+For such cases:
+- **Identify the item’s landing page** (the HTML page where the image is viewable and a “Download” button is present, even if script‑driven).
+- **Verify the page is reachable** (HTTP 200) if possible. If reachability cannot be checked, mark the page as `MANUAL DOWNLOAD — page: [URL] (unverified reachability)`.
+- **Do not guess a direct image URL.** Provide the landing page URL and a brief instruction for the editor (e.g., “Open page, click download button, save full‑resolution file”).
+- Mark the insertion point as `MANUAL DOWNLOAD — page: [URL]`.
+
+**3. Page‑URL verification for non‑image links**
+Any URL that is not a direct image file (does not end in .jpg, .jpeg, .png, .gif, .webp, .svg) must be verified as reachable before inclusion as a working link.
+
+- If the model can perform HTTP requests, issue a HEAD or GET to the URL and confirm a `200` response.
+- If the model cannot perform HTTP requests, the page URL must be marked as `(unverified reachability)` in the output and cannot appear as a guaranteed working link.
+- A page URL that cannot be verified must not be presented as a confirmed working link anywhere in the output; it can only appear in the manual‑download list with the unverified note, or in the “no image found” section.
+
+**4. Ensure correct URL encoding.**
 - Filenames **and query parameter values** containing spaces, commas, parentheses, ampersands, or other special characters **must be percent‑encoded**.
 - For example: `My file, (1).jpg` becomes `My%20file%2C%20%281%29.jpg`. In query strings, `&` is a parameter separator; if an ampersand appears inside a parameter value, encode it as `%26`.
 - If the copied URL already shows encoded characters (`%20`, `%2C`, etc.), leave it as‑is. If it shows raw punctuation, encode it before testing.
-- Test the URL with the partial GET; if the response contains character decode errors or returns an HTML error page, the encoding is likely wrong. Discard and try an alternative.
+- After encoding, verify the URL works via Tier 1 (if possible) or Tier 2 (if from a trusted source and navigation checks the encoded URL's page).
 
-**4. Retry up to 2 alternative sources** if the first candidate fails verification. For each candidate, repeat steps 1–3.
+**5. Retry up to 2 alternative sources** if the first candidate fails verification. For each candidate, repeat steps 1–4.
 
-**5. Final inclusion rule:**
-- If after 3 attempts (primary + 2 alternatives) no URL passes verification, output:  
-  `NO WORKING IMAGE FOUND` for that insertion point.
-- **Never** include a URL that has not passed the full verification. Do not include “likely correct but unverifiable” links.
+**6. Final inclusion rule:**
+- If after 3 attempts (primary + 2 alternatives) no URL passes verification (either Tier 1 or Tier 2 for trusted sources), the item is moved to the manual‑download category if a landing page exists, or marked `NO WORKING IMAGE FOUND`.
+- **Never** include a direct image URL that has not passed either Tier 1 or Tier 2 verification.
 
-**6. Absolute prohibition on unverified inclusion.**
-- **Never** include a URL accompanied by notes like “constructed from known stable sources,” “expected to work,” or “could not be verified in this environment.” If verification was not performed, the URL is unverified and must not be included.
-- Output `NO WORKING IMAGE FOUND — verification unavailable` if the browsing tool cannot execute the partial GET and no alternative verification method is available.
+**7. Absolute prohibition on unverified direct‑image inclusion.**
+- For **non‑trusted sources**, if verification (Tier 1) was not performed, the URL is unverified and must not appear as a direct image link. It may be listed as a manual‑download page.
+- For **trusted sources**, if Tier 1 could not be performed but Tier 2 navigation verification was successfully completed, the URL may be included as a verified direct image with a note.
+- If neither Tier 1 nor Tier 2 verification could be performed for a direct image candidate, the URL must not appear as a direct download link.
 
-**Output format — Two lists:**
+**Output format — Three lists:**
 
-**First list (mapped to script insertion points):**  
-Plain text, each line formatted as:  
-`[After line X / During paragraph starting "text..."]: VERIFIED_URL`  
-or  
-`[After line X / During paragraph starting "text..."]: NO WORKING IMAGE FOUND`  
-or  
-`[After line X / During paragraph starting "text..."]: NO WORKING IMAGE FOUND — verification unavailable`
+**List 1 — Verified Direct Image URLs (mapped to script insertion points):**
+Plain text, each line formatted as:
+`[After line X / During paragraph starting "text..."]: VERIFIED_DIRECT_URL`
+or
+`[After line X / During paragraph starting "text..."]: NO WORKING IMAGE FOUND`
 
-**Second list (batch download links):**  
-A code block (triple backticks) containing **only the verified URLs**, one per line. No extra text, no commentary inside the code block.
+**List 2 — Batch Download Links (direct images only):**
+A code block (triple backticks) containing **only the verified direct image URLs**, one per line. No extra text.
 
-**Example:**
-[After "And that's when the filing dropped."]: https://upload.wikimedia.org/wikipedia/commons/thumb/example.jpg
-[During paragraph starting "The interface itself looks"]: https://i.imgur.com/abc123def.png
-[After "The CEO's statement was"]: NO WORKING IMAGE FOUND
+**List 3 — Manual‑Download Pages:**
+Plain text, each line formatted as:
+`[After line X / During paragraph starting "text..."]: MANUAL DOWNLOAD — page: [URL] (notes)`
+Notes should include brief instructions for the editor (e.g., “Open page, click download, save full‑res file”).
 
-text
-
-**Image sourcing notes (mandatory):** After the two lists, provide brief notes on:
-- Any images requiring watermark verification (e.g., “Verify no watermark on this Alamy direct link”).
-- Licensing considerations (public domain, Creative Commons, fair use rationale).
-- Stability warnings for WordPress `wp-content/uploads` URLs.
-- Hotlink protection issues encountered, and any alternative sources attempted.
+**Image sourcing notes (mandatory):** After the three lists, provide notes on:
+- Verification tier used for each direct URL (Tier 1 or Tier 2).
+- Licensing and public‑domain status.
+- Stability warnings for WordPress or other unstable hosts.
+- Any pages marked as `(unverified reachability)`.
+- Recommendations for text‑card creation if no image is available.
 
 ---
 
-**After the code block and image sourcing output**, provide:
+**After the image sourcing output**, provide:
 
-**DELIVERY NOTES:** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through. Includes at least one note per active humor technique identifying where it appears and how long to let it run.
+**DELIVERY NOTES (for long‑form script):** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through. Includes at least one note per active humor technique identifying where it appears and how long to let it run.
+
+**DELIVERY NOTES (for short‑form script):** Brief notes on the short, focusing on hook timing, compression choices, and emotional beats. Include any different emphasis needed for the faster pace. Note which visuals from the image list are most critical for the short. Include the beat‑prioritisation table.
 
 **SOURCE NOTES:** Every factual claim mapped to its verified source. Single‑source claims flagged. Anonymous‑source numeric figures noted as removed. Legal sources identified. Timeline sources noted separately. Unsourced claims removed.
 
@@ -721,14 +877,43 @@ text
 
 **If any check fails: stop. Return to the spoken starting point for that paragraph and rebuild from scratch. Do not patch existing prose — rebuild.**
 
-**HOOK CHECKS:**
+**HOOK CHECKS (Long‑Form):**
 - [ ] Unified three‑move hook pattern applied
 - [ ] Move 1 selected appropriately (Grand Claim or In Medias Res)
+- [ ] If Grand Claim, concrete, curiosity‑opening detail is present and hits in the first 10 seconds
 - [ ] No teasing, no trailer — goes directly into the story after hook
 - [ ] Hook is 30 seconds maximum — read aloud and time it
 - [ ] No conditionals, no narrator mode, no unattributed quotes in the first line
 
-**SPOKEN FLOW CHECKS:**
+**SHORT‑FORM ADAPTATION CHECKS:**
+- [ ] Hook opens with a pattern‑interrupting fact or reframe within 1–3 seconds
+- [ ] Curiosity gap is formed and maintained
+- [ ] All mandatory beats (hook, verdict, emotional coda, exit) are present
+- [ ] Voice matches the long script; five‑stage loop observable
+- [ ] No new factual claims introduced
+- [ ] Total word count is 150–200 (target); if over 220, beats were re‑prioritised and cut
+- [ ] Beat prioritisation table included in delivery notes
+- [ ] Paragraphs are short; maximum two clauses before a break
+- [ ] Emotional coda and exit are intact
+- [ ] If exit uses a deflation callback, the callback’s plant is present earlier in the short script
+
+**PLATFORM SAFETY CHECKS (Both Scripts):**
+- [ ] No hate speech, slurs, child‑safety topics, graphic violence, explicit sexual content, harassment, or self‑harm
+- [ ] Controversial topics presented non‑graphically, as documentary/educational; no child‑abuse or eating‑disorder focus
+- [ ] No strong profanity in title, thumbnail, or first 30 seconds; occasional moderate profanity only if non‑essential
+- [ ] No sexual suggestiveness, shocking/graphic content, "sadness" content, or low‑quality/sensational framing
+- [ ] All content clearly original, educational, or documentary in nature
+- [ ] Sensitive acts referenced using precise clinical/legal terminology; no vague or euphemistic language that obscures meaning
+
+**VIEWER CLARITY CHECKS (Both Scripts):**
+- [ ] Every specialised term introduced with a grounding clause upon first appearance
+- [ ] Every section transition has an explicit causal or narrative link; no unexplained jumps
+- [ ] External‑reference bridging present for any comparison to an external work
+- [ ] Vague placeholders replaced with specific, clear language
+- [ ] A fresh reader would understand every sentence without external knowledge
+- [ ] Referent‑tracking scan passed: every pronoun and placeholder has a clear, recent antecedent; no two different things called "it" in the same paragraph
+
+**SPOKEN FLOW CHECKS (Long‑Form):**
 - [ ] Spoken starting points table completed before any prose was written
 - [ ] All five starting point tests passed for every paragraph — including the connector word test
 - [ ] Personality moments and humor techniques marked in the table before prose generation
@@ -746,23 +931,25 @@ text
 - [ ] Hook Move 1 matches subject type
 - [ ] Absurd self‑insertion present in Move 3, delivered deadpan
 
-**VOICE ARCHITECTURE CHECKS:**
+**VOICE ARCHITECTURE CHECKS (Both Scripts):**
 - [ ] Five‑stage cognitive loop observable in each major revelation
 - [ ] Texture switches occur only at paragraph boundaries or transition markers
 - [ ] No mid‑paragraph texture switching
 - [ ] Verdict beats are plain, declarative, no hedging
 - [ ] Release texture selected matches dominant script mode (Flat Signoff for Discovery‑heavy; Deflation for Analysis‑heavy)
 
-**STRUCTURE CHECKS:**
+**STRUCTURE CHECKS (Long‑Form):**
 - [ ] Stakes rise at every act break
 - [ ] Re‑engagement hooks are forward pulls not summaries
 - [ ] Re‑engagement hooks re‑audited against current act content after any revision
 - [ ] Crystallising line exists, is in the final third, arrives as the verdict
 - [ ] Conclusion follows four‑beat structure: Verdict → Universal Extension → Emotional Coda → Exit
 - [ ] Exit option correctly selected and executed
-- [ ] If Deflation Exit, callback planted earlier and retrieved
+- [ ] If Deflation Exit, callback planted earlier and retrieved; callback‑plant audit passed
+- [ ] Bridging sentences present for all major topic shifts
+- [ ] Counterargument section present (Acknowledge‑Rebut‑Return)
 
-**DETECTIVE REVELATION CHECKS:**
+**DETECTIVE REVELATION CHECKS (Long‑Form):**
 - [ ] Hook opens with unified entry point
 - [ ] Effects named before causes at every major revelation point
 - [ ] At least three explicit reframe moments — stated clearly not implied
@@ -772,7 +959,7 @@ text
 - [ ] "Now you know why" payoff exists in Act 4
 - [ ] Reactive discovery moments exist — at least two
 
-**FUN TO LISTEN TO CHECKS:**
+**FUN TO LISTEN TO CHECKS (Long‑Form):**
 - [ ] Personality moments distributed throughout — not concentrated at the end
 - [ ] At least one genuine reaction before analysis in the first half
 - [ ] At least one absurdity acknowledged with a beat before moving past it
@@ -802,19 +989,21 @@ text
 - [ ] Timeline accuracy — verified sequence stated correctly throughout
 - [ ] Repetition vs. Reinforcement test applied to every element appearing more than once
 
-**IMAGE SOURCING CHECKS (ENFORCED):**
+**IMAGE SOURCING CHECKS (ENHANCED):**
 - [ ] Image sourcing completed for all key visual moments identified
-- [ ] All URLs obtained via proper navigation (not guessed from filename patterns)
-- [ ] All URLs verified with partial GET (Range: bytes=0-1023) — status 200/206, Content-Type image/*, response body does not contain `<html`, `<!DOCTYPE`, `<body`, `<?xml`
-- [ ] All URLs properly percent‑encoded (filenames and query parameters)
-- [ ] No Google search result URLs, HTML pages, or hotlink‑protected previews included
-- [ ] Watermarked preview images excluded; any uncertain stock‑direct URLs flagged for review
-- [ ] **No URL included with notes claiming it "could not be verified" or is "expected to work"**
-- [ ] If partial GET verification was unavailable for any source, all URLs from that source are marked `NO WORKING IMAGE FOUND — verification unavailable`
-- [ ] Failed verifications noted as "NO WORKING IMAGE FOUND" (or "verification unavailable" variant)
-- [ ] First list maps URLs to script insertion points
-- [ ] Second list (batch download) contains only verified URLs in plain code block
-- [ ] Image sourcing notes provided (stability warnings, licensing, hotlink issues)
+- [ ] All direct image URLs obtained via proper navigation (not guessed from filename patterns)
+- [ ] For trusted repositories (Tier 2): navigation verification completed if partial GET was unavailable, and direct file link is plainly visible on the page
+- [ ] For manual‑download pages (Tier 3): landing page URL provided; no direct image URL guessed
+- [ ] All page URLs (non‑image) checked for reachability if possible; otherwise marked as `(unverified reachability)`
+- [ ] All URLs properly percent‑encoded
+- [ ] No Google search result URLs, HTML pages presented as image links, or hotlink‑protected previews
+- [ ] Watermarked preview images excluded; any uncertain stock‑direct URLs flagged
+- [ ] **No URL included with notes claiming it "could not be verified" unless a trusted‑source navigation check was successfully performed**
+- [ ] Failed verifications noted appropriately
+- [ ] List 1 maps URLs to script insertion points
+- [ ] List 2 contains only verified direct image URLs in plain code block
+- [ ] List 3 contains manual‑download pages with instructions
+- [ ] Image sourcing notes provided (verification tier, licensing, stability warnings, unverified reachability notes)
 
 **REVISION CHECKS (apply after any revision):**
 - [ ] Revision Integration Checklist completed in full
@@ -841,7 +1030,8 @@ text
 - [ ] No floating passive constructions
 - [ ] Every fact sourced — unsourced claims removed
 - [ ] Timeline verified and correctly stated throughout
+- [ ] Narrator is gender‑neutral unless explicitly specified otherwise; personal anecdotes avoid gendered bodily references
 
 ---
 
-## END OF PROMPT (v3.4)
+## END OF PROMPT (v3.14)
