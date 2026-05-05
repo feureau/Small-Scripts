@@ -907,7 +907,8 @@ def parse_progress_line(line):
     }
 
 def supports_live_ui(args):
-    return sys.stdout.isatty() and not getattr(args, 'no_live_ui', False)
+    # Always use plain scrolling console output (no dynamic screen redraw UI).
+    return False
 
 def render_live_ui(total_urls):
     """Continuously renders live task status."""
@@ -1156,7 +1157,7 @@ def process_text_subtitle(subtitle_path):
         with open(subtitle_path, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
 
-        paragraphs = []
+        chunks = []
         current_chunk = []
         skip_prefixes = ('WEBVTT', 'NOTE', 'STYLE', 'REGION', 'Kind:', 'Language:')
 
@@ -1164,7 +1165,7 @@ def process_text_subtitle(subtitle_path):
             line = raw_line.strip()
             if not line:
                 if current_chunk:
-                    paragraphs.append(" ".join(current_chunk))
+                    chunks.append(" ".join(current_chunk))
                     current_chunk = []
                 continue
 
@@ -1183,11 +1184,17 @@ def process_text_subtitle(subtitle_path):
                 current_chunk.append(clean)
 
         if current_chunk:
-            paragraphs.append(" ".join(current_chunk))
+            chunks.append(" ".join(current_chunk))
+
+        # Create a readable continuous transcript instead of one paragraph per subtitle cue.
+        text = " ".join(chunks).strip()
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'\s+([,.;:!?])', r'\1', text)
+        text = re.sub(r'([,.;:!?])([^\s])', r'\1 \2', text)
 
         txt_path = f"{os.path.splitext(subtitle_path)[0]}.txt"
         with open(txt_path, 'w', encoding='utf-8') as f:
-            f.write("\n\n".join(paragraphs).strip())
+            f.write(text)
 
         return f"Created {os.path.basename(txt_path)}", txt_path
     except Exception as e:
@@ -1419,6 +1426,14 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                     for msg in subtitle_msgs:
                         emit_message(f"[SUBTITLE] {msg}")
 
+                # Make subtitle-only runs explicit when no subtitle files are produced.
+                requested_sub_only = (args.srt or args.json3) and not (
+                    getattr(args, 'default_download', False) or args.video or args.audio_only
+                )
+                if requested_sub_only and not subtitle_candidates:
+                    update_task_status(task_id, state="FAILURE", phase="no-subtitles", speed="--", eta="--")
+                    return ("FAILURE", f"Finished {tool_name}: {display_title} (no subtitle files available/saved)", [])
+
             # Extract downloaded filetypes from stdout
             downloaded_exts = set()
             for line in stdout.splitlines() + stderr.splitlines():
@@ -1497,7 +1512,7 @@ def run_text_extraction_task(url):
 
     try:
         command = [*YTDLP_PATH, '--ignore-config', '--dump-json', '--skip-download', '--ignore-no-formats-error', url]
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='replace')
         data = result.stdout
     except subprocess.CalledProcessError:
         pass
@@ -1513,7 +1528,7 @@ def run_text_extraction_task(url):
     if not entries:
         try:
             command = [GALLERYDL_PATH, '--dump-json', '--no-download', url]
-            result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+            result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='replace')
             first_line = result.stdout.strip().splitlines()[0]
             entries = [json.loads(first_line)]
         except (subprocess.CalledProcessError, json.JSONDecodeError, IndexError):
@@ -1583,7 +1598,7 @@ def get_tasks_from_url(url):
     if any(p in url.lower() for p in ['playlist', 'list=', '/c/', '/user/', '/@']):
         command.append('--flat-playlist')
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='replace')
         ytdlp_tasks = []
         collection_title = None
         
@@ -1710,19 +1725,15 @@ def build_ytdlp_command(target_url, args, video_lang=None):
             # Request only the video's language and English to avoid downloading 100+ auto-translated tracks.
             # We use base language codes with a wildcard (e.g., 'en.*') to catch regional variants.
             v_base = video_lang.split('-')[0].lower()
-            if v_base == 'en':
-                sub_lang = 'en.*'
-            else:
-                sub_lang = f"{v_base}.*,en.*"
+            sub_lang = f"{v_base}.*"
         elif getattr(args, 'default_download', False):
             # Default download mode with no detected language: conservative English fallback.
             # We avoid 'all' because it downloads 100+ auto-translated languages on YouTube.
             sub_lang = 'en.*'
         else:
-            # User explicitly passed -s/-j but language could not be detected (common for non-YouTube
-            # sources and flat-playlist entries). Request all manual subs and let the scoring logic
-            # pick the best one. Skip --write-auto-subs here to avoid pulling 100+ auto-translated
-            # tracks from YouTube; manual subs in the original language will be present if available.
+            # Explicit subtitle mode with unknown language metadata:
+            # ask for non-auto subtitles only to avoid translated auto-subs.
+            # If the site has manual original-language captions, yt-dlp will pick them.
             sub_lang = 'all,-live_chat'
             write_auto_subs = False
 
