@@ -902,6 +902,7 @@ def build_job_config_snapshot(
         "stream_output": False,
         "enable_thinking": False,
         "save_log": False,
+        "allow_empty_files": False,
         "sequential_upload": False,
         "job_delay_seconds": 0,
         "enable_web_search": False,
@@ -1002,6 +1003,7 @@ def build_job_config_snapshot(
             "validate_json": bool(effective["validate_json"]),
             "validate_json_keys": bool(effective["validate_json_keys"]),
             "clean_markdown": bool(effective["clean_markdown"]),
+            "allow_empty_files": bool(effective["allow_empty_files"]),
             "safety_settings": to_loggable(effective["safety_settings"]),
         },
         "rename_mode": {
@@ -2735,11 +2737,15 @@ def process_file_group(
         STREAM_DASHBOARD.add_job(job_id, title)
 
     # --- CHECK FOR EMPTY FILES ---
+    allow_empty_files = kwargs.get("allow_empty_files", False)
     for fp in filepaths_group:
         if os.path.exists(fp) and os.path.getsize(fp) == 0:
-            raise FatalProcessingError(
-                f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}"
-            )
+            if not allow_empty_files:
+                raise FatalProcessingError(
+                    f"Fatal: File is empty (0 bytes): {os.path.basename(fp)}"
+                )
+            else:
+                console_log(f"Warning: File is empty (0 bytes) but allowed: {os.path.basename(fp)}", "WARN")
 
     save_log = kwargs.get("save_log", False)
 
@@ -3567,6 +3573,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )  # New schema validation var (v25.6)
         self.clean_markdown_var = tk.BooleanVar(value=True)  # Default On
         self.save_log_var = tk.BooleanVar(value=False)  # Default Off
+        self.allow_empty_files_var = tk.BooleanVar(value=False)
         self.enable_safety_var = tk.BooleanVar(value=False)
         self.safety_map = {
             "Off": "BLOCK_NONE",
@@ -4084,6 +4091,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.clean_markdown_var,
         )
         self.clean_md_check.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        self.allow_empty_check = ttk.Checkbutton(
+            tab_out,
+            text="Allow Empty Files (0 bytes)",
+            variable=self.allow_empty_files_var,
+        )
+        self.allow_empty_check.grid(row=99, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         self.json_check = ttk.Checkbutton(
             tab_out, text="Validate JSON Output", variable=self.validate_json_var
@@ -4676,6 +4690,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.validate_keys_var, "validate_json_keys", False)
             set_var(self.clean_markdown_var, "clean_markdown", True)
             set_var(self.save_log_var, "save_log", False)
+            set_var(self.allow_empty_files_var, "allow_empty_files", False)
 
             set_var(self.delay_min_var, "delay_min", 0)
             set_var(self.delay_sec_var, "delay_sec", 0)
@@ -4733,6 +4748,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "validate_json_keys": self.validate_keys_var.get(),
             "clean_markdown": self.clean_markdown_var.get(),
             "save_log": self.save_log_var.get(),
+            "allow_empty_files": self.allow_empty_files_var.get(),
             "delay_min": self.delay_min_var.get(),
             "delay_sec": self.delay_sec_var.get(),
             "concurrent_jobs": self.concurrent_jobs_var.get(),
@@ -5544,6 +5560,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "validate_json_keys": self.validate_keys_var.get(),
             "clean_markdown": self.clean_markdown_var.get(),
             "save_log": self.save_log_var.get(),
+            "allow_empty_files": self.allow_empty_files_var.get(),
             "safety_settings": safe,
             "job_delay_seconds": total_delay,
             "sequential_upload": (self.upload_mode_var.get() == "sequential"),

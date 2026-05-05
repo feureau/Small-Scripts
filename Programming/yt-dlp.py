@@ -1231,13 +1231,13 @@ def run_updates():
     print("\n--- ✅ Update process finished ---")
     sys.exit(0)
 
-def run_download_task(task_type, identifier, title, args, original_url, task_id=None, slot_label=None, channel=None, upload_date=None):
+def run_download_task(task_type, identifier, title, args, original_url, task_id=None, slot_label=None, channel=None, upload_date=None, video_lang=None):
     """Dispatches and runs a single media download task."""
     command_list, display_title, tool_name = None, "", ""
     
     if task_type == YTDLP_TASK:
         tool_name = "yt-dlp"
-        command_list = build_ytdlp_command(identifier, args)
+        command_list = build_ytdlp_command(identifier, args, video_lang=video_lang)
         display_title = (title[:50] + '...') if len(title) > 50 else title
     elif task_type == GALLERYDL_TASK:
         tool_name = "gallery-dl"
@@ -1284,8 +1284,16 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
         start_ts = last_output_ts
 
         while len(finished_streams) < 2:
+            if ui_stop_event.is_set():
+                if process and process.poll() is None:
+                    try:
+                        process.kill()
+                    except:
+                        pass
+                break
+                
             try:
-                stream_name, line = output_queue.get(timeout=1.0)
+                stream_name, line = output_queue.get(timeout=0.1) # Shorter timeout
             except queue.Empty:
                 if process.poll() is not None and out_t.is_alive() is False and err_t.is_alive() is False:
                     break
@@ -1352,7 +1360,20 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                 
                 if subtitle_candidates:
                     # 1. Prioritize: Manual > Auto, Lang match > other, SRT > others
-                    target_lang = (args.language if args.language else 'en').lower()
+                    target_langs = []
+                    if args.language:
+                        target_langs.append(args.language.lower())
+                    if video_lang:
+                        # Extract base language (e.g. 'en' from 'en-US')
+                        lang_base = video_lang.split('-')[0].lower()
+                        if lang_base not in target_langs:
+                            target_langs.append(lang_base)
+                    # Only add English as a low-priority fallback when we have some language context
+                    # (either user-specified or detected). When both are absent, the user explicitly
+                    # requested -s on an unknown-language video, so don't bias toward English —
+                    # the scoring will simply rank by manual>auto and srt>other.
+                    if target_langs and 'en' not in target_langs:
+                        target_langs.append('en')
                     
                     def score_subtitle(sub):
                         score = 0
@@ -1360,8 +1381,11 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                         
                         # Check language in path (e.g. video.en.srt)
                         path_lower = sub['path'].lower()
-                        if f".{target_lang}." in path_lower or path_lower.endswith(f".{target_lang}"):
-                             score += 500
+                        for i, lang in enumerate(target_langs):
+                            # Higher priority for earlier languages in the list
+                            if f".{lang}." in path_lower or path_lower.endswith(f".{lang}"):
+                                 score += (500 - i * 50)
+                                 break
                         
                         if sub['ext'] == '.srt': score += 100
                         if sub['ext'] == '.json3' and args.json3: score += 200
@@ -1554,7 +1578,10 @@ def get_tasks_from_url(url):
     url = normalize_url(url)
     is_youtube = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
     
-    command = [*YTDLP_PATH, '--ignore-config', '--dump-json', '--flat-playlist', '--ignore-no-formats-error', url]
+    # Use --flat-playlist only for actual playlists or channels to ensure single videos get full metadata (like language).
+    command = [*YTDLP_PATH, '--ignore-config', '--dump-json', '--ignore-no-formats-error', url]
+    if any(p in url.lower() for p in ['playlist', 'list=', '/c/', '/user/', '/@']):
+        command.append('--flat-playlist')
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
         ytdlp_tasks = []
@@ -1576,7 +1603,8 @@ def get_tasks_from_url(url):
                     title = entry.get("title") or f"Media_{entry.get('id', 'unknown')}"
                     channel = entry.get("channel") or entry.get("uploader") or "Unknown Channel"
                     upload_date = entry.get("upload_date") or "00000000"
-                    ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url, channel, upload_date))
+                    language = entry.get("language")
+                    ytdlp_tasks.append((YTDLP_TASK, entry_url or original_url, title, original_url, channel, upload_date, language))
 
                 if data.get('_type') == 'playlist' and 'entries' in data:
                     for entry in data['entries']:
@@ -1594,26 +1622,26 @@ def get_tasks_from_url(url):
         
         # If discovery found nothing but it's YouTube, force use of yt-dlp
         if not ytdlp_tasks and is_youtube:
-            ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000"))
+            ytdlp_tasks.append((YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000", None))
 
         if ytdlp_tasks:
             return ytdlp_tasks, (collection_title or "Links")
         else:
-            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")], "Links"
+            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000", None)], "Links"
 
     except subprocess.CalledProcessError as e:
         if is_youtube:
-            return [(YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000")], "YouTube Content"
+            return [(YTDLP_TASK, url, "YouTube Content", url, "YouTube", "00000000", None)], "YouTube Content"
         
         stderr_lower = e.stderr.lower()
         if "no video formats found" in stderr_lower or "unsupported url" in stderr_lower or "no media found" in stderr_lower:
-            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000")], "Gallery"
+            return [(GALLERYDL_TASK, url, url, url, "Gallery", "00000000", None)], "Gallery"
         else:
             raise Exception(f"yt-dlp failed to fetch info: {e.stderr.strip()}")
     except FileNotFoundError:
         raise Exception(f"Critical Error: yt-dlp executable not found at '{YTDLP_PATH}'.")
 
-def build_ytdlp_command(target_url, args):
+def build_ytdlp_command(target_url, args, video_lang=None):
     video_url = target_url
     output_tmpl = OUTPUT_TEMPLATE_FOLDER if getattr(args, 'individual_folder', False) else OUTPUT_TEMPLATE
     
@@ -1675,8 +1703,33 @@ def build_ytdlp_command(target_url, args):
         command_list.extend(["--write-comments", "--write-info-json"])
 
     if wants_subtitles:
-        sub_lang = args.language if args.language else 'en'
-        command_list.extend(['--write-subs', '--write-auto-subs', '--sub-langs', sub_lang, '--ignore-errors'])
+        write_auto_subs = True
+        if args.language:
+            sub_lang = args.language
+        elif video_lang:
+            # Request only the video's language and English to avoid downloading 100+ auto-translated tracks.
+            # We use base language codes with a wildcard (e.g., 'en.*') to catch regional variants.
+            v_base = video_lang.split('-')[0].lower()
+            if v_base == 'en':
+                sub_lang = 'en.*'
+            else:
+                sub_lang = f"{v_base}.*,en.*"
+        elif getattr(args, 'default_download', False):
+            # Default download mode with no detected language: conservative English fallback.
+            # We avoid 'all' because it downloads 100+ auto-translated languages on YouTube.
+            sub_lang = 'en.*'
+        else:
+            # User explicitly passed -s/-j but language could not be detected (common for non-YouTube
+            # sources and flat-playlist entries). Request all manual subs and let the scoring logic
+            # pick the best one. Skip --write-auto-subs here to avoid pulling 100+ auto-translated
+            # tracks from YouTube; manual subs in the original language will be present if available.
+            sub_lang = 'all,-live_chat'
+            write_auto_subs = False
+
+        command_list.append('--write-subs')
+        if write_auto_subs:
+            command_list.append('--write-auto-subs')
+        command_list.extend(['--sub-langs', sub_lang, '--ignore-errors'])
         if args.json3:
             command_list.extend(['--sub-format', 'json3'])
         else:
@@ -1762,9 +1815,9 @@ def process_url(url, index, total_urls, args):
             emit_message(f"[{slot_label}] Found {len(tasks)} item(s) to download.")
 
             for i, task in enumerate(tasks, 1):
-                task_type, target_url, title, original_url, channel, upload_date = task
+                task_type, target_url, title, original_url, channel, upload_date, video_lang = task
                 task_id = f"{index}:{i}:{int(time.time() * 1000)}"
-                status, message, t_paths = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label, channel=channel, upload_date=upload_date)
+                status, message, t_paths = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label, channel=channel, upload_date=upload_date, video_lang=video_lang)
                 log_message(args.log_file, status, original_url, message)
                 if status == "FAILURE":
                     with failed_urls_lock:
@@ -1849,6 +1902,7 @@ def combine_all_transcripts(success_list):
 def signal_handler(sig, frame):
     """Handles Ctrl-C by immediately terminating all child processes and exiting."""
     # Set the stop event first to stop any new tasks
+    ui_stop_event.set()
     if 'executor' in globals() and executor:
         executor.shutdown(wait=False, cancel_futures=True)
 

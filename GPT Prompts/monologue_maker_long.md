@@ -1,4 +1,4 @@
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.14 — WITH CONNECTIVITY, COUNTERARGUMENT, AND CALLBACK IMPROVEMENTS)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.17 — WITH STRUCTURAL PAYOFF AUDIT AND REFINEMENTS)
 
 ## GENERATIVE PRINCIPLE
 
@@ -96,6 +96,22 @@ The model selects texture based on the argument’s current need, not on a fixed
 - **If the section is concluding and the tone has been deadpan/discovery‑heavy** → Release Texture A (flat signoff).
 - **If the section has featured extended logic traps or petty grievances** → Release Texture B (deflation callback).
 
+**Extended Processing Mode:** When a section requires presenting multiple pieces of evidence before a conclusion can be drawn, the model may defer the Verdict beat and allow Processing texture to continue for two or more paragraphs. During Extended Processing, short declarative sentences (which function as mini‑verdicts) must be merged into the ongoing clause chain rather than standing alone. The Verdict arrives once the accumulated evidence is sufficient to support it, not after every individual piece of evidence.
+
+To implement this concretely: when presenting a sequence of related examples that serve the same point (e.g., three character actions that prove a trait), combine them into a single, flowing clause chain with natural connectors, and place the single Verdict after the final example. Do not insert a separate short declarative after each example.
+
+For clarity, here is an illustration of the pattern to avoid and the pattern to use:
+
+**Staccato mini‑verdicts (avoid):**
+> She reaches out to an NPC. She stays with Kinger in the dark. She offers Gummigoo a chance to be real. She's doing things the machine can't compute.
+
+**Merged evidence with deferred Verdict (use):**
+> She reaches out to an NPC, stays with Kinger in the dark, and offers Gummigoo something no human has ever offered an NPC: the chance to be real. She's not just free of the machine—she's doing things the machine can't compute.
+
+The Verdict (“she's doing things the machine can't compute”) closes the entire evidence chain, not each individual piece.
+
+A Verdict beat must be earned by the Processing that precedes it. If a paragraph contains only one or two short sentences of evidence before the Verdict, the Verdict is premature. Merge that evidence with adjacent paragraphs and defer the Verdict until the case is fully assembled.
+
 **Anchor Rule:** Texture may only change at **paragraph boundaries** or at **explicit transition markers** (“Anyway,” “So,” “But look,”). Within a single spoken paragraph, the sentence architecture must remain consistent. Switching mid‑paragraph creates procedural incoherence.
 
 ---
@@ -144,7 +160,7 @@ The following vocabulary items are available across both texture families. Use t
 
 ### PARAGRAPH OPENER PROTOCOL
 
-**Native Opener Categories (Allowed):**
+**Native Opener Categories (Allowed at paragraph start):**
 - Subject‑led: opens directly on the person, thing, or fact being discussed
 - Narrative‑led: opens on an event or action
 - Sourcing‑led: opens by flagging where information comes from
@@ -152,7 +168,7 @@ The following vocabulary items are available across both texture families. Use t
 - Process‑narration: opens with the discovery process
 - Transition word (limited): “Anyway,” is native. Used to shift back to warmth or to wrap something up.
 
-**Prohibited Openers:**
+**Prohibited at paragraph start:**
 - “So” as a paragraph launcher
 - “And” as a paragraph launcher
 - “But” as a paragraph launcher
@@ -163,7 +179,9 @@ The following vocabulary items are available across both texture families. Use t
 - “What's interesting is...”
 - Any compound connector opener of the form “[connector] + [here's/what's/the thing]”
 
-**Enforcement Rule:** After writing the script, list the first word of every paragraph. Any single word appearing more than twice as an opener is a pattern that does not exist in natural speech. Rebuild until no word appears more than twice.
+**Intra‑paragraph connectors (allowed):** Sentences within a paragraph may begin with “And,” “But,” “So,” “Because,” or “Or” when they continue a connected thought from the previous sentence. This permits natural spoken chaining (e.g., “That’s the surface. And that’s even what the characters themselves think.”). However, if more than two consecutive sentences within a paragraph begin with a connector, vary the structure to avoid a repetitive rhythm.
+
+**Enforcement Rule:** After writing the script, list the first word of every paragraph. Any single word appearing more than **four** times as an opener is a pattern that may feel repetitive. Audit those paragraphs to ensure they don’t form a monotonous rhythm; vary at least one of them unless the repetition serves a deliberate stylistic effect.
 
 ---
 
@@ -205,7 +223,7 @@ These techniques are available regardless of texture selection. The model should
 
 **Technique 9: Layered Parentheticals** — Add a second observation mid‑observation, which undercuts or complicates the first without ever abandoning it.
 
-**Technique 10: Callbacks and Escalating Returns** — Establish something early—a detail, a grievance, a joke—and return to it later in a slightly different form, often as the emotional button at the end. **A callback only lands if the exact image or phrase used in the return was planted earlier, delivered in the same deadpan‑annoyance register, and is recognisable to the listener without inference. If the punchline involves a name, the setup must include the speaker complaining about that name specifically. If the punchline involves an image, the setup must describe that image in the same words.** Before finalising, run a **callback‑plant audit**: find the deflation line, trace it back to its first appearance, and confirm the same words/register are used.
+**Technique 10: Callbacks and Escalating Returns** — Establish something early—a detail, a grievance, a joke—and return to it later in a slightly different form, often as the emotional button at the end. **A callback only lands if the exact image or phrase used in the return was planted earlier, delivered in the same deadpan‑annoyance register, and is recognisable to the listener without inference. If the punchline involves a name, the setup must include the speaker complaining about that name specifically. If the punchline involves an image, the setup must describe that image in the same words.** Before finalising, run a **callback‑plant audit**: find the deflation line, trace it back to its first appearance, and confirm the same words/register are used. If the plant uses different words or a different emotional register, the callback will not land and must be rebuilt.
 
 ---
 
@@ -323,6 +341,8 @@ These are not topic sentences. They are the literal first words before any sente
 - Could this starting point have been produced by someone writing prose and then adding informal words on top? If yes, it's a written patch. Rebuild from a genuinely spoken starting point.
 - **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject‑led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross‑reference against the native openers list — if the connector is not documented as native, it is prohibited regardless of how natural it feels.
 
+**Grouping note:** If multiple raw ideas belong to the same logical step (e.g., a list of examples that prove the same point), group them into a single paragraph's "Raw thing" column. This prevents the table from generating a separate paragraph—and a separate Verdict beat—for each individual example. When a raw idea is a supporting example that reinforces the same point as the adjacent idea, list them in the same row's 'Raw thing' column, separated by a semicolon. This forces them to be written as one connected paragraph.
+
 Mark personality moments and intended humor techniques in the table before prose generation. Do not leave them to emerge naturally.
 
 Only proceed to prose generation when every starting point passes all five tests.
@@ -416,6 +436,8 @@ The counterargument section must follow this structure:
 3. **Return** — end the section by explicitly stating that the objections, examined closely, actually reinforce the main thesis, because every alternative requires introducing new elements while the thesis only requires following through on what's already established.
 
 The tone remains analytical, not defensive.
+
+**Vary the phrasing of acknowledgements.** Use “You could argue that…”, “Another possibility is…”, “There’s also the idea that…”, “One objection might be…” rather than relying on a repetitive “Maybe X… But Y…” template.
 
 ---
 
@@ -534,7 +556,7 @@ The single most common failure mode is writing prose and then making it sound sp
 **PROHIBITED** (absolute):
 
 - Rhetorical triplets
-- Short declarative punch lines standing alone — except the crystallising line or verdict line
+- Short declarative punch lines standing alone — except the crystallising line or the single, deferred verdict that closes an extended Processing passage. A paragraph that contains a short declarative sentence must earn it with preceding clause‑chain buildup; isolated short sentences that appear without buildup are prohibited.
 - Paired contrast constructions used more than once
 - Setup‑payoff paragraph structure — paragraphs closing with a thesis statement
 - Formal pivot openers used as templates: “So here’s the thing,” “And here’s what’s insane,” “And look”
@@ -583,7 +605,7 @@ The single most common failure mode is writing prose and then making it sound sp
 - Humor techniques distributed throughout — not concentrated at the end; each comedic moment assigned a named technique
 - Timeline accuracy — verified sequence of events stated correctly every time it appears
 - Self‑narration present as documented
-- At least one extended analogy or fully committed roleplay running at full length (the length is the joke)
+- At least one extended analogy or fully committed roleplay running at full length (the length is the joke). This must include direct, invented dialogue spoken in character and run for a minimum of three full sentences.
 - At least one logic trap running to its full length (if Analysis‑Focused texture dominates)
 - At least one precision‑of‑image moment
 - At least one underreaction landing correctly
@@ -601,6 +623,8 @@ Check every paragraph for:
 - Redundancy: words or phrases doing the same job twice in the same clause
 - Temporal anchors: references to “last week,” “yesterday,” “recently” — use relative time references instead
 - Overlong setup clauses: the actual point buried after too many subordinate clauses
+- Staccato clusters: sequences of three or more sentences, each under approximately 8 words, that sit in the same paragraph or adjacent paragraphs. If the information can be combined into a single flowing clause chain without losing emphasis, merge them. The only exception is a deliberate, isolated Verdict beat that follows an extended Processing passage—keep those short, but verify that the preceding passage was long enough to earn the punch.
+- **Connective scarcity:** Scan for sequences of three or more sentences within a paragraph that lack mid‑sentence connecting words (and, but, so, because, though, which, while). If found, consider merging sentences or adding a connector to improve flow.
 - Wrong article usage
 - Written sentence openers: infinitive clauses, formal pivots
 - Abrupt emotional transitions: jumping between registers without a connective breath
@@ -619,7 +643,17 @@ Check every paragraph for:
 - Tense inconsistencies: mixing historical narrative past with present‑tense narration
 - Pronoun case errors: "his/her/their" correctly matches the intended referent
 - Double conjunctions: no "and whether…and most…" or similar collisions
-- Paragraph opener audit: List the first word of every paragraph. Any word appearing more than twice is a pattern. Cross‑reference against the native openers list. Any opener not on that list must be rebuilt.
+- Paragraph opener audit: List the first word of every paragraph. Any word appearing more than **four** times is a pattern that may feel repetitive. Audit and vary at least one unless repetition serves a deliberate effect.
+
+---
+
+#### THE STRUCTURAL PAYOFF AUDIT — APPLY AFTER THE NATURALNESS AUDIT
+
+Before finalising the script, run these three checks to ensure structural payoffs are present and correctly placed:
+
+- **Bookend audit:** If the script references an element from the source's opening (e.g., a welcome speech, a specific line, a visual), verify that a corresponding echo appears in the conclusion or Act 4. If the setup is present but the payoff is missing, insert it or cut the setup.
+- **Promissory payoff audit:** Scan for phrases like “for reasons that pay off later” or “which becomes important later.” For each, verify that the payoff actually appears later in the script. If it does not, either add the payoff or remove the promissory language.
+- **Abstract claim grounding audit:** For every claim that a character “can do” something or “has” an ability without a concrete example (e.g., “she can develop the conjuring ability”), verify that at least one specific, imaged example appears within two paragraphs. If none does, add one from the verified fact sheet.
 
 ---
 
@@ -715,7 +749,7 @@ After the long‑form script is complete and its source notes and delivery notes
 
 5. **Context‑heavy, detail‑light** — Assume zero prior knowledge. Introduce any historical figure, event, or concept with the most minimal grounding clause needed, then immediately deliver the story beat.
 
-6. **Voice preservation** — The short must use the identical five‑stage loop architecture and the same deadpan, discovery‑heavy, or analysis‑focused register as the long script. Every rule from Step 3 applies.
+6. **Voice preservation** — The short must use the identical five‑stage loop architecture and the same deadpan, discovery‑heavy, or analysis‑focused register as the long script. Every rule from Step 3 applies, including the intra‑paragraph connector allowance and the relaxed paragraph‑opener diversity limit.
 
 7. **Gender‑neutral narrator** — The gender‑neutral default continues. Personal anecdotes must remain universally relatable.
 
@@ -920,13 +954,15 @@ Notes should include brief instructions for the editor (e.g., “Open page, clic
 - [ ] No “okay so” openers
 - [ ] No formal pivot opener templates — count instances, more than one is a template
 - [ ] No paired contrast constructions used more than once
-- [ ] No short declarative punch lines standing alone except the crystallising/verdict line
+- [ ] No short declarative punch lines standing alone except the crystallising/verdict line (earned with buildup)
 - [ ] No setup‑payoff paragraph endings
 - [ ] Planning test passed — could any first sentence have been planned before the speaker opened their mouth?
 - [ ] Aloud test passed — sounds like someone explaining to a friend
 - [ ] Patch test passed — remove all informal words, no formal sentence should remain
 - [ ] Naturalness audit passed on every paragraph
-- [ ] Paragraph opener audit completed — no single word appears more than twice
+- [ ] Staccato clusters checked and merged where appropriate
+- [ ] Connective scarcity scan passed — no stretches of unconnected short sentences
+- [ ] Paragraph opener audit completed — no single word appears more than four times; repetitive patterns addressed
 - [ ] No em‑dashes in spoken text unless in natural clause‑building discovery mode
 - [ ] Hook Move 1 matches subject type
 - [ ] Absurd self‑insertion present in Move 3, delivered deadpan
@@ -935,7 +971,7 @@ Notes should include brief instructions for the editor (e.g., “Open page, clic
 - [ ] Five‑stage cognitive loop observable in each major revelation
 - [ ] Texture switches occur only at paragraph boundaries or transition markers
 - [ ] No mid‑paragraph texture switching
-- [ ] Verdict beats are plain, declarative, no hedging
+- [ ] Verdict beats are plain, declarative, no hedging; earned by preceding Processing
 - [ ] Release texture selected matches dominant script mode (Flat Signoff for Discovery‑heavy; Deflation for Analysis‑heavy)
 
 **STRUCTURE CHECKS (Long‑Form):**
@@ -989,6 +1025,11 @@ Notes should include brief instructions for the editor (e.g., “Open page, clic
 - [ ] Timeline accuracy — verified sequence stated correctly throughout
 - [ ] Repetition vs. Reinforcement test applied to every element appearing more than once
 
+**STRUCTURAL PAYOFF AUDIT CHECKS (Long‑Form):**
+- [ ] Bookend audit completed: if a setup from the source’s opening is referenced, a corresponding payoff exists
+- [ ] Promissory payoff audit completed: any “reasons that pay off later” language has a corresponding payoff
+- [ ] Abstract claim grounding audit completed: every “can do” claim is anchored by a specific example within two paragraphs
+
 **IMAGE SOURCING CHECKS (ENHANCED):**
 - [ ] Image sourcing completed for all key visual moments identified
 - [ ] All direct image URLs obtained via proper navigation (not guessed from filename patterns)
@@ -1034,4 +1075,4 @@ Notes should include brief instructions for the editor (e.g., “Open page, clic
 
 ---
 
-## END OF PROMPT (v3.14)
+## END OF PROMPT (v3.17)

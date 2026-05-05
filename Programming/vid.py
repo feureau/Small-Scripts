@@ -184,13 +184,14 @@ DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), original
-DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate
+DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate, blur, ambient
 DEFAULT_PAD_COLOR = "#000000"                       # Padding color for Aspect Ratio Handling set to "pad" (Fit). Default: #000000
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
 DEFAULT_PIXELATE_BRIGHTNESS = "-0.4"                # Background brightness adjustment. Default: -0.4
 DEFAULT_PIXELATE_SATURATION = "0.6"                  # Background saturation adjustment. Default: 0.6
 DEFAULT_BLUR_SIGMA = "30"                           # Blur strength for background. Default: 30, Range: 0.5 to 100+
 DEFAULT_BLUR_STEPS = "1"                            # Blur quality iterations. Default: 1, Range: 1 to 6
+DEFAULT_AMBIENT_SPREAD = "2"                        # Ambient glow spread (downscale factor). Default: 2
 DEFAULT_HORIZONTAL_ASPECT = "16:9"                  # Horizontal aspect ratio. Default: 16:9, Common: 16:9, 21:9, 4:3
 DEFAULT_VERTICAL_ASPECT = "4:5"                     # Vertical aspect ratio. Default: 4:5, Common: 4:5, 9:16
 DEFAULT_VIDEO_OFFSET_X = "0"                        # Horizontal video offset (pixels). Default: 0
@@ -2048,6 +2049,8 @@ class VideoProcessorApp:
         self.video_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_y'))
         self.pixelate_multiplier_var = tk.StringVar(value=DEFAULT_PIXELATE_MULTIPLIER)
         self.pixelate_multiplier_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_multiplier'))
+        self.ambient_spread_var = tk.StringVar(value=DEFAULT_AMBIENT_SPREAD)
+        self.ambient_spread_var.trace_add('write', lambda *args: self._update_selected_jobs('ambient_spread'))
         self.pixelate_brightness_var = tk.StringVar(value=DEFAULT_PIXELATE_BRIGHTNESS)
         self.pixelate_brightness_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_brightness'))
         self.pixelate_saturation_var = tk.StringVar(value=DEFAULT_PIXELATE_SATURATION)
@@ -2787,39 +2790,47 @@ class VideoProcessorApp:
         self.aspect_blur_rb.pack(side=tk.LEFT, padx=5)
         self.aspect_pixelate_rb = ttk.Radiobutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_mode_var, value="pixelate", command=self._toggle_upscale_options)
         self.aspect_pixelate_rb.pack(side=tk.LEFT)
+        self.aspect_ambient_rb = ttk.Radiobutton(aspect_handling_frame, text="Ambient (Glow)", variable=self.aspect_mode_var, value="ambient", command=self._toggle_upscale_options)
+        self.aspect_ambient_rb.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(aspect_handling_frame, text="Mult:").pack(side=tk.LEFT, padx=(10, 2))
-        self.pixelate_multiplier_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_multiplier_var, width=3)
+        aspect_params_frame = ttk.Frame(geometry_group); aspect_params_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(aspect_params_frame, text="Mult:").pack(side=tk.LEFT, padx=(0, 2))
+        self.pixelate_multiplier_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_multiplier_var, width=3)
         self.pixelate_multiplier_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_multiplier_entry, "Pixelation factor. 16 is default.")
 
-        ttk.Label(aspect_handling_frame, text="Dark:").pack(side=tk.LEFT, padx=(5, 2))
-        self.pixelate_brightness_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_brightness_var, width=4)
+        ttk.Label(aspect_params_frame, text="Dark:").pack(side=tk.LEFT, padx=(5, 2))
+        self.pixelate_brightness_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_brightness_var, width=4)
         self.pixelate_brightness_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_brightness_entry, "Darkness level. -0.4 is default. Lower is darker.")
 
-        ttk.Label(aspect_handling_frame, text="Sat:").pack(side=tk.LEFT, padx=(5, 2))
-        self.pixelate_saturation_entry = ttk.Entry(aspect_handling_frame, textvariable=self.pixelate_saturation_var, width=3)
+        ttk.Label(aspect_params_frame, text="Sat:").pack(side=tk.LEFT, padx=(5, 2))
+        self.pixelate_saturation_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_saturation_var, width=3)
         self.pixelate_saturation_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_saturation_entry, "Saturation boost. 0.6 is default. 1.0 is original.")
 
-        ttk.Label(aspect_handling_frame, text="Sigma:").pack(side=tk.LEFT, padx=(10, 2))
-        self.blur_sigma_entry = ttk.Entry(aspect_handling_frame, textvariable=self.blur_sigma_var, width=3)
+        ttk.Label(aspect_params_frame, text="Sigma:").pack(side=tk.LEFT, padx=(5, 2))
+        self.blur_sigma_entry = ttk.Entry(aspect_params_frame, textvariable=self.blur_sigma_var, width=3)
         self.blur_sigma_entry.pack(side=tk.LEFT)
         ToolTip(self.blur_sigma_entry, "Blur strength. 30 is default. Higher = more blur.")
 
-        ttk.Label(aspect_handling_frame, text="Steps:").pack(side=tk.LEFT, padx=(5, 2))
-        self.blur_steps_entry = ttk.Entry(aspect_handling_frame, textvariable=self.blur_steps_var, width=2)
+        ttk.Label(aspect_params_frame, text="Steps:").pack(side=tk.LEFT, padx=(5, 2))
+        self.blur_steps_entry = ttk.Entry(aspect_params_frame, textvariable=self.blur_steps_var, width=2)
         self.blur_steps_entry.pack(side=tk.LEFT)
         ToolTip(self.blur_steps_entry, "Blur quality. 1 is default. Higher = smoother (1-6).")
+        
+        ttk.Label(aspect_params_frame, text="Spread:").pack(side=tk.LEFT, padx=(5, 2))
+        self.ambient_spread_entry = ttk.Entry(aspect_params_frame, textvariable=self.ambient_spread_var, width=3)
+        self.ambient_spread_entry.pack(side=tk.LEFT)
+        ToolTip(self.ambient_spread_entry, "Ambient glow spread (downscale factor). 2 is default. Higher = wider glow.")
 
-        ttk.Label(aspect_handling_frame, text="X-Off:").pack(side=tk.LEFT, padx=(5, 2))
-        self.video_offset_x_entry = ttk.Entry(aspect_handling_frame, textvariable=self.video_offset_x_var, width=4)
+        ttk.Label(aspect_params_frame, text="X-Off:").pack(side=tk.LEFT, padx=(10, 2))
+        self.video_offset_x_entry = ttk.Entry(aspect_params_frame, textvariable=self.video_offset_x_var, width=4)
         self.video_offset_x_entry.pack(side=tk.LEFT)
         ToolTip(self.video_offset_x_entry, "Horizontal video offset in pixels. Pos = Right, Neg = Left.")
 
-        ttk.Label(aspect_handling_frame, text="Y-Off:").pack(side=tk.LEFT, padx=(5, 2))
-        self.video_offset_y_entry = ttk.Entry(aspect_handling_frame, textvariable=self.video_offset_y_var, width=4)
+        ttk.Label(aspect_params_frame, text="Y-Off:").pack(side=tk.LEFT, padx=(5, 2))
+        self.video_offset_y_entry = ttk.Entry(aspect_params_frame, textvariable=self.video_offset_y_var, width=4)
         self.video_offset_y_entry.pack(side=tk.LEFT)
         ToolTip(self.video_offset_y_entry, "Vertical video offset in pixels. Pos = Down, Neg = Up.")
 
@@ -3561,19 +3572,27 @@ class VideoProcessorApp:
     def _toggle_upscale_options(self):
         aspect_mode = self.aspect_mode_var.get()
         
+        # Auto-boost saturation if switching to ambient and it's left at default 0.6
+        if aspect_mode == "ambient" and self.pixelate_saturation_var.get() == "0.6":
+            self.pixelate_saturation_var.set("1.5")
+            
         # Pixelate controls (Mult, Dark, Sat)
         pixelate_state = "normal" if aspect_mode == "pixelate" else "disabled"
         self.pixelate_multiplier_entry.config(state=pixelate_state)
         
-        # Shared controls (Dark, Sat) - enabled for both blur and pixelate
-        shared_state = "normal" if aspect_mode in ["pixelate", "blur"] else "disabled"
+        # Shared controls (Dark, Sat) - enabled for both blur and pixelate and ambient (saturation)
+        shared_state = "normal" if aspect_mode in ["pixelate", "blur", "ambient"] else "disabled"
         self.pixelate_brightness_entry.config(state=shared_state)
         self.pixelate_saturation_entry.config(state=shared_state)
         
         # Blur controls (Sigma, Steps)
-        blur_state = "normal" if aspect_mode == "blur" else "disabled"
+        blur_state = "normal" if aspect_mode in ["blur", "ambient"] else "disabled"
         self.blur_sigma_entry.config(state=blur_state)
         self.blur_steps_entry.config(state=blur_state)
+        
+        # Ambient controls (Spread)
+        ambient_state = "normal" if aspect_mode == "ambient" else "disabled"
+        self.ambient_spread_entry.config(state=ambient_state)
         
         self._update_selected_jobs("aspect_mode")
 
@@ -3632,7 +3651,7 @@ class VideoProcessorApp:
         if is_nvencc_video_backend:
             # We NO LONGER disable Hybrid Stacked here, because if requested with NVEncC, 
             # we will dynamically route it to nvencc_with_ffmpeg during process_file.
-            if self.aspect_mode_var.get() in ["blur", "pixelate"]:
+            if self.aspect_mode_var.get() in ["blur", "pixelate", "ambient"]:
                 self.aspect_mode_var.set("pad")
             self.fruc_var.set(False)
             if is_nvencc_only:
@@ -3666,9 +3685,9 @@ class VideoProcessorApp:
 
         for rb in [getattr(self, "aspect_crop_rb", None), getattr(self, "aspect_pad_rb", None),
                    getattr(self, "aspect_stretch_rb", None), getattr(self, "aspect_blur_rb", None),
-                   getattr(self, "aspect_pixelate_rb", None)]:
+                   getattr(self, "aspect_pixelate_rb", None), getattr(self, "aspect_ambient_rb", None)]:
             if rb:
-                if rb in [getattr(self, "aspect_blur_rb", None), getattr(self, "aspect_pixelate_rb", None)]:
+                if rb in [getattr(self, "aspect_blur_rb", None), getattr(self, "aspect_pixelate_rb", None), getattr(self, "aspect_ambient_rb", None)]:
                     rb.config(state="disabled" if is_nvencc_video_backend else "normal")
                 else:
                     rb.config(state="normal")
@@ -3812,6 +3831,7 @@ class VideoProcessorApp:
             "video_offset_x": self.video_offset_x_var.get(),
             "video_offset_y": self.video_offset_y_var.get(),
             "pixelate_multiplier": self.pixelate_multiplier_var.get(),
+            "ambient_spread": self.ambient_spread_var.get(),
             "pixelate_brightness": self.pixelate_brightness_var.get(),
             "pixelate_saturation": self.pixelate_saturation_var.get(),
             "blur_sigma": self.blur_sigma_var.get(),
@@ -4417,6 +4437,7 @@ class VideoProcessorApp:
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
         self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
         self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
+        self.ambient_spread_var.set(options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD))
         self.pixelate_brightness_var.set(options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS))
         self.pixelate_saturation_var.set(options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION))
         self.blur_sigma_var.set(options.get("blur_sigma", DEFAULT_BLUR_SIGMA))
@@ -5598,13 +5619,37 @@ class VideoProcessorApp:
                     blur_fc = (
                         f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
                         f"[v_bg_in]scale_cuda=w={target_w//2}:h={target_h//2}:interp_algo={safe_algo}:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},hwupload_cuda,"
+                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},format={target_fmt},hwupload_cuda,"
                         f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];"
                         f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
                         f"[v_bg_blurred][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_blur_combined]"
                     )
                     filter_complex_parts.append(blur_fc)
                     video_in_tag = "[v_blur_combined]"
+                elif aspect_mode == 'ambient':
+                    # Ambient Glow mode: crop to fill, blur on CPU, saturation boost
+                    sigma = options.get("blur_sigma", "25")
+                    steps = options.get("blur_steps", "1")
+                    sat = options.get("pixelate_saturation", "1.5")
+                    spread_str = options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD)
+                    try:
+                        spread = max(1, int(spread_str))
+                    except ValueError:
+                        spread = 2
+                    
+                    target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                    ambient_fc = (
+                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
+                        f"[v_bg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt},"
+                        f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,"
+                        f"scale_cuda=w={target_w//spread}:h={target_h//spread}:interp_algo=bilinear:format={target_fmt},"
+                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=saturation={sat},format={target_fmt},hwupload_cuda,"
+                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_ambient];"
+                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
+                        f"[v_bg_ambient][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_ambient_combined]"
+                    )
+                    filter_complex_parts.append(ambient_fc)
+                    video_in_tag = "[v_ambient_combined]"
                 elif aspect_mode == 'pad':
                     pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
                     vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
