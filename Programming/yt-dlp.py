@@ -1358,12 +1358,15 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
             subtitle_mode = getattr(args, 'default_download', False) or args.srt or args.json3
             subtitle_msgs = []
             if task_type == YTDLP_TASK and subtitle_mode:
-                subtitle_candidates = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
+                subtitle_candidates_detected = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
                 subtitle_paths = []
+                subtitle_candidates = subtitle_candidates_detected
                 
-                if subtitle_candidates:
+                if subtitle_candidates_detected:
                     # Filter for only those that actually exist on disk now
-                    subtitle_candidates = [s for s in subtitle_candidates if os.path.exists(s['path'])]
+                    subtitle_candidates = [s for s in subtitle_candidates_detected if os.path.exists(s['path'])]
+                    if args.verbose and not subtitle_candidates:
+                        emit_message("[SUBTITLE] Subtitle paths were detected in yt-dlp output, but files were not found on disk during post-check.")
                 
                 if subtitle_candidates:
                     # 1. Prioritize: Manual > Auto, Lang match > other, SRT > others
@@ -1430,7 +1433,7 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                 requested_sub_only = (args.srt or args.json3) and not (
                     getattr(args, 'default_download', False) or args.video or args.audio_only
                 )
-                if requested_sub_only and not subtitle_candidates:
+                if requested_sub_only and not subtitle_candidates_detected:
                     update_task_status(task_id, state="FAILURE", phase="no-subtitles", speed="--", eta="--")
                     return ("FAILURE", f"Finished {tool_name}: {display_title} (no subtitle files available/saved)", [])
 

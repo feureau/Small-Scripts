@@ -313,6 +313,21 @@ def has_eng_token(text: str) -> bool:
         return False
     return bool(re.search(r'\beng\b', text.lower()))
 
+def extract_title_from_metadata_file(path: Path) -> str | None:
+    """Best-effort metadata title extraction for robust local/YouTube matching."""
+    try:
+        if path.suffix.lower() != ".json" or path.stat().st_size <= 0:
+            return None
+        content = path.read_text(encoding="utf-8", errors="replace")
+        data = sanitize_and_parse_json(content)
+        if isinstance(data, dict):
+            title = data.get("title")
+            if title:
+                return str(title)
+    except Exception:
+        return None
+    return None
+
 def sanitize_for_youtube(text: str, max_len=None) -> str:
     sanitized = text.replace('<', '').replace('>', '')
     return sanitized[:max_len] if max_len else sanitized
@@ -806,6 +821,10 @@ class MainApp:
     
             local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
             logger.info(f"--- DEBUG: FOUND {len(local_files)} LOCAL FILES ---")
+            metadata_title_cache = {}
+            for f in local_files:
+                if f.suffix.lower() in METADATA_EXTENSIONS:
+                    metadata_title_cache[f] = normalize_for_matching(extract_title_from_metadata_file(f) or "")
             
             # High-Precision TIMESTAMP_PATTERN (Captures Seconds)
             TIMESTAMP_PATTERN = re.compile(r'(202\d)[\.\-\s_]?([01]\d)[\.\-\s_]?([0-3]\d).*?([0-2]\d)[\.\-\s_]?([0-5]\d)[\.\-\s_]?([0-5]\d)?')
@@ -847,6 +866,7 @@ class MainApp:
                     marker_num_title = extract_marker_number(vd_obj.current_title)
                     best_txt_match = None; best_sub_match = None
                     best_txt_score = float('inf')
+                    best_sub_score = float('inf')
                     best_meta_match_name = None
                     best_sub_match_name = None
 
@@ -877,6 +897,15 @@ class MainApp:
                                 current_score = 2
                                 if has_eng_token(vd_obj.current_title) and has_eng_token(file_path.stem):
                                     current_score = 1.5
+                        # D. Metadata JSON title match (handles custom YT titles vs timestamp filenames)
+                        if current_score > 0.5 and file_path.suffix.lower() in METADATA_EXTENSIONS:
+                            metadata_norm_title = metadata_title_cache.get(file_path, "")
+                            yt_norm_title = normalize_for_matching(vd_obj.current_title)
+                            if metadata_norm_title and yt_norm_title:
+                                if metadata_norm_title == yt_norm_title:
+                                    current_score = 0.5
+                                elif metadata_norm_title in yt_norm_title or yt_norm_title in metadata_norm_title:
+                                    current_score = min(current_score, 0.75)
 
                         if current_score < float('inf'):
                             ext = file_path.suffix.lower()
@@ -886,7 +915,8 @@ class MainApp:
                                     best_txt_match = file_path
                                     best_meta_match_name = file_path.name
                             elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS):
-                                if not best_sub_match:
+                                if current_score < best_sub_score:
+                                    best_sub_score = current_score
                                     best_sub_match = file_path
                                     best_sub_match_name = file_path.name
 

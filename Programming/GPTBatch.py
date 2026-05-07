@@ -3533,6 +3533,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.successful_output_paths = []
         self.successful_output_lock = threading.Lock()
         self.model_switch_lock = threading.Lock()
+        self.job_start_lock = threading.Lock()
+        self.next_job_start_ts = 0.0
         self.job_id_counter = 0
 
         self.files_var = tk.Variable(value=list(command_line_files or []))
@@ -5791,6 +5793,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.processing_cancelled.clear()
             self.processing_paused.clear()
             self.successful_output_paths = []
+            # Shared launcher clock: prevents all workers from firing first requests at once.
+            self.next_job_start_ts = time.monotonic()
             
             if globals().get("RICH_AVAILABLE") and getattr(self, "stream_var", None) and self.stream_var.get() and STREAM_DASHBOARD:
                 STREAM_DASHBOARD.start()
@@ -5805,6 +5809,31 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.pause_btn.config(state="normal", text="Pause")
             self.stop_btn.config(state="normal")
             self.clear_btn.config(state="disabled")
+
+    def _wait_for_global_job_slot(self, delay_sec):
+        delay_sec = max(0.0, float(delay_sec or 0))
+        with self.job_start_lock:
+            now = time.monotonic()
+            slot_time = max(now, self.next_job_start_ts)
+            self.next_job_start_ts = slot_time + delay_sec
+        wait_time = slot_time - time.monotonic()
+        if wait_time <= 0:
+            return True
+
+        console_log(f"Waiting {wait_time:.2f}s before next job...", "INFO")
+        elapsed = 0.0
+        step = 0.5
+        while elapsed < wait_time:
+            if self.processing_cancelled.is_set():
+                return False
+            if self.processing_paused.is_set():
+                time.sleep(0.5)
+                continue
+            remaining = wait_time - elapsed
+            sleep_for = step if remaining > step else remaining
+            time.sleep(sleep_for)
+            elapsed += sleep_for
+        return not self.processing_cancelled.is_set()
 
     def stop_processing(self):
         if getattr(self, "worker_threads", None) and any(t.is_alive() for t in self.worker_threads):
@@ -6140,7 +6169,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def _worker(self):
         console_log("Worker thread started.", "INFO")
-        first_job = True
         while not self.job_queue.empty():
             if self.processing_cancelled.is_set():
                 break
@@ -6153,26 +6181,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             except queue.Empty:
                 break
 
-            # --- Delay Logic ---
             delay_sec = job.get("job_delay_seconds", 0)
-            if not first_job and delay_sec > 0:
-                console_log(f"Waiting {delay_sec}s before next job...", "INFO")
-                # Sleep in small chunks to remain responsive to pause/cancel
-                elapsed = 0
-                step = 0.5
-                while elapsed < delay_sec:
-                    if self.processing_cancelled.is_set():
-                        break
-                    if self.processing_paused.is_set():
-                        time.sleep(0.5)
-                        continue
-                    time.sleep(step)
-                    elapsed += step
-                if self.processing_cancelled.is_set():
-                    break
-
-            first_job = False
-            # -------------------
+            if not self._wait_for_global_job_slot(delay_sec):
+                break
 
             jid = job["job_id"]
 
