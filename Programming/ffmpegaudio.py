@@ -16,6 +16,7 @@ DEFAULT_SCAN_PATTERNS = [
 
 # Allowed output formats
 ALLOWED_OUTPUT_FORMATS = ['mp3', 'wav']
+DEFAULT_CHUNK_SECONDS = 1800
 
 def check_ffmpeg_installed():
     """Checks if ffmpeg is installed and in PATH."""
@@ -25,7 +26,14 @@ def check_ffmpeg_installed():
         return False
     return True
 
-def convert_media_to_audio(input_file_path, output_dir_path, target_formats, mp3_bitrate):
+def convert_media_to_audio(
+    input_file_path,
+    output_dir_path,
+    target_formats,
+    mp3_bitrate,
+    should_split=False,
+    chunk_seconds=DEFAULT_CHUNK_SECONDS
+):
     """
     Converts a single media file to the specified audio formats.
 
@@ -41,8 +49,15 @@ def convert_media_to_audio(input_file_path, output_dir_path, target_formats, mp3
     for target_format in target_formats:
         output_filename = f"{base_name}.{target_format}"
         output_file_path = os.path.join(output_dir_path, output_filename)
+        split_output_pattern = os.path.join(output_dir_path, f"{base_name}_part_%03d.{target_format}")
 
-        print(f"  Converting to {target_format.upper()} -> {output_file_path}...")
+        if should_split:
+            print(
+                f"  Converting to {target_format.upper()} with split -> {split_output_pattern} "
+                f"(every {chunk_seconds}s)..."
+            )
+        else:
+            print(f"  Converting to {target_format.upper()} -> {output_file_path}...")
 
         # Base ffmpeg command: input, overwrite, no video, 48kHz audio sample rate
         # Using -y to automatically overwrite output files if they exist.
@@ -65,7 +80,15 @@ def convert_media_to_audio(input_file_path, output_dir_path, target_formats, mp3
             print(f"  Skipping unsupported format: {target_format}")
             continue
 
-        ffmpeg_cmd.append(output_file_path)
+        if should_split:
+            ffmpeg_cmd.extend([
+                '-f', 'segment',
+                '-segment_time', str(chunk_seconds),
+                '-reset_timestamps', '1'
+            ])
+            ffmpeg_cmd.append(split_output_pattern)
+        else:
+            ffmpeg_cmd.append(output_file_path)
 
         try:
             # Execute ffmpeg command
@@ -126,11 +149,34 @@ def main():
         help="Name of the subdirectory in the current working directory to save converted files. "
              "Default: converted_audio"
     )
+    parser.add_argument(
+        '-c', '--chunk-seconds',
+        type=int,
+        default=DEFAULT_CHUNK_SECONDS,
+        help=f"Chunk duration in seconds for split mode. Default: {DEFAULT_CHUNK_SECONDS} (30 minutes)."
+    )
+    parser.add_argument(
+        '-s', '--split',
+        action='store_true',
+        help="Enable chunk splitting."
+    )
+    parser.add_argument(
+        '-n', '--no-split',
+        action='store_true',
+        help="Disable chunk splitting and create one file per format."
+    )
 
     args = parser.parse_args()
 
     if not check_ffmpeg_installed():
         sys.exit(1)
+
+    if args.chunk_seconds <= 0:
+        print("Error: --chunk-seconds must be greater than 0.")
+        parser.print_help()
+        sys.exit(1)
+
+    should_split = args.split and not args.no_split
 
     # Parse target formats
     try:
@@ -193,10 +239,21 @@ def main():
     print(f"Target formats: {', '.join(f.upper() for f in target_formats_list)}")
     if 'mp3' in target_formats_list:
         print(f"MP3 Bitrate: {args.bitrate}")
+    if should_split:
+        print(f"Split mode: enabled (every {args.chunk_seconds} seconds)")
+    else:
+        print("Split mode: disabled")
 
     # Process each file
     for input_file in files_to_process:
-        convert_media_to_audio(input_file, output_dir_abs_path, target_formats_list, args.bitrate)
+        convert_media_to_audio(
+            input_file,
+            output_dir_abs_path,
+            target_formats_list,
+            args.bitrate,
+            should_split=should_split,
+            chunk_seconds=args.chunk_seconds
+        )
 
     print("\nBatch conversion finished.")
 

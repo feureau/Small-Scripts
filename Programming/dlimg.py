@@ -636,8 +636,8 @@ def main():
         description="Download images (including full galleries) from URLs."
     )
     parser.add_argument(
-        "url_file", nargs="?", default=None,
-        help="File with one URL per line. Omit to read from stdin.",
+        "input_value", nargs="?", default=None,
+        help="Single URL or file with one URL per line. Omit to read from stdin.",
     )
     parser.add_argument(
         "--output-dir", "-o", default="./downloaded_images",
@@ -646,16 +646,21 @@ def main():
     args = parser.parse_args()
 
     urls = []
-    if args.url_file:
-        try:
-            with open(args.url_file, encoding="utf-8") as fh:
-                urls = [
-                    line.strip() for line in fh
-                    if line.strip() and not line.startswith("#")
-                ]
-        except FileNotFoundError:
-            print(f"Error: file '{args.url_file}' not found.")
-            sys.exit(1)
+    if args.input_value:
+        candidate = args.input_value.strip()
+        parsed = urlparse(candidate)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            urls = [candidate]
+        else:
+            try:
+                with open(candidate, encoding="utf-8") as fh:
+                    urls = [
+                        line.strip() for line in fh
+                        if line.strip() and not line.startswith("#")
+                    ]
+            except OSError as exc:
+                print(f"Error: could not read input file '{candidate}': {exc}")
+                sys.exit(1)
     else:
         print(
             "Reading URLs from stdin. "

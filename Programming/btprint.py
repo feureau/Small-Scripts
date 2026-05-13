@@ -14,6 +14,7 @@ DESCRIPTION:
     - Smart Detection: Scans Windows Registry for "Friendly Names" to map COM ports.
     - Robust Config: Auto-heals corrupt JSON files; auto-backups.
     - Batch Processing: Handles wildcards (*.pdf) and multiple files.
+    - Optional 2-Page Merge: Combine 2-page PDFs into one printed page.
 
 DEPENDENCIES:
     pip install pyserial pymupdf Pillow
@@ -23,6 +24,8 @@ USAGE:
        python btprint.py label.pdf              # Use default profile
        python btprint.py -p "Receipt" *.pdf     # Use specific profile
        python btprint.py -s label.pdf           # Force manual COM port selection
+       python btprint.py booklet.pdf            # Default: merge all PDF pages into one print
+       python btprint.py --individual-pages x.pdf # Print each page separately
 
     2. GUI Editor:
        python btprint.py -e                     # Open Settings Manager
@@ -660,6 +663,32 @@ def image_to_bitmap(pil_image, cfg):
     img = img.convert('1')
     return img
 
+def trim_white_margins(pil_image, threshold=245):
+    gray = pil_image.convert("L")
+    # Treat near-white as background so scanned documents still trim reliably.
+    mask = gray.point(lambda p: 0 if p >= threshold else 255)
+    bbox = mask.getbbox()
+    if not bbox:
+        return pil_image
+    return pil_image.crop(bbox)
+
+def build_merged_document_image(doc):
+    pages = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=203)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        pages.append(trim_white_margins(img))
+
+    width = max(p.size[0] for p in pages)
+    height = sum(p.size[1] for p in pages)
+    merged = Image.new("RGB", (width, height), (255, 255, 255))
+    y = 0
+    for part in pages:
+        x = (width - part.size[0]) // 2
+        merged.paste(part, (x, y))
+        y += part.size[1]
+    return merged
+
 # ==============================================================================
 # 6. MAIN
 # ==============================================================================
@@ -668,6 +697,8 @@ def main():
     parser.add_argument("-p", "--printer", help="Override printer profile")
     parser.add_argument("-e", "--edit", action="store_true", help="Open Settings GUI")
     parser.add_argument("-s", "--scan", action="store_true", help="Force manual port selection")
+    parser.add_argument("--individual-pages", action="store_true", help="Print each PDF page separately instead of merged")
+    parser.add_argument("--merge-two-pages", action="store_true", help="Legacy option; merging is now default")
     parser.add_argument("files", nargs="*", help="PDF files")
     args = parser.parse_args()
 
@@ -727,30 +758,50 @@ def main():
                 
                 try:
                     doc = fitz.open(fname)
-                    for i, page in enumerate(doc):
-                        print(f"  > Printing Page {i+1}/{len(doc)}...", end="\r")
-                        pix = page.get_pixmap(dpi=203)
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        
-                        # Process Image
-                        img_1bit = image_to_bitmap(img, cfg)
+                    if not args.individual_pages and len(doc) > 1:
+                        print(f"  > Merging {len(doc)} pages into a single print...")
+                        merged_img = build_merged_document_image(doc)
+                        img_1bit = image_to_bitmap(merged_img, cfg)
 
-                        # Determine Height
                         fixed_h = cfg.get("fixed_label_height_mm", 0)
                         if fixed_h > 0:
                             final_h_mm = fixed_h
                         else:
                             final_h_mm = int(img_1bit.size[1] / cfg["dots_per_mm"])
 
-                        # Dispatch Protocol
                         if protocol == "CPCL":
                             data_bytes = generate_cpcl(img_1bit, cfg, final_h_mm)
                         else:
                             data_bytes = generate_tspl(img_1bit, cfg, final_h_mm)
-                        
+
                         p.write(data_bytes)
                         p.flush()
                         time.sleep(1.5)
+                    else:
+                        for i, page in enumerate(doc):
+                            print(f"  > Printing Page {i+1}/{len(doc)}...", end="\r")
+                            pix = page.get_pixmap(dpi=203)
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            
+                            # Process Image
+                            img_1bit = image_to_bitmap(img, cfg)
+
+                            # Determine Height
+                            fixed_h = cfg.get("fixed_label_height_mm", 0)
+                            if fixed_h > 0:
+                                final_h_mm = fixed_h
+                            else:
+                                final_h_mm = int(img_1bit.size[1] / cfg["dots_per_mm"])
+
+                            # Dispatch Protocol
+                            if protocol == "CPCL":
+                                data_bytes = generate_cpcl(img_1bit, cfg, final_h_mm)
+                            else:
+                                data_bytes = generate_tspl(img_1bit, cfg, final_h_mm)
+                            
+                            p.write(data_bytes)
+                            p.flush()
+                            time.sleep(1.5)
                     doc.close()
                     print(f"  > Finished: {fname}      ")
                 except Exception as e:
