@@ -231,7 +231,7 @@ def select_audio_encoder(channels):
     else:
         return None, None
 
-def convert_to_subtitle_free_video(input_file, output_extension, force_output_dir=None):
+def convert_to_subtitle_free_video(input_file, output_extension, force_output_dir=None, target_lang=None):
     """Converts a video to subtitle-free version (smart audio conversion)."""
     if not os.path.isfile(input_file):
         print(f"Skipping non-file: {input_file}")
@@ -285,6 +285,25 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
 
     sorted_audio = sorted(audio_streams, key=audio_sort_key)
     
+    if target_lang:
+        filtered_audio = []
+        target_lang_lower = target_lang.lower()
+        for s in sorted_audio:
+            tags = s.get('tags', {})
+            lang = ""
+            for k, v in tags.items():
+                if k.lower() == 'language':
+                    lang = v
+                    break
+            lang_name = _get_language_name(lang).lower() if lang else "unknown"
+            if target_lang_lower == lang.lower() or target_lang_lower in lang_name:
+                filtered_audio.append(s)
+        
+        if not filtered_audio and audio_streams:
+            print(f"  WARNING: No audio streams matched language '{target_lang}'. Falling back to all streams.")
+        else:
+            sorted_audio = filtered_audio
+
     audio_maps = []
     dispositions = []
     
@@ -454,7 +473,7 @@ def _probe_video_streams(video_path):
         print(f"  Failed to parse video streams for {video_path}")
         return []
 
-def check_output_requirements(video_path, target_extension):
+def check_output_requirements(video_path, target_extension, target_lang=None):
     """
     Returns (ok, reasons) indicating whether input already meets output requirements:
     - Has at least one video stream.
@@ -476,6 +495,23 @@ def check_output_requirements(video_path, target_extension):
 
     # Audio stream checks
     audio_streams = _probe_audio_streams(video_path)
+    
+    if target_lang:
+        target_lang_lower = target_lang.lower()
+        filtered_audio = []
+        for s in audio_streams:
+            tags = s.get('tags', {})
+            lang = ""
+            for k, v in tags.items():
+                if k.lower() == 'language':
+                    lang = v
+                    break
+            lang_name = _get_language_name(lang).lower() if lang else "unknown"
+            if target_lang_lower == lang.lower() or target_lang_lower in lang_name:
+                filtered_audio.append(s)
+        if filtered_audio:
+            audio_streams = filtered_audio
+
     if not audio_streams:
         reasons.append("No audio streams detected")
     else:
@@ -658,13 +694,32 @@ def _package_bitmap_subs(video_path, streams, basename, output_dir_override=None
             except Exception:
                 pass
 
-def extract_subtitles(video_path, mode="hybrid", output_dir_override=None):
+def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, target_lang=None):
     """Main entry for subtitle extraction (hybrid/srt/mkv)."""
     basename = os.path.splitext(os.path.basename(video_path))[0]
     subs = _probe_subtitle_streams(video_path)
     if not subs:
         print("  No subtitles found.")
         return
+
+    if target_lang:
+        filtered_subs = []
+        target_lang_lower = target_lang.lower()
+        for s in subs:
+            tags = s.get('tags', {})
+            lang = ""
+            for k, v in tags.items():
+                if k.lower() == 'language':
+                    lang = v
+                    break
+            lang_name = _get_language_name(lang).lower() if lang else "unknown"
+            if target_lang_lower == lang.lower() or target_lang_lower in lang_name:
+                filtered_subs.append(s)
+        subs = filtered_subs
+        if not subs:
+            print(f"  No subtitles matched language '{target_lang}'.")
+            return
+
     text_subs = [s for s in subs if s.get('codec_name', '').lower() in KNOWN_TEXT_SUBTITLE_CODECS]
     bitmap_subs = [s for s in subs if s not in text_subs]
 
@@ -744,6 +799,8 @@ def main():
     parser.add_argument("-p", "--test-and-process",
                         action="store_true",
                         help="Test first, then process only files that fail requirements")
+    parser.add_argument("-l", "--lang",
+                        help="Filter audio and subtitle tracks by language (e.g., eng, english).")
     parser.add_argument("input_patterns", nargs="*",
                         help="Optional file patterns or directories (default: recursive scan)")
     args = parser.parse_args()
@@ -831,7 +888,7 @@ def main():
             if not is_supported_video(file_path):
                 print(f"  Skipping non-video file: {file_path}")
                 continue
-            ok, reasons = check_output_requirements(file_path, args.extension)
+            ok, reasons = check_output_requirements(file_path, args.extension, args.lang)
             if ok:
                 print("  PASS: Meets all output requirements.")
                 passed += 1
@@ -852,7 +909,7 @@ def main():
             if not is_supported_video(file_path):
                 print(f"  Skipping non-video file: {file_path}")
                 continue
-            ok, reasons = check_output_requirements(file_path, args.extension)
+            ok, reasons = check_output_requirements(file_path, args.extension, args.lang)
             if ok:
                 print("  PASS: Meets all output requirements.")
                 passed += 1
@@ -891,7 +948,8 @@ def main():
         converted_file = convert_to_subtitle_free_video(
             backup_file_path, 
             args.extension, 
-            force_output_dir=original_dir
+            force_output_dir=original_dir,
+            target_lang=args.lang
         )
         
         if converted_file:
@@ -900,7 +958,7 @@ def main():
             
         # 3. Extract Subtitles from the Backup file
         # Force explicit output to original dir so 'SRT' folder attempts to be in root
-        extract_subtitles(backup_file_path, mode=args.format, output_dir_override=original_dir)
+        extract_subtitles(backup_file_path, mode=args.format, output_dir_override=original_dir, target_lang=args.lang)
 
     print("\nAll processing complete.")
 

@@ -1,4 +1,4 @@
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.18 — WITH ALL STRUCTURAL IMPROVEMENTS)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.19 — WITH CLARITY EXCEPTIONS AND TELEPROMPTER READINESS)
 
 ## GENERATIVE PRINCIPLE
 
@@ -78,36 +78,15 @@ The fact sheet closes only when the script is final. Any revision session that i
 
 ## STEP 3 — DEFINE THE VOICE ARCHITECTURE (UNIFIED)
 
-This step replaces the former creator-specific baselines with a single, dynamic voice architecture. The voice operates on a **five‑stage cognitive loop** that repeats for each major revelation in the script. The model must ensure each loop contains all five stages in order, but may select the **texture** for each stage from the libraries provided below.
+The voice operates on a **five‑stage cognitive loop** that repeats for each major revelation in the script. The model must ensure each loop contains all five stages in order. There are no separate "textures"; the speaker moves through these stages naturally. All descriptions are structural, not textual. Generate original prose that fulfills the described function for the specific subject.
 
-All descriptions are structural, not textual. Generate original prose that fulfills the described function for the specific subject.
-
----
-
-### THE FIVE‑STAGE COGNITIVE LOOP
-
-| Stage | Function | Texture A (Discovery‑Focused) | Texture B (Analysis‑Focused) |
-| :--- | :--- | :--- | :--- |
-| **1. DISCOVERY** | How did the speaker encounter this information? | Real‑time narration: "I'm reading this document and…"; "I found this post that…" | Established deep dive: "I've spent way too much time looking at…"; "The forums for this are a rabbit hole." |
-| **2. REACTION** | Genuine, unperformed emotional response to the fact. | Flat affect: "Man."; "That's… a lot."; "Wow." | Understatement pivot: "Which is insane."; "Okay."; "I don't know." |
-| **3. PROCESSING** | Working through implications, reasoning aloud. | Clause‑by‑clause building: Sentences that discover their endpoint mid‑flight; hedge and un‑hedge in real time. | Setup‑Verdict: Long analytical stretch, then short declarative landing; layered parentheticals. |
-| **4. VERDICT** | The point of the section — plain, direct, no hedging. | Short, flat declarative statement. | Short, flat declarative statement. (Identical — this is the anchor that prevents incoherence.) |
-| **5. RELEASE** | Ending a topic or the video; releasing tension. | Pivot: "Anyway." (shifts register); or flat signoff (6‑10 word declarative sentence, flat tone, signals end). | Deflation: A small, specific, personal grievance or petty callback; pettiness reasserts itself. |
-
-**RELEASE BEAT DEFINITION — A Release beat is not a summary.** A summary restates what was argued. A Release beat changes the register: it signals that this argument is concluded and something new is beginning (Pivot release) or that the speaker has returned to a smaller, pettier version of themselves (Deflation release). A Release beat that could be cut without losing any analytical information is a Release. A sentence that contains information the script hasn't yet stated, which would be lost without it, is a summary — not a Release — and is prohibited.
-
----
-
-### DYNAMIC ROUTING RULES
-
-The model selects texture based on the argument's current need, not on a fixed persona.
-
-- **If the information is surprising to the speaker** → Lean Discovery Texture A; Reaction Texture A.
-- **If the information is absurd in its detail** → Lean Reaction Texture B.
-- **If the logic is murky and being worked out live** → Processing Texture A.
-- **If the logic is clear but the outcome is wild** → Processing Texture B.
-- **If the section is concluding and the tone has been deadpan/discovery‑heavy** → Release Texture A (flat signoff).
-- **If the section has featured extended logic traps or petty grievances** → Release Texture B (deflation callback).
+| Stage | Function | Description |
+| :--- | :--- | :--- |
+| **1. DISCOVERY** | How did the speaker encounter this information? | Real‑time narration: "I'm reading this document and…"; "I found this post that…" or established deep dive: "I've spent way too much time looking at…"; "The forums for this are a rabbit hole." |
+| **2. REACTION** | Genuine, unperformed emotional response to the fact. | Flat affect: "Man."; "That's… a lot."; "Wow." Understatement pivot: "Which is insane."; "Okay."; "I don't know." |
+| **3. PROCESSING** | Working through implications, reasoning aloud. | Clause‑by‑clause building: Sentences that discover their endpoint mid‑flight; hedge and un‑hedge in real time. Or Setup‑Verdict: Long analytical stretch, then short declarative landing; layered parentheticals. |
+| **4. VERDICT** | The point of the section — plain, direct, no hedging. | Short, flat declarative statement. (This is the anchor that prevents incoherence.) |
+| **5. RELEASE** | Ending a topic or the video; releasing tension. | Pivot: "Anyway." (shifts register); or flat signoff (6‑10 word declarative sentence, flat tone, signals end); or deflation callback. |
 
 **Extended Processing Mode:** When a section requires presenting multiple pieces of evidence before a conclusion can be drawn, the model may defer the Verdict beat and allow Processing texture to continue for two or more paragraphs. During Extended Processing, short declarative sentences (which function as mini‑verdicts) must be merged into the ongoing clause chain rather than standing alone. The Verdict arrives once the accumulated evidence is sufficient to support it, not after every individual piece of evidence.
 
@@ -127,10 +106,11 @@ A Verdict beat must be earned by the Processing that precedes it. **Short declar
 
 1. **The section-level Verdict beat** — permitted only when the preceding Processing passage contains a minimum of four clauses of sustained evidence before the declarative is placed. If fewer than four clauses precede it, merge the evidence with adjacent material and defer the Verdict.
 2. **The script-level crystallising line** — one permitted per script, placed in the final third.
+3. **Clarity Exceptions for Opening and Conclusion** — see Step 6.
 
-Any short declarative that does not meet one of these two conditions is prohibited. "Short" means under approximately 10 words. Run a pre-output count: find every sentence under 10 words that stands alone as its own paragraph. Each must either be a Verdict beat with four-clause buildup or the crystallising line. All others are rebuilds.
+Any short declarative that does not meet one of these conditions is prohibited. "Short" means under approximately 10 words. Run a pre-output count: find every sentence under 10 words that stands alone as its own paragraph. Each must either be a Verdict beat with four-clause buildup, the crystallising line, or fall under the Clarity Exceptions. All others are rebuilds.
 
-**Anchor Rule:** Texture may only change at **paragraph boundaries** or at **explicit transition markers** ("Anyway," "So," "But look,"). Within a single spoken paragraph, the sentence architecture must remain consistent. Switching mid‑paragraph creates procedural incoherence.
+**Anchor Rule:** The speaker may move between stages at paragraph boundaries or at explicit transition markers ("Anyway," "So," "But look,"). Within a single spoken paragraph, the sentence architecture must remain consistent.
 
 ---
 
@@ -179,6 +159,7 @@ Items most likely to be creator-specific: "kitten caboodle," "many moons ago," "
 - Recapping what was just said
 - Previewing what's about to be said
 - Explaining a joke after it lands
+- Em‑dashes anywhere (use commas or periods instead)
 
 ---
 
@@ -248,7 +229,7 @@ If a hook fails the quality checks, identify which failure type applies before r
 
 **Type 3 — Abstract Without Anchor:** A Grand Claim hook that makes a sweeping statement without a concrete, specific detail to open on. *Fix:* Find the most specific, pattern-interrupting fact in the script. Build the claim around that fact, not around the argument's thesis.
 
-**Type 4 — In Medias Res That Doesn't Land:** The scene is too obscure. The viewer doesn't know what they're watching before it's over. *Fix:* The scene needs one more detail to orient the viewer — a character, a location, a recognisable action. The viewer shouldn't need to understand *why* the scene matters, but they do need to understand *what is happening.*
+**Type 4 — In Medias Res That Doesn't Land:** The scene is too obscure. The viewer doesn't know what they're watching before it's over. *Fix:* The scene needs one more detail to orient the viewer — a character, a location, a recognisable action.
 
 **Type 5 — Move 3 Misfire:** The absurd personal example is too far from the subject, too esoteric, or too remote in register from the serious examples. *Fix:* The absurd example must sit alongside the serious ones as if it belongs. If the contrast is too jarring rather than funny, move it closer to the subject matter or find one from the Universal Relatable Category list.
 
@@ -258,7 +239,7 @@ The hook is not a preview; it is the first scene.
 
 ### HUMOR MECHANICS — STRUCTURAL DESCRIPTIONS
 
-These techniques are available regardless of texture selection. The model should deploy them intentionally and note which technique is being used in delivery notes.
+These techniques are available regardless of subject. The model should deploy them intentionally and note which technique is being used in delivery notes.
 
 **Technique 1: The Grandiose Deadpan** — Apply maximum superlative framing to something ordinary or absurd, delivered completely straight.
 
@@ -278,7 +259,7 @@ These techniques are available regardless of texture selection. The model should
 
 **Technique 9: Layered Parentheticals** — Add a second observation mid‑observation, which undercuts or complicates the first without ever abandoning it.
 
-**Technique 10: Callbacks and Escalating Returns** — Establish something early—a detail, a grievance, a joke—and return to it later in a slightly different form, often as the emotional button at the end. **A callback only lands if the exact image or phrase used in the return was planted earlier, delivered in the same deadpan‑annoyance register, and is recognisable to the listener without inference. If the punchline involves a name, the setup must include the speaker complaining about that name specifically. If the punchline involves an image, the setup must describe that image in the same words.** Before finalising, run a **callback‑plant audit**: find the deflation line, trace it back to its first appearance, and confirm the same words/register are used. If the plant uses different words or a different emotional register, the callback will not land and must be rebuilt.
+**Technique 10: Callbacks and Escalating Returns** — Establish something early—a detail, a grievance, a joke—and return to it later in a slightly different form, often as the emotional button at the end. **A callback only lands if the exact image or phrase used in the return was planted earlier, delivered in the same deadpan‑annoyance register, and is recognisable to the listener without inference.** Before finalising, run a **callback‑plant audit**: find the deflation line, trace it back to its first appearance, and confirm the same words/register are used.
 
 ---
 
@@ -293,18 +274,19 @@ These techniques are available regardless of texture selection. The model should
 - Steelmanning positions thought wrong
 - Addressing the audience formally — no "you, the viewer" or "those watching"
 - Building to a poetic final line — endings are flat or deflationary, not constructed
-- Summarizing own point after making it
-- Recapping what was just said
-- Previewing what's about to be said
+- Summarizing own point after making it (except in allowed exceptions)
+- Recapping what was just said (except in allowed exceptions)
+- Previewing what's about to be said (except in allowed exceptions)
 - Apologizing for going long
 - Padding with filler enthusiasm
 - Explaining a joke after it lands
+- Em‑dashes anywhere (use commas or periods instead)
 
 ---
 
 ## STEP 4 — SOURCE MATERIAL COMPLETENESS AUDIT
 
-**Important:** Step 4 is not only housekeeping — it is frequently where the central argument and best material are discovered. The most interesting angle, the reframe that makes the story matter, and the ironic specificity that makes it land are often buried in the source and only surface under systematic audit. Treat Step 4 as generative, not just corrective.
+**Important:** Step 4 is not only housekeeping — it is frequently where the central argument and best material are discovered. Treat Step 4 as generative, not just corrective.
 
 Before choosing an angle or writing a single word of script, conduct a systematic audit comparing all source material against what could appear in the script.
 
@@ -378,7 +360,7 @@ Not all repeated information is redundancy. Before cutting any information that 
 *Is this information doing the same argumentative job in both locations — making the same point, for the same reason, to the same effect?*
 
 - **Yes — Redundancy:** Cut the weaker instance. Keep the one where the information lands with more force, specificity, or emotional weight.
-- **No — Potential Reinforcement:** Ask: does the second appearance reframe the information, extend it, or make a new point by placing it in a new context? If yes, keep both. Make the difference explicit in the prose.
+- **No — Potential Reinforcement:** ask: does the second appearance reframe the information, extend it, or make a new point by placing it in a new context? If yes, keep both. Make the difference explicit in the prose.
 
 **Reinforcement is earned, not assumed.** If you cannot articulate in one sentence what new argumentative work the repeated information is doing in its second location, it is redundancy. Cut it.
 
@@ -453,7 +435,7 @@ Before applying the detective revelation structure, classify the subject:
 
 **Type B — Visible-process subjects:** The audience witnessed events in real time but did not understand their significance until later. *Examples: a trend that seemed random, a public figure's career arc.* → Apply a modified detective structure: replace "you were living inside this mystery" with "you watched this happen without knowing what it meant." Effects-before-causes (Technique 2) applies. Reframes (Technique 3) become "now you know what you were really watching."
 
-**Type C — Systemic-argument subjects:** No hidden cause, no mystery — the argument is purely analytical. *Examples: why a policy is bad, what a cultural phenomenon reveals about society.* → Do not apply the detective structure. Instead, use the five-stage cognitive loop and the four-act escalation structure as pure argument scaffolding. Act 4 becomes the crystallisation of the argument, not the revelation of a mechanism. The "Now you know why" payoff (Technique 8) is replaced with "Now you have the framework to see this everywhere."
+**Type C — Systemic-argument subjects:** No hidden cause, no mystery — the argument is purely analytical. *Examples: why a policy is bad, what a cultural phenomenon reveals about society.* → Do not apply the detective structure. Instead, use the five‑stage cognitive loop and the four‑act escalation structure as pure argument scaffolding. Act 4 becomes the crystallisation of the argument, not the revelation of a mechanism. The "Now you know why" payoff (Technique 8) is replaced with "Now you have the framework to see this everywhere."
 
 Note the subject type at the top of Step 5. If Type B or C, note which modifications apply before writing the spoken starting points table.
 
@@ -465,16 +447,17 @@ Apply the unified three‑move hook pattern. Select Move 1 (Grand Claim or In Me
 
 ---
 
-#### REPETITION VS. REINFORCEMENT — APPLY DURING DRAFTING AND EVERY REVISION
+#### CLARITY EXCEPTIONS FOR OPENING AND CONCLUSION
 
-Not all repeated information is redundancy. Before cutting any information that appears more than once, apply this test:
+The restrictions on short declarative sentences, previewing, and summarizing apply strictly to **Acts 2 through 4** (the main narrative and evidence sections). For the following parts, these restrictions are lifted:
 
-*Is this information doing the same argumentative job in both locations — making the same point, for the same reason, to the same effect?*
+1. **The opening hook** (first 2‑3 paragraphs). May use short declarative sentences and direct factual statements. Example: “In 2026, the Indonesian Rupiah touched Rp 17,500. Some called it a crisis worse than 1998. Others said it is just a strong dollar. Both are wrong.”
 
-- **Yes — Redundancy:** Cut the weaker instance. Keep the one where the information lands with more force, specificity, or emotional weight.
-- **No — Potential Reinforcement:** Ask: does the second appearance reframe the information, extend it, or make a new point by placing it in a new context? If yes, keep both. Make the difference explicit in the prose.
+2. **The roadmap sentence** (immediately after the hook). May preview the argument’s structure and tone. Format: “I am going to lay out one coherent argument: [what the video will prove] and [what it will recommend]. No [tone qualifier]. No [tone qualifier].” Example: “I am going to lay out one coherent argument: why the Rupiah is weak and what would actually help. No political cheerleading. No doomsday exaggerations.”
 
-**Reinforcement is earned, not assumed.** If you cannot articulate in one sentence what new argumentative work the repeated information is doing in its second location, it is redundancy. Cut it.
+3. **The conclusion’s rhetorical anchor** (between the Emotional Coda and the Exit). May use very short declaratives, including fragmented sentences for emphasis. Example: “The Rupiah will stabilize when that signal comes. Until then, the currency will continue to bleed. Slowly. Silently. Predictably.”
+
+All other prohibitions (no em‑dashes, no bullet lists, no colons introducing lists, teleprompter spelling rules) apply everywhere, including the exceptions.
 
 ---
 
@@ -597,9 +580,9 @@ A re-engagement hook is a single sentence placed at the end of an act (before th
 
 ---
 
-#### THE CONCLUSION — UNIFIED FOUR‑BEAT STRUCTURE
+#### THE CONCLUSION — UNIFIED FIVE‑BEAT STRUCTURE
 
-The conclusion always contains these four beats in order, with texture selected dynamically.
+The conclusion always contains these five beats in order, with texture selected dynamically.
 
 **Beat 1 — The Verdict:** Plain, direct, no hedging. Short. After everything that preceded it, it doesn't need to be long.
 
@@ -607,7 +590,9 @@ The conclusion always contains these four beats in order, with texture selected 
 
 **Beat 3 — The Emotional Coda:** Genuine, unironic, usually brief. Allow the speaker to feel something and state it plainly, without softening it with a joke. (This beat is mandatory; it anchors the sincerity of the argument.)
 
-**Beat 4 — The Exit (Select One):**
+**Beat 4 — The Rhetorical Anchor:** A short, memorable, emotionally resonant sentence that encapsulates the entire argument. May use very short declaratives or fragments for emphasis. No em‑dashes; use periods. Example: “The Rupiah will stabilize when that signal comes. Until then, the currency will continue to bleed. Slowly. Silently. Predictably.”
+
+**Beat 5 — The Exit (Select One):**
 - **Option A — Flat Signoff:** A single declarative sentence of 6–10 words. Flat in tone, definitive, signals the end. Does not recap, does not summarize, does not thank the viewer. Feels like the speaker ran out of things to say at this specific moment. *Select this option when the script's dominant texture has been Discovery‑Focused (clause‑building, deadpan).*
 - **Option B — Deflation Callback:** A small, specific, personal grievance reasserts itself. The petty callback planted earlier pays off here. The deflation doesn't undercut the emotion; it reasserts that the speaker is a specific person with petty complaints who also happens to have just made a serious argument. *Select this option when the script has featured extended logic traps, precision‑of‑image moments, or layered parentheticals.*
 
@@ -693,6 +678,42 @@ The script is written for an audience that has zero prior knowledge of the topic
 
 ---
 
+#### TELEPROMPTER FORMATTING RULES
+
+The final script must be ready to read aloud from a teleprompter without live improvisation. Apply these rules before output:
+
+1. **No colons introducing lists.** Write “For example, wheat and cooking oil” not “For example: wheat, cooking oil.”
+2. **No standalone dashes.** Use commas or periods instead. (Em‑dashes are already prohibited everywhere.)
+3. **No bullet points or column layouts.** Convert all tabular data into complete spoken sentences. Example: “The Indonesian Rupiah fell 9.8 percent. The Vietnamese Dong fell 3.2 percent.” not a bullet list.
+4. **No abbreviations that require expansion.** Write “for example,” “that is,” “versus.” Do not use “e.g.,” “i.e.,” “vs.”
+5. **Numbers:** Use numerals for large numbers (17,500) – the speaker will read naturally. For percentages, write “9.8 percent” not “9.8%”.
+6. **No parentheticals that are not spoken.** Replace parentheses with commas or rephrase.
+7. **No implied referents.** If “this” or “that” appears, ensure the exact noun is within the previous two sentences.
+
+---
+
+#### DATA PRESENTATION RULE
+
+Any time the script presents comparative data (e.g., currency depreciation percentages, trade surplus numbers, fiscal figures), it must be written as **complete spoken sentences**, not as lists or tables. For each data point, write a full sentence that includes the subject, the value, and the time reference.
+
+✅ Correct: “In January 2025, the trade surplus was 3.49 billion dollars. In January 2026, it fell to 950 million dollars.”
+❌ Incorrect: “January 2025: $3.49B. January 2026: $0.95B.”
+
+Do not use colons to introduce data series.
+
+---
+
+#### FIRST‑PERSON ACTIVE VOICE FOR METHODOLOGY
+
+When describing the script’s own purpose, methods, or structure, use first‑person active voice. Avoid self‑referential labels like “this explainer,” “this video,” “this analysis.”
+
+✅ Correct: “I’ve built this on data from the Ministry of Finance and BPS.” or “Here is what I found.”
+❌ Incorrect: “This explainer builds on multiple layers of analysis.”
+
+This rule applies only to methodological statements, not to narrative or evidence sections.
+
+---
+
 #### PROSE REQUIREMENTS
 
 The single most common failure mode is writing prose and then making it sound spoken. This produces written sentences with informal vocabulary on top. It is not spoken language.
@@ -703,10 +724,10 @@ The single most common failure mode is writing prose and then making it sound sp
 
 ---
 
-**PROHIBITED** (absolute):
+**PROHIBITED** (absolute, except where explicitly allowed in Clarity Exceptions):
 
 - Rhetorical triplets
-- Short declarative punch lines standing alone — except the crystallising line or the single, deferred verdict that closes an extended Processing passage (minimum four-clause buildup required for each)
+- Short declarative punch lines standing alone — except the crystallising line, the rhetorical anchor, or the single, deferred verdict that closes an extended Processing passage (minimum four-clause buildup required for each)
 - Paired contrast constructions used more than once
 - Setup‑payoff paragraph structure — paragraphs closing with a thesis statement
 - Formal pivot openers used as templates: "So here's the thing," "And here's what's insane," "And look"
@@ -727,12 +748,12 @@ The single most common failure mode is writing prose and then making it sound sp
 - Unattributed quotes as opening lines
 - Timeline errors
 - Connector words as paragraph openers — unless documented as native
-- Em‑dashes for mid‑sentence asides (use only in Discovery‑Mode clause‑building when natural)
+- Em‑dashes
 - Formal audience address
 - Building to a poetic final line
-- Summarizing own point after making it
-- Recapping what was just said
-- Previewing what's about to be said
+- Summarizing own point after making it (except Clarity Exceptions)
+- Recapping what was just said (except Clarity Exceptions)
+- Previewing what's about to be said (except Clarity Exceptions)
 - Apologizing for going long
 - Padding with filler enthusiasm
 - Explaining a joke after it lands
@@ -746,7 +767,6 @@ The single most common failure mode is writing prose and then making it sound sp
 - Clauses that belong together are joined with natural connective tissue
 - Line breaks only at genuine breath points
 - The unified voice architecture maintained throughout (five‑stage loop observable)
-- Natural speech markers appear where they naturally fall
 - Detective revelation structure active throughout (modified appropriately for subject type)
 - Genuine reactive discovery moments — at least two places where the speaker appears to realize something as they say it
 - Pace variation built into text itself through paragraph length and clause density
@@ -765,6 +785,11 @@ The single most common failure mode is writing prose and then making it sound sp
 - **External‑reference bridging** present before any comparison to external works
 - **Callback‑plant audit** passed if a deflation callback is used
 - **At least one Technique 5 "listener something to do" moment**, marked in the starting points table
+- **Roadmap sentence** present after the hook (Clarity Exceptions)
+- **Rhetorical anchor** present in the conclusion (Beat 4)
+- **Teleprompter formatting** applied (no colons before lists, no bullet points, all data as spoken sentences)
+- **Data presentation as spoken prose** applied
+- **First‑person active voice** for methodology
 
 ---
 
@@ -949,7 +974,7 @@ After the long‑form script is complete and its source notes and delivery notes
 
 8. **No new factual claims** — The short must draw exclusively from the verified fact sheet.
 
-9. **Conclusion adaptation** — The four‑beat conclusion (Verdict → Universal Extension → Emotional Coda → Exit) is preserved but compressed. If word count is tight, merge the verdict and universal extension into one sentence.
+9. **Conclusion adaptation** — The five‑beat conclusion (Verdict → Universal Extension → Emotional Coda → Rhetorical Anchor → Exit) is preserved but compressed. If word count is tight, merge the verdict and universal extension into one sentence.
 
 10. **Pacing and breath** — Paragraphs are very short (maximum two clauses before a natural break). Line breaks act as timing cues for the performer and editor.
 
@@ -961,7 +986,9 @@ After the long‑form script is complete and its source notes and delivery notes
 
 14. **Deflation callback planting** — If the exit uses a deflation callback, the exact phrase or image used in the callback must appear verbatim or near‑verbatim earlier in the short script. Verify before finalising.
 
-15. **Code block requirement** — The entire short‑form script must be placed inside its own single code block, with a header clearly indicating it is the short‑form adaptation.
+15. **Teleprompter readiness** — Apply all teleprompter formatting rules to the short script as well.
+
+16. **Code block requirement** — The entire short‑form script must be placed inside its own single code block, with a header clearly indicating it is the short‑form adaptation.
 
 **Output:**
 - The short‑form script in a code block labeled "SHORT‑FORM SCRIPT"
@@ -1079,13 +1106,15 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Every empirical claim verified; single-source anonymous numerics removed
 - [ ] Spoken starting points table completed and all five tests passed for every paragraph
 - [ ] No prohibited paragraph openers (So/And/But/Because as launchers; compound connectors)
-- [ ] No short declaratives without four-clause buildup (except crystallising line)
+- [ ] No short declaratives without four-clause buildup (except Clarity Exceptions)
 - [ ] Timeline verified and stated correctly throughout
-- [ ] Five-stage cognitive loop observable in each major revelation
+- [ ] Five‑stage cognitive loop observable in each major revelation
 - [ ] Re-engagement hooks forward-pulling, not summarising, at Act 1 and Act 2 endings
 - [ ] Counterargument section present (Acknowledge–Rebut–Return) with credibility weighting applied
-- [ ] Conclusion follows four-beat structure (Verdict → Universal Extension → Emotional Coda → Exit)
+- [ ] Conclusion follows five-beat structure (Verdict → Universal Extension → Emotional Coda → Rhetorical Anchor → Exit)
 - [ ] No gender-specific bodily references in the narrator voice
+- [ ] Roadmap sentence present after hook
+- [ ] Teleprompter formatting applied (no colons before lists, no bullet points, data as spoken sentences)
 
 **TIER 2 — QUALITY GATES (must pass for publishable output):**
 
@@ -1097,10 +1126,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] No conditionals, no narrator mode, no unattributed quotes in the first line
 
 *Voice architecture:*
-- [ ] Texture switches occur only at paragraph boundaries or transition markers
-- [ ] No mid‑paragraph texture switching
+- [ ] The five stages are observable in sequence for each major revelation
 - [ ] Verdict beats earned by preceding Processing (four-clause minimum)
-- [ ] Release texture selected matches dominant script mode
 
 *Structure:*
 - [ ] Stakes rise at every act break
@@ -1141,7 +1168,7 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Staccato clusters checked and merged where appropriate
 - [ ] Connective scarcity scan passed
 - [ ] Paragraph opener audit completed at proportional scale
-- [ ] No em‑dashes in spoken text unless in natural clause‑building discovery mode
+- [ ] No em‑dashes in spoken text
 - [ ] Absurd self‑insertion in Move 3 drawn from Universal Relatable Category
 - [ ] Source material completeness audit completed and all gaps addressed
 - [ ] Humor technique assignments from Step 4 carried into the script
@@ -1157,12 +1184,13 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 **SHORT‑FORM ADAPTATION CHECKS:**
 - [ ] Hook opens with a pattern‑interrupting fact or reframe within 1–3 seconds
-- [ ] All mandatory beats present (hook, best reframe, verdict, emotional coda, exit)
+- [ ] All mandatory beats present (hook, best reframe, verdict, emotional coda, rhetorical anchor, exit)
 - [ ] Voice matches the long script; five‑stage loop observable
 - [ ] No new factual claims introduced
 - [ ] Total word count is 150–200 (target); if over 220, beats re‑prioritised and cut
 - [ ] Beat selection table included in delivery notes
 - [ ] Paragraphs short; maximum two clauses before a break
+- [ ] Teleprompter formatting applied
 - [ ] If exit uses a deflation callback, the callback's plant is present earlier in the short script
 
 **REVISION CHECKS (apply after any revision):**
@@ -1189,7 +1217,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] No floating passive constructions
 - [ ] Every fact sourced — unsourced claims removed
 - [ ] Timeline verified and correctly stated throughout
+- [ ] First‑person active voice for methodology (no “this explainer”)
 
 ---
 
-## END OF PROMPT (v3.18)
+## END OF PROMPT (v3.19)
