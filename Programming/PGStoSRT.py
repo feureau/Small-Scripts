@@ -8,6 +8,10 @@ import io
 import gc
 import shutil
 import argparse
+import sys
+import base64
+import urllib.request
+import urllib.error
 
 # ==========================================
 # DEPENDENCY CHECK
@@ -104,6 +108,11 @@ except ImportError:
 # Tesseract Configuration
 TESSERACT_CONFIG = r'--psm 6'
 LANG = 'eng'
+OCR_ENGINE = 'easyocr'
+LLM_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
+LLM_MODEL = "llava"
+LLM_TIMEOUT = 120
+LLM_PROMPT = "Read only the subtitle text in this image. Return plain text only, no quotes, no explanation."
 
 # ==========================================
 # CORE PGS PARSER & DECODER
@@ -116,7 +125,7 @@ class BitReader:
 
     def read_byte(self):
         if self.pos >= len(self.data):
-            return 0
+            return None
         b = self.data[self.pos]
         self.pos += 1
         return b
@@ -211,6 +220,8 @@ class PGSDecoder:
             pos += 5
 
     def _parse_ods(self, data):
+        if len(data) < 11:
+            return
         width = (data[7] << 8) | data[8]
         height = (data[9] << 8) | data[10]
         rle_data = data[11:]
@@ -219,30 +230,62 @@ class PGSDecoder:
         self.current_height = height
 
     def _decode_rle(self, data, width, height):
+        if width <= 0 or height <= 0:
+            return []
         pixels = []
         reader = BitReader(data)
-        while len(pixels) < width * height:
+        target_pixels = width * height
+        # Guard against malformed streams causing non-progress loops.
+        stall_count = 0
+        while len(pixels) < target_pixels:
+            before_len = len(pixels)
             b = reader.read_byte()
+            if b is None:
+                break
             if b != 0:
                 pixels.append(b)
             else:
                 flags = reader.read_byte()
-                if flags == 0: pass
+                if flags is None:
+                    break
+                if flags == 0:
+                    # Explicit no-op marker; too many in a row likely means bad/truncated payload.
+                    stall_count += 1
+                    if stall_count > 1024:
+                        break
                 elif flags < 64: pixels.extend([0] * flags)
                 elif flags & 0x40:
                     if flags & 0x80:
                         if flags & 0xC0 == 0xC0:
-                            length = ((flags & 0x3F) << 8) | reader.read_byte()
+                            length_lo = reader.read_byte()
                             color = reader.read_byte()
+                            if length_lo is None or color is None:
+                                break
+                            length = ((flags & 0x3F) << 8) | length_lo
                             pixels.extend([color] * length)
                         else: pass
                     else:
-                        length = ((flags & 0x3F) << 8) | reader.read_byte()
+                        length_lo = reader.read_byte()
+                        if length_lo is None:
+                            break
+                        length = ((flags & 0x3F) << 8) | length_lo
                         pixels.extend([0] * length)
                 else:
                     length = flags & 0x3F
                     color = reader.read_byte()
+                    if color is None:
+                        break
                     pixels.extend([color] * length)
+            if len(pixels) == before_len:
+                stall_count += 1
+                if stall_count > 1024:
+                    break
+            else:
+                stall_count = 0
+        if len(pixels) < target_pixels:
+            pixels.extend([0] * (target_pixels - len(pixels)))
+        elif len(pixels) > target_pixels:
+            pixels = pixels[:target_pixels]
         return pixels
 
     def _parse_pcs(self, data, pts):
@@ -378,6 +421,100 @@ def preprocess_for_easyocr(img):
     
     return bg_black
 
+def ocr_with_openai_compatible(img, api_url, model, timeout):
+    proc_img = preprocess_for_easyocr(img)
+    buf = io.BytesIO()
+    proc_img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": LLM_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+                ]
+            }
+        ],
+        "temperature": 0
+    }
+
+    req = urllib.request.Request(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+def list_openai_compatible_models(api_url, timeout):
+    base = api_url
+    suffix = "/v1/chat/completions"
+    if base.endswith(suffix):
+        base = base[:-len(suffix)]
+    models_url = base.rstrip("/") + "/v1/models"
+
+    req = urllib.request.Request(
+        models_url,
+        headers={"Content-Type": "application/json"},
+        method="GET"
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    model_ids = []
+    for item in data.get("data", []):
+        mid = item.get("id")
+        if mid:
+            model_ids.append(mid)
+    return model_ids
+
+def ocr_image(img):
+    if OCR_ENGINE == "easyocr":
+        reader = get_easyocr_reader()
+        if reader:
+            import numpy as np
+            proc_img = preprocess_for_easyocr(img)
+            img_np = np.array(proc_img)
+            try:
+                results = reader.readtext(img_np, detail=0, paragraph=True,
+                                          text_threshold=0.3, low_text=0.3)
+                return " ".join(results)
+            except Exception:
+                return ""
+            finally:
+                del proc_img, img_np
+        proc_img = preprocess_image(img)
+        try:
+            return pytesseract.image_to_string(proc_img, lang=LANG, config=TESSERACT_CONFIG)
+        finally:
+            del proc_img
+
+    if OCR_ENGINE == "tesseract":
+        proc_img = preprocess_image(img)
+        try:
+            return pytesseract.image_to_string(proc_img, lang=LANG, config=TESSERACT_CONFIG)
+        finally:
+            del proc_img
+
+    if OCR_ENGINE in ("ollama", "lmstudio"):
+        try:
+            return ocr_with_openai_compatible(img, LLM_API_URL, LLM_MODEL, LLM_TIMEOUT)
+        except urllib.error.URLError as e:
+            print(f"   [ERR] {OCR_ENGINE} request failed: {e}")
+            return ""
+        except Exception as e:
+            print(f"   [ERR] {OCR_ENGINE} OCR failed: {e}")
+            return ""
+
+    return ""
+
 def format_time(seconds):
     ms = int((seconds % 1) * 1000)
     s = int(seconds)
@@ -419,29 +556,7 @@ def perform_ocr_from_folder(frames_dir, output_srt):
             # Load the frame from disk
             img = Image.open(frame_path).convert('RGBA')
             
-            text = ""
-            proc_img = None
-            img_np = None
-            reader = get_easyocr_reader()
-            
-            if reader:
-                # --- EasyOCR Path ---
-                import numpy as np
-                proc_img = preprocess_for_easyocr(img)
-                img_np = np.array(proc_img)
-                
-                try:
-                    # Lower text_threshold for thin/small subtitle text that CRAFT might miss
-                    results = reader.readtext(img_np, detail=0, paragraph=True,
-                                              text_threshold=0.3, low_text=0.3)
-                    text = " ".join(results)
-                except Exception as e:
-                    print(f"   [ERR] EasyOCR failed on {entry['frame']}: {e}")
-                    text = ""
-            else:
-                # --- Tesseract Path ---
-                proc_img = preprocess_image(img)
-                text = pytesseract.image_to_string(proc_img, lang=LANG, config=TESSERACT_CONFIG)
+            text = ocr_image(img)
             
             # Common Cleanup
             text = text.strip().replace('|', 'I')
@@ -462,10 +577,6 @@ def perform_ocr_from_folder(frames_dir, output_srt):
             
             # Free memory after each frame
             del img
-            if proc_img is not None:
-                del proc_img
-            if img_np is not None:
-                del img_np
             
             if counter % 20 == 0:
                 gc.collect()
@@ -711,22 +822,7 @@ def perform_ocr_streaming(generator, output_srt):
             
         time_str = f"{format_time(start_time)} --> {format_time(end_time)}"
         
-        text = ""
-        reader = get_easyocr_reader()
-        if reader:
-            import numpy as np
-            proc_img = preprocess_for_easyocr(img)
-            img_np = np.array(proc_img)
-            try:
-                results = reader.readtext(img_np, detail=0, paragraph=True,
-                                          text_threshold=0.3, low_text=0.3)
-                text = " ".join(results)
-            except: text = ""
-            del proc_img, img_np
-        else:
-            proc_img = preprocess_image(img)
-            text = pytesseract.image_to_string(proc_img, lang=LANG, config=TESSERACT_CONFIG)
-            del proc_img
+        text = ocr_image(img)
             
         text = text.strip().replace('|', 'I')
         clean_text = text.replace('\n', ' ')
@@ -761,7 +857,8 @@ def perform_ocr_streaming(generator, output_srt):
                 gc.collect()
                 if GPU_DEVICE == 'cuda':
                     try: torch.cuda.empty_cache()
-                    except: pass
+                    except Exception:
+                        pass
         if pending_caption:
             write_caption(pending_caption, pending_caption.get('end'))
             pbar.update(1)
@@ -864,15 +961,66 @@ def process_file(mkv_path, args):
             if os.path.exists(temp_sup):
                 try:
                     os.remove(temp_sup)
-                except:
+                except Exception:
                     pass
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract PGS/VobSub subtitles from MKV and convert to SRT using EasyOCR/Tesseract.")
+    global OCR_ENGINE, LLM_API_URL, LLM_MODEL, LLM_TIMEOUT
+    parser = argparse.ArgumentParser(description="Extract PGS/VobSub subtitles from MKV and convert to SRT using OCR/LLM.")
     parser.add_argument("patterns", nargs="*", help="File patterns to search for (e.g., *.mkv). Defaults to common video types if omitted.")
     parser.add_argument("--dump", "-d", action="store_true", help="Dump mode: Save all frame bitmaps to a folder (useful for debugging/caching). Streaming is default.")
+    parser.add_argument("--ocr-engine", choices=["easyocr", "tesseract", "ollama", "lmstudio"], default="easyocr", help="OCR backend to use.")
+    parser.add_argument("--llm-url", default=None, help="OpenAI-compatible chat/completions URL for ollama/lmstudio.")
+    parser.add_argument("--llm-model", default=None, help="Vision model name for ollama/lmstudio.")
+    parser.add_argument("--llm-timeout", type=int, default=120, help="HTTP timeout in seconds for ollama/lmstudio requests.")
     
     args = parser.parse_args()
+    OCR_ENGINE = args.ocr_engine
+    LLM_TIMEOUT = max(10, args.llm_timeout)
+    if OCR_ENGINE == "ollama":
+        LLM_API_URL = args.llm_url or "http://127.0.0.1:11434/v1/chat/completions"
+        LLM_MODEL = args.llm_model
+    elif OCR_ENGINE == "lmstudio":
+        LLM_API_URL = args.llm_url or "http://127.0.0.1:1234/v1/chat/completions"
+        LLM_MODEL = args.llm_model
+    else:
+        if args.llm_url:
+            LLM_API_URL = args.llm_url
+        if args.llm_model:
+            LLM_MODEL = args.llm_model
+
+    print(f"[INFO] OCR engine: {OCR_ENGINE}")
+    if OCR_ENGINE in ("ollama", "lmstudio"):
+        if not LLM_MODEL:
+            print("[INFO] --llm-model not provided. Querying available models...")
+            try:
+                model_ids = list_openai_compatible_models(LLM_API_URL, LLM_TIMEOUT)
+                if model_ids:
+                    print("\nAvailable models:")
+                    for i, mid in enumerate(model_ids, start=1):
+                        print(f"  {i}. {mid}")
+
+                    while True:
+                        choice = input("\nSelect model number (or 'q' to quit): ").strip()
+                        if choice.lower() in ("q", "quit", "exit"):
+                            print("Cancelled by user.")
+                            sys.exit(0)
+                        if choice.isdigit():
+                            idx = int(choice)
+                            if 1 <= idx <= len(model_ids):
+                                LLM_MODEL = model_ids[idx - 1]
+                                print(f"[INFO] Selected model: {LLM_MODEL}")
+                                break
+                        print("Invalid selection. Enter a valid number or 'q'.")
+                else:
+                    print("No models returned by endpoint.")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"[ERROR] Could not list models: {e}")
+                print("\nPlease rerun with --llm-model <model_id>.")
+                sys.exit(1)
+        print(f"[INFO] LLM endpoint: {LLM_API_URL}")
+        print(f"[INFO] LLM model: {LLM_MODEL}")
     
     try:
         # If no args are provided, scan common video containers in CWD.

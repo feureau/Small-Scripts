@@ -1358,82 +1358,159 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
             subtitle_mode = getattr(args, 'default_download', False) or args.srt or args.json3
             subtitle_msgs = []
             if task_type == YTDLP_TASK and subtitle_mode:
-                subtitle_candidates_detected = extract_subtitle_paths_from_output(f"{stdout}\n{stderr}")
+                full_output = f"{stdout}\n{stderr}"
+                subtitle_candidates_detected = extract_subtitle_paths_from_output(full_output)
                 subtitle_paths = []
-                subtitle_candidates = subtitle_candidates_detected
-                
+
+                # --- Always log subtitle debug info to the log file ---
+                sub_keywords = ('subtitle', 'writing video sub', 'writing auto-generated sub',
+                                'subtitlesconvert', '.srt', '.vtt', '.json3', '.ass', '.lrc')
+                sub_lines = [l.strip() for l in full_output.splitlines()
+                             if any(kw in l.lower() for kw in sub_keywords)]
+                log_message(args.log_file, "SUB-DEBUG", original_url,
+                    f"yt-dlp subtitle-related output ({len(sub_lines)} lines): " +
+                    (" | ".join(sub_lines[:30]) if sub_lines else "(none)"))
+                log_message(args.log_file, "SUB-DEBUG", original_url,
+                    f"Regex detected {len(subtitle_candidates_detected)} path(s) from output: " +
+                    (", ".join(f"[{s['path']}] auto={s['is_auto']} ext={s['ext']}" for s in subtitle_candidates_detected)
+                     if subtitle_candidates_detected else "(none)"))
+
+                subtitle_candidates = []
+
                 if subtitle_candidates_detected:
                     # Filter for only those that actually exist on disk now
-                    subtitle_candidates = [s for s in subtitle_candidates_detected if os.path.exists(s['path'])]
-                    if args.verbose and not subtitle_candidates:
-                        emit_message("[SUBTITLE] Subtitle paths were detected in yt-dlp output, but files were not found on disk during post-check.")
-                
+                    existing = [s for s in subtitle_candidates_detected if os.path.exists(s['path'])]
+                    missing  = [s for s in subtitle_candidates_detected if not os.path.exists(s['path'])]
+
+                    if missing:
+                        log_message(args.log_file, "SUB-DEBUG", original_url,
+                            f"Detected but NOT found on disk: {', '.join(s['path'] for s in missing)}")
+
+                        # Fallback: --convert-subs srt renames e.g. .vtt -> .srt after conversion,
+                        # so the logged path no longer exists.  Try common subtitle extensions.
+                        for s in missing:
+                            base_no_ext = os.path.splitext(s['path'])[0]
+                            for try_ext in ('.srt', '.vtt', '.json3', '.ass', '.lrc'):
+                                alt_path = base_no_ext + try_ext
+                                if alt_path != s['path'] and os.path.exists(alt_path):
+                                    existing.append({'path': alt_path, 'is_auto': s['is_auto'], 'ext': try_ext})
+                                    log_message(args.log_file, "SUB-DEBUG", original_url,
+                                        f"Extension substitution hit: {os.path.basename(s['path'])} -> {os.path.basename(alt_path)}")
+                                    break
+
+                    subtitle_candidates = existing
+                    if existing:
+                        log_message(args.log_file, "SUB-DEBUG", original_url,
+                            f"Candidates after existence/substitution check: {', '.join(s['path'] for s in existing)}")
+
+                # Filesystem fallback: scan for subtitle files by video ID if still empty
+                if not subtitle_candidates:
+                    video_id_match = re.search(r'(?:v=|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})', identifier)
+                    if video_id_match:
+                        video_id = video_id_match.group(1)
+                        sub_exts = {'.srt', '.vtt', '.json3', '.ass', '.lrc'}
+                        search_dirs = [os.getcwd()]
+                        if getattr(args, 'individual_folder', False):
+                            try:
+                                for entry in os.scandir(os.getcwd()):
+                                    if entry.is_dir() and video_id in entry.name:
+                                        search_dirs.append(entry.path)
+                            except Exception:
+                                pass
+
+                        for sdir in search_dirs:
+                            try:
+                                for entry in os.scandir(sdir):
+                                    if entry.is_file() and video_id in entry.name:
+                                        ext = os.path.splitext(entry.name)[1].lower()
+                                        if ext in sub_exts:
+                                            subtitle_candidates.append({
+                                                'path': entry.path,
+                                                'is_auto': 'auto' in entry.name.lower(),
+                                                'ext': ext,
+                                            })
+                            except Exception:
+                                pass
+
+                        if subtitle_candidates:
+                            log_message(args.log_file, "SUB-DEBUG", original_url,
+                                f"Filesystem fallback found {len(subtitle_candidates)} file(s): " +
+                                ", ".join(s['path'] for s in subtitle_candidates))
+                        else:
+                            log_message(args.log_file, "SUB-DEBUG", original_url,
+                                f"Filesystem fallback: no subtitle files for video ID '{video_id}' in {search_dirs}")
+                    else:
+                        log_message(args.log_file, "SUB-DEBUG", original_url,
+                            "Filesystem fallback skipped: could not extract video ID from URL")
+
                 if subtitle_candidates:
                     # 1. Prioritize: Manual > Auto, Lang match > other, SRT > others
                     target_langs = []
                     if args.language:
                         target_langs.append(args.language.lower())
                     if video_lang:
-                        # Extract base language (e.g. 'en' from 'en-US')
                         lang_base = video_lang.split('-')[0].lower()
                         if lang_base not in target_langs:
                             target_langs.append(lang_base)
                     # Only add English as a low-priority fallback when we have some language context
-                    # (either user-specified or detected). When both are absent, the user explicitly
-                    # requested -s on an unknown-language video, so don't bias toward English —
-                    # the scoring will simply rank by manual>auto and srt>other.
                     if target_langs and 'en' not in target_langs:
                         target_langs.append('en')
-                    
+
                     def score_subtitle(sub):
                         score = 0
                         if not sub['is_auto']: score += 1000
-                        
-                        # Check language in path (e.g. video.en.srt)
+
                         path_lower = sub['path'].lower()
                         for i, lang in enumerate(target_langs):
-                            # Higher priority for earlier languages in the list
                             if f".{lang}." in path_lower or path_lower.endswith(f".{lang}"):
                                  score += (500 - i * 50)
                                  break
-                        
+
                         if sub['ext'] == '.srt': score += 100
                         if sub['ext'] == '.json3' and args.json3: score += 200
-                        
+
                         return score
 
                     subtitle_candidates.sort(key=score_subtitle, reverse=True)
-                    
-                    # Pick the best one
+
                     best_sub = subtitle_candidates[0]
                     other_subs = subtitle_candidates[1:]
-                    
-                    # 2. Process the best one
+                    log_message(args.log_file, "SUB-DEBUG", original_url,
+                        f"Best subtitle chosen: {best_sub['path']} (score={score_subtitle(best_sub)})")
+
+                    # 2. Process the best one -> generate cleaned-up .txt
                     res = process_text_subtitle(best_sub['path'])
                     if isinstance(res, tuple):
                         msg, txt_path = res
                         subtitle_paths.append(txt_path)
                         subtitle_msgs.append(msg)
+                        log_message(args.log_file, "SUB-DEBUG", original_url,
+                            f"Plaintext generated: {txt_path}")
                     else:
                         subtitle_msgs.append(res)
-                    
+                        log_message(args.log_file, "SUB-DEBUG", original_url,
+                            f"Plaintext generation FAILED: {res}")
+
                     # 3. Cleanup: Delete all other subtitle candidates from disk
                     for other in other_subs:
                         try:
                             if os.path.exists(other['path']):
                                 os.remove(other['path'])
-                        except Exception as e:
+                        except Exception:
                             pass
-                
-                if args.verbose and subtitle_msgs:
-                    for msg in subtitle_msgs:
-                        emit_message(f"[SUBTITLE] {msg}")
+                else:
+                    log_message(args.log_file, "SUB-DEBUG", original_url,
+                        "No subtitle candidates found after all detection methods")
+
+                # Always show subtitle processing results
+                for msg in subtitle_msgs:
+                    emit_message(f"[SUBTITLE] {msg}")
 
                 # Make subtitle-only runs explicit when no subtitle files are produced.
                 requested_sub_only = (args.srt or args.json3) and not (
                     getattr(args, 'default_download', False) or args.video or args.audio_only
                 )
-                if requested_sub_only and not subtitle_candidates_detected:
+                if requested_sub_only and not subtitle_candidates:
                     update_task_status(task_id, state="FAILURE", phase="no-subtitles", speed="--", eta="--")
                     return ("FAILURE", f"Finished {tool_name}: {display_title} (no subtitle files available/saved)", [])
 

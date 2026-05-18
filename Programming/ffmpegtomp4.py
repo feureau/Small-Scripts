@@ -84,6 +84,101 @@ SUBPROCESS_ENCODING = "utf-8"
 SUBPROCESS_ERRORS = "replace"  # 'replace' avoids exceptions, preserves logs
 
 # ---------------------------------------------------------------------------
+# Interactive track selection helpers
+# ---------------------------------------------------------------------------
+def _get_stream_label(stream_info, stream_type="audio"):
+    """
+    Build a human-readable label for a stream, showing language, codec,
+    channels/layout (audio), title, and forced/default flags.
+    """
+    tags = stream_info.get('tags', {})
+    disposition = stream_info.get('disposition', {})
+
+    # Case-insensitive tag lookup
+    language = ""
+    title = ""
+    for k, v in tags.items():
+        if k.lower() == 'language':
+            language = v
+        elif k.lower() == 'title':
+            title = v
+
+    lang_name = _get_language_name(language) if language else "Unknown"
+    codec = stream_info.get('codec_name', 'unknown')
+
+    parts = [f"Language: {lang_name}"]
+
+    if stream_type == "audio":
+        try:
+            channels = int(stream_info.get('channels', 0))
+        except (ValueError, TypeError):
+            channels = 0
+        layout = stream_info.get('channel_layout', '')
+        parts.append(f"Codec: {codec}")
+        parts.append(f"Channels: {channels}")
+        if layout:
+            parts.append(f"Layout: {layout}")
+    else:
+        parts.append(f"Codec: {codec}")
+
+    if title:
+        parts.append(f"Title: {title}")
+
+    flags = []
+    if str(disposition.get('default', '0')) == '1':
+        flags.append("Default")
+    if str(disposition.get('forced', '0')) == '1':
+        flags.append("Forced")
+    if flags:
+        parts.append(f"[{', '.join(flags)}]")
+
+    return " | ".join(parts)
+
+
+def _prompt_select_streams(streams, stream_type="audio"):
+    """
+    Display a numbered list of streams and ask the user which to keep.
+    Returns the selected subset (list). If only one stream exists or the
+    user chooses all, the original list is returned unchanged.
+    """
+    if len(streams) <= 1:
+        return streams
+
+    print(f"\n  Multiple {stream_type} tracks detected. Please select which to include:")
+    for i, s in enumerate(streams):
+        idx = s.get('index', '?')
+        label = _get_stream_label(s, stream_type)
+        print(f"    {i + 1}) Stream {idx}: {label}")
+
+    print(f"  Enter track numbers separated by commas (e.g. 1,3), or press Enter to keep all:")
+    try:
+        choice = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("  No input received, keeping all tracks.")
+        return streams
+
+    if not choice or choice.lower() == 'all':
+        return streams
+
+    selected = []
+    for part in choice.split(','):
+        part = part.strip()
+        try:
+            num = int(part)
+            if 1 <= num <= len(streams):
+                selected.append(streams[num - 1])
+            else:
+                print(f"  WARNING: '{num}' is out of range, ignoring.")
+        except ValueError:
+            print(f"  WARNING: '{part}' is not a valid number, ignoring.")
+
+    if not selected:
+        print("  No valid selection made, keeping all tracks.")
+        return streams
+
+    return selected
+
+# ---------------------------------------------------------------------------
 # Utility: central subprocess runner with safe decoding
 # ---------------------------------------------------------------------------
 def run_command(cmd, capture_output=True, check=False):
@@ -231,7 +326,7 @@ def select_audio_encoder(channels):
     else:
         return None, None
 
-def convert_to_subtitle_free_video(input_file, output_extension, force_output_dir=None, target_lang=None):
+def convert_to_subtitle_free_video(input_file, output_extension, force_output_dir=None, target_lang=None, selected_audio=None):
     """Converts a video to subtitle-free version (smart audio conversion)."""
     if not os.path.isfile(input_file):
         print(f"Skipping non-file: {input_file}")
@@ -285,7 +380,10 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
 
     sorted_audio = sorted(audio_streams, key=audio_sort_key)
     
-    if target_lang:
+    # Use pre-selected audio streams if provided (from upfront selection)
+    if selected_audio is not None:
+        sorted_audio = selected_audio
+    elif target_lang:
         filtered_audio = []
         target_lang_lower = target_lang.lower()
         for s in sorted_audio:
@@ -694,7 +792,7 @@ def _package_bitmap_subs(video_path, streams, basename, output_dir_override=None
             except Exception:
                 pass
 
-def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, target_lang=None):
+def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, target_lang=None, selected_subs=None):
     """Main entry for subtitle extraction (hybrid/srt/mkv)."""
     basename = os.path.splitext(os.path.basename(video_path))[0]
     subs = _probe_subtitle_streams(video_path)
@@ -702,7 +800,10 @@ def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, targe
         print("  No subtitles found.")
         return
 
-    if target_lang:
+    # Use pre-selected subtitle streams if provided (from upfront selection)
+    if selected_subs is not None:
+        subs = selected_subs
+    elif target_lang:
         filtered_subs = []
         target_lang_lower = target_lang.lower()
         for s in subs:
@@ -925,6 +1026,50 @@ def main():
             return
         files_to_process = files_to_process_after_test
 
+    # -----------------------------------------------------------------------
+    # Pre-scan phase: probe all files and prompt for track selection upfront
+    # -----------------------------------------------------------------------
+    # Stores pre-selected streams keyed by file path
+    # Value is (selected_audio_list_or_None, selected_subs_list_or_None)
+    track_selections = {}  # file_path -> (selected_audio, selected_subs)
+
+    if not args.lang:
+        need_prompt = False
+        for file_path in files_to_process:
+            audio_streams = _probe_audio_streams(file_path)
+            sub_streams = _probe_subtitle_streams(file_path)
+            if len(audio_streams) > 1 or len(sub_streams) > 1:
+                need_prompt = True
+                break
+
+        if need_prompt:
+            print("\n" + "=" * 70)
+            print("TRACK SELECTION  (answer all prompts, then batch processing begins)")
+            print("=" * 70)
+
+            for file_path in files_to_process:
+                basename = os.path.basename(file_path)
+                audio_streams = _probe_audio_streams(file_path)
+                sub_streams = _probe_subtitle_streams(file_path)
+
+                sel_audio = None
+                sel_subs = None
+
+                if len(audio_streams) > 1 or len(sub_streams) > 1:
+                    print(f"\n--- {basename} ---")
+
+                if len(audio_streams) > 1:
+                    sel_audio = _prompt_select_streams(audio_streams, stream_type="audio")
+
+                if len(sub_streams) > 1:
+                    sel_subs = _prompt_select_streams(sub_streams, stream_type="subtitle")
+
+                track_selections[file_path] = (sel_audio, sel_subs)
+
+            print("\n" + "=" * 70)
+            print("All selections recorded. Starting batch processing...")
+            print("=" * 70)
+
     for file_path in files_to_process:
         print(f"\n--- Processing: {file_path} ---")
         
@@ -933,6 +1078,9 @@ def main():
              print(f"  Skipping non-video file: {file_path}")
              continue
         
+        # Retrieve pre-selected tracks (may be None if no selection was needed)
+        sel_audio, sel_subs = track_selections.get(file_path, (None, None))
+
         # 1. Move Original File to Backup FIRST
         # Returns the new path of the file in the backup folder
         backup_file_path = move_input_to_backup(file_path)
@@ -949,7 +1097,8 @@ def main():
             backup_file_path, 
             args.extension, 
             force_output_dir=original_dir,
-            target_lang=args.lang
+            target_lang=args.lang,
+            selected_audio=sel_audio
         )
         
         if converted_file:
@@ -958,7 +1107,7 @@ def main():
             
         # 3. Extract Subtitles from the Backup file
         # Force explicit output to original dir so 'SRT' folder attempts to be in root
-        extract_subtitles(backup_file_path, mode=args.format, output_dir_override=original_dir, target_lang=args.lang)
+        extract_subtitles(backup_file_path, mode=args.format, output_dir_override=original_dir, target_lang=args.lang, selected_subs=sel_subs)
 
     print("\nAll processing complete.")
 

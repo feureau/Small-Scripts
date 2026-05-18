@@ -1595,7 +1595,7 @@ def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, so
     
     return BITRATES.get(key, {}).get(mapped_key, BITRATES["SDR_NORMAL_FPS"]["1080p"])
 
-def get_job_hash(job_options):
+def get_job_hash(job_options, extra_data=""):
     keys_to_hash = [
         job_options.get('manual_bitrate', ''),
         str(job_options.get('override_bitrate', False)),
@@ -1675,6 +1675,8 @@ def get_job_hash(job_options):
         job_options.get('title_shadow_blur', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
+    if extra_data:
+        hash_str += f"|{extra_data}"
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
 
 class ToolTip:
@@ -1771,6 +1773,7 @@ class WorkflowPresetManager:
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
             "close_gui_on_processing": True,
+            "hibernate_when_done": False,
             "burn_subtitles": DEFAULT_BURN_SUBTITLES,
             "use_sharpening": DEFAULT_USE_SHARPENING,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
@@ -2067,6 +2070,7 @@ class VideoProcessorApp:
         self.fruc_fps_var.trace_add('write', lambda *args: self._update_selected_jobs('fruc_fps'))
         self.generate_log_var = tk.BooleanVar(value=False)
         self.close_gui_var = tk.BooleanVar(value=True)
+        self.hibernate_when_done_var = tk.BooleanVar(value=False)
         self.burn_subtitles_var = tk.BooleanVar(value=DEFAULT_BURN_SUBTITLES)
         self.override_bitrate_var = tk.BooleanVar(value=False)
         self.manual_bitrate_var = tk.StringVar(value="0")
@@ -3284,6 +3288,8 @@ class VideoProcessorApp:
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
         self.close_gui_checkbox = ttk.Checkbutton(parent, text="Close GUI on Processing", variable=self.close_gui_var, command=lambda: self._update_selected_jobs("close_gui_on_processing"))
         self.close_gui_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+        self.hibernate_checkbox = ttk.Checkbutton(parent, text="Hibernate When Done", variable=self.hibernate_when_done_var, command=lambda: self._update_selected_jobs("hibernate_when_done"))
+        self.hibernate_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
     def populate_fonts(self):
         try:
@@ -3824,6 +3830,7 @@ class VideoProcessorApp:
             "fruc": self.fruc_var.get(),
             "fruc_fps": self.fruc_fps_var.get(), "generate_log": self.generate_log_var.get(),
             "close_gui_on_processing": self.close_gui_var.get(),
+            "hibernate_when_done": self.hibernate_when_done_var.get(),
             "render_by_chapters": self.render_by_chapters_var.get(),
             "split_subtitles_by_chapter": self.split_subtitles_by_chapter_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
@@ -4445,7 +4452,7 @@ class VideoProcessorApp:
         self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT)); self.fruc_var.set(options.get("fruc", DEFAULT_FRUC)); self.fruc_fps_var.set(options.get("fruc_fps", DEFAULT_FRUC_FPS))
         self._on_merged_aspect_change(self.merged_aspect_var.get())
-        self.generate_log_var.set(options.get("generate_log", False)); self.close_gui_var.set(options.get("close_gui_on_processing", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
+        self.generate_log_var.set(options.get("generate_log", False)); self.close_gui_var.set(options.get("close_gui_on_processing", False)); self.hibernate_when_done_var.set(options.get("hibernate_when_done", False)); self.burn_subtitles_var.set(options.get("burn_subtitles", DEFAULT_BURN_SUBTITLES)); self.override_bitrate_var.set(options.get("override_bitrate", False))
         self.manual_bitrate_var.set(options.get("manual_bitrate", "0")); 
         self.use_dynaudnorm_var.set(options.get("use_dynaudnorm", DEFAULT_USE_DYNAUDNORM))
         self.dyn_frame_len_var.set(options.get("dyn_frame_len", DEFAULT_DYNAUDNORM_FRAME_LEN))
@@ -4734,15 +4741,12 @@ class VideoProcessorApp:
         suffix = override if override else job.get('preset_name', "")
         safe_suffix = re.sub(r'[\\/*?:"<>|]', "", suffix).strip().replace(" ", "_")
 
-        job_hash = get_job_hash(options)
-        
-        # Construct: Base_Tag_Suffix_Hash
+        # Construct: Base_Tag_Suffix
         name_parts = [original_basename]
         if safe_tag: name_parts.append(safe_tag)
         if safe_suffix: name_parts.append(safe_suffix)
-        name_parts.append(job_hash)
         
-        safe_base_name = "_".join(filter(None, name_parts))
+        base_name_without_hash = "_".join(filter(None, name_parts))
         
         # --- Chapter Processing Loop ---
         chapters = []
@@ -4775,14 +4779,17 @@ class VideoProcessorApp:
 
         for i, chapter in enumerate(chapters):
             ch_options = copy.deepcopy(options)
-            ch_output_file = os.path.join(output_dir, f"{safe_base_name}.mp4")
-            ch_srt_file = os.path.join(output_dir, f"{safe_base_name}.srt")
             
             if options.get("render_by_chapters"):
                 ch_title = chapter.get('title') or f"Chapter_{i+1}"
                 # Sanitize chapter title for filename
                 safe_ch_title = re.sub(r'[\\/*?:"<>|]', "", ch_title).strip().replace(" ", "_")
-                base_chunk = f"{safe_base_name}_{i+1:02d}_{safe_ch_title}"
+                
+                # Compute hash unique to file and chapter
+                extra_hash_data = f"{job['video_path']}_{i}_{safe_ch_title}"
+                ch_job_hash = get_job_hash(ch_options, extra_hash_data)
+                
+                base_chunk = f"{base_name_without_hash}_{i+1:02d}_{safe_ch_title}_{ch_job_hash}"
                 ch_output_file = os.path.join(output_dir, f"{base_chunk}.mp4")
                 ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
                 print(f"\n[INFO] Processing Chapter {i+1}/{total_chapters}: {ch_title}")
@@ -4798,6 +4805,14 @@ class VideoProcessorApp:
                         print(f"       -> Exported {os.path.basename(ch_srt_file)}")
                         # Use chapter-local subtitle for burn-in on this segment.
                         ch_options["segment_subtitle_path"] = ch_srt_file
+            else:
+                # Compute hash unique to file
+                extra_hash_data = f"{job['video_path']}"
+                ch_job_hash = get_job_hash(ch_options, extra_hash_data)
+                
+                base_chunk = f"{base_name_without_hash}_{ch_job_hash}"
+                ch_output_file = os.path.join(output_dir, f"{base_chunk}.mp4")
+                ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
             
             base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
             self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir, base_dir=base_dir)
@@ -5876,6 +5891,12 @@ class VideoProcessorApp:
         
         final_message = f"Processing Complete: {successful} successful, {failed} failed"
         print("\n" + "="*80 + "\n" + final_message)
+        
+        # Check if hibernate was requested
+        hibernate = any(j.get('options', {}).get('hibernate_when_done', False) for j in jobs)
+        if hibernate:
+            print("\n[INFO] Hibernate requested. Hibernating system...")
+            subprocess.run(["shutdown", "/h"], shell=True)
         sys.exit(0)
 
     def _process_files_thread(self):
@@ -5906,6 +5927,11 @@ class VideoProcessorApp:
         self.root.after(0, lambda: self.update_status(final_message))
         self.root.after(0, lambda: self.progress_bar.config(value=0))
         self.root.after(0, lambda: self.start_button.config(state="normal"))
+        
+        # Check if hibernate was requested
+        if self.hibernate_when_done_var.get():
+            print("\n[INFO] Hibernate requested. Hibernating system...")
+            subprocess.run(["shutdown", "/h"], shell=True)
 
     def run_ffmpeg_command(self, cmd, duration=None, options=None, cwd=None):
         # Force dynamic progress + verbose diagnostics in console for easier debugging.

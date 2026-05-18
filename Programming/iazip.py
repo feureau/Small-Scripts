@@ -274,6 +274,7 @@ def process_directory(
     # Walk recursively through the base directory
     for root, dirs, files in os.walk(base_dir):
         file_groups = {}
+        leftovers = {}
 
         for f in files:
             lower_name = f.lower()
@@ -297,20 +298,34 @@ def process_directory(
                 stem = os.path.splitext(f)[0]
                 # Only consider numbered plaintext files as part of a series.
                 if not re.search(r"\d", stem):
+                    leftovers.setdefault(("text", ext), []).append(f)
                     continue
                 prefix = _derive_prefix(f, os.path.basename(root))
                 file_groups.setdefault(("text", prefix, ext), []).append(f)
 
+        final_groups = {}
         # Process the detected groups
         for (group_kind, prefix, ext), group_files in file_groups.items():
             if not group_files:
                 continue
 
-            # Skip solitary files; zipping a single file provides no derivation
-            # benefit for IA and just adds overhead.
+            # Move solitary files to leftovers instead of skipping
             if len(group_files) < 2:
+                leftovers.setdefault((group_kind, ext), []).extend(group_files)
                 continue
+                
+            final_groups[(group_kind, prefix, ext)] = group_files
 
+        # Add leftovers to final groups
+        folder_prefix = os.path.basename(root)
+        misc_prefix = f"{folder_prefix}_misc" if folder_prefix else "misc"
+        
+        for (group_kind, ext), group_files in leftovers.items():
+            if group_files:
+                final_groups[(group_kind, misc_prefix, ext)] = group_files
+
+        # Process the final groups
+        for (group_kind, prefix, ext), group_files in final_groups.items():
             group_files.sort()
 
             # Determine zip filename based on IA naming conventions
