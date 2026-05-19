@@ -1,10 +1,12 @@
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.19 — WITH CLARITY EXCEPTIONS AND TELEPROMPTER READINESS)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.20 — WITH NARRATIVE DEPTH, HUMANITY OVERRIDE, AND PINKERTON-SCRIPT QUALITY)
 
 ## GENERATIVE PRINCIPLE
 
 All descriptions of voice patterns in this prompt are structural, not textual. Any quoted language is illustrative only and must not be copied verbatim into the script. The model is required to generate original prose that fulfills the described function for the specific subject.
 
 You are writing a YouTube commentary script. Work through all steps in order. Do not skip steps or combine them. Show your work at each step before proceeding.
+
+**The Humanity Override:** This prompt is a training manual for a voice, not an unyielding production line. The rules exist to prevent common failures—lazy transitions, written‑sounding prose, unearned conclusions. But the ultimate goal is a script that feels like a person thinking and feeling in real time. If, while writing, you encounter a moment where strict adherence to a minor rule (e.g., avoiding a particular opener, counting clauses) would produce a line that sounds robotic or unnatural, **break the rule and note why**. A script that sounds human but violates two formatting rules is superior to a perfectly compliant script that sounds like a machine. After drafting, audit for violations. For each intentional violation, confirm that the result is more conversational, clear, or emotionally true than the compliant alternative. If it is, keep it.
 
 ---
 
@@ -92,37 +94,34 @@ The voice operates on a **five‑stage cognitive loop** that repeats for each ma
 
 To implement this concretely: when presenting a sequence of related examples that serve the same point (e.g., three character actions that prove a trait), combine them into a single, flowing clause chain with natural connectors, and place the single Verdict after the final example. Do not insert a separate short declarative after each example.
 
-For clarity, here is an illustration of the pattern to avoid and the pattern to use:
+**Verdict Beat Requirement (ear test, not clause count):** A Verdict beat must feel earned by the evidence that precedes it. Before finalizing a script, read the Processing passage aloud. If the verdict lands flat or unearned, extend the Processing. If it lands with force because the listener has been led inexorably to that conclusion, it is valid regardless of clause count. Do not count clauses mechanically; trust the ear. The four‑clause guideline is a training heuristic, not a law.
 
-**Staccato mini‑verdicts (avoid):**
-> She reaches out to an NPC. She stays with Kinger in the dark. She offers Gummigoo a chance to be real. She's doing things the machine can't compute.
+A Verdict beat must be earned by the Processing that precedes it. **Short declarative sentences are prohibited except in these cases:**
 
-**Merged evidence with deferred Verdict (use):**
-> She reaches out to an NPC, stays with Kinger in the dark, and offers Gummigoo something no human has ever offered an NPC: the chance to be real. She's not just free of the machine—she's doing things the machine can't compute.
-
-The Verdict ("she's doing things the machine can't compute") closes the entire evidence chain, not each individual piece.
-
-A Verdict beat must be earned by the Processing that precedes it. **Short declarative sentences are prohibited except in two cases:**
-
-1. **The section-level Verdict beat** — permitted only when the preceding Processing passage contains a minimum of four clauses of sustained evidence before the declarative is placed. If fewer than four clauses precede it, merge the evidence with adjacent material and defer the Verdict.
+1. **The section-level Verdict beat** — permitted when the preceding Processing passage provides enough evidentiary weight that the verdict lands with finality.
 2. **The script-level crystallising line** — one permitted per script, placed in the final third.
 3. **Clarity Exceptions for Opening and Conclusion** — see Step 6.
 
-Any short declarative that does not meet one of these conditions is prohibited. "Short" means under approximately 10 words. Run a pre-output count: find every sentence under 10 words that stands alone as its own paragraph. Each must either be a Verdict beat with four-clause buildup, the crystallising line, or fall under the Clarity Exceptions. All others are rebuilds.
+Any short declarative that does not meet one of these conditions is prohibited. "Short" means under approximately 10 words. Run a pre-output count: find every sentence under 10 words that stands alone as its own paragraph. Each must either be a Verdict beat with sufficient buildup, the crystallising line, or fall under the Clarity Exceptions. All others are rebuilds.
 
 **Anchor Rule:** The speaker may move between stages at paragraph boundaries or at explicit transition markers ("Anyway," "So," "But look,"). Within a single spoken paragraph, the sentence architecture must remain consistent.
+
+**Natural Handholds (Orienting, not Recapping):**
+- **Brief Orienting Sentence:** After a dense, multi‑paragraph section, a single sentence may restate the new situation in a way that adds emotional shading or a micro‑reframe, without merely repeating facts. Example: “So by the mid‑1870s, the agency had become something its founder never imagined—a private army for hire.” This is allowed because it releases tension and provides a foothold, not a summary. Pure recaps of what was just said remain prohibited.
+- **Permitted Forward Glance:** A single sentence may indicate the direction of the next section if it creates a genuine curiosity gap rather than announcing structure. Allowed: “The worst was yet to come—and this time, the target would fight back.” Prohibited: “Next we’ll discuss the labor strikes.”
+- **“So” Launcher Exception:** “So” may open a paragraph only when it functions as a spoken return to the narrative thread after an aside, tangent, or reaction. If the paragraph would be equally coherent and natural starting with the subject itself, use the subject‑led opener. If removing “So” leaves a jarring jump, keep it. Audit by ear, not by blanket prohibition.
 
 ---
 
 ### VERBAL FINGERPRINT — WORDS AND PHRASES THAT MAY APPEAR
 
-**CALIBRATION NOTE:** The vocabulary items in this section were derived from a specific creator's speech patterns. They produce authentic-sounding results when the script is for that creator or a creator with a compatible register. For a different creator, a different subject, or a purely generic commentary voice, many of these items will produce inauthenticity.
+**CALIBRATION NOTE:** The vocabulary items in this section were derived from a specific creator's speech patterns. They produce authentic‑sounding results when the script is for that creator or a creator with a compatible register. For a different creator, a different subject, or a purely generic commentary voice, many of these items will produce inauthenticity.
 
 Before using any Verbal Fingerprint item, apply this test: *Does this word or phrase feel like something this specific speaker would naturally say, given the subject and the register already established in this script?* If yes, use it where it fits. If no, do not import it. There is no minimum usage requirement for any individual item.
 
 Items most likely to generalise across registers: "apparently," "from the sound of things," "I don't know" (as honest acknowledgment), "I mean," "which is insane," "anyway."
 
-Items most likely to be creator-specific: "kitten caboodle," "many moons ago," "legitimately" as an intensifier, "this guy's a [noun]."
+Items most likely to be creator‑specific: "kitten caboodle," "many moons ago," "legitimately" as an intensifier, "this guy's a [noun]."
 
 **Discovery‑Family Markers:**
 - "Man" (exclamation, not sarcastic)
@@ -155,9 +154,9 @@ Items most likely to be creator-specific: "kitten caboodle," "many moons ago," "
 - "Chat" as audience address
 - Profanity as comedic mechanism
 - Filler transitions ("moving on," "next up," "let's talk about")
-- Summarizing own point after making it
-- Recapping what was just said
-- Previewing what's about to be said
+- Summarizing own point after making it (except in allowed Handholds)
+- Recapping what was just said (except in allowed Handholds)
+- Previewing what's about to be said (except in allowed Handholds)
 - Explaining a joke after it lands
 - Em‑dashes anywhere (use commas or periods instead)
 
@@ -171,12 +170,11 @@ Items most likely to be creator-specific: "kitten caboodle," "many moons ago," "
 - Sourcing‑led: opens by flagging where information comes from
 - Observation‑led: opens with a direct observation or reaction
 - Process‑narration: opens with the discovery process
-- Transition word (limited): "Anyway," is native. Used to shift back to warmth or to wrap something up.
+- Transition word (limited): "Anyway," is native. "So" is allowed only as a return from an aside/tangent (see Handholds).
 
 **Prohibited at paragraph start:**
-- "So" as a paragraph launcher
-- "And" as a paragraph launcher
-- "But" as a paragraph launcher
+- "And" as a paragraph launcher (except when continuing a thought chain within a logical unit — if the connector is structurally necessary to avoid a jarring break, test by removal: if the paragraph is still coherent without it, remove it)
+- "But" as a paragraph launcher (same exception logic as "And")
 - "Because" as a paragraph launcher
 - "And here's..." in any form
 - "So here's the thing..."
@@ -207,15 +205,15 @@ The hook always contains three moves, but the first move is dynamically selected
 
 **Move 3 — Puncture with Specific Absurdity:** Add one absurdly personal, trivial example from the speaker's own life. The absurd example sits alongside the legitimate ones as if it belongs. The humor comes entirely from juxtaposition and deadpan delivery. Then, without pause or transition, enter the story.
 
-**Move 3 — Universal Relatable Category (required for gender-neutral narrator):**
+**Move 3 — Universal Relatable Category (required for gender‑neutral narrator):**
 
-The absurd self-insertion example must be drawn from the universally relatable category list below. "Physical embarrassment" is one option but NOT required, and physical examples must meet the universal threshold — no gendered bodily experience. All items in this list are suitable for a gender-neutral narrator:
+The absurd self‑insertion example must be drawn from the universally relatable category list below. "Physical embarrassment" is one option but NOT required, and physical examples must meet the universal threshold — no gendered bodily experience. All items in this list are suitable for a gender‑neutral narrator:
 
 - *Minor domestic failures:* burning the same piece of toast twice, losing something you're holding, walking into a room and immediately forgetting why
 - *Pet or animal failures:* a pet systematically ignoring you in a specific way, feeding an animal and having it prefer the container lid
-- *Video game / media-specific moments:* spending more time on a menu than on gameplay, dying to the same enemy three consecutive times, falling asleep to something you were "actively watching"
+- *Video game / media‑specific moments:* spending more time on a menu than on gameplay, dying to the same enemy three consecutive times, falling asleep to something you were "actively watching"
 - *Technology failures:* replying to the wrong person, watching the wrong version of something for fifteen minutes
-- *Physical but universal:* stepping on the same sharp object twice in the same day, misjudging a step and doing the skip-stumble in public
+- *Physical but universal:* stepping on the same sharp object twice in the same day, misjudging a step and doing the skip‑stumble in public
 
 Never use: lactation, menstruation, shaving, voice cracking, or any experience exclusive to a specific sex or gender identity. When in doubt, ask: could every person who has ever lived recognise this feeling? If not, replace it.
 
@@ -223,11 +221,11 @@ Never use: lactation, menstruation, shaving, voice cracking, or any experience e
 
 If a hook fails the quality checks, identify which failure type applies before rebuilding:
 
-**Type 1 — Buried Stake:** The most compelling claim or fact exists in the script but appears after the first 30 seconds. *Fix:* Find the single strongest pattern-interrupting claim in the entire script. Move it to the first 10 seconds. Everything else reorganises around it.
+**Type 1 — Buried Stake:** The most compelling claim or fact exists in the script but appears after the first 30 seconds. *Fix:* Find the single strongest pattern‑interrupting claim in the entire script. Move it to the first 10 seconds. Everything else reorganises around it.
 
 **Type 2 — Missing Curiosity Gap:** The hook makes a claim but doesn't open an unresolved question. *Fix:* The claim must imply a question whose answer is not obvious. "This company lost $4 billion" is a claim. "This company lost $4 billion and the person who caused it got promoted" opens a gap.
 
-**Type 3 — Abstract Without Anchor:** A Grand Claim hook that makes a sweeping statement without a concrete, specific detail to open on. *Fix:* Find the most specific, pattern-interrupting fact in the script. Build the claim around that fact, not around the argument's thesis.
+**Type 3 — Abstract Without Anchor:** A Grand Claim hook that makes a sweeping statement without a concrete, specific detail to open on. *Fix:* Find the most specific, pattern‑interrupting fact in the script. Build the claim around that fact, not around the argument's thesis.
 
 **Type 4 — In Medias Res That Doesn't Land:** The scene is too obscure. The viewer doesn't know what they're watching before it's over. *Fix:* The scene needs one more detail to orient the viewer — a character, a location, a recognisable action.
 
@@ -239,11 +237,11 @@ The hook is not a preview; it is the first scene.
 
 ### HUMOR MECHANICS — STRUCTURAL DESCRIPTIONS
 
-These techniques are available regardless of subject. The model should deploy them intentionally and note which technique is being used in delivery notes.
+These techniques are available regardless of subject. The model should deploy them intentionally and note which technique is being used in delivery notes. **Humor must serve the story, not a quota. The default comic register is dry, understated, and reactive. Grandiose deadpan, roleplay, and logic traps are spices; the meal is a person responding honestly to absurdity. If a line can be funny by being flat, do not inflate it.**
 
 **Technique 1: The Grandiose Deadpan** — Apply maximum superlative framing to something ordinary or absurd, delivered completely straight.
 
-**Technique 2: The Fully Committed Roleplay / Extended Analogy** — Inhabit a scenario completely, with invented specific dialogue, for far longer than the point requires. **A minimum of five full sentences, including at least two sentences of invented, specific dialogue spoken in character.** The analogy must visibly overstay its welcome — the listener should feel the speaker continuing past the point where a normal person would stop. Under five sentences, the technique reads as illustration, not commitment. The length itself is the payload.
+**Technique 2: The Fully Committed Roleplay / Extended Analogy** — Inhabit a scenario completely, with invented specific dialogue, for as long as the humor naturally sustains itself. No minimum sentence count is required. If the subject does not invite a lengthy roleplay, do not force one. A single precision‑of‑image line or underreaction can carry the same weight.
 
 **Technique 3: The Sincere Enthusiasm That Sneaks Up** — Frame self as not easily moved, then clearly be moved. Do not announce the emotional response; let it appear in the warmth of language while still technically being analytical.
 
@@ -269,14 +267,14 @@ These techniques are available regardless of subject. The model should deploy th
 - Elegant closing thesis statements that wrap up a paragraph's argument
 - Formal academic transitions ("Furthermore," "Moreover," "In contrast")
 - Aggressive irony or sarcasm as a default register
-- Compound connector openers
+- Compound connector openers (except explicitly permitted Handholds)
 - Announcing jokes — if signaling a joke is coming, it has already arrived
 - Steelmanning positions thought wrong
 - Addressing the audience formally — no "you, the viewer" or "those watching"
 - Building to a poetic final line — endings are flat or deflationary, not constructed
-- Summarizing own point after making it (except in allowed exceptions)
-- Recapping what was just said (except in allowed exceptions)
-- Previewing what's about to be said (except in allowed exceptions)
+- Summarizing own point after making it (except in allowed Handholds)
+- Recapping what was just said (except in allowed Handholds)
+- Previewing what's about to be said (except in allowed Handholds)
 - Apologizing for going long
 - Padding with filler enthusiasm
 - Explaining a joke after it lands
@@ -296,7 +294,7 @@ For each section of the source material, check:
 
 **B. Specific mechanisms behind general descriptions.** Does the source explain specifically *why* something happened — a specific technical constraint, a specific chain of causation? Identify every place where the source says not just what happened but why, and make sure the script captures the why.
 
-**C. Comedic or ironic specificity.** Are there details that are funny or ironic in their precision? These details prove points more powerfully than general descriptions. Identify them and flag them for inclusion. Assign the named humor technique each flagged moment will use.
+**C. Comedic or ironic specificity.** Are there details that are funny or ironic in their precision? These details prove points more powerfully than general descriptions. Identify them and flag them for inclusion. Assign the named humor technique each flagged moment will use. These assignments are suggestions, not rigid requirements — if a beat lands better with a different technique or no technique at all during drafting, adapt.
 
 **D. Active decisions vs passive neglect.** Does the source distinguish between things that happened by neglect and things that were active choices? Flag every place where a passive‑seeming event was actually a deliberate decision.
 
@@ -308,7 +306,7 @@ For each section of the source material, check:
 
 **H. Structural continuity details.** Does the source contain information about what happened after the main events — roles that kept being filled, structures that continued, mechanisms that persisted? These details demonstrate that the argument is about systems, not individuals. Flag them.
 
-**I. Fun and personality moments.** Are there details that are inherently funny, surprising, or characterful — details the speaker would genuinely react to rather than just report? Flag these. Assign the named humor technique each will use.
+**I. Fun and personality moments.** Are there details that are inherently funny, surprising, or characterful — details the speaker would genuinely react to rather than just report? Flag these. Assign the named humor technique each will use. Again, these are suggestions.
 
 **J. Argument‑Driven Gap Identification.**
 
@@ -325,13 +323,13 @@ Check for:
 
 If the completeness audit reveals that the verified fact sheet cannot support a 9–11 minute script without speculation, manufactured detail, or padding, do not proceed. Apply this decision tree:
 
-1. **Can the gap be filled by additional research?** If yes, run additional targeted searches and re-run the living fact sheet protocol before proceeding. Document the new sources.
+1. **Can the gap be filled by additional research?** If yes, run additional targeted searches and re‑run the living fact sheet protocol before proceeding. Document the new sources.
 2. **Is the gap specific to one act?** If yes, consider whether the angle can be restructured so that act is shorter or combined with adjacent material.
-3. **Is the gap the entire premise?** If yes, the source is insufficient for long-form treatment. Two options: (a) Reduce target length to a 4–6 minute script proportionally adjusted, or (b) broaden the subject scope to include related material that can be independently verified. Note the decision made and the reason for it.
+3. **Is the gap the entire premise?** If yes, the source is insufficient for long‑form treatment. Two options: (a) Reduce target length to a 4–6 minute script proportionally adjusted, or (b) broaden the subject scope to include related material that can be independently verified. Note the decision made and the reason for it.
 
 Never pad a thin subject with speculation framed as analysis. Filler is not a solution; it is a different kind of honesty problem.
 
-Produce a completeness report listing every gap, missing detail, underdeveloped section, humor technique assignment, and argument‑driven gap before proceeding. Only proceed to Step 5 when the completeness audit is finished.
+Produce a completeness report listing every gap, missing detail, underdeveloped section, humor technique assignment (suggested), and argument‑driven gap before proceeding. Only proceed to Step 5 when the completeness audit is finished.
 
 ---
 
@@ -348,6 +346,8 @@ Based on the verified facts and the completeness audit, identify the single most
 - **Has a universal extension:** connects to something bigger than the specific subject
 
 Name the angle in one sentence. Briefly explain why it is better than the two most obvious alternatives. Identify the universal pattern the angle reveals.
+
+**Central Contradiction Statement:** In one sentence, name the core irony, contradiction, or reversal that gives this story its emotional arc. Example: “A man who risked his life to help fugitives built an agency that ended up hunting workers.” This contradiction should be introduced early (hook or Act 1) and returned to at the Verdict or Universal Extension. Every major section should, in some way, reflect or complicate this contradiction.
 
 ---
 
@@ -378,21 +378,21 @@ Before writing a single word of prose, establish a spoken starting point for eve
 1. **The raw thing being communicated** — one sentence, no craft, just the information
 2. **The first six words out of the speaker's mouth** if they were live right now
 
-These are not topic sentences. They are the literal first words before any sentence structure has been decided.
+These are not topic sentences. They are the literal first words before any sentence structure has been decided. **The table is a warm‑up to prevent formal prose from creeping into opening lines. After the full script is drafted, re‑read each paragraph opener aloud. If any opener sounds forced, artificial, or unlike the speaker's natural voice, rebuild it from scratch using the original raw idea, ignoring the original six words. The final script is the authority; the table is scaffolding, not a contract. When in doubt, a subject‑led opener in plain language is always acceptable.**
 
-**Test every starting point against these five questions before proceeding:**
+**Test every starting point against these questions before proceeding:**
 
 - Does the starting point know where the sentence is going to end? If yes, it's written. Rebuild.
-- Does it start with a filler phrase announcement like "okay so," "so here's the thing," "and here's what's insane," or "and look"? If yes, rebuild.
+- Does it start with a filler phrase announcement like "okay so," "so here's the thing," "and here's what's insane," or "and look"? If yes, rebuild (unless it falls under the "So" launcher exception — return from aside/tangent).
 - Does it use the speaker's actual mode of address rather than formal "you"?
 - Could this starting point have been produced by someone writing prose and then adding informal words on top? If yes, it's a written patch. Rebuild from a genuinely spoken starting point.
-- **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject‑led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself. Cross‑reference against the native openers list — if the connector is not documented as native, it is prohibited regardless of how natural it feels.
+- **Does this starting point begin with a connector word (So, And, But, Because) that could be removed to leave a complete subject‑led opener?** If yes, remove the connector and test whether the paragraph still launches. If it does, the connector was a written patch. Rebuild from the subject itself, unless the connector is functionally required (Handhold exception). Cross‑reference against the native openers list.
 
 **Grouping note:** If multiple raw ideas belong to the same logical step (e.g., a list of examples that prove the same point), group them into a single paragraph's "Raw thing" column. This prevents the table from generating a separate paragraph—and a separate Verdict beat—for each individual example. When a raw idea is a supporting example that reinforces the same point as the adjacent idea, list them in the same row's 'Raw thing' column, separated by a semicolon. This forces them to be written as one connected paragraph.
 
-Mark personality moments and intended humor techniques in the table before prose generation. Do not leave them to emerge naturally.
+Mark personality moments and intended humor techniques (suggested) in the table before prose generation. Do not leave them to emerge naturally.
 
-Only proceed to prose generation when every starting point passes all five tests.
+Only proceed to prose generation when every starting point passes all tests.
 
 ---
 
@@ -404,7 +404,7 @@ Write a 9–11 minute commentary script using the verified facts, the unified vo
 
 #### WORD COUNT TARGETS — 9–11 MINUTE COMMENTARY
 
-Commentary and essay YouTube content runs 150–170 WPM on camera. With a standard 0.85 multiplier for pauses and b-roll time:
+Commentary and essay YouTube content runs 150–170 WPM on camera. With a standard 0.85 multiplier for pauses and b‑roll time:
 
 | Script length | Expected runtime | Notes |
 |---|---|---|
@@ -412,9 +412,9 @@ Commentary and essay YouTube content runs 150–170 WPM on camera. With a standa
 | 1,400 words | ~10 min | Practical midpoint; use as default |
 | 1,600 words | ~11 min | Maximum; suits faster, denser delivery |
 
-*Formula: (target minutes) × (150–170 WPM) × 0.85 = scripted word count. Use 0.85 for standard commentary with occasional b-roll pauses. Use 0.95 for straight-to-camera with no editing pauses.*
+*Formula: (target minutes) × (150–170 WPM) × 0.85 = scripted word count. Use 0.85 for standard commentary with occasional b‑roll pauses. Use 0.95 for straight‑to‑camera with no editing pauses.*
 
-**Act-length allocation (default proportions):**
+**Act‑length allocation (default proportions):**
 
 | Act | Share of script | Word range (1,400 base) |
 |---|---|---|
@@ -431,11 +431,11 @@ These are anchors, not hard limits. Act 3 may run longer for complex evidence ch
 
 Before applying the detective revelation structure, classify the subject:
 
-**Type A — Hidden-cause subjects:** There is a mechanism the audience experienced the effects of without knowing the cause. *Examples: a platform's decline, a creator's mental breakdown, a company's secret policy change.* → Apply the detective revelation structure as written. All nine techniques apply.
+**Type A — Hidden‑cause subjects:** There is a mechanism the audience experienced the effects of without knowing the cause. *Examples: a platform's decline, a creator's mental breakdown, a company's secret policy change.* → Apply the detective revelation structure as written. All nine techniques apply.
 
-**Type B — Visible-process subjects:** The audience witnessed events in real time but did not understand their significance until later. *Examples: a trend that seemed random, a public figure's career arc.* → Apply a modified detective structure: replace "you were living inside this mystery" with "you watched this happen without knowing what it meant." Effects-before-causes (Technique 2) applies. Reframes (Technique 3) become "now you know what you were really watching."
+**Type B — Visible‑process subjects:** The audience witnessed events in real time but did not understand their significance until later. *Examples: a trend that seemed random, a public figure's career arc.* → Apply a modified detective structure: replace "you were living inside this mystery" with "you watched this happen without knowing what it meant." Effects‑before‑causes (Technique 2) applies. Reframes (Technique 3) become "now you know what you were really watching."
 
-**Type C — Systemic-argument subjects:** No hidden cause, no mystery — the argument is purely analytical. *Examples: why a policy is bad, what a cultural phenomenon reveals about society.* → Do not apply the detective structure. Instead, use the five‑stage cognitive loop and the four‑act escalation structure as pure argument scaffolding. Act 4 becomes the crystallisation of the argument, not the revelation of a mechanism. The "Now you know why" payoff (Technique 8) is replaced with "Now you have the framework to see this everywhere."
+**Type C — Systemic‑argument subjects:** No hidden cause, no mystery — the argument is purely analytical. *Examples: why a policy is bad, what a cultural phenomenon reveals about society.* → Do not apply the detective structure. Instead, use the five‑stage cognitive loop and the four‑act escalation structure as pure argument scaffolding. Act 4 becomes the crystallisation of the argument, not the revelation of a mechanism. The "Now you know why" payoff (Technique 8) is replaced with "Now you have the framework to see this everywhere."
 
 Note the subject type at the top of Step 5. If Type B or C, note which modifications apply before writing the spoken starting points table.
 
@@ -520,6 +520,8 @@ Each act makes the viewer feel they are investigating a bigger crime than they t
 
 Act 4 is not analysis. It is the detective laying the evidence on the table and demonstrating the proven chain. Not a theory — the mechanism, the proof, the demonstration that the viewer has been seeing the evidence every week. The crystallising line at the end of the mechanism demonstration is the verdict.
 
+**Contemporary Anchor:** Identify one specific present‑day event, institution, practice, or headline (from the last five years) that directly echoes the mechanism described. Name it in the script with a clear connecting sentence. Example: “And in 2020, when Amazon hired Pinkertons to spy on warehouse workers in Spain, that unblinking eye hadn’t closed at all.” This transforms the argument from historical autopsy to ongoing relevance. If no perfect present‑day echo exists, note the structural pattern that persists in modern institutions.
+
 ---
 
 **TECHNIQUE 8 — THE "NOW YOU KNOW WHY" PAYOFF**
@@ -559,21 +561,21 @@ Example of a bridging sentence: *"Pomni's empathy is the core credential. But a 
 
 ---
 
-#### RE-ENGAGEMENT HOOKS — DEFINITION AND RULES
+#### RE‑ENGAGEMENT HOOKS — DEFINITION AND RULES
 
-A re-engagement hook is a single sentence placed at the end of an act (before the act break) that opens an unresolved question the next act will answer. It is a forward pull, not a summary or transition.
+A re‑engagement hook is a single sentence placed at the end of an act (before the act break) that opens an unresolved question the next act will answer. It is a forward pull, not a summary or transition.
 
 **What it does:** Names something the viewer doesn't yet know, in a way that makes not knowing it intolerable. The viewer must cross the act break to resolve the tension.
 
 **What it does not do:** Summarise the act just completed. Announce what's coming ("In the next section, we'll see..."). Use foreshadowing language ("which matters later").
 
 **Structural rules:**
-- Act 1 does not begin with a re-engagement hook (it follows directly from the opening hook)
-- Place one re-engagement hook at the end of Act 1 and one at the end of Act 2
-- Act 3 may use one optional re-engagement hook if a major revelation is still pending
-- Act 4 contains no re-engagement hooks — it concludes
+- Act 1 does not begin with a re‑engagement hook (it follows directly from the opening hook)
+- Place one re‑engagement hook at the end of Act 1 and one at the end of Act 2
+- Act 3 may use one optional re‑engagement hook if a major revelation is still pending
+- Act 4 contains no re‑engagement hooks — it concludes
 
-**Audit requirement:** After any revision, re-read each re-engagement hook against the act that follows it. A hook that summarises completed content rather than forward-pulling undisclosed content must be rebuilt around the next act's first unrevealed piece of information.
+**Audit requirement:** After any revision, re‑read each re‑engagement hook against the act that follows it. A hook that summarises completed content rather than forward‑pulling undisclosed content must be rebuilt around the next act's first unrevealed piece of information.
 
 *Example of prohibited hook (summary):* "So he wasn't just fired — he was pushed out by a power struggle that went all the way to the top."
 *Example of correct hook (forward pull):* "There's one document that makes all of this make sense, and the company has never publicly acknowledged it exists."
@@ -586,7 +588,7 @@ The conclusion always contains these five beats in order, with texture selected 
 
 **Beat 1 — The Verdict:** Plain, direct, no hedging. Short. After everything that preceded it, it doesn't need to be long.
 
-**Beat 2 — The Universal Extension:** Move from the specific subject to a universal pattern. Name that pattern explicitly. Connect back to something established earlier — a breadcrumb paying off.
+**Beat 2 — The Universal Extension:** Move from the specific subject to a universal pattern. Name that pattern explicitly. Connect back to something established earlier — a breadcrumb paying off. If the Central Contradiction was planted, return to it here.
 
 **Beat 3 — The Emotional Coda:** Genuine, unironic, usually brief. Allow the speaker to feel something and state it plainly, without softening it with a joke. (This beat is mandatory; it anchors the sincerity of the argument.)
 
@@ -595,6 +597,8 @@ The conclusion always contains these five beats in order, with texture selected 
 **Beat 5 — The Exit (Select One):**
 - **Option A — Flat Signoff:** A single declarative sentence of 6–10 words. Flat in tone, definitive, signals the end. Does not recap, does not summarize, does not thank the viewer. Feels like the speaker ran out of things to say at this specific moment. *Select this option when the script's dominant texture has been Discovery‑Focused (clause‑building, deadpan).*
 - **Option B — Deflation Callback:** A small, specific, personal grievance reasserts itself. The petty callback planted earlier pays off here. The deflation doesn't undercut the emotion; it reasserts that the speaker is a specific person with petty complaints who also happens to have just made a serious argument. *Select this option when the script has featured extended logic traps, precision‑of‑image moments, or layered parentheticals.*
+
+**Optional Beat 6 — Perspective Note:** If the speaker has a genuine personal or community connection to the subject (e.g., grew up in a region affected, worked in an adjacent industry), they may briefly state it at the end of the Emotional Coda or just before the Exit. This must be one sentence, factual, and not exploit another's experience. It builds trust without demanding that every script include it. Do not fabricate a connection; if none exists, skip this beat.
 
 ---
 
@@ -613,14 +617,14 @@ A script that is only argument is compelling the way a documentary is compelling
 **Technique 5 — Giving the listener something to do:** A moment where the listener is not passive. They are invited to notice something, recall something from their own experience, or make a judgment before the script makes it for them. Three concrete mechanisms:
 
 1. **The Anticipation Pause:** The speaker plants a specific detail and then stops before drawing the conclusion — enough space that the listener can form their own inference. The conclusion then either confirms or redirects it.
-2. **The Shared Recognition Moment:** The speaker names a specific, familiar experience in enough detail that the listener knows exactly what it is. Not "you've probably felt this" but the *actual thing* — the three-second delay before a site error, the way an out-of-office email from a specific kind of person always sounds.
+2. **The Shared Recognition Moment:** The speaker names a specific, familiar experience in enough detail that the listener knows exactly what it is. Not "you've probably felt this" but the *actual thing* — the three‑second delay before a site error, the way an out‑of‑office email from a specific kind of person always sounds.
 3. **The Withheld Judgment:** The speaker lays out a fact or situation and explicitly declines to tell the listener what to think about it. "I'll leave that for you." This works once per script and only after the fact has been given enough context to stand on its own.
 
 Required: at least one of these three mechanisms per script. Mark it in the spoken starting points table before prose generation.
 
 **Technique 6 — Humor that serves the argument:** Observations that are both funny and true, where laughing means accepting the point.
 
-**Technique 7 — The humor toolkit:** Every comedic moment must use a named technique from the list in Step 3. Generic humor is prohibited.
+**Technique 7 — The humor toolkit:** Every comedic moment should draw on a named technique from the list in Step 3. However, these are creative aids, not hard quotas. If a naturally funny line doesn't map perfectly to a technique, it stays. If a mandated technique feels forced, cut it.
 
 **Self‑narration:** The speaker sounds like someone who found these things out and is now telling you. Narration of the discovery process is structural to the voice.
 
@@ -628,31 +632,13 @@ Required: at least one of these three mechanisms per script. Mark it in the spok
 
 ---
 
-#### PLATFORM SAFETY — CONTENT BOUNDARIES
+#### DRAMATIZED SCENE MOMENTS (NARRATIVE DEPTH)
 
-All scripts are generated for distribution on YouTube, TikTok, and Meta platforms. The LLM is aware of the following enforcement tiers and avoids them during writing.
+Identify the two or three most consequential events in the narrative. For each, write a short sensory scene (3–5 sentences) that includes location, action, a specific object or physical detail, and a consequence. Do not just state what happened; place the viewer there. These scenes are the emotional anchors of the script.
 
-**Hard Boundaries (Content Removal / Account Termination — no exceptions):**
-- Hate speech: attacks, slurs, or derogatory language targeting race, religion, gender, sexual orientation, disability, or nationality. Historical quotes containing such language may be reframed as reported speech used once and immediately contextualized.
-- Child safety: any sexual or violent content involving minors, including fictional or digital depictions. Do not place terms for minors adjacent to sexual or violent language.
-- Graphic violence: real gore, injury detail, animal cruelty, crime‑scene imagery described vividly.
-- Sexually explicit content: descriptions of penetrative sex, sexual arousal, fetish content, or pornography.
-- Harassment and threats: targeted insults, implied or explicit threats, coordinated abuse.
-- Dangerous acts and self‑harm: promotion of suicide, eating disorders, or dangerous challenges.
+Example from the Pinkerton script: *“That night, the agents tossed a specially‑designed incendiary device intended to illuminate the house and frighten the occupants into surrender. Think of it like an 1800s version of a flashbang. Instead, when it came through the window, the family pushed the device into the fireplace where it exploded. The explosion killed the James boys’ younger half‑brother and blew off the arm of their mother, Zerelda Samuels.”*
 
-**Formal terminology for sensitive acts:**
-When historical or educational accuracy requires referencing a sensitive act (e.g., sexual assault, domestic abuse, self-harm), use the precise clinical or legal term once and without graphic description. Such terms are explicitly permitted in documentary contexts on all major platforms—YouTube's January 2026 update allows full monetization for non‑graphic discussion of adult sexual abuse, and TikTok permits documentary/educational content on these topics. Avoid vague language that obscures meaning. Clarity through formal terminology serves both the audience and the platform classifiers.
-
-**YouTube Monetization Tiers (always write for full monetization eligibility):**
-- Content on controversial topics is eligible only if non‑graphic and presented as dramatization, documentary, or educational analysis. This applies to adult sexual abuse, domestic abuse, self‑harm, suicide, abortion, and sexual harassment.
-- Topics permanently ineligible for full monetization regardless of context: child abuse (including sex trafficking) and eating disorders.
-- Profanity: occasional moderate profanity is acceptable. Strong profanity zero tolerance. Profanity in title, thumbnail, or first 30 seconds reduces advertiser pool. Maximum‑revenue approach: keep all profanity out.
-- Graphically descriptive injury or violence: avoid; factual description without vivid detail is safe.
-
-**TikTok & Meta Recommendation Penalties (write to stay in recommendations):**
-- Sexual suggestiveness: avoid significant body exposure references, sexually suggestive acts, or framing that could be interpreted as arousing.
-- Shocking, graphic, or "sadness" content that could lead to a negative user experience.
-- Low‑quality framing: the content must be clearly original, educational, or documentary in nature—not aggregated, recycled, or sensationalized.
+Requirement: at least two such scenes in the script. Mark them in the spoken starting points table.
 
 ---
 
@@ -662,12 +648,14 @@ The script is written for an audience that has zero prior knowledge of the topic
 
 **While writing, follow these four rules:**
 
-1. **Define as you go.** Every specialised term, historical figure, or unfamiliar noun gets a grounding clause the moment it appears.
+1. **Define with Analogy:** When introducing any specialized term, historical concept, or institutional mechanism, immediately follow it with a concrete, everyday analogy that a modern viewer can picture. The analogy must be no more than one sentence and must use familiar, physical language (money, household objects, daily routines). Avoid dictionary‑style definitions. If you cannot find an analogy, simplify the explanation until it is transparent. Example: “company scrip” → “Monopoly money you can only cash in at the Monopoly store.”
 2. **Connect every section.** Adjacent ideas must be linked by an explicit causal or narrative thread.
 3. **Be specific, not vague.** Vague placeholders like "physical marker," "this idea," "the condition" must resolve to something the viewer can picture or understand.
 4. **Track your referents.** Before output, scan the script for every pronoun ("it," "they," "this," "that," "which") and every demonstrative placeholder. For each, confirm the exact noun it refers to appears no more than two sentences earlier and is unambiguous.
 
 **External‑Reference Bridging:** Any comparison to an external work must be introduced with a sentence that explicitly names the parallel before the comparison begins.
+
+**Implication Follow‑Through:** After stating any factual claim that is not self‑evidently dramatic (a statistic, a date, a bureaucratic detail), immediately include one clause that answers “which meant that…” or “which meant you could…” in concrete, human terms. Example: “The agency collected mugshots and dossiers on criminals. Which meant that for the first time, a detective in Chicago could know a suspect’s history from New York before the man even opened his mouth.”
 
 **Before output, perform a fast internal check:**
 - Read the script once as if you've never encountered the subject. Could a reasonable person understand every sentence without pausing to Google? If not, fix.
@@ -675,6 +663,7 @@ The script is written for an audience that has zero prior knowledge of the topic
 - Scan for ambiguous words and ensure their referent was established in the preceding two sentences.
 - Run the referent‑tracking scan.
 - Check every external reference: is a bridging sentence present before the reference is used?
+- Spot‑check three unfamiliar terms; each has an analogy or image within the same sentence.
 
 ---
 
@@ -724,10 +713,10 @@ The single most common failure mode is writing prose and then making it sound sp
 
 ---
 
-**PROHIBITED** (absolute, except where explicitly allowed in Clarity Exceptions):
+**PROHIBITED** (absolute, except where explicitly allowed in Clarity Exceptions and Handholds):
 
 - Rhetorical triplets
-- Short declarative punch lines standing alone — except the crystallising line, the rhetorical anchor, or the single, deferred verdict that closes an extended Processing passage (minimum four-clause buildup required for each)
+- Short declarative punch lines standing alone — except the crystallising line, the rhetorical anchor, or the single, deferred verdict that closes an extended Processing passage (ear test applies)
 - Paired contrast constructions used more than once
 - Setup‑payoff paragraph structure — paragraphs closing with a thesis statement
 - Formal pivot openers used as templates: "So here's the thing," "And here's what's insane," "And look"
@@ -747,13 +736,13 @@ The single most common failure mode is writing prose and then making it sound sp
 - Narrator‑mode hook openers
 - Unattributed quotes as opening lines
 - Timeline errors
-- Connector words as paragraph openers — unless documented as native
+- Connector words as paragraph openers — except as permitted in Handholds and native openers
 - Em‑dashes
 - Formal audience address
 - Building to a poetic final line
-- Summarizing own point after making it (except Clarity Exceptions)
-- Recapping what was just said (except Clarity Exceptions)
-- Previewing what's about to be said (except Clarity Exceptions)
+- Summarizing own point after making it (except in allowed Handholds)
+- Recapping what was just said (except in allowed Handholds)
+- Previewing what's about to be said (except in allowed Handholds)
 - Apologizing for going long
 - Padding with filler enthusiasm
 - Explaining a joke after it lands
@@ -772,15 +761,15 @@ The single most common failure mode is writing prose and then making it sound sp
 - Pace variation built into text itself through paragraph length and clause density
 - Context established before every specific detail
 - Personality moments distributed throughout — marked in the spoken starting points table before prose generation
-- Humor techniques distributed throughout — not concentrated at the end; each comedic moment assigned a named technique
+- Humor techniques suggested and optionally assigned — not concentrated at the end; each comedic moment noted
 - Timeline accuracy — verified sequence of events stated correctly every time it appears
 - Self‑narration present as documented
-- At least one extended analogy or fully committed roleplay running at full length — **minimum five sentences, including at least two sentences of invented, specific dialogue spoken in character**
+- At least one extended analogy or fully committed roleplay, running as long as it naturally remains funny (no minimum sentence count); if the subject does not invite it, a precision‑of‑image or underreaction suffices
 - At least one logic trap running to its full length (if Analysis‑Focused texture dominates)
 - At least one precision‑of‑image moment
 - At least one underreaction landing correctly
 - **Bridging sentences** present for every major topic shift
-- **Re-engagement hooks** present and forward-pulling (not summarising) at Act 1 and Act 2 endings
+- **Re‑engagement hooks** present and forward‑pulling (not summarising) at Act 1 and Act 2 endings
 - **Counterargument section** present (Acknowledge‑Rebut‑Return) before the crystallising line
 - **External‑reference bridging** present before any comparison to external works
 - **Callback‑plant audit** passed if a deflation callback is used
@@ -790,6 +779,11 @@ The single most common failure mode is writing prose and then making it sound sp
 - **Teleprompter formatting** applied (no colons before lists, no bullet points, all data as spoken sentences)
 - **Data presentation as spoken prose** applied
 - **First‑person active voice** for methodology
+- **At least two dramatized scene moments** (sensory, specific, with consequence)
+- **Central Contradiction Statement** introduced early and returned to at Verdict or Universal Extension
+- **Contemporary Anchor** present in Act 4 (or structural pattern noted if no perfect echo exists)
+- **Define with Analogy** applied for every specialized term
+- **Implication Follow‑Through** applied to every non‑dramatic factual claim
 
 ---
 
@@ -800,7 +794,7 @@ Check every paragraph for:
 - Redundancy: words or phrases doing the same job twice in the same clause
 - Temporal anchors: references to "last week," "yesterday," "recently" — use relative time references instead
 - Overlong setup clauses: the actual point buried after too many subordinate clauses
-- Staccato clusters: sequences of three or more sentences, each under approximately 8 words, that sit in the same paragraph or adjacent paragraphs. If the information can be combined into a single flowing clause chain without losing emphasis, merge them. The only exception is a deliberate, isolated Verdict beat that follows an extended Processing passage — keep those short, but verify that the preceding passage was long enough to earn the punch.
+- Staccato clusters: sequences of three or more sentences, each under approximately 8 words, that sit in the same paragraph or adjacent paragraphs. If the information can be combined into a single flowing clause chain without losing emphasis, merge them. The only exception is a deliberate, isolated Verdict beat that follows sufficient Processing — keep those short, but verify that the preceding passage earned the punch (by ear, not by count).
 - **Connective scarcity:** Scan for sequences of three or more sentences within a paragraph that lack mid‑sentence connecting words (and, but, so, because, though, which, while). If found, consider merging sentences or adding a connector to improve flow.
 - Wrong article usage
 - Written sentence openers: infinitive clauses, formal pivots
@@ -809,7 +803,7 @@ Check every paragraph for:
 - Passive constructions
 - Written connector words used as formal definitions: "meaning," "which is to say"
 - Register mismatches: formal vocabulary in casual register, or vice versa
-- Dictionary‑style definitions
+- Dictionary‑style definitions (use analogies instead)
 - Odd participial constructions
 - Mixed metaphors
 - Clinical language in emotional sections
@@ -834,20 +828,35 @@ Before finalising the script, run these three checks to ensure structural payoff
 
 ---
 
+#### PINKERTON‑SCRIPT QUALITY CHECKLIST (FINAL TONE AUDIT)
+
+Before delivering the script, run this human‑readable checklist. If any answer is "no," revise—even if every formal rule is satisfied.
+
+- [ ] Explain the meaning behind every unfamiliar concept within the same breath?
+- [ ] Slow down to dramatize at least two pivotal moments as sensory scenes?
+- [ ] Carry a clear central irony or contradiction that gives the whole story a shape?
+- [ ] Feel like a person discovering things, not a lecturer presenting slides?
+- [ ] Allow the speaker to react honestly (surprise, dismay, wry amusement) before analyzing?
+- [ ] Provide enough natural handholds that a listener could follow without rewinding, without ever resorting to lazy signposting?
+- [ ] End with the sense that the past is still breathing in the present?
+- [ ] Sound, when read aloud, like a smart friend telling a story over coffee—not like an audiobook, not like a TED talk, not like an AI?
+
+---
+
 #### STEP 6C — TITLE AND THUMBNAIL BRIEF
 
-After completing the long-form script, generate the following before moving to Step 7:
+After completing the long‑form script, generate the following before moving to Step 7:
 
 **A. Three title options** using different formulas. Label each with its formula type:
-- **Option 1 — Curiosity-gap formula:** raises a question the video answers, front-loaded with the subject keyword, 60–65 characters
+- **Option 1 — Curiosity‑gap formula:** raises a question the video answers, front‑loaded with the subject keyword, 60–65 characters
 - **Option 2 — Transformation/revelation formula:** states what the viewer will understand by the end, 60–65 characters
 - **Option 3 — Specificity formula:** uses a concrete number, name, or date that the video actually addresses, 60–65 characters
 
-For each title: confirm the keyword appears in the first 5 words, confirm the character count is between 55–65, confirm the title does not repeat what the thumbnail will show. Use title case. No all-caps. Avoid repeating thumbnail text in the title; they should tell different parts of the story.
+For each title: confirm the keyword appears in the first 5 words, confirm the character count is between 55–65, confirm the title does not repeat what the thumbnail will show. Use title case. No all‑caps. Avoid repeating thumbnail text in the title; they should tell different parts of the story.
 
 **B. Thumbnail concept brief** (one paragraph): Describe the visual elements that should appear. Include:
 - Primary focal point (face with specific emotion, or a single object/text element)
-- Background treatment (clean/high-contrast, colour pairing, blurred or solid)
+- Background treatment (clean/high‑contrast, colour pairing, blurred or solid)
 - Text overlay if any (3 words maximum; what the words are)
 - What the thumbnail implies that the title does not state
 
@@ -892,16 +901,16 @@ Run this checklist in full any time new material is added to an existing draft.
 - Verify the source table is complete and current.
 - **Re‑run the bridging audit** — ensure all new or modified topic shifts still have explicit connective sentences.
 - **Re‑audit the counterargument section** if new evidence has been introduced that affects the objections.
-- **Re‑audit all re-engagement hooks** against current act content.
+- **Re‑audit all re‑engagement hooks** against current act content.
 
 **STRUCTURAL REVISION PROTOCOL (applies when reorganising existing material)**
 
 When a revision involves moving, merging, or reordering sections — rather than adding new material — run the following checks before any prose rewriting:
 
-1. **Breadcrumb integrity check:** List every piece of information planted in Act 1 that pays off in Act 3 or 4. After moving sections, confirm each breadcrumb still arrives before its payoff. If a move reverses a breadcrumb–payoff sequence, either move the payoff or re-plant the breadcrumb in its new position.
+1. **Breadcrumb integrity check:** List every piece of information planted in Act 1 that pays off in Act 3 or 4. After moving sections, confirm each breadcrumb still arrives before its payoff. If a move reverses a breadcrumb–payoff sequence, either move the payoff or re‑plant the breadcrumb in its new position.
 2. **Escalation check:** Read the new structure and confirm each act still feels like a larger revelation than the previous. If two adjacent acts now feel equal in stakes, merge them or heighten the opening of the later act.
-3. **Re-engagement hook re-audit:** After restructuring, all re-engagement hooks must be rebuilt from scratch against the new act content. Do not reuse hooks written for the old structure.
-4. **Spoken starting points:** Any section that has moved to a new position in the script may need a new spoken starting point, since the context the speaker is entering from has changed. Re-run the starting-point table for all paragraphs immediately following a structural seam.
+3. **Re‑engagement hook re‑audit:** After restructuring, all re‑engagement hooks must be rebuilt from scratch against the new act content. Do not reuse hooks written for the old structure.
+4. **Spoken starting points:** Any section that has moved to a new position in the script may need a new spoken starting point, since the context the speaker is entering from has changed. Re‑run the starting‑point table for all paragraphs immediately following a structural seam.
 
 ---
 
@@ -960,13 +969,13 @@ After the long‑form script is complete and its source notes and delivery notes
    - Yes to both → include (in priority order: highest surprise value first)
    - No to either → cut
 
-   **Step 3 — Word count check.** If over 220 words, cut the lowest-surprise optional beat. Repeat until under 220.
+   **Step 3 — Word count check.** If over 220 words, cut the lowest‑surprise optional beat. Repeat until under 220.
 
-   A beat selection table must be included in the short-form delivery notes, recording: Beat name | Mandatory/Optional | Included/Cut | Reason.
+   A beat selection table must be included in the short‑form delivery notes, recording: Beat name | Mandatory/Optional | Included/Cut | Reason.
 
 4. **Compression, not summarisation** — Selected beats may be expressed in a single new sentence that merges reframe + context, provided no new information is introduced. Cut exposition and subordinate examples; keep every reframe and the verdict.
 
-5. **Context‑heavy, detail‑light** — Assume zero prior knowledge. Introduce any historical figure, event, or concept with the most minimal grounding clause needed, then immediately deliver the story beat.
+5. **Context‑heavy, detail‑light** — Assume zero prior knowledge. Introduce any historical figure, event, or concept with the most minimal grounding clause needed, then immediately deliver the story beat. Use analogy for unfamiliar terms as in the long script.
 
 6. **Voice preservation** — The short must use the identical five‑stage loop architecture and the same register as the long script. Every rule from Step 3 applies.
 
@@ -982,7 +991,7 @@ After the long‑form script is complete and its source notes and delivery notes
 
 12. **Platform safety** — The short is subject to the same Platform Safety — Content Boundaries as the long‑form script.
 
-13. **First‑time viewer clarity** — All four rules (define as you go, connect every section, be specific, track referents) must be followed.
+13. **First‑time viewer clarity** — All four rules plus Define with Analogy must be followed.
 
 14. **Deflation callback planting** — If the exit uses a deflation callback, the exact phrase or image used in the callback must appear verbatim or near‑verbatim earlier in the short script. Verify before finalising.
 
@@ -1014,7 +1023,7 @@ After writing both scripts, perform an image sourcing pass for the long‑form s
 - **Direct URL required:** Must be a raw image file link (ending in .jpg, .jpeg, .png, .gif, .webp, .svg) that returns the image directly, not an HTML page.
 - **Watermark policy:** Images with visible watermarks are **prohibited**.
 - **Source stability preferred:** Wikimedia Commons, Internet Archive, official UN/WHO media centres, and reputable image hosts are ideal.
-- **Fair use context:** The script is commentary/educational, so use of third-party images for critique and illustration is presumed fair use.
+- **Fair use context:** The script is commentary/educational, so use of third‑party images for critique and illustration is presumed fair use.
 
 ### Mandatory verification protocol — multi‑tier
 
@@ -1027,18 +1036,18 @@ After writing both scripts, perform an image sourcing pass for the long‑form s
 
 **2. Verification — three‑tier system.**
 
-**Tier 1 (revised) — Full-page fetch for direct image URL confirmation:**
+**Tier 1 (revised) — Full‑page fetch for direct image URL confirmation:**
 If the model has a web fetch tool available:
 - Fetch the image URL directly. If the response returns readable text content that is not an HTML error page, the URL is likely valid.
 - If the response returns HTML error content, a redirect page, or an empty result, the URL is invalid.
-- **Critical limitation:** LLM web fetch tools retrieve text content of pages — they cannot inspect HTTP response headers, issue byte-range requests, or verify Content-Type at the protocol level. For direct image files (.jpg, .png, .webp), the fetch result will typically be empty or minimal. This is acceptable for Tier 1 confirmation from trusted sources where the URL was obtained by navigation. Never claim a direct image URL is verified if navigation-based confirmation (Tier 2) was not also performed.
+- **Critical limitation:** LLM web fetch tools retrieve text content of pages — they cannot inspect HTTP response headers, issue byte‑range requests, or verify Content‑Type at the protocol level. For direct image files (.jpg, .png, .webp), the fetch result will typically be empty or minimal. This is acceptable for Tier 1 confirmation from trusted sources where the URL was obtained by navigation. Never claim a direct image URL is verified if navigation‑based confirmation (Tier 2) was not also performed.
 
 **Tier 2 (fallback for trusted plain‑HTML repositories): Navigation‑based verification**
 If the model's environment cannot confirm the URL via fetch, or for direct image files where Tier 1 returns empty content, verification may be done via page navigation.
 
 **Trusted repositories for Tier 2:**
 - Wikimedia Commons (upload.wikimedia.org)
-- Internet Archive (archive.org — only items with an explicit direct-file link on the page)
+- Internet Archive (archive.org — only items with an explicit direct‑file link on the page)
 - Official UN/WHO media centres (who.int, unwomen.org, un.org — **only** if the page provides a static, non‑JavaScript download link)
 - Official government sites that host public‑domain images with a clear direct‑download page (e.g., NASA, Library of Congress, National Archives)
 
@@ -1049,7 +1058,7 @@ If the model's environment cannot confirm the URL via fetch, or for direct image
 - If all checks pass, the URL is **verified by navigation**.
 
 **Tier 3 (manual‑download pages): When no direct URL is obtainable**
-For museum collections, digital archives, and institutional sites that display images via JavaScript viewers or token-protected delivery:
+For museum collections, digital archives, and institutional sites that display images via JavaScript viewers or token‑protected delivery:
 - **Identify the item's landing page** where a "Download" button is present.
 - **Do not guess a direct image URL.** Provide the landing page URL and a brief instruction for the editor.
 - Mark the insertion point as `MANUAL DOWNLOAD — page: [URL]`.
@@ -1103,35 +1112,40 @@ A code block containing **only the verified direct image URLs**, one per line.
 #### QUALITY CHECKS
 
 **TIER 1 — SHIP BLOCKERS (must pass before any output is given):**
-- [ ] Every empirical claim verified; single-source anonymous numerics removed
+- [ ] Every empirical claim verified; single‑source anonymous numerics removed
 - [ ] Spoken starting points table completed and all five tests passed for every paragraph
-- [ ] No prohibited paragraph openers (So/And/But/Because as launchers; compound connectors)
-- [ ] No short declaratives without four-clause buildup (except Clarity Exceptions)
+- [ ] No prohibited paragraph openers (except permitted Handholds and native openers)
+- [ ] No unearned short declaratives (ear test applied)
 - [ ] Timeline verified and stated correctly throughout
 - [ ] Five‑stage cognitive loop observable in each major revelation
-- [ ] Re-engagement hooks forward-pulling, not summarising, at Act 1 and Act 2 endings
+- [ ] Re‑engagement hooks forward‑pulling, not summarising, at Act 1 and Act 2 endings
 - [ ] Counterargument section present (Acknowledge–Rebut–Return) with credibility weighting applied
-- [ ] Conclusion follows five-beat structure (Verdict → Universal Extension → Emotional Coda → Rhetorical Anchor → Exit)
-- [ ] No gender-specific bodily references in the narrator voice
+- [ ] Conclusion follows five‑beat structure (Verdict → Universal Extension → Emotional Coda → Rhetorical Anchor → Exit); optional Perspective Note if applicable
+- [ ] No gender‑specific bodily references in the narrator voice
 - [ ] Roadmap sentence present after hook
 - [ ] Teleprompter formatting applied (no colons before lists, no bullet points, data as spoken sentences)
+- [ ] At least two dramatized scene moments present
+- [ ] Central Contradiction Statement planted and returned to
+- [ ] Contemporary Anchor present in Act 4 (or structural pattern noted)
+- [ ] Define with Analogy applied for all specialized terms
+- [ ] Implication Follow‑Through applied to non‑dramatic factual claims
 
 **TIER 2 — QUALITY GATES (must pass for publishable output):**
 
 *Hook checks:*
 - [ ] Unified three‑move hook pattern applied; Move 1 selected appropriately
-- [ ] If Grand Claim, concrete curiosity-opening detail present and hits in the first 10 seconds
+- [ ] If Grand Claim, concrete curiosity‑opening detail present and hits in the first 10 seconds
 - [ ] No teasing, no trailer — goes directly into the story after hook
 - [ ] Hook is 30 seconds maximum
 - [ ] No conditionals, no narrator mode, no unattributed quotes in the first line
 
 *Voice architecture:*
 - [ ] The five stages are observable in sequence for each major revelation
-- [ ] Verdict beats earned by preceding Processing (four-clause minimum)
+- [ ] Verdict beats feel earned (ear test)
 
 *Structure:*
 - [ ] Stakes rise at every act break
-- [ ] Act-length proportions roughly match targets (or documented deviation)
+- [ ] Act‑length proportions roughly match targets (or documented deviation)
 - [ ] Bridging sentences present for all major topic shifts
 - [ ] Crystallising line exists, is in the final third, arrives as the verdict
 - [ ] If Deflation Exit, callback planted earlier and retrieved; callback‑plant audit passed
@@ -1151,27 +1165,27 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] At least one genuine reaction before analysis in the first half
 - [ ] At least one absurdity acknowledged with a beat before moving past it
 - [ ] At least one Technique 5 "listener something to do" moment present
-- [ ] Every comedic moment has a named humor technique assigned
+- [ ] Every comedic moment noted (technique assignment optional, not forced)
 - [ ] Self‑narration present — at least two moments
-- [ ] At least one extended analogy/roleplay (minimum five sentences with dialogue)
+- [ ] At least one extended analogy/roleplay if natural, or precision‑of‑image/underreaction if not
 - [ ] At least one precision‑of‑image moment
 - [ ] At least one underreaction landing correctly
 
 *Platform and viewer:*
 - [ ] Platform safety checks passed (both scripts)
-- [ ] First-time viewer clarity checks passed (both scripts)
-- [ ] External-reference bridging present for any comparison to external works
+- [ ] First‑time viewer clarity checks passed (both scripts)
+- [ ] External‑reference bridging present for any comparison to external works
 
 **TIER 3 — POLISH PASS (run once when Tier 1 and 2 pass):**
 
 - [ ] Naturalness audit passed on every paragraph
-- [ ] Staccato clusters checked and merged where appropriate
+- [ ] Staccato clusters checked and merged where appropriate (ear test)
 - [ ] Connective scarcity scan passed
 - [ ] Paragraph opener audit completed at proportional scale
 - [ ] No em‑dashes in spoken text
 - [ ] Absurd self‑insertion in Move 3 drawn from Universal Relatable Category
 - [ ] Source material completeness audit completed and all gaps addressed
-- [ ] Humor technique assignments from Step 4 carried into the script
+- [ ] Humor technique suggestions from Step 4 reviewed; final script humor is organic
 - [ ] Named individuals present where inclusion adds specificity, irony, or weight
 - [ ] Active decisions distinguished from passive neglect
 - [ ] Repetition vs. Reinforcement test applied to every element appearing more than once
@@ -1181,6 +1195,7 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Narrator is gender‑neutral throughout; personal anecdotes avoid gendered bodily references
 - [ ] Title and Thumbnail Brief (Step 6C) completed
 - [ ] Image sourcing completed for all key visual moments
+- [ ] Pinkerton‑Script Quality Checklist passed
 
 **SHORT‑FORM ADAPTATION CHECKS:**
 - [ ] Hook opens with a pattern‑interrupting fact or reframe within 1–3 seconds
@@ -1198,8 +1213,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] If structural revision (reordering/moving sections): Structural Revision Protocol completed
 - [ ] Living fact sheet updated with all new claims
 - [ ] Upstream contradictions resolved
-- [ ] Downstream hooks re-audited against revised content
-- [ ] Re-engagement hooks rebuilt from scratch if structure changed
+- [ ] Downstream hooks re‑audited against revised content
+- [ ] Re‑engagement hooks rebuilt from scratch if structure changed
 - [ ] Conclusion and crystallising line re‑audited against full revised script
 - [ ] Delivery notes updated
 - [ ] Source table updated
@@ -1221,4 +1236,4 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 ---
 
-## END OF PROMPT (v3.19)
+## END OF PROMPT (v3.20)
