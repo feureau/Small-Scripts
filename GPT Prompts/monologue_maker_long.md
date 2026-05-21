@@ -1,4 +1,4 @@
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.20 — WITH NARRATIVE DEPTH, HUMANITY OVERRIDE, AND PINKERTON-SCRIPT QUALITY)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v3.21 — WITH LITERARY FLOW, WRITING‑LEVEL FIXES, AND PRODUCTION REFINEMENTS)
 
 ## GENERATIVE PRINCIPLE
 
@@ -6,7 +6,7 @@ All descriptions of voice patterns in this prompt are structural, not textual. A
 
 You are writing a YouTube commentary script. Work through all steps in order. Do not skip steps or combine them. Show your work at each step before proceeding.
 
-**The Humanity Override:** This prompt is a training manual for a voice, not an unyielding production line. The rules exist to prevent common failures—lazy transitions, written‑sounding prose, unearned conclusions. But the ultimate goal is a script that feels like a person thinking and feeling in real time. If, while writing, you encounter a moment where strict adherence to a minor rule (e.g., avoiding a particular opener, counting clauses) would produce a line that sounds robotic or unnatural, **break the rule and note why**. A script that sounds human but violates two formatting rules is superior to a perfectly compliant script that sounds like a machine. After drafting, audit for violations. For each intentional violation, confirm that the result is more conversational, clear, or emotionally true than the compliant alternative. If it is, keep it.
+**The Humanity Override:** This prompt is a training manual for a voice, not an unyielding production line. The rules exist to prevent common failures—lazy transitions, written‑sounding prose, unearned conclusions. But the ultimate goal is a script that feels like a person thinking and feeling in real time. If, while writing, you encounter a moment where strict adherence to a minor rule would produce a line that sounds robotic or unnatural, break the rule and note why. A script that sounds human but violates two formatting rules is superior to a perfectly compliant script that sounds like a machine. After drafting, audit for violations. For each intentional violation, confirm that the result is more conversational, clear, or emotionally true than the compliant alternative. If it is, keep it.
 
 ---
 
@@ -94,7 +94,9 @@ The voice operates on a **five‑stage cognitive loop** that repeats for each ma
 
 To implement this concretely: when presenting a sequence of related examples that serve the same point (e.g., three character actions that prove a trait), combine them into a single, flowing clause chain with natural connectors, and place the single Verdict after the final example. Do not insert a separate short declarative after each example.
 
-**Verdict Beat Requirement (ear test, not clause count):** A Verdict beat must feel earned by the evidence that precedes it. Before finalizing a script, read the Processing passage aloud. If the verdict lands flat or unearned, extend the Processing. If it lands with force because the listener has been led inexorably to that conclusion, it is valid regardless of clause count. Do not count clauses mechanically; trust the ear. The four‑clause guideline is a training heuristic, not a law.
+**Verdict Beat Requirement (ear test, not clause count):** A Verdict beat must feel earned by the evidence that precedes it. Before finalizing a script, read the Processing passage aloud. If the verdict lands flat or unearned, extend the Processing. If it lands with force because the listener has been led inexorably to that conclusion, it is valid regardless of clause count. Do not count clauses mechanically; trust the ear.
+
+**The Ear Test Is Human Judgment:** The ear test is the final authority on whether a Verdict lands. There is no mechanical substitute for reading the script aloud. If a passage sounds natural and the verdicts feel earned when spoken, it passes regardless of clause counts or structural checks. If it sounds robotic despite passing every formal check, the formal checks are wrong. Trust the ear.
 
 A Verdict beat must be earned by the Processing that precedes it. **Short declarative sentences are prohibited except in these cases:**
 
@@ -107,9 +109,9 @@ Any short declarative that does not meet one of these conditions is prohibited. 
 **Anchor Rule:** The speaker may move between stages at paragraph boundaries or at explicit transition markers ("Anyway," "So," "But look,"). Within a single spoken paragraph, the sentence architecture must remain consistent.
 
 **Natural Handholds (Orienting, not Recapping):**
-- **Brief Orienting Sentence:** After a dense, multi‑paragraph section, a single sentence may restate the new situation in a way that adds emotional shading or a micro‑reframe, without merely repeating facts. Example: “So by the mid‑1870s, the agency had become something its founder never imagined—a private army for hire.” This is allowed because it releases tension and provides a foothold, not a summary. Pure recaps of what was just said remain prohibited.
-- **Permitted Forward Glance:** A single sentence may indicate the direction of the next section if it creates a genuine curiosity gap rather than announcing structure. Allowed: “The worst was yet to come—and this time, the target would fight back.” Prohibited: “Next we’ll discuss the labor strikes.”
-- **“So” Launcher Exception:** “So” may open a paragraph only when it functions as a spoken return to the narrative thread after an aside, tangent, or reaction. If the paragraph would be equally coherent and natural starting with the subject itself, use the subject‑led opener. If removing “So” leaves a jarring jump, keep it. Audit by ear, not by blanket prohibition.
+- **Brief Orienting Sentence:** After a dense, multi‑paragraph section, a single sentence may restate the new situation in a way that adds emotional shading or a micro‑reframe, without merely repeating facts. Example: "So by the mid‑1870s, the agency had become something its founder never imagined—a private army for hire." This is allowed because it releases tension and provides a foothold, not a summary. Pure recaps of what was just said remain prohibited.
+- **Permitted Forward Glance:** A single sentence may indicate the direction of the next section if it creates a genuine curiosity gap rather than announcing structure. Allowed: "The worst was yet to come—and this time, the target would fight back." Prohibited: "Next we'll discuss the labor strikes."
+- **"So" Launcher Exception:** "So" may open a paragraph only when it functions as a spoken return to the narrative thread after an aside, tangent, or reaction. If the paragraph would be equally coherent and natural starting with the subject itself, use the subject‑led opener. If removing "So" leaves a jarring jump, keep it. Audit by ear, not by blanket prohibition.
 
 ---
 
@@ -158,7 +160,6 @@ Items most likely to be creator‑specific: "kitten caboodle," "many moons ago,"
 - Recapping what was just said (except in allowed Handholds)
 - Previewing what's about to be said (except in allowed Handholds)
 - Explaining a joke after it lands
-- Em‑dashes anywhere (use commas or periods instead)
 
 ---
 
@@ -201,13 +202,11 @@ The hook always contains three moves, but the first move is dynamically selected
 - **Option A (Grand Claim):** For abstract/systemic subjects. Make a sweeping, confident claim about the specific subject. Use superlative language without irony. Establishes immensity. **For long‑form scripts, the Grand Claim must be built around a concrete, pattern‑interrupting fact — a specific piece of evidence that creates a micro‑reframe in the first 10 seconds. Avoid purely abstract thesis statements.**
 - **Option B (In Medias Res):** For narrative/specific subjects. Start mid‑scene or mid‑sketch. The viewer does not know what they are watching until it is over. No wind‑up.
 
-**Move 2 — Populate the Category:** Provide two or three legitimate, subject‑relevant examples that genuinely belong in the established category.
+**Move 2 — Populate the Category:** Provide at least one legitimate, subject‑relevant example that genuinely belongs in the established category. If two or three strong examples are available, use them. If only one exists, that is sufficient; do not pad with vague references.
 
-**Move 3 — Puncture with Specific Absurdity:** Add one absurdly personal, trivial example from the speaker's own life. The absurd example sits alongside the legitimate ones as if it belongs. The humor comes entirely from juxtaposition and deadpan delivery. Then, without pause or transition, enter the story.
+**Move 3 — Ground with Specific, Relatable Failure:** Add one small, specific moment of human failure, pettiness, or frustration from the speaker's own life. The example works because it is recognizable and grounding, not because it is absurd. The humor, if present, comes from the listener recognizing themselves in the failure. Draw from the Universal Relatable Category list below.
 
-**Move 3 — Universal Relatable Category (required for gender‑neutral narrator):**
-
-The absurd self‑insertion example must be drawn from the universally relatable category list below. "Physical embarrassment" is one option but NOT required, and physical examples must meet the universal threshold — no gendered bodily experience. All items in this list are suitable for a gender‑neutral narrator:
+**Universal Relatable Category (for Move 3):** The personal example must be drawn from experiences that anyone could have, regardless of gender. All items in this list are suitable for a gender‑neutral narrator:
 
 - *Minor domestic failures:* burning the same piece of toast twice, losing something you're holding, walking into a room and immediately forgetting why
 - *Pet or animal failures:* a pet systematically ignoring you in a specific way, feeding an animal and having it prefer the container lid
@@ -229,7 +228,7 @@ If a hook fails the quality checks, identify which failure type applies before r
 
 **Type 4 — In Medias Res That Doesn't Land:** The scene is too obscure. The viewer doesn't know what they're watching before it's over. *Fix:* The scene needs one more detail to orient the viewer — a character, a location, a recognisable action.
 
-**Type 5 — Move 3 Misfire:** The absurd personal example is too far from the subject, too esoteric, or too remote in register from the serious examples. *Fix:* The absurd example must sit alongside the serious ones as if it belongs. If the contrast is too jarring rather than funny, move it closer to the subject matter or find one from the Universal Relatable Category list.
+**Type 5 — Move 3 Misfire:** The personal example is too far from the subject, too esoteric, or too remote in register from the serious examples. *Fix:* The personal example must sit alongside the serious ones as if it belongs. If the contrast is too jarring rather than grounding, move it closer to the subject matter or find one from the Universal Relatable Category list.
 
 The hook is not a preview; it is the first scene.
 
@@ -278,7 +277,6 @@ These techniques are available regardless of subject. The model should deploy th
 - Apologizing for going long
 - Padding with filler enthusiasm
 - Explaining a joke after it lands
-- Em‑dashes anywhere (use commas or periods instead)
 
 ---
 
@@ -329,6 +327,8 @@ If the completeness audit reveals that the verified fact sheet cannot support a 
 
 Never pad a thin subject with speculation framed as analysis. Filler is not a solution; it is a different kind of honesty problem.
 
+**If the decision is to reduce target length:** The resulting shorter script must still satisfy all structural requirements—hook, acts, counterargument, five‑beat conclusion—proportionally compressed. A four‑minute script still needs a hook, a thesis, evidence, a counterargument, and a conclusion. The proportions tighten; the structure does not collapse.
+
 Produce a completeness report listing every gap, missing detail, underdeveloped section, humor technique assignment (suggested), and argument‑driven gap before proceeding. Only proceed to Step 5 when the completeness audit is finished.
 
 ---
@@ -347,7 +347,7 @@ Based on the verified facts and the completeness audit, identify the single most
 
 Name the angle in one sentence. Briefly explain why it is better than the two most obvious alternatives. Identify the universal pattern the angle reveals.
 
-**Central Contradiction Statement:** In one sentence, name the core irony, contradiction, or reversal that gives this story its emotional arc. Example: “A man who risked his life to help fugitives built an agency that ended up hunting workers.” This contradiction should be introduced early (hook or Act 1) and returned to at the Verdict or Universal Extension. Every major section should, in some way, reflect or complicate this contradiction.
+**Central Contradiction Statement:** In one sentence, name the core irony, contradiction, or reversal that gives this story its emotional arc. Example: "A man who risked his life to help fugitives built an agency that ended up hunting workers." This contradiction should be introduced early (hook or Act 1) and returned to at the Verdict or Universal Extension. Every major section should, in some way, reflect or complicate this contradiction.
 
 ---
 
@@ -378,7 +378,7 @@ Before writing a single word of prose, establish a spoken starting point for eve
 1. **The raw thing being communicated** — one sentence, no craft, just the information
 2. **The first six words out of the speaker's mouth** if they were live right now
 
-These are not topic sentences. They are the literal first words before any sentence structure has been decided. **The table is a warm‑up to prevent formal prose from creeping into opening lines. After the full script is drafted, re‑read each paragraph opener aloud. If any opener sounds forced, artificial, or unlike the speaker's natural voice, rebuild it from scratch using the original raw idea, ignoring the original six words. The final script is the authority; the table is scaffolding, not a contract. When in doubt, a subject‑led opener in plain language is always acceptable.**
+These are not topic sentences. They are the literal first words before any sentence structure has been decided. **The table is scaffolding. If the final prose passes the aloud test—sounds like someone explaining to a friend, not reading a prepared statement—the table has done its job regardless of whether it was formally completed. The final script is the authority; the table is training, not a contract. When in doubt, a subject‑led opener in plain language is always acceptable.**
 
 **Test every starting point against these questions before proceeding:**
 
@@ -451,11 +451,11 @@ Apply the unified three‑move hook pattern. Select Move 1 (Grand Claim or In Me
 
 The restrictions on short declarative sentences, previewing, and summarizing apply strictly to **Acts 2 through 4** (the main narrative and evidence sections). For the following parts, these restrictions are lifted:
 
-1. **The opening hook** (first 2‑3 paragraphs). May use short declarative sentences and direct factual statements. Example: “In 2026, the Indonesian Rupiah touched Rp 17,500. Some called it a crisis worse than 1998. Others said it is just a strong dollar. Both are wrong.”
+1. **The opening hook** (first 2‑3 paragraphs). May use short declarative sentences and direct factual statements. Example: "In 2026, the Indonesian Rupiah touched Rp 17,500. Some called it a crisis worse than 1998. Others said it is just a strong dollar. Both are wrong."
 
-2. **The roadmap sentence** (immediately after the hook). May preview the argument’s structure and tone. Format: “I am going to lay out one coherent argument: [what the video will prove] and [what it will recommend]. No [tone qualifier]. No [tone qualifier].” Example: “I am going to lay out one coherent argument: why the Rupiah is weak and what would actually help. No political cheerleading. No doomsday exaggerations.”
+2. **The roadmap sentence** (immediately after the hook). May preview the argument's structure and tone. Format: "I am going to lay out one coherent argument: [what the video will prove] and [what it will recommend]. No [tone qualifier]. No [tone qualifier]." Example: "I am going to lay out one coherent argument: why the Rupiah is weak and what would actually help. No political cheerleading. No doomsday exaggerations."
 
-3. **The conclusion’s rhetorical anchor** (between the Emotional Coda and the Exit). May use very short declaratives, including fragmented sentences for emphasis. Example: “The Rupiah will stabilize when that signal comes. Until then, the currency will continue to bleed. Slowly. Silently. Predictably.”
+3. **The conclusion's rhetorical anchor** (between the Emotional Coda and the Exit). May use very short declaratives, including fragmented sentences for emphasis. Example: "The Rupiah will stabilize when that signal comes. Until then, the currency will continue to bleed. Slowly. Silently. Predictably."
 
 All other prohibitions (no em‑dashes, no bullet lists, no colons introducing lists, teleprompter spelling rules) apply everywhere, including the exceptions.
 
@@ -520,7 +520,7 @@ Each act makes the viewer feel they are investigating a bigger crime than they t
 
 Act 4 is not analysis. It is the detective laying the evidence on the table and demonstrating the proven chain. Not a theory — the mechanism, the proof, the demonstration that the viewer has been seeing the evidence every week. The crystallising line at the end of the mechanism demonstration is the verdict.
 
-**Contemporary Anchor:** Identify one specific present‑day event, institution, practice, or headline (from the last five years) that directly echoes the mechanism described. Name it in the script with a clear connecting sentence. Example: “And in 2020, when Amazon hired Pinkertons to spy on warehouse workers in Spain, that unblinking eye hadn’t closed at all.” This transforms the argument from historical autopsy to ongoing relevance. If no perfect present‑day echo exists, note the structural pattern that persists in modern institutions.
+**Contemporary Anchor:** Identify one specific present‑day event, institution, practice, or headline (from the last five years) that directly echoes the mechanism described. Name it in the script with a clear connecting sentence. Example: "And in 2020, when Amazon hired Pinkertons to spy on warehouse workers in Spain, that unblinking eye hadn't closed at all." This transforms the argument from historical autopsy to ongoing relevance. If no perfect present‑day echo exists, identify one structural pattern that persists—for example, "any system where an algorithm makes decisions without accountability operates on the same principle"—and name it in one sentence. This keeps the argument from feeling like a historical autopsy.
 
 ---
 
@@ -592,7 +592,7 @@ The conclusion always contains these five beats in order, with texture selected 
 
 **Beat 3 — The Emotional Coda:** Genuine, unironic, usually brief. Allow the speaker to feel something and state it plainly, without softening it with a joke. (This beat is mandatory; it anchors the sincerity of the argument.)
 
-**Beat 4 — The Rhetorical Anchor:** A short, memorable, emotionally resonant sentence that encapsulates the entire argument. May use very short declaratives or fragments for emphasis. No em‑dashes; use periods. Example: “The Rupiah will stabilize when that signal comes. Until then, the currency will continue to bleed. Slowly. Silently. Predictably.”
+**Beat 4 — The Rhetorical Anchor:** A short, memorable, emotionally resonant statement that encapsulates the entire argument. May stand alone as its own sentence or paragraph, or may be the closing line of the Emotional Coda. It is defined by its function—encapsulating the entire argument—not by its formatting. May use very short declaratives or fragments for emphasis. No em‑dashes; use periods.
 
 **Beat 5 — The Exit (Select One):**
 - **Option A — Flat Signoff:** A single declarative sentence of 6–10 words. Flat in tone, definitive, signals the end. Does not recap, does not summarize, does not thank the viewer. Feels like the speaker ran out of things to say at this specific moment. *Select this option when the script's dominant texture has been Discovery‑Focused (clause‑building, deadpan).*
@@ -636,7 +636,7 @@ Required: at least one of these three mechanisms per script. Mark it in the spok
 
 Identify the two or three most consequential events in the narrative. For each, write a short sensory scene (3–5 sentences) that includes location, action, a specific object or physical detail, and a consequence. Do not just state what happened; place the viewer there. These scenes are the emotional anchors of the script.
 
-Example from the Pinkerton script: *“That night, the agents tossed a specially‑designed incendiary device intended to illuminate the house and frighten the occupants into surrender. Think of it like an 1800s version of a flashbang. Instead, when it came through the window, the family pushed the device into the fireplace where it exploded. The explosion killed the James boys’ younger half‑brother and blew off the arm of their mother, Zerelda Samuels.”*
+Example from the Pinkerton script: *"That night, the agents tossed a specially‑designed incendiary device intended to illuminate the house and frighten the occupants into surrender. Think of it like an 1800s version of a flashbang. Instead, when it came through the window, the family pushed the device into the fireplace where it exploded. The explosion killed the James boys' younger half‑brother and blew off the arm of their mother, Zerelda Samuels."*
 
 Requirement: at least two such scenes in the script. Mark them in the spoken starting points table.
 
@@ -648,14 +648,14 @@ The script is written for an audience that has zero prior knowledge of the topic
 
 **While writing, follow these four rules:**
 
-1. **Define with Analogy:** When introducing any specialized term, historical concept, or institutional mechanism, immediately follow it with a concrete, everyday analogy that a modern viewer can picture. The analogy must be no more than one sentence and must use familiar, physical language (money, household objects, daily routines). Avoid dictionary‑style definitions. If you cannot find an analogy, simplify the explanation until it is transparent. Example: “company scrip” → “Monopoly money you can only cash in at the Monopoly store.”
+1. **Define with Analogy:** When introducing any specialized term, historical concept, or institutional mechanism, immediately follow it with a concrete, everyday analogy that a modern viewer can picture. The analogy may take one or two sentences. It must use familiar, physical language (money, household objects, daily routines). Avoid dictionary‑style definitions. If you cannot find an analogy, simplify the explanation until it is transparent. Example: "company scrip" → "Monopoly money you can only cash in at the Monopoly store."
 2. **Connect every section.** Adjacent ideas must be linked by an explicit causal or narrative thread.
 3. **Be specific, not vague.** Vague placeholders like "physical marker," "this idea," "the condition" must resolve to something the viewer can picture or understand.
 4. **Track your referents.** Before output, scan the script for every pronoun ("it," "they," "this," "that," "which") and every demonstrative placeholder. For each, confirm the exact noun it refers to appears no more than two sentences earlier and is unambiguous.
 
 **External‑Reference Bridging:** Any comparison to an external work must be introduced with a sentence that explicitly names the parallel before the comparison begins.
 
-**Implication Follow‑Through:** After stating any factual claim that is not self‑evidently dramatic (a statistic, a date, a bureaucratic detail), immediately include one clause that answers “which meant that…” or “which meant you could…” in concrete, human terms. Example: “The agency collected mugshots and dossiers on criminals. Which meant that for the first time, a detective in Chicago could know a suspect’s history from New York before the man even opened his mouth.”
+**Implication Follow‑Through:** After stating any factual claim that is not self‑evidently dramatic (a statistic, a date, a bureaucratic detail), immediately include one clause that answers "which meant that…" or "which meant you could…" in concrete, human terms. Example: "The agency collected mugshots and dossiers on criminals. Which meant that for the first time, a detective in Chicago could know a suspect's history from New York before the man even opened his mouth."
 
 **Before output, perform a fast internal check:**
 - Read the script once as if you've never encountered the subject. Could a reasonable person understand every sentence without pausing to Google? If not, fix.
@@ -671,13 +671,13 @@ The script is written for an audience that has zero prior knowledge of the topic
 
 The final script must be ready to read aloud from a teleprompter without live improvisation. Apply these rules before output:
 
-1. **No colons introducing lists.** Write “For example, wheat and cooking oil” not “For example: wheat, cooking oil.”
-2. **No standalone dashes.** Use commas or periods instead. (Em‑dashes are already prohibited everywhere.)
-3. **No bullet points or column layouts.** Convert all tabular data into complete spoken sentences. Example: “The Indonesian Rupiah fell 9.8 percent. The Vietnamese Dong fell 3.2 percent.” not a bullet list.
-4. **No abbreviations that require expansion.** Write “for example,” “that is,” “versus.” Do not use “e.g.,” “i.e.,” “vs.”
-5. **Numbers:** Use numerals for large numbers (17,500) – the speaker will read naturally. For percentages, write “9.8 percent” not “9.8%”.
-6. **No parentheticals that are not spoken.** Replace parentheses with commas or rephrase.
-7. **No implied referents.** If “this” or “that” appears, ensure the exact noun is within the previous two sentences.
+1. **No colons introducing lists.** Write "For example, wheat and cooking oil" not "For example: wheat, cooking oil."
+2. **No em‑dashes.** Em‑dashes are a typographic mark for inserted thoughts. In spoken language, those thoughts either belong in their own sentence, belong at the end of the current sentence as a natural clause, or belong earlier in the sentence as a rephrased idea. Instead of dropping a comma where an em‑dash was, rewrite the sentence to remove the insertion entirely. Options: chain the thought with "and," "but," or "so"; let it trail off and restart; restructure the sentence so the parenthetical idea is integrated into the main clause; or simply end the sentence and start a new one. The goal is not punctuation replacement—it is spoken‑sentence architecture that never needed the em‑dash in the first place.
+3. **No bullet points or column layouts.** Convert all tabular data into complete spoken sentences. Example: "The Indonesian Rupiah fell 9.8 percent. The Vietnamese Dong fell 3.2 percent." not a bullet list.
+4. **No abbreviations that require expansion.** Write "for example," "that is," "versus." Do not use "e.g.," "i.e.," "vs."
+5. **Numbers:** Use numerals for large numbers (17,500) — the speaker will read naturally. For percentages, write "9.8 percent" not "9.8%".
+6. **No parentheticals that are not spoken.** If a thought requires parentheses to fit in a sentence, the sentence is written, not spoken. Rewrite the surrounding sentences so the thought either becomes its own sentence, integrates naturally into the main clause without brackets, or is cut. Never drop a comma where a parenthesis was and call it fixed—the architecture must change, not just the punctuation.
+7. **No implied referents.** If "this" or "that" appears, ensure the exact noun is within the previous two sentences.
 
 ---
 
@@ -685,8 +685,8 @@ The final script must be ready to read aloud from a teleprompter without live im
 
 Any time the script presents comparative data (e.g., currency depreciation percentages, trade surplus numbers, fiscal figures), it must be written as **complete spoken sentences**, not as lists or tables. For each data point, write a full sentence that includes the subject, the value, and the time reference.
 
-✅ Correct: “In January 2025, the trade surplus was 3.49 billion dollars. In January 2026, it fell to 950 million dollars.”
-❌ Incorrect: “January 2025: $3.49B. January 2026: $0.95B.”
+✅ Correct: "In January 2025, the trade surplus was 3.49 billion dollars. In January 2026, it fell to 950 million dollars."
+❌ Incorrect: "January 2025: $3.49B. January 2026: $0.95B."
 
 Do not use colons to introduce data series.
 
@@ -694,10 +694,10 @@ Do not use colons to introduce data series.
 
 #### FIRST‑PERSON ACTIVE VOICE FOR METHODOLOGY
 
-When describing the script’s own purpose, methods, or structure, use first‑person active voice. Avoid self‑referential labels like “this explainer,” “this video,” “this analysis.”
+When describing the script's own purpose, methods, or structure, use first‑person active voice. Avoid self‑referential labels like "this explainer," "this video," "this analysis."
 
-✅ Correct: “I’ve built this on data from the Ministry of Finance and BPS.” or “Here is what I found.”
-❌ Incorrect: “This explainer builds on multiple layers of analysis.”
+✅ Correct: "I've built this on data from the Ministry of Finance and BPS." or "Here is what I found."
+❌ Incorrect: "This explainer builds on multiple layers of analysis."
 
 This rule applies only to methodological statements, not to narrative or evidence sections.
 
@@ -737,7 +737,8 @@ The single most common failure mode is writing prose and then making it sound sp
 - Unattributed quotes as opening lines
 - Timeline errors
 - Connector words as paragraph openers — except as permitted in Handholds and native openers
-- Em‑dashes
+- Em‑dashes (prohibited everywhere; structural rewrite required, not punctuation swap)
+- Parentheticals that are not spoken (structural rewrite required, not punctuation swap)
 - Formal audience address
 - Building to a poetic final line
 - Summarizing own point after making it (except in allowed Handholds)
@@ -782,7 +783,7 @@ The single most common failure mode is writing prose and then making it sound sp
 - **At least two dramatized scene moments** (sensory, specific, with consequence)
 - **Central Contradiction Statement** introduced early and returned to at Verdict or Universal Extension
 - **Contemporary Anchor** present in Act 4 (or structural pattern noted if no perfect echo exists)
-- **Define with Analogy** applied for every specialized term
+- **Define with Analogy** applied for every specialized term (may take one or two sentences)
 - **Implication Follow‑Through** applied to every non‑dramatic factual claim
 
 ---
@@ -795,6 +796,7 @@ Check every paragraph for:
 - Temporal anchors: references to "last week," "yesterday," "recently" — use relative time references instead
 - Overlong setup clauses: the actual point buried after too many subordinate clauses
 - Staccato clusters: sequences of three or more sentences, each under approximately 8 words, that sit in the same paragraph or adjacent paragraphs. If the information can be combined into a single flowing clause chain without losing emphasis, merge them. The only exception is a deliberate, isolated Verdict beat that follows sufficient Processing — keep those short, but verify that the preceding passage earned the punch (by ear, not by count).
+- **Parallel structure clusters:** Scan for sequences where two or more consecutive sentences share the same grammatical skeleton (Subject + can + verb + object. Subject + cannot + verb + object.) If found, break the pattern by varying at least one of the structures—change the subject, embed one inside a larger sentence, or shift from declarative to a different mode.
 - **Connective scarcity:** Scan for sequences of three or more sentences within a paragraph that lack mid‑sentence connecting words (and, but, so, because, though, which, while). If found, consider merging sentences or adding a connector to improve flow.
 - Wrong article usage
 - Written sentence openers: infinitive clauses, formal pivots
@@ -818,7 +820,13 @@ Check every paragraph for:
 
 ---
 
-#### THE STRUCTURAL PAYOFF AUDIT — APPLY AFTER THE NATURALNESS AUDIT
+#### ADJACENT VERDICT AUDIT — APPLY AFTER THE NATURALNESS AUDIT
+
+Scan for any two consecutive paragraphs that each end with a short declarative Verdict (under approximately 10 words) and that share a similar grammatical structure (e.g., both are "He can X. He cannot Y." or "That is not a joke. That is him Z."). If found, vary the structure of at least one: embed the second Verdict inside a larger sentence, shift the subject, change the length, or merge the two paragraphs into a single Processing passage with one deferred Verdict. The goal is not mechanical merging but literary variation—the listener should not hear a template.
+
+---
+
+#### THE STRUCTURAL PAYOFF AUDIT — APPLY AFTER THE ADJACENT VERDICT AUDIT
 
 Before finalising the script, run these three checks to ensure structural payoffs are present and correctly placed:
 
@@ -1127,8 +1135,10 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] At least two dramatized scene moments present
 - [ ] Central Contradiction Statement planted and returned to
 - [ ] Contemporary Anchor present in Act 4 (or structural pattern noted)
-- [ ] Define with Analogy applied for all specialized terms
+- [ ] Define with Analogy applied for all specialized terms (may take one or two sentences)
 - [ ] Implication Follow‑Through applied to non‑dramatic factual claims
+- [ ] Adjacent Verdict Audit passed (no template‑sounding adjacent verdicts)
+- [ ] Parallel structure clusters broken and varied
 
 **TIER 2 — QUALITY GATES (must pass for publishable output):**
 
@@ -1182,7 +1192,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Staccato clusters checked and merged where appropriate (ear test)
 - [ ] Connective scarcity scan passed
 - [ ] Paragraph opener audit completed at proportional scale
-- [ ] No em‑dashes in spoken text
+- [ ] No em‑dashes in spoken text (structural rewrites applied, not punctuation swaps)
+- [ ] No parentheticals that are not spoken (structural rewrites applied, not punctuation swaps)
 - [ ] Absurd self‑insertion in Move 3 drawn from Universal Relatable Category
 - [ ] Source material completeness audit completed and all gaps addressed
 - [ ] Humor technique suggestions from Step 4 reviewed; final script humor is organic
@@ -1232,8 +1243,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] No floating passive constructions
 - [ ] Every fact sourced — unsourced claims removed
 - [ ] Timeline verified and correctly stated throughout
-- [ ] First‑person active voice for methodology (no “this explainer”)
+- [ ] First‑person active voice for methodology (no "this explainer")
 
 ---
 
-## END OF PROMPT (v3.20)
+## END OF PROMPT (v3.21)

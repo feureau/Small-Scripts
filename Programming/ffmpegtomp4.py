@@ -135,45 +135,60 @@ def _get_stream_label(stream_info, stream_type="audio"):
     return " | ".join(parts)
 
 
-def _prompt_select_streams(streams, stream_type="audio"):
+def _filter_streams_by_choice(streams, choice, stream_type="audio"):
     """
-    Display a numbered list of streams and ask the user which to keep.
-    Returns the selected subset (list). If only one stream exists or the
-    user chooses all, the original list is returned unchanged.
+    Filter a list of streams based on a user-specified choice string
+    (which can contain comma-separated numbers, language names/codes, or titles).
+    If no matching tracks are found or choice is empty, returns all streams.
     """
-    if len(streams) <= 1:
-        return streams
-
-    print(f"\n  Multiple {stream_type} tracks detected. Please select which to include:")
-    for i, s in enumerate(streams):
-        idx = s.get('index', '?')
-        label = _get_stream_label(s, stream_type)
-        print(f"    {i + 1}) Stream {idx}: {label}")
-
-    print(f"  Enter track numbers separated by commas (e.g. 1,3), or press Enter to keep all:")
-    try:
-        choice = input("  > ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("  No input received, keeping all tracks.")
-        return streams
-
     if not choice or choice.lower() == 'all':
+        return streams
+
+    if len(streams) <= 1:
         return streams
 
     selected = []
     for part in choice.split(','):
         part = part.strip()
+        if not part:
+            continue
         try:
             num = int(part)
             if 1 <= num <= len(streams):
-                selected.append(streams[num - 1])
-            else:
-                print(f"  WARNING: '{num}' is out of range, ignoring.")
+                if streams[num - 1] not in selected:
+                    selected.append(streams[num - 1])
+            continue
         except ValueError:
-            print(f"  WARNING: '{part}' is not a valid number, ignoring.")
+            pass
+
+        # Try to match by language tag, language name, or title
+        part_lower = part.lower()
+        matched = []
+        for s in streams:
+            tags = s.get('tags', {})
+            lang = ""
+            title = ""
+            for k, v in tags.items():
+                if k.lower() == 'language':
+                    lang = v
+                elif k.lower() == 'title':
+                    title = v
+            
+            lang_lower = lang.lower() if lang else ""
+            lang_name = _get_language_name(lang).lower() if lang else ""
+            title_lower = title.lower() if title else ""
+
+            if (lang_lower and part_lower == lang_lower) or \
+               (lang_name and part_lower == lang_name) or \
+               (lang_name and part_lower in lang_name) or \
+               (title_lower and part_lower in title_lower):
+                matched.append(s)
+        
+        for ms in matched:
+            if ms not in selected:
+                selected.append(ms)
 
     if not selected:
-        print("  No valid selection made, keeping all tracks.")
         return streams
 
     return selected
@@ -1044,30 +1059,60 @@ def main():
 
         if need_prompt:
             print("\n" + "=" * 70)
-            print("TRACK SELECTION  (answer all prompts, then batch processing begins)")
+            print("BATCH TRACK SELECTION  (applied to all videos in this batch)")
             print("=" * 70)
 
+            # Find a reference file that has multiple tracks to display as examples
+            ref_file = None
+            ref_audio = []
+            ref_subs = []
             for file_path in files_to_process:
-                basename = os.path.basename(file_path)
+                audio_streams = _probe_audio_streams(file_path)
+                sub_streams = _probe_subtitle_streams(file_path)
+                if len(audio_streams) > 1 or len(sub_streams) > 1:
+                    ref_file = file_path
+                    ref_audio = audio_streams
+                    ref_subs = sub_streams
+                    break
+
+            if ref_file:
+                print(f"Reference File: {os.path.basename(ref_file)}")
+                if len(ref_audio) > 1:
+                    print("\n  Multiple audio tracks detected (Reference):")
+                    for i, s in enumerate(ref_audio):
+                        idx = s.get('index', '?')
+                        label = _get_stream_label(s, "audio")
+                        print(f"    {i + 1}) Stream {idx}: {label}")
+                if len(ref_subs) > 1:
+                    print("\n  Multiple subtitle tracks detected (Reference):")
+                    for i, s in enumerate(ref_subs):
+                        idx = s.get('index', '?')
+                        label = _get_stream_label(s, "subtitle")
+                        print(f"    {i + 1}) Stream {idx}: {label}")
+
+            print("\n  Enter audio track preference (language code/name, title, comma-separated numbers, or press Enter to keep all):")
+            try:
+                audio_choice = input("  Audio Selection > ").strip()
+            except EOFError:
+                audio_choice = ""
+
+            print("  Enter subtitle track preference (language code/name, title, comma-separated numbers, or press Enter to keep all):")
+            try:
+                sub_choice = input("  Subtitle Selection > ").strip()
+            except EOFError:
+                sub_choice = ""
+
+            for file_path in files_to_process:
                 audio_streams = _probe_audio_streams(file_path)
                 sub_streams = _probe_subtitle_streams(file_path)
 
-                sel_audio = None
-                sel_subs = None
-
-                if len(audio_streams) > 1 or len(sub_streams) > 1:
-                    print(f"\n--- {basename} ---")
-
-                if len(audio_streams) > 1:
-                    sel_audio = _prompt_select_streams(audio_streams, stream_type="audio")
-
-                if len(sub_streams) > 1:
-                    sel_subs = _prompt_select_streams(sub_streams, stream_type="subtitle")
+                sel_audio = _filter_streams_by_choice(audio_streams, audio_choice, stream_type="audio")
+                sel_subs = _filter_streams_by_choice(sub_streams, sub_choice, stream_type="subtitle")
 
                 track_selections[file_path] = (sel_audio, sel_subs)
 
             print("\n" + "=" * 70)
-            print("All selections recorded. Starting batch processing...")
+            print("Selections applied. Starting batch processing...")
             print("=" * 70)
 
     for file_path in files_to_process:
@@ -1112,4 +1157,8 @@ def main():
     print("\nAll processing complete.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user.")
+        sys.exit(1)

@@ -1452,8 +1452,8 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                         lang_base = video_lang.split('-')[0].lower()
                         if lang_base not in target_langs:
                             target_langs.append(lang_base)
-                    # Only add English as a low-priority fallback when we have some language context
-                    if target_langs and 'en' not in target_langs:
+                    # Ensure English is always a fallback target language
+                    if 'en' not in target_langs:
                         target_langs.append('en')
 
                     def score_subtitle(sub):
@@ -1805,7 +1805,10 @@ def build_ytdlp_command(target_url, args, video_lang=None):
             # Request only the video's language and English to avoid downloading 100+ auto-translated tracks.
             # We use base language codes with a wildcard (e.g., 'en.*') to catch regional variants.
             v_base = video_lang.split('-')[0].lower()
-            sub_lang = f"{v_base}.*"
+            if v_base != 'en':
+                sub_lang = f"{v_base}.*,en.*"
+            else:
+                sub_lang = 'en.*'
         elif getattr(args, 'default_download', False):
             # Default download mode with no detected language: conservative English fallback.
             # We avoid 'all' because it downloads 100+ auto-translated languages on YouTube.
