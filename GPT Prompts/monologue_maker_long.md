@@ -240,7 +240,7 @@ These techniques are available regardless of subject. The model should deploy th
 
 **Technique 1: The Grandiose Deadpan** — Apply maximum superlative framing to something ordinary or absurd, delivered completely straight.
 
-**Technique 2: The Fully Committed Roleplay / Extended Analogy** — Inhabit a scenario completely, with invented specific dialogue, for as long as the humor naturally sustains itself. No minimum sentence count is required. If the subject does not invite a lengthy roleplay, do not force one. A single precision‑of‑image line or underreaction can carry the same weight.
+**Technique 2: The Fully Committed Roleplay / Extended Analogy** — Inhabit a scenario completely, with invented specific dialogue, for as long as the humor naturally sustains itself. No minimum sentence count is required. If the subject does not invite a lengthy roleplay, do not force it. A single precision‑of‑image line or underreaction can carry the same weight.
 
 **Technique 3: The Sincere Enthusiasm That Sneaks Up** — Frame self as not easily moved, then clearly be moved. Do not announce the emotional response; let it appear in the warmth of language while still technically being analytical.
 
@@ -319,15 +319,15 @@ Check for:
 
 **THIN SOURCE PROTOCOL**
 
-If the completeness audit reveals that the verified fact sheet cannot support a 9–11 minute script without speculation, manufactured detail, or padding, do not proceed. Apply this decision tree:
+If the completeness audit reveals that the verified fact sheet cannot support a full‑length script without speculation, manufactured detail, or padding, do not proceed. Apply this decision tree:
 
 1. **Can the gap be filled by additional research?** If yes, run additional targeted searches and re‑run the living fact sheet protocol before proceeding. Document the new sources.
 2. **Is the gap specific to one act?** If yes, consider whether the angle can be restructured so that act is shorter or combined with adjacent material.
-3. **Is the gap the entire premise?** If yes, the source is insufficient for long‑form treatment. Two options: (a) Reduce target length to a 4–6 minute script proportionally adjusted, or (b) broaden the subject scope to include related material that can be independently verified. Note the decision made and the reason for it.
+3. **Is the gap the entire premise?** If yes, the source is insufficient for long‑form treatment. Two options: (a) Reduce the script to a shorter runtime (a compact commentary still requires the hook, acts, counterargument, and five‑beat conclusion—proportionally compressed), or (b) broaden the subject scope to include related material that can be independently verified. Note the decision made and the reason for it.
 
 Never pad a thin subject with speculation framed as analysis. Filler is not a solution; it is a different kind of honesty problem.
 
-**If the decision is to reduce target length:** The resulting shorter script must still satisfy all structural requirements—hook, acts, counterargument, five‑beat conclusion—proportionally compressed. A four‑minute script still needs a hook, a thesis, evidence, a counterargument, and a conclusion. The proportions tighten; the structure does not collapse.
+**If the decision is to reduce length:** The resulting shorter script must still satisfy all structural requirements—hook, acts, counterargument, five‑beat conclusion—proportionally compressed. A four‑minute script still needs a hook, a thesis, evidence, a counterargument, and a conclusion. The proportions tighten; the structure does not collapse.
 
 Produce a completeness report listing every gap, missing detail, underdeveloped section, humor technique assignment (suggested), and argument‑driven gap before proceeding. Only proceed to Step 5 when the completeness audit is finished.
 
@@ -366,7 +366,7 @@ Not all repeated information is redundancy. Before cutting any information that 
 
 ---
 
-## STEP 6 — ESTABLISH SPOKEN STARTING POINTS, THEN WRITE THE LONG‑FORM SCRIPT
+## STEP 6 — ESTABLISH SPOKEN STARTING POINTS, THEN WRITE THE SCRIPT
 
 ### PART A — ESTABLISH SPOKEN STARTING POINTS FIRST
 
@@ -396,34 +396,34 @@ Only proceed to prose generation when every starting point passes all tests.
 
 ---
 
-### PART B — WRITE THE LONG‑FORM SCRIPT
+### PART B — WRITE THE SCRIPT
 
-Write a 9–11 minute commentary script using the verified facts, the unified voice architecture, the chosen angle, and all structures described below. Generate each paragraph from its spoken starting point and only from its spoken starting point.
+Write a commentary script using the verified facts, the unified voice architecture, the chosen angle, and all structures described below. Generate each paragraph from its spoken starting point and only from its spoken starting point.
 
 ---
 
-#### WORD COUNT TARGETS — 9–11 MINUTE COMMENTARY
+#### SCRIPT LENGTH GUIDANCE — FUNCTIONAL SUFFICIENCY, NOT WORD COUNT
 
-Commentary and essay YouTube content runs 150–170 WPM on camera. With a standard 0.85 multiplier for pauses and b‑roll time:
+The script's length is determined by the evidence and the structural demands of the detective revelation arc, not by a pre‑set word count. Each of the four acts must be fully realised: an act is complete when it has accomplished its narrative job (see Act Completion Criteria below), not when it reaches a certain number of words. The pacing should feel unhurried but never padded.
 
-| Script length | Expected runtime | Notes |
-|---|---|---|
-| 1,150 words | ~9 min | Minimum; suits slower, more deliberate pacing |
-| 1,400 words | ~10 min | Practical midpoint; use as default |
-| 1,600 words | ~11 min | Maximum; suits faster, denser delivery |
+After the script is written, you may use the following formula to estimate its spoken runtime for recording purposes; it is a production tool, not a writing target.
 
-*Formula: (target minutes) × (150–170 WPM) × 0.85 = scripted word count. Use 0.85 for standard commentary with occasional b‑roll pauses. Use 0.95 for straight‑to‑camera with no editing pauses.*
+*Formula: (script word count) ÷ (150–170 WPM) ÷ 0.85 = estimated minutes. Use 0.85 for standard commentary with occasional b‑roll pauses. Use 0.95 for straight‑to‑camera with no editing pauses.*
 
-**Act‑length allocation (default proportions):**
+The goal is the shortest script that fully delivers the argument with all required structural elements (hook, acts, counterargument, five‑beat conclusion, re‑engagement hooks, dramatized scenes, etc.). If the source material is rich, the script may run longer; if it is thin, the Thin Source Protocol already mandates compression. Never pad to reach a number. Never cut substance to fit one.
 
-| Act | Share of script | Word range (1,400 base) |
-|---|---|---|
-| Act 1 — One person's story | 25% | ~350 words |
-| Act 2 — Ecosystem revealed | 30% | ~420 words |
-| Act 3 — Specific coercive act | 30% | ~420 words |
-| Act 4 — Mechanism still running | 15% | ~210 words |
+---
 
-These are anchors, not hard limits. Act 3 may run longer for complex evidence chains. Act 4 must never be padded — short and decisive.
+#### ACT COMPLETION CRITERIA (FUNCTIONAL SUFFICIENCY)
+
+Each act ends not when it hits a length target but when it has done its job. Use these qualitative gates to judge when to move to the next act.
+
+- **Act 1 is finished when** the audience has been placed inside a specific person’s experience, a mystery or central tension has been established, and a re‑engagement hook opens a forward‑pulling question about the larger ecosystem. The audience should feel they are investigating a real human situation, not reading a summary.
+- **Act 2 is finished when** the personal story has been credibly reframed as part of a wider system or pattern. At least two separate pieces of verified evidence (documents, testimonies, data) have been presented, the connections between them are clear, and a new re‑engagement hook pivots toward a specific, coercive mechanism that will be exposed in Act 3.
+- **Act 3 is finished when** the specific coercive act (policy, decision, exploit, betrayal) has been dramatized—with at least one sensory scene—and the chain of evidence makes the mechanism unambiguous. The audience should feel the weight of personal wrongdoing within the system. A bridging sentence (if needed) carries them into the final act.
+- **Act 4 is finished when** the verdict has been delivered, the contemporary anchor (or structural pattern) has been named, the counterargument has been acknowledged and rebutted, the universal extension has been articulated, the emotional coda has been felt, and the exit (flat or deflationary) has landed with finality. No new information is introduced; the act demonstrates that the mechanism is still breathing.
+
+If, while writing, an act feels thin or rushed, return to the verified fact sheet or Step 4 audit to find more substance—do not inflate the prose. If an act overflows with material, check whether it’s doing the job of the next act or repeating itself; if so, cut back to the narrative spine. The ear test remains the final authority: if a section drags, tighten it; if a verdict lands too soon, extend the processing.
 
 ---
 
@@ -1139,6 +1139,7 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Implication Follow‑Through applied to non‑dramatic factual claims
 - [ ] Adjacent Verdict Audit passed (no template‑sounding adjacent verdicts)
 - [ ] Parallel structure clusters broken and varied
+- [ ] Act functional sufficiency met — each act fulfills its narrative job (reference Act Completion Criteria)
 
 **TIER 2 — QUALITY GATES (must pass for publishable output):**
 
@@ -1155,7 +1156,7 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 *Structure:*
 - [ ] Stakes rise at every act break
-- [ ] Act‑length proportions roughly match targets (or documented deviation)
+- [ ] Act functional sufficiency met; no act feels rushed or padded (reference Act Completion Criteria)
 - [ ] Bridging sentences present for all major topic shifts
 - [ ] Crystallising line exists, is in the final third, arrives as the verdict
 - [ ] If Deflation Exit, callback planted earlier and retrieved; callback‑plant audit passed
@@ -1230,6 +1231,7 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Delivery notes updated
 - [ ] Source table updated
 - [ ] Paragraph opener audit re‑run on full revised script
+- [ ] Act functional sufficiency re‑checked — no act lost its narrative job in revision
 
 **CREDIBILITY CHECKS:**
 - [ ] Clear stance supported by evidence
@@ -1247,4 +1249,4 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 ---
 
-## END OF PROMPT (v3.21)
+## END OF PROMPT (v3.21 — FUNCTIONAL SUFFICIENCY EDITION)

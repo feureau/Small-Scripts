@@ -228,6 +228,9 @@ DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Defau
 
 # -------------------------- Output Configuration --------------------------
 DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per video. Default: False
+DEFAULT_GROUP_BY_PRESET = False                     # Group output into preset subfolders. Default: False
+DEFAULT_GROUP_BY_VIDEO = False                      # Group output into video subfolders. Default: False
+DEFAULT_SUBFOLDER_OVERRIDE = ""                     # Custom override for subfolder name
 DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"           # Name of pooled output directory. Default: Output
 
 # -------------------------- Workflow Presets --------------------------
@@ -276,6 +279,8 @@ DEFAULT_SUBTITLE_UNDERLINE = False                  # Underline text style. Defa
 DEFAULT_SUBTITLE_MARGIN_V = "335"                   # Vertical margin from edge (pixels). Default: 335, Range: 0 to 1080
 DEFAULT_SUBTITLE_MARGIN_L = "50"                    # Left margin from edge (pixels). Default: 50, Range: 0 to 960
 DEFAULT_SUBTITLE_MARGIN_R = "100"                   # Right margin from edge (pixels). Default: 100, Range: 0 to 960
+DEFAULT_SUBTITLE_SEAM_H_OFFSET = "0"                # Horizontal offset for Seam alignment. Default: 0
+DEFAULT_SUBTITLE_SEAM_V_OFFSET = "0"                # Vertical offset for Seam alignment. Default: 0
 DEFAULT_REFORMAT_SUBTITLES = True                   # Reformat to single wrapped line. Default: True
 DEFAULT_WRAP_LIMIT = "42"                           # Characters per line before wrapping. Default: 42, Range: 20 to 100
 DEFAULT_SUBTITLE_MAX_LINES = "0"                    # Max lines for a subtitle block after wrapping. 0 = unlimited.
@@ -1017,6 +1022,8 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     margin_v = options.get('subtitle_margin_v', DEFAULT_SUBTITLE_MARGIN_V)
     margin_l = options.get('subtitle_margin_l', DEFAULT_SUBTITLE_MARGIN_L)
     margin_r = options.get('subtitle_margin_r', DEFAULT_SUBTITLE_MARGIN_R)
+    seam_h_offset = options.get('subtitle_seam_h_offset', DEFAULT_SUBTITLE_SEAM_H_OFFSET)
+    seam_v_offset = options.get('subtitle_seam_v_offset', DEFAULT_SUBTITLE_SEAM_V_OFFSET)
     align_map = {"top": 8, "middle": 5, "bottom": 2, "seam": 2}
     alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
     reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
@@ -1152,7 +1159,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         align_mode = options.get("subtitle_alignment", "bottom")
         if align_mode == "seam" and "calculated_pos" in options:
             x, y = options["calculated_pos"]
-            pos_override = fr"{{\an5\pos({x},{y})}}"
+            try:
+                ho = float(seam_h_offset)
+                vo = float(seam_v_offset)
+            except (ValueError, TypeError):
+                ho = 0.0
+                vo = 0.0
+            x = x + ho
+            y = y - vo
+            pos_override = fr"{{\an5\pos({x:.1f},{y:.1f})}}"
         elif align_mode == "top":
             cy = m_v_offset
             pos_override = fr"{{\an8\pos({cx:.1f},{cy:.1f})}}"
@@ -1779,6 +1794,9 @@ class WorkflowPresetManager:
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
             "sharpening_strength": DEFAULT_SHARPENING_STRENGTH,
             "output_to_subfolders": DEFAULT_OUTPUT_TO_SUBFOLDERS,
+            "group_by_preset": DEFAULT_GROUP_BY_PRESET,
+            "group_by_video": DEFAULT_GROUP_BY_VIDEO,
+            "subfolder_override": DEFAULT_SUBFOLDER_OVERRIDE,
             "normalize_audio": DEFAULT_NORMALIZE_AUDIO,
             "use_dynaudnorm": DEFAULT_USE_DYNAUDNORM,
             "dyn_frame_len": DEFAULT_DYNAUDNORM_FRAME_LEN,
@@ -1812,6 +1830,8 @@ class WorkflowPresetManager:
             "subtitle_margin_v": DEFAULT_SUBTITLE_MARGIN_V,
             "subtitle_margin_l": DEFAULT_SUBTITLE_MARGIN_L,
             "subtitle_margin_r": DEFAULT_SUBTITLE_MARGIN_R,
+            "subtitle_seam_h_offset": DEFAULT_SUBTITLE_SEAM_H_OFFSET,
+            "subtitle_seam_v_offset": DEFAULT_SUBTITLE_SEAM_V_OFFSET,
             "fill_color": DEFAULT_FILL_COLOR,
             "fill_alpha": DEFAULT_FILL_ALPHA,
             "outline_color": DEFAULT_OUTLINE_COLOR,
@@ -2041,6 +2061,10 @@ class VideoProcessorApp:
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
+        self.group_by_preset_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_PRESET)
+        self.group_by_video_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_VIDEO)
+        self.subfolder_override_var = tk.StringVar(value=DEFAULT_SUBFOLDER_OVERRIDE)
+        self.subfolder_override_var.trace_add('write', lambda *args: self._update_selected_jobs('subfolder_override'))
         self.render_by_chapters_var = tk.BooleanVar(value=DEFAULT_RENDER_BY_CHAPTERS)
         self.split_subtitles_by_chapter_var = tk.BooleanVar(value=DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
@@ -2172,6 +2196,10 @@ class VideoProcessorApp:
         self.subtitle_margin_l_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_l'))
         self.subtitle_margin_r_var = tk.StringVar(value=DEFAULT_SUBTITLE_MARGIN_R)
         self.subtitle_margin_r_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_margin_r'))
+        self.subtitle_seam_h_offset_var = tk.StringVar(value=DEFAULT_SUBTITLE_SEAM_H_OFFSET)
+        self.subtitle_seam_h_offset_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_seam_h_offset'))
+        self.subtitle_seam_v_offset_var = tk.StringVar(value=DEFAULT_SUBTITLE_SEAM_V_OFFSET)
+        self.subtitle_seam_v_offset_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_seam_v_offset'))
         self.fill_color_var = tk.StringVar(value=DEFAULT_FILL_COLOR)
         self.fill_alpha_var = tk.IntVar(value=DEFAULT_FILL_ALPHA)
         self.outline_color_var = tk.StringVar(value=DEFAULT_OUTLINE_COLOR)
@@ -2874,6 +2902,15 @@ class VideoProcessorApp:
         ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
                         command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
+        ttk.Checkbutton(output_format_frame, text="Group by Preset", variable=self.group_by_preset_var, 
+                        command=lambda: self._update_selected_jobs("group_by_preset")).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Checkbutton(output_format_frame, text="Group by Video", variable=self.group_by_video_var, 
+                        command=lambda: self._update_selected_jobs("group_by_video")).pack(side=tk.LEFT, padx=(10, 0))
+        
+        ttk.Label(output_format_frame, text="Override:").pack(side=tk.LEFT, padx=(10, 2))
+        override_entry = ttk.Entry(output_format_frame, textvariable=self.subfolder_override_var, width=12)
+        override_entry.pack(side=tk.LEFT)
+        ToolTip(override_entry, "Custom subfolder name to override Video/Preset names.")
         
         lut_frame = ttk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
@@ -3213,6 +3250,16 @@ class VideoProcessorApp:
         self.seam_align_rb = ttk.Radiobutton(align_frame, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
         self.seam_align_rb.pack(side=tk.LEFT, padx=5)
         self.seam_align_rb.config(state="disabled")
+        
+        self.seam_h_lbl = ttk.Label(align_frame, text="H-Offset:")
+        self.seam_h_lbl.pack(side=tk.LEFT, padx=(5, 2))
+        self.seam_h_entry = ttk.Entry(align_frame, textvariable=self.subtitle_seam_h_offset_var, width=5)
+        self.seam_h_entry.pack(side=tk.LEFT)
+        self.seam_v_lbl = ttk.Label(align_frame, text="V-Offset:")
+        self.seam_v_lbl.pack(side=tk.LEFT, padx=(5, 2))
+        self.seam_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_seam_v_offset_var, width=5)
+        self.seam_v_entry.pack(side=tk.LEFT)
+
         ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
         margin_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
@@ -3529,10 +3576,14 @@ class VideoProcessorApp:
                 self.last_standard_alignment.set(current_alignment)
                 self.subtitle_alignment_var.set("seam")
             self.seam_align_rb.config(state="normal")
+            self.seam_h_entry.config(state="normal")
+            self.seam_v_entry.config(state="normal")
         else:
             if current_alignment == "seam":
                 self.subtitle_alignment_var.set(self.last_standard_alignment.get())
             self.seam_align_rb.config(state="disabled")
+            self.seam_h_entry.config(state="disabled")
+            self.seam_v_entry.config(state="disabled")
         
         self.aspect_ratio_frame.pack_forget()
         self.aspect_columns_frame.pack_forget()
@@ -3873,6 +3924,8 @@ class VideoProcessorApp:
             "subtitle_margin_v": self.subtitle_margin_v_var.get(), 
             "subtitle_margin_l": self.subtitle_margin_l_var.get(),
             "subtitle_margin_r": self.subtitle_margin_r_var.get(),
+            "subtitle_seam_h_offset": self.subtitle_seam_h_offset_var.get(),
+            "subtitle_seam_v_offset": self.subtitle_seam_v_offset_var.get(),
             "fill_color": self.fill_color_var.get(),
             "fill_alpha": self.fill_alpha_var.get(), "outline_color": self.outline_color_var.get(),
             "outline_alpha": self.outline_alpha_var.get(), "outline_width": self.outline_width_var.get(),
@@ -3882,6 +3935,9 @@ class VideoProcessorApp:
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
             "output_to_subfolders": self.output_subfolders_var.get(),
+            "group_by_preset": self.group_by_preset_var.get(),
+            "group_by_video": self.group_by_video_var.get(),
+            "subfolder_override": self.subfolder_override_var.get(),
             "use_sharpening": self.use_sharpening_var.get(),
             "sharpening_algo": self.sharpening_algo_var.get(),
             "sharpening_strength": self.sharpening_strength_var.get(),
@@ -4427,6 +4483,9 @@ class VideoProcessorApp:
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
+        self.group_by_preset_var.set(options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET))
+        self.group_by_video_var.set(options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO))
+        self.subfolder_override_var.set(options.get("subfolder_override", DEFAULT_SUBFOLDER_OVERRIDE))
         self.render_by_chapters_var.set(options.get("render_by_chapters", DEFAULT_RENDER_BY_CHAPTERS))
         self.split_subtitles_by_chapter_var.set(options.get("split_subtitles_by_chapter", DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER))
         raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
@@ -4477,6 +4536,8 @@ class VideoProcessorApp:
         self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
         self.subtitle_margin_l_var.set(options.get("subtitle_margin_l", DEFAULT_SUBTITLE_MARGIN_L))
         self.subtitle_margin_r_var.set(options.get("subtitle_margin_r", DEFAULT_SUBTITLE_MARGIN_R))
+        self.subtitle_seam_h_offset_var.set(options.get("subtitle_seam_h_offset", DEFAULT_SUBTITLE_SEAM_H_OFFSET))
+        self.subtitle_seam_v_offset_var.set(options.get("subtitle_seam_v_offset", DEFAULT_SUBTITLE_SEAM_V_OFFSET))
         self.fill_color_var.set(options.get("fill_color", DEFAULT_FILL_COLOR)); self.fill_alpha_var.set(options.get("fill_alpha", DEFAULT_FILL_ALPHA))
         self.outline_color_var.set(options.get("outline_color", DEFAULT_OUTLINE_COLOR)); self.outline_alpha_var.set(options.get("outline_alpha", DEFAULT_OUTLINE_ALPHA))
         self.outline_width_var.set(options.get("outline_width", DEFAULT_OUTLINE_WIDTH)); self.shadow_color_var.set(options.get("shadow_color", DEFAULT_SHADOW_COLOR))
@@ -4710,20 +4771,42 @@ class VideoProcessorApp:
             else:
                 options["horizontal_aspect"] = merged_aspect
         
-        if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
-            folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
-            if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
-            elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
-            elif orientation == "original": folder_name += "_Original"
-            else:
-                h_aspect = options.get('horizontal_aspect').replace(':', 'x')
-                if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
-            
-            tag = job.get('display_tag', "Subtitles")
-            safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-            final_sub_path = os.path.join(folder_name, safe_subtitle_folder_name)
+        sub_paths = []
+        override = options.get("subfolder_override", "").strip()
+        
+        if override:
+            sub_paths.append(re.sub(r'[\\/*?:"<>|]', "", override).strip())
+        elif not options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS) and \
+           not options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO) and \
+           not options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
+            sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
         else:
-            final_sub_path = DEFAULT_SINGLE_OUTPUT_DIR_NAME
+            if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
+                folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
+                if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
+                elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
+                elif orientation == "original": folder_name += "_Original"
+                else:
+                    h_aspect = options.get('horizontal_aspect').replace(':', 'x')
+                    if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
+                
+                tag = job.get('display_tag', "Subtitles")
+                safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
+                sub_paths.append(os.path.join(folder_name, safe_subtitle_folder_name))
+            else:
+                sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
+
+            if options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
+                preset_name = job.get('preset_name', "Default")
+                safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
+                sub_paths.append(safe_preset)
+
+            if options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO):
+                original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+                safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
+                sub_paths.append(safe_video_name)
+
+        final_sub_path = os.path.join(*sub_paths) if sub_paths else DEFAULT_SINGLE_OUTPUT_DIR_NAME
         
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, final_sub_path)

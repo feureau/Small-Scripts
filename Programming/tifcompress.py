@@ -1,3 +1,4 @@
+
 """
 # TIFF Compressor (Mission Control Dashboard Edition)
 
@@ -8,6 +9,11 @@ real-time, flicker-free visualization of multi-core workloads.
 ## Maintenance Rule
 > [!IMPORTANT]
 > This documentation block MUST be included and updated with every revision or update of the script.
+
+## Recent Fix
+- **Bit‑depth preservation**: `variant_worker` now validates that the saved temporary file
+  retains the original image mode (e.g., 'I;16'). Any variant that silently downgrades
+  bit depth (e.g., to 'L') is discarded and cannot be chosen as the winner.
 
 ## Technical Structure & Rationale
 
@@ -204,6 +210,8 @@ def variant_worker(payload):
     """
     Tests a single variant.
     Payload: (worker_id, f_path, config, t_path, dpi, shared_state)
+    Returns: (size, duration, stats_string, (comp, pred, level))
+    Returns float('inf') for size if the variant changed bit depth or failed.
     """
     w_id, f_path, (comp, pred, lvl), t_path, dpi, shared_state = payload
     var_label = f"{comp}/P{pred}/L{lvl}"
@@ -212,10 +220,31 @@ def variant_worker(payload):
     start = time.time()
     try:
         with Image.open(f_path) as img:
+            orig_mode = img.mode  # Remember original bit depth/mode
             shared_state[w_id] = f"SAVING: {var_label}"
             sp = {"compression": comp, "predictor": pred, "dpi": dpi}
             if "deflate" in comp: sp["compress_level"] = lvl
             img.save(t_path, **sp)
+            
+            # --- BIT DEPTH INTEGRITY CHECK ---
+            try:
+                with Image.open(t_path) as saved:
+                    if saved.mode != orig_mode:
+                        # Mode mismatch – discard this variant
+                        os.remove(t_path)
+                        dur = time.time() - start
+                        stats = (f"      [!] Bit depth changed ({orig_mode} -> {saved.mode}) "
+                                 f"- {var_label} discarded")
+                        shared_state[w_id] = f"IDLE - Discarded {comp}"
+                        return float('inf'), dur, stats, None
+            except Exception as e:
+                if t_path.exists(): os.remove(t_path)
+                dur = time.time() - start
+                stats = f"      [!] Cannot verify saved file: {e} - {var_label}"
+                shared_state[w_id] = f"ERROR: {var_label}"
+                return float('inf'), dur, stats, None
+            # --- END CHECK ---
+            
             sz = os.path.getsize(t_path)
             dur = time.time() - start
             stats = f"      - {comp:18} | P{pred} | L{lvl:1} : {sz:,} bytes | {dur:.3f}s"
@@ -240,6 +269,7 @@ def process_file_worker(payload):
     
     try:
         with Image.open(in_path) as img:
+            orig_mode = img.mode  # For bit‑depth validation inside variant testing
             dpi = img.info.get('dpi')
             curr_comp, curr_pred = get_tiff_info(img)
             
@@ -256,16 +286,22 @@ def process_file_worker(payload):
                 for i, cfg in enumerate(variants, 1):
                     shared_state[w_id] = f"{in_path.name[:15]}.. Testing {i}/9"
                     t_out = Path(tempfile.gettempdir()) / f"v_{w_id}_{i}.tif"
-                    # Call the same logic, passing shared_state as None to keep it silent nested
+                    # variant_worker now includes the bit‑depth check (returns inf if invalid)
                     sz, dur, stats, res_cfg = variant_worker((w_id, in_path, cfg, t_out, dpi, {}))
                     pct = ((o_sz - sz) / o_sz * 100) if o_sz > 0 else 0
                     log.write(f"{stats} | {pct:+.2f}%\n")
-                    if sz < best_sz: best_sz, best_cfg = sz, res_cfg
-                    if t_out.exists(): os.remove(t_out)
+                    if sz < best_sz:
+                        best_sz, best_cfg = sz, res_cfg
+                    if t_out.exists():
+                        os.remove(t_out)
+                
+                if best_cfg is None:
+                    raise RuntimeError("No valid variant preserved the original bit depth.")
                 
                 shared_state[w_id] = f"SAVING: {in_path.name}"
                 sp = {"compression": best_cfg[0], "predictor": best_cfg[1], "dpi": dpi}
-                if "deflate" in best_cfg[0]: sp["compress_level"] = best_cfg[2]
+                if "deflate" in best_cfg[0]:
+                    sp["compress_level"] = best_cfg[2]
                 img.save(out_path, **sp)
                 log.write(f"    Winner: {best_cfg[0]} | P{best_cfg[1]} | L{best_cfg[2] if best_cfg[2]>0 else 'N/A'}\n")
             else:
@@ -390,6 +426,7 @@ def main():
         painter.start(shared_dict)
 
         with Image.open(f_path) as img:
+            orig_mode = img.mode
             dpi, o_sz = img.info.get('dpi'), os.path.getsize(f_path)
             best_sz, best_cfg = float('inf'), None
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -404,10 +441,16 @@ def main():
                         sz, dur, log, cfg = fut.result()
                         painter.add_log(f"{log} | {((o_sz-sz)/o_sz*100):+.2f}%")
                         painter.completed_tasks += 1
-                        if sz < best_sz: best_sz, best_cfg = sz, cfg
+                        if sz < best_sz:
+                            best_sz, best_cfg = sz, cfg
+
+            if best_cfg is None:
+                painter.add_log("\n[FATAL] No valid variant preserved the original bit depth. Aborting.")
+                painter.stop()
+                return
 
             final_sp = {"compression": best_cfg[0], "predictor": best_cfg[1], "dpi": dpi}
-            if best_cfg[2]>0: final_sp["compress_level"] = best_cfg[2]
+            if best_cfg[2] > 0: final_sp["compress_level"] = best_cfg[2]
             img.save(out_path, **final_sp)
             n_sz = os.path.getsize(out_path)
             painter.add_log(f"\nWinner: {best_cfg[0]} | P{best_cfg[1]} | L{best_cfg[2] if best_cfg[2]>0 else 'N/A'}")

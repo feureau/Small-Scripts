@@ -73,7 +73,7 @@ from faster_whisper import WhisperModel
 
 # --- Configuration ---
 MODEL_ALIASES = {
-    "default": "large-v2",  # CHANGED: Default is now stable large-v2
+    "default": "deepdml/faster-whisper-large-v3-turbo-ct2", 
     "large-v2": "large-v2",
     "large-v3": "large-v3",
     "turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
@@ -84,7 +84,7 @@ MODEL_ALIASES = {
     "qwen3-asr-1.7b": "Qwen/Qwen3-ASR-1.7B"
 }
 
-DEFAULT_MODEL_KEY = "large-v2" # CHANGED
+DEFAULT_MODEL_KEY = "deepdml/faster-whisper-large-v3-turbo-ct2" # CHANGED
 DEFAULT_TASK = "transcribe"
 DEFAULT_VAD_THRESHOLD = 0.3
 DEFAULT_VAD_MIN_SILENCE_MS = 300
@@ -92,7 +92,9 @@ DEFAULT_WHISPER_VAD_THRESHOLD = 0.2
 DEFAULT_WHISPER_VAD_MIN_SILENCE_MS = 500
 DEFAULT_MIN_SUB_DURATION = 0.7
 DEFAULT_MAX_REPEAT_RUN = 8
-DEFAULT_PHRASE_PAUSE_SPLIT_S = 0.65
+DEFAULT_PHRASE_PAUSE_SPLIT_S = 0.85
+DEFAULT_MAX_SUB_DURATION = 7.0
+DEFAULT_MAX_SUB_WORDS = 18
 
 # Global State
 transcription_model = None
@@ -165,6 +167,125 @@ def resolve_model_backend(model_path: str) -> str:
     if isinstance(model_path, str) and model_path.lower().startswith("qwen/"):
         return "qwen"
     return "whisper"
+
+def resolve_model_alias(model_alias: str) -> str:
+    """Resolve model aliases case-insensitively."""
+    if not isinstance(model_alias, str):
+        return model_alias
+    key = model_alias.strip()
+    low = key.lower()
+    return MODEL_ALIASES.get(key, MODEL_ALIASES.get(low, key))
+
+def get_hf_cache_dir() -> str:
+    """Return Hugging Face hub cache directory."""
+    cache_override = os.environ.get("HUGGINGFACE_HUB_CACHE", "").strip()
+    if cache_override:
+        return cache_override
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    if hf_home:
+        return os.path.join(hf_home, "hub")
+    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+
+def list_downloaded_models_from_cache() -> list[str]:
+    """List downloaded model ids from Hugging Face cache folder."""
+    hub_dir = get_hf_cache_dir()
+    if not os.path.isdir(hub_dir):
+        return []
+    out = []
+    try:
+        for name in os.listdir(hub_dir):
+            if not name.startswith("models--"):
+                continue
+            # models--org--repo -> org/repo
+            model_id = name[len("models--"):].replace("--", "/")
+            snaps = os.path.join(hub_dir, name, "snapshots")
+            if os.path.isdir(snaps):
+                out.append(model_id)
+    except Exception:
+        return []
+    return sorted(set(out))
+
+def _model_id_to_cache_dirname(model_id: str) -> str:
+    return "models--" + model_id.replace("/", "--")
+
+def _candidate_model_ids_for_cache_lookup(model_or_alias: str) -> list[str]:
+    """Generate likely HF model ids for a user-provided alias/name."""
+    resolved = resolve_model_alias(model_or_alias)
+    candidates = []
+    if isinstance(resolved, str) and resolved.strip():
+        candidates.append(resolved.strip())
+        low = resolved.strip().lower()
+        # faster-whisper short names commonly resolve to Systran repos in cache.
+        if "/" not in low and low not in {"tiny", "tiny.en", "base", "base.en"}:
+            candidates.append(f"Systran/faster-whisper-{low}")
+    # Keep order and uniqueness.
+    seen = set()
+    out = []
+    for c in candidates:
+        k = c.lower()
+        if k not in seen:
+            out.append(c)
+            seen.add(k)
+    return out
+
+def delete_model_cache(model_or_alias: str) -> tuple[int, list[str]]:
+    """Delete cached directories for a model alias/id.
+    Returns (deleted_count, deleted_paths).
+    """
+    hub_dir = get_hf_cache_dir()
+    if not os.path.isdir(hub_dir):
+        return 0, []
+
+    deleted = []
+    candidate_ids = _candidate_model_ids_for_cache_lookup(model_or_alias)
+    candidate_dirnames = {_model_id_to_cache_dirname(mid).lower() for mid in candidate_ids}
+    # Also match by tail repo name to catch vendor differences.
+    candidate_tails = {mid.split("/")[-1].lower() for mid in candidate_ids}
+
+    for name in os.listdir(hub_dir):
+        full = os.path.join(hub_dir, name)
+        if not os.path.isdir(full) or not name.startswith("models--"):
+            continue
+        lname = name.lower()
+        repo_tail = lname.split("--")[-1]
+        if lname in candidate_dirnames or repo_tail in candidate_tails:
+            try:
+                shutil.rmtree(full)
+                deleted.append(full)
+            except Exception:
+                pass
+    return len(deleted), deleted
+
+def print_model_catalog():
+    print("Model Catalog")
+    print("   Use with: --model <name-or-path>\n")
+
+    downloadable = sorted(set(MODEL_ALIASES.values()))
+    alias_rows = sorted(MODEL_ALIASES.items(), key=lambda kv: kv[0].lower())
+
+    print("Available aliases (ready to use):")
+    for alias, target in alias_rows:
+        print(f"  - {alias:16s} -> {target}")
+
+    print("\nAvailable model targets (download/use):")
+    for m in downloadable:
+        print(f"  - {m}")
+
+    cached = list_downloaded_models_from_cache()
+    hub_dir = get_hf_cache_dir()
+    print(f"\nDownloaded/cached models in: {hub_dir}")
+    if cached:
+        for m in cached:
+            print(f"  - {m}")
+    else:
+        print("  (none found)")
+
+    print("\nExamples:")
+    print("  transcribe.py --model turbo <file>")
+    print("  transcribe.py --model large-v3 <file>")
+    print("  transcribe.py --model Qwen/Qwen3-ASR-1.7B <file>")
+    print("  transcribe.py --model-delete turbo")
+    print("  transcribe.py --model-redownload turbo")
 
 # --- yt-dlp Integration ---
 class YdlTqdmLogger:
@@ -434,7 +555,7 @@ def snap_to_vad(word_start, word_end, regions):
 # --- Processing Logic ---
 def ensure_model_loaded(model_alias):
     global transcription_model, current_model_path, current_model_backend, current_qwen_aligner, PREFERRED_COMPUTE_TYPE
-    model_path = MODEL_ALIASES.get(model_alias, model_alias)
+    model_path = resolve_model_alias(model_alias)
     backend = resolve_model_backend(model_path)
     qwen_aligner = os.environ.get("QWEN_ASR_ALIGNER", "").strip() if backend == "qwen" else None
     
@@ -464,6 +585,7 @@ def ensure_model_loaded(model_alias):
 
     if backend == "whisper":
         print(f"🚀 Loading Whisper model '{model_path}' on {device} ({compute_type})...")
+        print("   ⏳ If this is first run for this model, it may download model files.")
         log_event(f"ensure_model_loaded backend=whisper path={model_path} device={device} compute_type={compute_type}")
         
         try:
@@ -500,6 +622,7 @@ def ensure_model_loaded(model_alias):
             raise e
     else:
         print(f"🚀 Loading Qwen3-ASR model '{model_path}' on {device}...")
+        print("   ⏳ If this is first run for this model, it may download model files.")
         log_event(f"ensure_model_loaded backend=qwen path={model_path} device={device} aligner={qwen_aligner}")
         if not qwen_aligner:
             raise RuntimeError(
@@ -561,8 +684,21 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
             })
         return {'segments': fallback_segments}
 
-    # Punctuation that marks phrase/clause boundaries
-    phrase_end_chars = {'.', ',', '!', '?', ';', ':'}
+    # Prefer sentence-level boundaries. Commas are soft boundaries.
+    hard_end_chars = {'.', '!', '?', ';', ':'}
+    weak_tail_tokens = {
+        "e", "mas", "que", "de", "do", "da", "dos", "das",
+        "pra", "para", "com", "se", "em", "no", "na", "nos", "nas"
+    }
+    discourse_starters = {
+        "mas", "entao", "então", "agora", "enfim", "porem", "porém",
+        "porque", "pois", "so", "só", "ai", "aí"
+    }
+
+    def _norm_token(t: str) -> str:
+        t = (t or "").strip().lower()
+        t = re.sub(r"[^\wÀ-ÖØ-öø-ÿ]", "", t)
+        return t
 
     new_segments = []
     current_words = []
@@ -596,17 +732,55 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
         if i > 0 and current_words:
             prev = all_words[i - 1]
             gap = float(word.get("start", 0.0)) - float(prev.get("end", 0.0))
+            next_norm = _norm_token(word.get("word", ""))
+
             # Split when there is a real pause between spoken words.
-            if gap >= pause_split_s:
+            # Require a larger pause when the current phrase is still very short,
+            # which helps avoid dangling words at subtitle starts/ends.
+            pause_threshold = pause_split_s
+            if len(current_words) <= 2:
+                pause_threshold = max(pause_split_s, 1.20)
+            elif len(current_words) <= 5:
+                pause_threshold = max(pause_split_s, 1.00)
+            if gap >= pause_threshold:
+                process_and_add_phrase(current_words)
+                current_words = []
+            # Additional clause boundary split for long run-ons with light pauses.
+            elif len(current_words) >= 10 and gap >= 0.45:
+                process_and_add_phrase(current_words)
+                current_words = []
+            # Discourse-starter split after enough context.
+            elif len(current_words) >= 10 and gap >= 0.08 and next_norm in discourse_starters:
                 process_and_add_phrase(current_words)
                 current_words = []
 
         current_words.append(word)
         text = word['word'].strip()
 
-        if text and text[-1] in phrase_end_chars:
+        if text and text[-1] in hard_end_chars:
             process_and_add_phrase(current_words)
             current_words = []
+            continue
+
+        # Optional comma split: only when phrase is already substantial and
+        # there is at least a slight natural pause after the comma.
+        if text and text[-1] == ',' and i < len(all_words) - 1:
+            next_word = all_words[i + 1]
+            comma_gap = float(next_word.get("start", 0.0)) - float(word.get("end", 0.0))
+            last_norm = _norm_token(text)
+            next_norm = _norm_token(next_word.get("word", ""))
+            # Avoid splitting right after weak connectors.
+            tail_is_weak = last_norm in weak_tail_tokens
+            # Split more assertively to avoid paragraph-long lines:
+            # - substantial clause + tiny pause, or
+            # - medium clause + clearer pause.
+            if not tail_is_weak and (
+                (len(current_words) >= 8 and comma_gap >= 0.06) or
+                (len(current_words) >= 5 and comma_gap >= 0.12) or
+                (len(current_words) >= 6 and next_norm in discourse_starters and comma_gap >= 0.04)
+            ):
+                process_and_add_phrase(current_words)
+                current_words = []
 
     # Remaining words with no trailing punctuation
     process_and_add_phrase(current_words)
@@ -639,16 +813,22 @@ def sanitize_subtitle_segments(
         return data
 
     norm_counts = Counter()
+    sig_counts = Counter()
     for seg in segments:
         norm = _normalize_text_for_compare((seg.get("text") or "").strip())
         if norm:
             norm_counts[norm] += 1
+            sig = _text_signature(norm)
+            if sig:
+                sig_counts[sig] += 1
 
     # Detect likely hallucinated loops (short phrases repeated many times).
     dominant_norms = {
         n for n, c in norm_counts.items()
-        if c >= 10 and len(n.split()) <= 4 and len(n) <= 24
+        if c >= 5 and len(n.split()) <= 8 and len(n) <= 45
     }
+    # Also catch repeated long promo loops by signature.
+    dominant_sigs = {s for s, c in sig_counts.items() if c >= 3}
 
     cleaned = []
     last_norm = None
@@ -663,6 +843,8 @@ def sanitize_subtitle_segments(
 
         # Drop standalone dominant-loop lines.
         if norm in dominant_norms:
+            continue
+        if _text_signature(norm) in dominant_sigs:
             continue
 
         # Drop near-duplicate short lines that occur within 1 second.
@@ -697,6 +879,17 @@ def sanitize_subtitle_segments(
     if not cleaned:
         return {"segments": []}
 
+    # N-gram hallucination detection: drop segments dominated by repeating substrings
+    halluc_ngrams = _detect_hallucination_ngrams(cleaned, ngram_size=4, threshold=15)
+    if halluc_ngrams:
+        cleaned = [
+            seg for seg in cleaned
+            if _segment_hallucination_ratio(seg, halluc_ngrams) < 0.6
+        ]
+
+    if not cleaned:
+        return {"segments": []}
+
     # Enforce readable minimum durations by extending end time
     # without crossing into the next segment start.
     for i in range(len(cleaned)):
@@ -712,13 +905,206 @@ def sanitize_subtitle_segments(
             cur["end"] = cur["start"] + 0.20
 
     cleaned.sort(key=lambda s: (s["start"], s["end"]))
+
+    # Merge tiny orphan fragments into neighboring segments so lines start/end cleanly.
+    # Guard with timing so genuine standalone short utterances are preserved.
+    MERGE_GAP_MAX = 0.35
+    def _is_fragment_text(t: str) -> bool:
+        s = (t or "").strip().lower()
+        if not s:
+            return True
+        tokens = re.findall(r"\w+", s, flags=re.UNICODE)
+        if len(tokens) <= 1 and len(s) <= 12:
+            return True
+        if len(tokens) <= 2 and len(s) <= 10 and s[-1] not in ".!?":
+            return True
+        return False
+
+    merged = []
+    i = 0
+    while i < len(cleaned):
+        cur = cleaned[i]
+        txt = (cur.get("text") or "").strip()
+        if _is_fragment_text(txt):
+            cur_start = float(cur.get("start", 0.0))
+            cur_end = float(cur.get("end", cur_start))
+            if merged:
+                prev = merged[-1]
+                prev_end = float(prev.get("end", 0.0))
+                if (cur_start - prev_end) <= MERGE_GAP_MAX:
+                    prev["text"] = f"{prev.get('text', '').rstrip()} {txt}".strip()
+                    prev["end"] = max(prev_end, cur_end)
+                    i += 1
+                    continue
+            if i + 1 < len(cleaned):
+                nxt = cleaned[i + 1]
+                nxt_start = float(nxt.get("start", 0.0))
+                if (nxt_start - cur_end) <= MERGE_GAP_MAX:
+                    nxt["text"] = f"{txt} {nxt.get('text', '').lstrip()}".strip()
+                    nxt["start"] = min(nxt_start, cur_start)
+                    i += 1
+                    continue
+        merged.append(cur)
+        i += 1
+
+    cleaned = merged
     return {"segments": cleaned}
+
+def split_long_subtitle_segments(
+    data: dict,
+    max_duration: float = DEFAULT_MAX_SUB_DURATION,
+    max_words: int = DEFAULT_MAX_SUB_WORDS
+) -> dict:
+    segments = sorted(
+        list(data.get("segments", [])),
+        key=lambda s: (float(s.get("start", 0.0)), float(s.get("end", 0.0)))
+    )
+    if not segments:
+        return {"segments": []}
+
+    out = []
+    split_chars = {".", "!", "?", ";", ":", ","}
+
+    def flush_chunk(chunk_words):
+        if not chunk_words:
+            return
+        text = "".join(w.get("word", "") for w in chunk_words).strip()
+        if not text:
+            return
+        out.append({
+            "start": float(chunk_words[0].get("start", 0.0)),
+            "end": float(chunk_words[-1].get("end", float(chunk_words[0].get("start", 0.0)))),
+            "text": text,
+            "words": list(chunk_words)
+        })
+
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        words = seg.get("words", []) or []
+        start = float(seg.get("start", 0.0))
+        end = float(seg.get("end", start))
+
+        if not text:
+            continue
+
+        # If word timestamps are unavailable, do a conservative text chunk split.
+        if not words:
+            toks = text.split()
+            if len(toks) <= max_words and (end - start) <= max_duration:
+                out.append({**seg, "start": start, "end": end, "text": text})
+                continue
+            i = 0
+            while i < len(toks):
+                j = min(len(toks), i + max_words)
+                chunk = " ".join(toks[i:j]).strip()
+                if chunk:
+                    frac_start = start + (end - start) * (i / max(1, len(toks)))
+                    frac_end = start + (end - start) * (j / max(1, len(toks)))
+                    out.append({"start": frac_start, "end": max(frac_end, frac_start + 0.2), "text": chunk, "words": []})
+                i = j
+            continue
+
+        # Word-aware split with punctuation preference.
+        cur = []
+        for idx, w in enumerate(words):
+            cur.append(w)
+            cur_start = float(cur[0].get("start", start))
+            cur_end = float(cur[-1].get("end", cur_start))
+            cur_dur = max(0.0, cur_end - cur_start)
+            cur_count = len(cur)
+            wtxt = str(w.get("word", "")).strip()
+
+            # split at punctuation once chunk is substantial
+            if (
+                wtxt and wtxt[-1] in split_chars and
+                (cur_count >= max(6, max_words // 2) or cur_dur >= max_duration * 0.65)
+            ):
+                flush_chunk(cur)
+                cur = []
+                continue
+
+            # hard guard split
+            if cur_count >= max_words or cur_dur >= max_duration:
+                if len(cur) == 1:
+                    flush_chunk(cur)
+                    cur = []
+                else:
+                    chosen = None
+                    # prefer latest punctuation boundary inside current chunk, but not too skewed
+                    for j in range(len(cur) - 2, 0, -1):
+                        tw = str(cur[j].get("word", "")).strip()
+                        if tw and tw[-1] in split_chars:
+                            if len(cur) >= 6 and (j < 2 or j > len(cur) - 3):
+                                continue
+                            chosen = j + 1
+                            break
+                    if chosen is None:
+                        # Prefer splitting near the middle before a minor grammar word
+                        mid = len(cur) // 2
+                        minor_words = {"a", "an", "the", "and", "or", "but", "of", "in", "to", "for", "with", "on", "at", "by", "from", "as", "is", "are", "was", "were", "it", "this", "that", "o", "os", "as", "um", "uma", "uns", "umas", "e", "ou", "mas", "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "para", "pra", "com", "por", "como", "é", "são", "foi", "era", "isso", "aquilo", "este", "esta", "esse", "essa", "que", "se"}
+                        best_diff = 999
+                        for j in range(2, len(cur) - 1):
+                            tw = str(cur[j].get("word", "")).strip().lower()
+                            if tw in minor_words:
+                                diff = abs(j - mid)
+                                if diff < best_diff:
+                                    best_diff = diff
+                                    chosen = j
+                        if chosen is None:
+                            chosen = max(1, mid)
+                    left = cur[:chosen]
+                    right = cur[chosen:]
+                    flush_chunk(left)
+                    cur = right
+
+        flush_chunk(cur)
+
+    return {"segments": out}
 
 def _normalize_text_for_compare(text: str) -> str:
     t = (text or "").lower().strip()
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"[^\w\s]", "", t)
     return t
+
+def _text_signature(norm_text: str) -> str:
+    """Stable signature for repeated boilerplate lines.
+    Uses first tokens + length bucket so long repeated promo text is caught even with small variations.
+    """
+    if not norm_text:
+        return ""
+    tokens = norm_text.split()
+    if len(tokens) < 5:
+        return ""
+    prefix = " ".join(tokens[:9])
+    length_bucket = len(tokens) // 4
+    return f"{prefix}::{length_bucket}"
+
+
+def _detect_hallucination_ngrams(segments: list, ngram_size: int = 4, threshold: int = 15) -> set:
+    """Find N-grams that repeat excessively across all segments."""
+    ngram_counter = Counter()
+    for seg in segments:
+        norm = _normalize_text_for_compare((seg.get("text") or "").strip())
+        words = norm.split()
+        for i in range(len(words) - ngram_size + 1):
+            ngram_counter[tuple(words[i:i + ngram_size])] += 1
+    return {ng for ng, c in ngram_counter.items() if c >= threshold}
+
+
+def _segment_hallucination_ratio(seg: dict, halluc_ngrams: set, ngram_size: int = 4) -> float:
+    """Fraction of a segment's words that participate in hallucination N-grams."""
+    norm = _normalize_text_for_compare((seg.get("text") or "").strip())
+    words = norm.split()
+    if len(words) < ngram_size:
+        return 0.0
+    halluc_positions = set()
+    for i in range(len(words) - ngram_size + 1):
+        if tuple(words[i:i + ngram_size]) in halluc_ngrams:
+            for j in range(i, i + ngram_size):
+                halluc_positions.add(j)
+    return len(halluc_positions) / max(1, len(words))
+
 
 def _segment_quality(seg: dict) -> float:
     txt = (seg.get("text") or "").strip()
@@ -788,6 +1174,10 @@ def normalize_timeline(data: dict, min_duration: float = DEFAULT_MIN_SUB_DURATIO
             out[i]["end"] = max(out[i]["end"], desired_end)
     return {"segments": out}
 
+
+
+
+
 def merge_missed_segments(primary: dict, rescue: dict) -> dict:
     p = sorted(list(primary.get("segments", [])), key=lambda x: (x.get("start", 0.0), x.get("end", 0.0)))
     r = sorted(list(rescue.get("segments", [])), key=lambda x: (x.get("start", 0.0), x.get("end", 0.0)))
@@ -846,7 +1236,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     final_srt_path = os.path.join(args.output_dir if args.output_dir else os.path.dirname(file_path), f"{base_name}.srt")
 
     print(f"🎤 Processing: {base_name}")
-    model_path = MODEL_ALIASES.get(args.model, args.model)
+    model_path = resolve_model_alias(args.model)
     backend = resolve_model_backend(model_path)
     log_event(f"run_transcription start file={file_path} model={args.model} model_path={model_path} backend={backend} lang={args.lang} task={args.task} "
               f"vad_filter={args.vad_filter} whisper_vad_threshold={args.whisper_vad_threshold} "
@@ -978,11 +1368,22 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             vad_filter=vad_filt,
             vad_parameters=vad_params,
             beam_size=args.beam_size, best_of=args.best_of, temperature=args.temperature,
-            word_timestamps=True
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            repetition_penalty=1.1,
+            no_repeat_ngram_size=4
         )
         res = {"segments": []}
         with tqdm(total=round(info.duration, 2), unit='s', desc="   Whisper", dynamic_ncols=True, leave=False) as pbar:
             for seg in segments:
+                words_list = []
+                if seg.words:
+                    for w in seg.words:
+                        w_start = min(max(w.start, seg.start), seg.end)
+                        w_end = min(max(w.end, seg.start), seg.end)
+                        if w_end < w_start:
+                            w_end = w_start
+                        words_list.append({"start": w_start, "end": w_end, "word": w.word})
                 res["segments"].append({
                     "start": seg.start,
                     "end": seg.end,
@@ -990,7 +1391,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                     "avg_logprob": getattr(seg, "avg_logprob", -1.2),
                     "no_speech_prob": getattr(seg, "no_speech_prob", 0.0),
                     "compression_ratio": getattr(seg, "compression_ratio", 1.5),
-                    "words": [{"start": w.start, "end": w.end, "word": w.word} for w in seg.words]
+                    "words": words_list
                 })
                 pbar.update(seg.end - pbar.n)
             pbar.update(info.duration - pbar.n)
@@ -1152,6 +1553,11 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         min_duration=args.min_sub_duration,
         max_repeat_run=args.max_repeat_run
     )
+    cleaned_data = split_long_subtitle_segments(
+        cleaned_data,
+        max_duration=getattr(args, "max_sub_duration", DEFAULT_MAX_SUB_DURATION),
+        max_words=getattr(args, "max_sub_words", DEFAULT_MAX_SUB_WORDS),
+    )
     cleaned_data = normalize_timeline(cleaned_data, min_duration=args.min_sub_duration)
 
     success = convert_data_to_srt(cleaned_data, final_srt_path)
@@ -1166,6 +1572,7 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     return success, final_srt_path
 
 def main():
+    global PREFERRED_COMPUTE_TYPE
     parser = argparse.ArgumentParser(description="Whisper Transcription Ultimate V5")
     parser.add_argument('--version', action='version', version='%(prog)s 5.0')
     parser.add_argument("files", nargs="*", help="Files/URLs to process")
@@ -1179,6 +1586,8 @@ def main():
             "qwen3-asr-0.6b, qwen3-asr-1.7b"
         )
     )
+    parser.add_argument("--model-delete", type=str, help="Delete downloaded cache for a model alias/id and exit")
+    parser.add_argument("--model-redownload", type=str, help="Delete cache for model alias/id, then load/download it and exit")
     parser.add_argument("-l", "--lang", type=str)
     parser.add_argument("--task", type=str, default=DEFAULT_TASK)
     parser.add_argument("--precision", type=str, default="auto", choices=["auto", "float16", "int8", "float32"], help="Force compute type")
@@ -1196,6 +1605,8 @@ def main():
     parser.add_argument("--whisper_vad_threshold", type=float, default=DEFAULT_WHISPER_VAD_THRESHOLD)
     parser.add_argument("--whisper_vad_min_silence_ms", type=int, default=DEFAULT_WHISPER_VAD_MIN_SILENCE_MS)
     parser.add_argument("--min_sub_duration", type=float, default=DEFAULT_MIN_SUB_DURATION)
+    parser.add_argument("--max_sub_duration", type=float, default=DEFAULT_MAX_SUB_DURATION, help="Maximum subtitle segment duration in seconds before forced split")
+    parser.add_argument("--max_sub_words", type=int, default=DEFAULT_MAX_SUB_WORDS, help="Maximum words per subtitle segment before forced split")
     parser.add_argument(
         "--phrase_pause_split_s",
         type=float,
@@ -1216,8 +1627,44 @@ def main():
     parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=True, help="Write detailed per-run debug log")
 
     args = parser.parse_args()
+
+    if isinstance(args.model, str) and args.model.strip().lower() == "list":
+        print_model_catalog()
+        return
+
+    if args.model_delete:
+        deleted_count, deleted_paths = delete_model_cache(args.model_delete)
+        print(f"Model cache delete request: {args.model_delete}")
+        if deleted_count:
+            print(f"   Deleted {deleted_count} cache folder(s):")
+            for p in deleted_paths:
+                print(f"   - {p}")
+        else:
+            print("   No matching cached model folders found.")
+        return
+
+    if args.model_redownload:
+        model_req = args.model_redownload
+        deleted_count, deleted_paths = delete_model_cache(model_req)
+        print(f"Model re-download request: {model_req}")
+        if deleted_count:
+            print(f"   Deleted {deleted_count} cache folder(s):")
+            for p in deleted_paths:
+                print(f"   - {p}")
+        else:
+            print("   No existing cache found, proceeding with fresh load/download.")
+
+        PREFERRED_COMPUTE_TYPE = args.precision
+        target = resolve_model_alias(model_req)
+        print(f"   Loading/downloading: {target}")
+        try:
+            ensure_model_loaded(target)
+            print("✅ Re-download/load completed.")
+        except Exception as e:
+            print(f"❌ Re-download/load failed: {e}")
+            sys.exit(1)
+        return
     
-    global PREFERRED_COMPUTE_TYPE
     PREFERRED_COMPUTE_TYPE = args.precision
 
     if not hasattr(args, 'pipeline'): args.pipeline = []
