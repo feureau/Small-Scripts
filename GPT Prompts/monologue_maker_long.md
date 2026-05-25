@@ -402,15 +402,13 @@ Write a commentary script using the verified facts, the unified voice architectu
 
 ---
 
-#### SCRIPT LENGTH GUIDANCE — FUNCTIONAL SUFFICIENCY, NOT WORD COUNT
+#### SCRIPT LENGTH — DETERMINED BY THE ARGUMENT, NOT BY A TARGET
 
-The script's length is determined by the evidence and the structural demands of the detective revelation arc, not by a pre‑set word count. Each of the four acts must be fully realised: an act is complete when it has accomplished its narrative job (see Act Completion Criteria below), not when it reaches a certain number of words. The pacing should feel unhurried but never padded.
+There is no target word count or runtime. The script is exactly as long as it needs to be for the argument to unfold completely, naturally, and without rushing. Let each act breathe. If the evidence is rich and the reasoning complex, the script expands to accommodate that. If the subject is compact, the script stays compact.
 
-After the script is written, you may use the following formula to estimate its spoken runtime for recording purposes; it is a production tool, not a writing target.
+The only length‑related constraint is the principle of functional sufficiency: an act is finished when it has done its narrative job (see the Act Completion Criteria), not when a clock says so. But “functional sufficiency” does not mean “as short as possible.” It means no act overstays its purpose by repeating itself, and no act is starved of the space it genuinely needs.
 
-*Formula: (script word count) ÷ (150–170 WPM) ÷ 0.85 = estimated minutes. Use 0.85 for standard commentary with occasional b‑roll pauses. Use 0.95 for straight‑to‑camera with no editing pauses.*
-
-The goal is the shortest script that fully delivers the argument with all required structural elements (hook, acts, counterargument, five‑beat conclusion, re‑engagement hooks, dramatized scenes, etc.). If the source material is rich, the script may run longer; if it is thin, the Thin Source Protocol already mandates compression. Never pad to reach a number. Never cut substance to fit one.
+Never pad to make a script longer. Never cut substance or compress a natural flow to make it shorter. The script’s length is a consequence of the argument, not a target.
 
 ---
 
@@ -915,7 +913,7 @@ Run this checklist in full any time new material is added to an existing draft.
 
 When a revision involves moving, merging, or reordering sections — rather than adding new material — run the following checks before any prose rewriting:
 
-1. **Breadcrumb integrity check:** List every piece of information planted in Act 1 that pays off in Act 3 or 4. After moving sections, confirm each breadcrumb still arrives before its payoff. If a move reverses a breadcrumb–payoff sequence, either move the payoff or re‑plant the breadcrumb in its new position.
+1. **Breadcrumb integrity check:** List every piece of information planted in Act 1 that pays off in Act 3 or 4. After moving sections, confirm each breadcrumb still arrives before its payoff. If a move reverses a breadcrumb‑payoff sequence, either move the payoff or re‑plant the breadcrumb in its new position.
 2. **Escalation check:** Read the new structure and confirm each act still feels like a larger revelation than the previous. If two adjacent acts now feel equal in stakes, merge them or heighten the opening of the later act.
 3. **Re‑engagement hook re‑audit:** After restructuring, all re‑engagement hooks must be rebuilt from scratch against the new act content. Do not reuse hooks written for the old structure.
 4. **Spoken starting points:** Any section that has moved to a new position in the script may need a new spoken starting point, since the context the speaker is entering from has changed. Re‑run the starting‑point table for all paragraphs immediately following a structural seam.
@@ -949,76 +947,11 @@ The entire long‑form script (from the hook to the final line of spoken content
 
 ---
 
-## STEP 7 — GENERATE A SHORT‑FORM ADAPTATION (FLEXIBLE LENGTH)
+## STEP 7 — IMAGE SOURCING (WITH ENHANCED VERIFICATION, PAGE‑URL CHECK, AND MULTI‑CATEGORY OUTPUT)
 
-After the long‑form script is complete and its source notes and delivery notes are finished, produce a condensed short‑form script suitable for TikTok, YouTube Shorts, Instagram Reels, or similar.
+After writing the script, perform an image sourcing pass for the script.
 
-**Input:** The completed long script, the verified fact sheet, and the chosen angle.
-
-**Objective:** Communicate the identical argument and emotional arc in a self‑contained video short. The short must be built for platforms where the hook must arrest the viewer in the first 1–3 seconds.
-
-**Mandatory Principles:**
-
-1. **Hook reconstruction** — The first spoken line must be the single most surprising, pattern‑interrupting reframe or fact drawn from the long script. The hook must open a curiosity gap within the first 5 seconds.
-
-2. **Length constraint (flexible target)** — The short‑form script should total **150–200 words** (approximately 60–80 seconds of spoken runtime). This is a target range, not a hard cut‑off. If the first draft exceeds 220 words, iterative cuts are required.
-
-3. **Beat prioritisation (required)** — Before writing the short, extract every major revelation or scene from the long script. Apply this selection protocol:
-
-   **Step 1 — Mandatory beats first** (always included, allocated word budget before anything else):
-   - Opening hook beat
-   - The script's single best reframe moment (the "oh, that's what that was" beat)
-   - Verdict
-   - Emotional coda
-   - Exit
-
-   **Step 2 — Optional beats**, selected by this single test applied to each remaining beat:
-   *"Could a viewer who has never seen the long script understand this beat in under 10 words of setup, and would they care about it without knowing what came before?"*
-   - Yes to both → include (in priority order: highest surprise value first)
-   - No to either → cut
-
-   **Step 3 — Word count check.** If over 220 words, cut the lowest‑surprise optional beat. Repeat until under 220.
-
-   A beat selection table must be included in the short‑form delivery notes, recording: Beat name | Mandatory/Optional | Included/Cut | Reason.
-
-4. **Compression, not summarisation** — Selected beats may be expressed in a single new sentence that merges reframe + context, provided no new information is introduced. Cut exposition and subordinate examples; keep every reframe and the verdict.
-
-5. **Context‑heavy, detail‑light** — Assume zero prior knowledge. Introduce any historical figure, event, or concept with the most minimal grounding clause needed, then immediately deliver the story beat. Use analogy for unfamiliar terms as in the long script.
-
-6. **Voice preservation** — The short must use the identical five‑stage loop architecture and the same register as the long script. Every rule from Step 3 applies.
-
-7. **Gender‑neutral narrator** — The gender‑neutral default continues. Personal anecdotes must remain universally relatable.
-
-8. **No new factual claims** — The short must draw exclusively from the verified fact sheet.
-
-9. **Conclusion adaptation** — The five‑beat conclusion (Verdict → Universal Extension → Emotional Coda → Rhetorical Anchor → Exit) is preserved but compressed. If word count is tight, merge the verdict and universal extension into one sentence.
-
-10. **Pacing and breath** — Paragraphs are very short (maximum two clauses before a natural break). Line breaks act as timing cues for the performer and editor.
-
-11. **Visual‑text readiness** — Write key facts and reframes as short, declarative sentences that can be displayed as on‑screen text overlays while the speaker narrates.
-
-12. **Platform safety** — The short is subject to the same Platform Safety — Content Boundaries as the long‑form script.
-
-13. **First‑time viewer clarity** — All four rules plus Define with Analogy must be followed.
-
-14. **Deflation callback planting** — If the exit uses a deflation callback, the exact phrase or image used in the callback must appear verbatim or near‑verbatim earlier in the short script. Verify before finalising.
-
-15. **Teleprompter readiness** — Apply all teleprompter formatting rules to the short script as well.
-
-16. **Code block requirement** — The entire short‑form script must be placed inside its own single code block, with a header clearly indicating it is the short‑form adaptation.
-
-**Output:**
-- The short‑form script in a code block labeled "SHORT‑FORM SCRIPT"
-- Brief delivery notes for the short script, covering timing cues, register shifts, and the exact moment the hook lands
-- The beat selection table (required)
-
----
-
-## STEP 8 — IMAGE SOURCING (WITH ENHANCED VERIFICATION, PAGE‑URL CHECK, AND MULTI‑CATEGORY OUTPUT)
-
-After writing both scripts, perform an image sourcing pass for the long‑form script and note any visuals that also apply to the short.
-
-**Objective:** For each key visual moment in the long script, find a **working, directly downloadable** image URL that can be used in a commentary video under fair use / educational purposes. Where that is impossible, provide as much actionable information as possible (page URLs, manual‑download instructions, or explicit "not found" markers).
+**Objective:** For each key visual moment in the script, find a **working, directly downloadable** image URL that can be used in a commentary video under fair use / educational purposes. Where that is impossible, provide as much actionable information as possible (page URLs, manual‑download instructions, or explicit "not found" markers).
 
 **When to source images:**
 - Major subjects or named individuals introduced
@@ -1111,8 +1044,6 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 **DELIVERY NOTES (for long‑form script):** One note per meaningful delivery decision. References specific lines by quoting them. Includes notes on where personality moments should break through. Includes at least one note per active humor technique identifying where it appears and how long to let it run.
 
-**DELIVERY NOTES (for short‑form script):** Brief notes on the short, focusing on hook timing, compression choices, and emotional beats. Include any different emphasis needed for the faster pace. Note which visuals from the image list are most critical for the short. Include the beat selection table.
-
 **SOURCE NOTES:** Every factual claim mapped to its verified source. Single‑source claims flagged. Anonymous‑source numeric figures noted as removed. Legal sources identified. Timeline sources noted separately. Unsourced claims removed. Disputed figures noted with both sources and resolution applied.
 
 ---
@@ -1183,8 +1114,8 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] At least one underreaction landing correctly
 
 *Platform and viewer:*
-- [ ] Platform safety checks passed (both scripts)
-- [ ] First‑time viewer clarity checks passed (both scripts)
+- [ ] Platform safety checks passed
+- [ ] First‑time viewer clarity checks passed
 - [ ] External‑reference bridging present for any comparison to external works
 
 **TIER 3 — POLISH PASS (run once when Tier 1 and 2 pass):**
@@ -1208,17 +1139,6 @@ A code block containing **only the verified direct image URLs**, one per line.
 - [ ] Title and Thumbnail Brief (Step 6C) completed
 - [ ] Image sourcing completed for all key visual moments
 - [ ] Pinkerton‑Script Quality Checklist passed
-
-**SHORT‑FORM ADAPTATION CHECKS:**
-- [ ] Hook opens with a pattern‑interrupting fact or reframe within 1–3 seconds
-- [ ] All mandatory beats present (hook, best reframe, verdict, emotional coda, rhetorical anchor, exit)
-- [ ] Voice matches the long script; five‑stage loop observable
-- [ ] No new factual claims introduced
-- [ ] Total word count is 150–200 (target); if over 220, beats re‑prioritised and cut
-- [ ] Beat selection table included in delivery notes
-- [ ] Paragraphs short; maximum two clauses before a break
-- [ ] Teleprompter formatting applied
-- [ ] If exit uses a deflation callback, the callback's plant is present earlier in the short script
 
 **REVISION CHECKS (apply after any revision):**
 - [ ] Revision Integration Checklist completed in full
@@ -1249,4 +1169,4 @@ A code block containing **only the verified direct image URLs**, one per line.
 
 ---
 
-## END OF PROMPT (v3.21 — FUNCTIONAL SUFFICIENCY EDITION)
+## END OF PROMPT (v3.21 — LENGTH UNCONSTRAINED, SHORT‑FORM REMOVED)
