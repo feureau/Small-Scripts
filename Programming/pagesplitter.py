@@ -72,7 +72,11 @@ def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, 
 
     page_counter = 1
     for filepath in files_to_process:
-        img = cv2.imread(filepath)
+        # Read image supporting unicode paths
+        try:
+            img = cv2.imdecode(np.fromfile(filepath, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
         if img is None: continue
         
         filename = os.path.basename(filepath)
@@ -86,7 +90,8 @@ def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, 
         # Check Aspect Ratio (Landscape = Spread)
         if w < h and not force_split:
             out_name = f"{page_counter:04d}_{base_name}.jpg"
-            cv2.imwrite(os.path.join(output_dir, out_name), img)
+            out_path = os.path.join(output_dir, out_name)
+            cv2.imencode('.jpg', img)[1].tofile(out_path)
             print(f"Portrait -> {out_name}")
             page_counter += 1
             continue
@@ -121,7 +126,8 @@ def process_files(file_patterns, output_dir, rtl_mode=False, force_split=False, 
         # 4. Save
         for i, p in enumerate(pages):
             out_name = f"{page_counter:04d}_{base_name}_{i+1}.jpg"
-            cv2.imwrite(os.path.join(output_dir, out_name), p)
+            out_path = os.path.join(output_dir, out_name)
+            cv2.imencode('.jpg', p)[1].tofile(out_path)
             page_counter += 1
             
         print(f"Split {filename} (Gutter: {split_x}, Overlap: {overlap_px}px included on both sides)")

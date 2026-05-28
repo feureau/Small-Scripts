@@ -313,6 +313,13 @@ def has_eng_token(text: str) -> bool:
         return False
     return bool(re.search(r'\beng\b', text.lower()))
 
+def extract_trailing_hash8(text: str):
+    if not text:
+        return None
+    stem = Path(str(text)).stem
+    m = re.search(r'[_\-]([a-f0-9]{8})$', stem, flags=re.IGNORECASE)
+    return m.group(1).lower() if m else None
+
 def extract_title_from_metadata_file(path: Path) -> str | None:
     """Best-effort metadata title extraction for robust local/YouTube matching."""
     try:
@@ -862,13 +869,21 @@ class MainApp:
                         ts_orig = get_ts(vd_obj.original_upload_filename)
                         if ts_orig: yt_timestamps.add(ts_orig)
 
+                    yt_norm_title = normalize_for_matching(vd_obj.current_title)
                     nuclear_title = nuclear_clean(vd_obj.current_title)
                     marker_num_title = extract_marker_number(vd_obj.current_title)
+                    yt_hash_tokens = set()
+                    for src in (vd_obj.current_title, vd_obj.original_upload_filename):
+                        h = extract_trailing_hash8(src)
+                        if h:
+                            yt_hash_tokens.add(h)
                     best_txt_match = None; best_sub_match = None
                     best_txt_score = float('inf')
                     best_sub_score = float('inf')
                     best_meta_match_name = None
                     best_sub_match_name = None
+                    best_txt_hash_tiebreak = -1
+                    best_sub_hash_tiebreak = -1
 
                     for file_path in local_files:
                         # Guard: Skip blank files
@@ -876,9 +891,17 @@ class MainApp:
                         
                         current_score = float('inf')
                         file_ts = get_ts(file_path.name)
+                        file_norm_stem = normalize_for_matching(file_path.stem)
                         nuclear_file = nuclear_clean(file_path.name)
+                        file_hash = extract_trailing_hash8(file_path.stem)
+                        hash_tiebreak = 1 if (file_hash and file_hash in yt_hash_tokens) else 0
 
-                        # A. TIMESTAMP MATCH (Score 0 or 5 based on Replay status)
+                        # A. EXACT NORMALIZED TITLE <-> STEM MATCH (strongest non-timestamp signal)
+                        if file_norm_stem and yt_norm_title:
+                            if file_norm_stem == yt_norm_title:
+                                current_score = 0.1
+
+                        # B. TIMESTAMP MATCH (Score 0 or 5 based on Replay status)
                         if file_ts and file_ts in yt_timestamps:
                             current_score = 0
                             yt_has_replay = "replay" in vd_obj.current_title.lower()
@@ -886,21 +909,20 @@ class MainApp:
                             if yt_has_replay != file_has_replay:
                                 current_score = 5 # Penalty for Rec/Replay mismatch
 
-                        # B. NUCLEAR TEXT MATCH (Score 1)
+                        # C. NUCLEAR TEXT MATCH (Score 1)
                         if current_score > 1 and len(nuclear_file) > 8:
                             if nuclear_file in nuclear_title or nuclear_title in nuclear_file:
                                 current_score = 1
-                        # C. Marker token match (handles "Marker X ..."-style names)
+                        # D. Marker token match (handles "Marker X ..."-style names)
                         if current_score > 1:
                             marker_num_file = extract_marker_number(file_path.stem)
                             if marker_num_title is not None and marker_num_file == marker_num_title:
                                 current_score = 2
                                 if has_eng_token(vd_obj.current_title) and has_eng_token(file_path.stem):
                                     current_score = 1.5
-                        # D. Metadata JSON title match (handles custom YT titles vs timestamp filenames)
+                        # E. Metadata JSON title match (handles custom YT titles vs timestamp filenames)
                         if current_score > 0.5 and file_path.suffix.lower() in METADATA_EXTENSIONS:
                             metadata_norm_title = metadata_title_cache.get(file_path, "")
-                            yt_norm_title = normalize_for_matching(vd_obj.current_title)
                             if metadata_norm_title and yt_norm_title:
                                 if metadata_norm_title == yt_norm_title:
                                     current_score = 0.5
@@ -910,15 +932,17 @@ class MainApp:
                         if current_score < float('inf'):
                             ext = file_path.suffix.lower()
                             if ext in METADATA_EXTENSIONS:
-                                if current_score < best_txt_score:
+                                if (current_score < best_txt_score) or (current_score == best_txt_score and hash_tiebreak > best_txt_hash_tiebreak):
                                     best_txt_score = current_score
                                     best_txt_match = file_path
                                     best_meta_match_name = file_path.name
+                                    best_txt_hash_tiebreak = hash_tiebreak
                             elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS):
-                                if current_score < best_sub_score:
+                                if (current_score < best_sub_score) or (current_score == best_sub_score and hash_tiebreak > best_sub_hash_tiebreak):
                                     best_sub_score = current_score
                                     best_sub_match = file_path
                                     best_sub_match_name = file_path.name
+                                    best_sub_hash_tiebreak = hash_tiebreak
 
                     if best_txt_match or best_sub_match:
                          if best_txt_match:
