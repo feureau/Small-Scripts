@@ -68,7 +68,7 @@ fail during processing are logged to a specified error file for easy retries.
 | :--- | :--- | :--- |
 | `--update`      | `-U` | **Switches to Update Mode.** Updates dependencies and exits. |
 | `--extract-text`| `-E` | **Switches to Text Extraction Mode.** Extracts only the clean text to a `.txt` file. |
-| `--log-file`    | `-L` | File to save a verbose, timestamped log of all operations (default: `processing_log.txt`). |
+| `--log` / `--log-file` | `-L` | Enable verbose, timestamped logging (default: disabled; logs to `processing_log.txt` or a specified file). |
 | `--output-errors`| `-oE` | File to save the clean list of URLs that failed (default: `errors.txt`). |
 | `--verbose` | `-V` | Debug Mode: Prints all output from the underlying process. |
 
@@ -1202,6 +1202,8 @@ def process_text_subtitle(subtitle_path):
 
 def log_message(log_file, status, url, message=""):
     """Thread-safe function to write a formatted message to the log file."""
+    if not log_file:
+        return
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with log_lock:
         with open(log_file, 'a', encoding='utf-8') as f:
@@ -2033,7 +2035,8 @@ def main():
     input_group.add_argument("inputs", nargs='*', default=[], help="One or more URLs or paths to text files containing URLs.")
     
     general_group = parser.add_argument_group('General Options')
-    general_group.add_argument("-L", "--log-file", type=str, default="processing_log.txt", help="File to save a verbose, timestamped log (default: processing_log.txt).")
+    general_group.add_argument("-L", "--log", action="store_true", help="Enable saving a verbose, timestamped log to processing_log.txt.")
+    general_group.add_argument("--log-file", type=str, default=None, help="File to save a verbose, timestamped log (implies --log).")
     general_group.add_argument("-oE", "--output-errors", type=str, default="errors.txt", help="File to save the clean list of URLs that failed (default: errors.txt).")
     general_group.add_argument("-gl", "--get-links", action="store_true", help="Extract and save all video links to a text file and exit (skip download).")
     general_group.add_argument("-V", "--verbose", action="store_true", help="Show all underlying output for debugging.")
@@ -2060,6 +2063,14 @@ def main():
     gallerydl_group.add_argument("-gO", "--g-options", type=str, help="Raw string of additional options for gallery-dl (e.g., \"--zip\").")
     
     args = parser.parse_args()
+
+    # Resolve log_file path: --log-file takes precedence, otherwise if -L/--log is specified, use processing_log.txt
+    if args.log_file:
+        pass
+    elif args.log:
+        args.log_file = "processing_log.txt"
+    else:
+        args.log_file = None
 
     if args.update:
         run_updates()
@@ -2135,19 +2146,20 @@ def main():
                 print(f"  Info:  {msg}\n")
             print("="*80 + "\n")
             
-        try:
-            with open(args.log_file, "a", encoding="utf-8") as f:
-                f.write("\n" + "="*80 + "\n")
-                f.write("[SUCCESS] SUCCESSFUL TASKS SUMMARY\n")
-                f.write("="*80 + "\n")
-                for succ in success_urls:
-                    f.write(f"- Title: {succ.get('title', 'Unknown')}\n")
-                    f.write(f"  URL:   {succ.get('target_url', 'Unknown')}\n")
-                    msg = succ.get('message', 'Completed')
-                    f.write(f"  Info:  {msg}\n\n")
-                f.write("="*80 + "\n\n")
-        except Exception as e:
-            pass
+        if args.log_file:
+            try:
+                with open(args.log_file, "a", encoding="utf-8") as f:
+                    f.write("\n" + "="*80 + "\n")
+                    f.write("[SUCCESS] SUCCESSFUL TASKS SUMMARY\n")
+                    f.write("="*80 + "\n")
+                    for succ in success_urls:
+                        f.write(f"- Title: {succ.get('title', 'Unknown')}\n")
+                        f.write(f"  URL:   {succ.get('target_url', 'Unknown')}\n")
+                        msg = succ.get('message', 'Completed')
+                        f.write(f"  Info:  {msg}\n\n")
+                    f.write("="*80 + "\n\n")
+            except Exception as e:
+                pass
     elif not failed_urls:
         with print_lock:
             print("\n" + "="*80)
@@ -2165,18 +2177,19 @@ def main():
                 print(f"  Error: {fail.get('message', 'Unknown Error')}\n")
             print("="*80 + "\n")
             
-        try:
-            with open(args.log_file, "a", encoding="utf-8") as f:
-                f.write("\n" + "="*80 + "\n")
-                f.write("[FAILURE] FAILED TASKS SUMMARY\n")
-                f.write("="*80 + "\n")
-                for fail in failed_urls:
-                    f.write(f"- Title: {fail.get('title', 'Unknown')}\n")
-                    f.write(f"  URL:   {fail.get('target_url', 'Unknown')}\n")
-                    f.write(f"  Error: {fail.get('message', 'Unknown Error')}\n\n")
-                f.write("="*80 + "\n\n")
-        except Exception as e:
-            pass
+        if args.log_file:
+            try:
+                with open(args.log_file, "a", encoding="utf-8") as f:
+                    f.write("\n" + "="*80 + "\n")
+                    f.write("[FAILURE] FAILED TASKS SUMMARY\n")
+                    f.write("="*80 + "\n")
+                    for fail in failed_urls:
+                        f.write(f"- Title: {fail.get('title', 'Unknown')}\n")
+                        f.write(f"  URL:   {fail.get('target_url', 'Unknown')}\n")
+                        f.write(f"  Error: {fail.get('message', 'Unknown Error')}\n\n")
+                    f.write("="*80 + "\n\n")
+            except Exception as e:
+                pass
 
         unique_failed_target_urls = sorted(list(set(f.get('target_url', '') for f in failed_urls if f.get('target_url'))))
         print(f"- Writing {len(unique_failed_target_urls)} unique failed target URL(s) to '{args.output_errors}'...")
