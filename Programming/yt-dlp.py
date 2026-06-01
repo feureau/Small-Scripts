@@ -858,6 +858,7 @@ ui_stop_event = threading.Event()
 ui_render_thread = None
 ui_enabled = False
 ui_dirty_event = threading.Event()
+executor = None
 
 def emit_message(message):
     """Prints normally, or appends to live UI event stream."""
@@ -1219,6 +1220,25 @@ def sanitize_filename(name):
         name = name[:150].rsplit(' ', 1)[0]
     return name.strip('. ')
 
+def terminate_running_processes():
+    """Best-effort termination for every active child process."""
+    with process_lock:
+        processes = list(running_processes)
+
+    for proc in processes:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
+
+def request_global_shutdown(reason=None):
+    """Signal all workers to stop and terminate active subprocesses."""
+    ui_stop_event.set()
+    terminate_running_processes()
+    if reason:
+        log_message(None, "CANCELLED", "", reason)
+
 def run_updates():
     """Updates the core dependencies, yt-dlp and gallery-dl."""
     print("--- ⬆️  Updating Dependencies ---")
@@ -1262,11 +1282,16 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
     try:
         update_task_status(task_id, slot=slot_label or "--/--", title=display_title, tool=tool_name, state="STARTING", phase="starting")
 
+        popen_kwargs = {}
+        if os.name == 'nt':
+            popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+
         process = subprocess.Popen(
             command_list,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True, encoding='utf-8', errors='replace', bufsize=1
+            text=True, encoding='utf-8', errors='replace', bufsize=1,
+            **popen_kwargs
         )
         with process_lock:
             running_processes.add(process)
@@ -1299,7 +1324,8 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
                         process.kill()
                     except:
                         pass
-                break
+                update_task_status(task_id, state="CANCELLED", phase="cancelled", speed="--", eta="--")
+                return ("FAILURE", f"Cancelled {tool_name}: {display_title}", [])
                 
             try:
                 stream_name, line = output_queue.get(timeout=0.1) # Shorter timeout
@@ -1354,6 +1380,15 @@ def run_download_task(task_type, identifier, title, args, original_url, task_id=
         err_t.join(timeout=1)
         stdout = "\n".join(stdout_chunks)
         stderr = "\n".join(stderr_chunks)
+
+        interrupted_by_user = any(
+            marker in f"{stdout}\n{stderr}"
+            for marker in ("Interrupted by user", "KeyboardInterrupt")
+        )
+        if interrupted_by_user or ui_stop_event.is_set():
+            request_global_shutdown("Child process was interrupted; stopping all queued work.")
+            update_task_status(task_id, state="CANCELLED", phase="cancelled", speed="--", eta="--")
+            return ("FAILURE", f"Cancelled {tool_name}: {display_title}", [])
         
         if process.returncode == 0:
             update_task_status(task_id, state="POST", phase="post-processing", percent="100.0", eta="00:00")
@@ -1800,31 +1835,29 @@ def build_ytdlp_command(target_url, args, video_lang=None):
         command_list.extend(["--write-comments", "--write-info-json"])
 
     if wants_subtitles:
-        write_auto_subs = True
         if args.language:
-            sub_lang = args.language
+            lang_base = args.language.split('-')[0].lower()
+            sub_lang = f"{args.language},{lang_base}.*,{lang_base}"
         elif video_lang:
             # Request only the video's language and English to avoid downloading 100+ auto-translated tracks.
             # We use base language codes with a wildcard (e.g., 'en.*') to catch regional variants.
             v_base = video_lang.split('-')[0].lower()
             if v_base != 'en':
-                sub_lang = f"{v_base}.*,en.*"
+                sub_lang = f"{video_lang},{v_base}.*,{v_base},en.*,en"
             else:
-                sub_lang = 'en.*'
+                sub_lang = 'en.*,en'
         elif getattr(args, 'default_download', False):
             # Default download mode with no detected language: conservative English fallback.
             # We avoid 'all' because it downloads 100+ auto-translated languages on YouTube.
-            sub_lang = 'en.*'
+            sub_lang = 'en.*,en'
         else:
             # Explicit subtitle mode with unknown language metadata:
-            # ask for non-auto subtitles only to avoid translated auto-subs.
-            # If the site has manual original-language captions, yt-dlp will pick them.
-            sub_lang = 'all,-live_chat'
-            write_auto_subs = False
+            # prefer English manual/auto captions instead of "all", which can fetch
+            # huge auto-translation sets on YouTube.
+            sub_lang = 'en.*,en'
 
         command_list.append('--write-subs')
-        if write_auto_subs:
-            command_list.append('--write-auto-subs')
+        command_list.append('--write-auto-subs')
         command_list.extend(['--sub-langs', sub_lang, '--ignore-errors'])
         if args.json3:
             command_list.extend(['--sub-format', 'json3'])
@@ -1911,6 +1944,10 @@ def process_url(url, index, total_urls, args):
             emit_message(f"[{slot_label}] Found {len(tasks)} item(s) to download.")
 
             for i, task in enumerate(tasks, 1):
+                if ui_stop_event.is_set():
+                    emit_message(f"[{slot_label}] ⚠️ Cancelled; skipping remaining items.")
+                    return
+
                 task_type, target_url, title, original_url, channel, upload_date, video_lang = task
                 task_id = f"{index}:{i}:{int(time.time() * 1000)}"
                 status, message, t_paths = run_download_task(task_type, target_url, title, args, original_url, task_id=task_id, slot_label=slot_label, channel=channel, upload_date=upload_date, video_lang=video_lang)
@@ -2005,17 +2042,13 @@ def signal_handler(sig, frame):
     # Immediately signal the UI to stop without waiting
     stop_live_ui(immediate=True)
     
-    with print_lock:
+    try:
         print("\n\n⚠️ Ctrl-C detected! Terminating all processes...", flush=True)
+    except Exception:
+        pass
     
     # Kill all running child processes immediately
-    with process_lock:
-        for proc in list(running_processes):
-            try:
-                # Use kill() for more immediate termination on Windows/Unix
-                proc.kill()
-            except:
-                pass
+    terminate_running_processes()
     
     # Exit immediately to avoid hanging on thread joins or other locks
     os._exit(1)
