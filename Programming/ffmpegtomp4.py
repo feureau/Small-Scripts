@@ -6,15 +6,15 @@ Comprehensive FFmpeg Batch Processor with Robust Subprocess Decoding
 ================================================================================
 
 Author: (Your Name)
-Version: 1.2
-Date: 2025-10-07
+Version: 1.3
+Date: 2026-06-03
 
-SUMMARY OF FIX (v1.2)
+SUMMARY OF FIX (v1.3)
 --------------------------------------------------------------------------------
 Primary problem fixed:
-  - Windows `UnicodeDecodeError` raised in subprocess reader threads when
-    Python attempted to decode ffmpeg/ffprobe output with the system default
-    encoding (cp1252) and encountered bytes not representable in that codec.
+  - Replaced layout-altering layout filters with native stream channel control
+    parameters (`-ac:a:{i} 6`) to leverage FFmpeg's integrated downmix matrixing
+    for standard 5.1 channel layout structures across alternative input schemes.
 
 Key changes in this release:
   - Synchronized subtitle naming logic with `srtextract.py`.
@@ -30,13 +30,6 @@ Key changes in this release:
   - Consistent handling of CompletedProcess objects and clearer error logs.
   - Safer cleanup of zero-byte outputs on failure.
   - All existing behavior preserved unless otherwise stated.
-
-RATIONALE
---------------------------------------------------------------------------------
-- Using an explicit encoding and `errors='replace'` prevents
-  `UnicodeDecodeError` while keeping stderr/stdout readable.
-- Centralizing subprocess calls simplifies future changes such as streaming
-  output or logging to file.
 
 USAGE
 --------------------------------------------------------------------------------
@@ -215,7 +208,6 @@ def run_command(cmd, capture_output=True, check=False):
                 errors=SUBPROCESS_ERRORS,
             )
         else:
-            # Let subprocess print to console (stdout/stderr inherit from parent)
             return subprocess.run(cmd)
     except Exception:
         print(f"  Subprocess failed to start: {cmd}")
@@ -240,8 +232,6 @@ def find_ffmpeg_tools():
 # ---------------------------------------------------------------------------
 # Session Layout Management
 # ---------------------------------------------------------------------------
-# Caches to ensure we use the same output/input folders for all files 
-# in the same directory during a single script run.
 OUTPUT_DIRS = {}        # Key: source_dir_path -> Value: output_dir_path
 INPUT_BACKUP_DIRS = {}  # Key: (source_dir_path, extension) -> Value: input_backup_dir_path
 
@@ -256,9 +246,6 @@ def get_output_folder(source_dir, ext):
     folder_name = ext.lstrip('.')
     base_path = os.path.join(source_dir, folder_name)
     
-    # Logic: Always make a new folder. If it exists, increment.
-    # Note: If the user runs the script, we check existence. 
-    # If "mp4" exists, we try "mp4 (1)".
     final_path = base_path
     counter = 1
     while os.path.exists(final_path):
@@ -268,7 +255,7 @@ def get_output_folder(source_dir, ext):
     try:
         os.makedirs(final_path, exist_ok=True)
     except OSError:
-        pass # Handle race conditions or permission issues gracefully
+        pass
         
     OUTPUT_DIRS[source_dir] = final_path
     return final_path
@@ -308,12 +295,9 @@ def move_input_to_backup(file_path):
     filename = os.path.basename(file_path)
     _, ext = os.path.splitext(filename)
     
-    # Get the designated backup folder for this file type
     backup_dir = get_input_backup_folder(source_dir, ext)
-    
     target_path = os.path.join(backup_dir, filename)
     
-    # If specific filename exists in backup (rare given folder logic, but possible if mixed batches), increment
     if os.path.exists(target_path):
         base, extension = os.path.splitext(filename)
         counter = 1
@@ -330,10 +314,7 @@ def move_input_to_backup(file_path):
         return None
 
 def select_audio_encoder(channels):
-    """
-    Selects the appropriate encoder and bitrate based on channel count.
-    Logic taken from ffmpegac3.py.
-    """
+    """Selects the appropriate encoder and bitrate based on channel count."""
     if channels <= 6:
         return "ac3", "640k"
     elif channels <= 8:
@@ -352,21 +333,14 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
     if force_output_dir:
         dest_dir = force_output_dir
     else:
-        # Use session-based output folder logic
         source_dir = os.path.dirname(input_file)
         dest_dir = get_output_folder(source_dir, output_extension)
     
-    # Output filename matches input basename + new extension
-    # Per request: "output file will always match"
     output_filename = os.path.basename(base) + "." + output_extension.lstrip('.')
     output_file = os.path.join(dest_dir, output_filename)
 
-    # Collision check within the NEW folder (shouldn't happen often if folder is new, but safety check)
     if os.path.exists(output_file):
-        # Even if folder is new, if we process two files named 'video.mp4' in same source? 
-        # Unlikely but possible if globbing weirdly.
         print(f"  Warning: Output file {output_file} already exists.")
-        # Safe bet: Increment to avoid data loss.
         base_name, ext = os.path.splitext(output_filename)
         counter = 1
         while os.path.exists(output_file):
@@ -375,14 +349,12 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
 
     print(f"Converting: {input_file} -> {output_file}")
 
-    # Probe audio streams with expanded details
     audio_streams = _probe_audio_streams(input_file)
     
     if not audio_streams:
         print("  WARNING: Probing returned 0 audio streams. Using safety fallback (Copy All).")
         print("  This file will NOT be strictly converted to AC3 5.1 because details could not be read.")
 
-    # Sort: 'eng' or 'en' first, then others
     def audio_sort_key(s):
         tags = s.get('tags', {})
         lang = ""
@@ -390,12 +362,10 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
             if k.lower() == 'language':
                 lang = v.lower()
                 break
-        # Prioritize English (eng or en)
         return 0 if lang in ('eng', 'en') else 1
 
     sorted_audio = sorted(audio_streams, key=audio_sort_key)
     
-    # Use pre-selected audio streams if provided (from upfront selection)
     if selected_audio is not None:
         sorted_audio = selected_audio
     elif target_lang:
@@ -420,12 +390,10 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
     audio_maps = []
     dispositions = []
     
-    # Process each audio stream
     for i, s in enumerate(sorted_audio):
         idx = s['index']
         codec = s.get('codec_name', 'unknown').lower()
         
-        # Ensure channels is an int
         try:
             channels = int(s.get('channels', 2))
         except (ValueError, TypeError):
@@ -433,34 +401,23 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
             
         layout = s.get('channel_layout', 'unknown')
 
-        # Map the stream
         audio_maps.extend(["-map", f"0:{idx}"])
 
-        # Determine if we can copy (Passthrough) or need to convert
-        # Strict 5.1 LCR enforcement:
-        # Must be AC3, 6 channels, and layout strictly '5.1' (not 5.1(side) etc)
-        is_compliant = (codec == 'ac3' and channels == 6 and layout == '5.1')
+        # Employs specific track switches (-ac:a:{i} 6) instead of layout filters.
+        # This prompts FFmpeg's native resampling library to scale channel layout
+        # structures to standard 5.1 matrices automatically.
+        print(f"  [Stream {idx}] {codec}, {channels}ch, layout='{layout}' -> Standard AC3 5.1")
+        audio_maps.extend([
+            f"-c:a:{i}", "ac3",
+            f"-b:a:{i}", "640k",
+            f"-ac:a:{i}", "6",
+        ])
 
-        if is_compliant:
-            print(f"  [Stream {idx}] Pass: {codec}, {channels}ch, layout='{layout}' -> Copy")
-            audio_maps.extend([f"-c:a:{i}", "copy"])
-        else:
-            print(f"  [Stream {idx}] Fail: {codec}, {channels}ch, layout='{layout}' -> Converting to AC3 5.1")
-            # Force AC3 5.1 (6 channels) implementation match ffmpegac3.py logic
-            audio_maps.extend([
-                f"-c:a:{i}", "ac3",
-                f"-b:a:{i}", "640k",
-                f"-ac:a:{i}", "6"
-            ])
-
-        # Disposition handling
-        # Set first audio track (a:0 in output) as default, others not
         if i == 0:
             dispositions.extend([f"-disposition:a:0", "default"])
         else:
             dispositions.extend([f"-disposition:a:{i}", "0"])
     
-    # If no audio streams found by probe, fallback (risky but keeps existing fallback logic)
     if not audio_maps:
         audio_maps = ["-map", "0:a?", "-c:a", "copy"]
 
@@ -484,10 +441,8 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
         return output_file
     else:
         print(f"  FFmpeg error converting {input_file} (returncode {proc.returncode})")
-        # print stderr if available
         if getattr(proc, "stderr", None):
             print(proc.stderr)
-        # Remove empty output if created
         if os.path.exists(output_file) and os.path.getsize(output_file) == 0:
             try:
                 os.remove(output_file)
@@ -498,7 +453,6 @@ def convert_to_subtitle_free_video(input_file, output_extension, force_output_di
 
 def _probe_audio_streams(video_path):
     """Probe audio streams via ffprobe (returns list of stream dicts)."""
-    # Added channels and channel_layout to the query
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_streams",
@@ -511,7 +465,6 @@ def _probe_audio_streams(video_path):
         return []
     if proc.returncode != 0:
         print(f"  FFprobe returned non-zero for {video_path} (rc={proc.returncode})")
-        # Print stderr to help diagnose why probe failed
         if getattr(proc, "stderr", None):
              print(f"  FFprobe stderr: {proc.stderr}")
         return []
@@ -527,10 +480,7 @@ def _probe_audio_streams(video_path):
         return []
 
 def verify_converted_audio_streams(video_path):
-    """
-    Post-conversion ffprobe check for output audio streams.
-    Prints codec/channels/layout per track and whether all are AC3 5.1.
-    """
+    """Post-conversion ffprobe check for output audio streams."""
     print("  Post-conversion audio verification (ffprobe):")
     streams = _probe_audio_streams(video_path)
     if not streams:
@@ -587,26 +537,17 @@ def _probe_video_streams(video_path):
         return []
 
 def check_output_requirements(video_path, target_extension, target_lang=None):
-    """
-    Returns (ok, reasons) indicating whether input already meets output requirements:
-    - Has at least one video stream.
-    - Has at least one audio stream and ALL audio streams are AC3 5.1 layout.
-    - Has NO subtitle streams.
-    - Matches target container extension.
-    """
+    """Returns (ok, reasons) indicating whether input already meets output requirements."""
     reasons = []
 
-    # Extension check
     _, ext = os.path.splitext(video_path)
     if ext.lstrip('.').lower() != target_extension.lstrip('.').lower():
         reasons.append(f"Container mismatch (.{ext.lstrip('.') or 'none'} != .{target_extension.lstrip('.')})")
 
-    # Video stream check
     video_streams = _probe_video_streams(video_path)
     if not video_streams:
         reasons.append("No video streams detected")
 
-    # Audio stream checks
     audio_streams = _probe_audio_streams(video_path)
     
     if target_lang:
@@ -643,7 +584,6 @@ def check_output_requirements(video_path, target_extension, target_lang=None):
                     f"(codec={codec}, channels={channels}, layout={layout})"
                 )
 
-    # Subtitle stream check
     subtitle_streams = _probe_subtitle_streams(video_path)
     if subtitle_streams:
         reasons.append(f"Subtitle streams present ({len(subtitle_streams)})")
@@ -660,10 +600,7 @@ KNOWN_TEXT_SUBTITLE_CODECS = [
 ]
 
 def _get_language_name(code):
-    """
-    Converts ISO 639-2 (3-letter) or ISO 639-1 (2-letter) codes to full names.
-    Falls back to original code if pycountry missing or name not found.
-    """
+    """Converts ISO 639-2 (3-letter) or ISO 639-1 (2-letter) codes to full names."""
     if not code or not pycountry:
         return code
     try:
@@ -698,7 +635,6 @@ def _probe_subtitle_streams(video_path):
     except json.JSONDecodeError:
         print(f"  Failed to parse ffprobe JSON for {video_path}")
         if getattr(proc, "stdout", None):
-            # Dump raw (decoded with replacement) output to help debugging
             print(proc.stdout)
         return []
     except Exception:
@@ -710,7 +646,6 @@ def _generate_subtitle_filename(video_basename, stream_info, ext, output_dir):
     tags = stream_info.get('tags', {})
     disposition = stream_info.get('disposition', {})
     
-    # Case-insensitive lookup for Title and Language
     title = None
     language = None
     for k, v in tags.items():
@@ -719,17 +654,12 @@ def _generate_subtitle_filename(video_basename, stream_info, ext, output_dir):
         if k.lower() == 'language':
             language = _get_language_name(v)
 
-    # Check for Forced flag
     is_forced = str(disposition.get('forced', '0')) == '1'
-
-    # Prioritize Language, then Title, then "Unknown"
     tag = language if language else (title if title else "Unknown")
 
-    # Add [Forced] suffix if needed
     if is_forced and "[Forced]" not in tag and "forced" not in tag.lower():
         tag = f"{tag} [Forced]"
 
-    # Sanitization
     illegal_chars = r'\/:*?"<>|'
     sanitized_tag = "".join(c for c in tag if c not in illegal_chars).strip()
     if not sanitized_tag:
@@ -737,7 +667,6 @@ def _generate_subtitle_filename(video_basename, stream_info, ext, output_dir):
 
     filename = f"{video_basename} - {sanitized_tag}.{ext}"
     
-    # Collision detection
     base_name_no_ext = f"{video_basename} - {sanitized_tag}"
     counter = 1
     while os.path.exists(os.path.join(output_dir, filename)):
@@ -747,7 +676,7 @@ def _generate_subtitle_filename(video_basename, stream_info, ext, output_dir):
     return filename
 
 def _ensure_srt_subfolder(video_path, base_dir=None):
-    """Ensure a subfolder named 'SRT' exists. Uses base_dir if provided, else video_path dir."""
+    """Ensure a subfolder named 'SRT' exists."""
     parent = base_dir if base_dir else os.path.dirname(video_path)
     folder = os.path.join(parent, "SRT")
     os.makedirs(folder, exist_ok=True)
@@ -773,7 +702,6 @@ def _extract_to_srt(video_path, streams, basename, output_dir_override=None):
             print(f"    Failed: {output_path} (rc={proc.returncode})")
             if getattr(proc, "stderr", None):
                 print(proc.stderr)
-            # If small/empty output created then remove it
             try:
                 if os.path.exists(output_path) and os.path.getsize(output_path) < 20:
                     os.remove(output_path)
@@ -800,7 +728,6 @@ def _package_bitmap_subs(video_path, streams, basename, output_dir_override=None
             print(f"    Failed: {output_path} (rc={proc.returncode})")
             if getattr(proc, "stderr", None):
                 print(proc.stderr)
-            # Remove zero-byte or tiny files
             try:
                 if os.path.exists(output_path) and os.path.getsize(output_path) < 20:
                     os.remove(output_path)
@@ -815,7 +742,6 @@ def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, targe
         print("  No subtitles found.")
         return
 
-    # Use pre-selected subtitle streams if provided (from upfront selection)
     if selected_subs is not None:
         subs = selected_subs
     elif target_lang:
@@ -850,10 +776,7 @@ def extract_subtitles(video_path, mode="hybrid", output_dir_override=None, targe
             _package_bitmap_subs(video_path, bitmap_subs, basename, output_dir_override)
 
 def move_original_file(file_path):
-    """
-    Moves the original file to a subfolder named after its extension.
-    Example: video.mkv -> mkv/video.mkv
-    """
+    """Moves the original file to a subfolder named after its extension."""
     if not os.path.isfile(file_path):
         return
 
@@ -861,12 +784,10 @@ def move_original_file(file_path):
     filename = os.path.basename(file_path)
     _, ext = os.path.splitext(filename)
     
-    # Normalize extension for folder name
     ext_folder = ext.lstrip('.').lower()
     if not ext_folder:
         ext_folder = "no_extension"
     
-    # Check if we're already in a folder named after the extension
     parent_folder = os.path.basename(dir_path)
     if parent_folder.lower() == ext_folder:
         print(f"  File already in '{ext_folder}' folder. Skipping move.")
@@ -877,7 +798,6 @@ def move_original_file(file_path):
     
     target_path = os.path.join(target_dir, filename)
     
-    # Handle filename collisions
     if os.path.exists(target_path):
         base, extension = os.path.splitext(filename)
         counter = 1
@@ -891,9 +811,6 @@ def move_original_file(file_path):
     except Exception as e:
         print(f"  Error moving file: {e}")
 
-# ---------------------------------------------------------------------------
-# Main Control Flow
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Main Control Flow
 # ---------------------------------------------------------------------------
@@ -921,16 +838,10 @@ def main():
                         help="Optional file patterns or directories (default: recursive scan)")
     args = parser.parse_args()
 
-    # Strict list of supported video extensions
     supported_exts = (".mkv", ".mp4", ".avi", ".mov", ".flv", ".webm", ".wmv", ".m4v", ".ts", ".mts")
-
-    # Directories to ignore during recursive scan (generated folders)
-    # We ignore generic output/input generated names to avoid re-processing outputs
     ignored_dirs = {"SRT", "subs", "subtitles"}
-    
     files_to_process = []
     
-    # Helper to check if file is supported video
     def is_supported_video(f_path):
         return os.path.isfile(f_path) and f_path.lower().endswith(supported_exts)
 
@@ -938,14 +849,11 @@ def main():
         for pattern in args.input_patterns:
             if os.path.isdir(pattern):
                 for root, dirs, files in os.walk(pattern):
-                    # Smart prune: Modify dirs in-place to skip ignored folders
-                    # skips folders like 'SRT', 'mp4', or any '*-input'
                     dirs[:] = [
                         d for d in dirs 
                         if d not in ignored_dirs 
                         and not d.endswith("-input") 
-                        and not (d == args.extension.lstrip('.')) # ignore output folder e.g. 'mp4'
-                        # handle incremented folders too e.g. 'mp4 (1)'
+                        and not (d == args.extension.lstrip('.'))
                         and not (d.startswith(args.extension.lstrip('.') + " ("))
                     ]
                     
@@ -954,26 +862,18 @@ def main():
                             files_to_process.append(os.path.join(root, f))
                             
             elif os.path.isfile(pattern):
-                # Direct file path - strict check
                 if is_supported_video(pattern):
                     files_to_process.append(os.path.abspath(pattern))
                 else:
                     print(f"Skipping unsupported file type: {pattern}")
             else:
-                # Treat as glob pattern
                 expanded = glob.glob(pattern)
                 for match in expanded:
-                    # Filter glob results strictly
                     if is_supported_video(match):
                         files_to_process.append(os.path.abspath(match))
-                    elif os.path.isfile(match):
-                         # Verbose skip for clarity
-                         pass 
     else:
-        # Recursive scan of CWD
         print("Scanning current directory recursively for video files...")
         for root, dirs, files in os.walk(os.getcwd()):
-            # Smart prune here as well
             dirs[:] = [
                 d for d in dirs 
                 if d not in ignored_dirs 
@@ -1041,12 +941,7 @@ def main():
             return
         files_to_process = files_to_process_after_test
 
-    # -----------------------------------------------------------------------
-    # Pre-scan phase: probe all files and prompt for track selection upfront
-    # -----------------------------------------------------------------------
-    # Stores pre-selected streams keyed by file path
-    # Value is (selected_audio_list_or_None, selected_subs_list_or_None)
-    track_selections = {}  # file_path -> (selected_audio, selected_subs)
+    track_selections = {}
 
     if not args.lang:
         need_prompt = False
@@ -1062,7 +957,6 @@ def main():
             print("BATCH TRACK SELECTION  (applied to all videos in this batch)")
             print("=" * 70)
 
-            # Find a reference file that has multiple tracks to display as examples
             ref_file = None
             ref_audio = []
             ref_subs = []
@@ -1118,24 +1012,17 @@ def main():
     for file_path in files_to_process:
         print(f"\n--- Processing: {file_path} ---")
         
-        # Double check before processing (redundant but safe)
         if not is_supported_video(file_path):
              print(f"  Skipping non-video file: {file_path}")
              continue
         
-        # Retrieve pre-selected tracks (may be None if no selection was needed)
         sel_audio, sel_subs = track_selections.get(file_path, (None, None))
-
-        # 1. Move Original File to Backup FIRST
-        # Returns the new path of the file in the backup folder
         backup_file_path = move_input_to_backup(file_path)
         
         if not backup_file_path:
              print("  Skipping file due to move failure.")
              continue
              
-        # 2. Convert from Backup -> Original Location
-        # force_output_dir = where the file ORIGINALLY was
         original_dir = os.path.dirname(file_path)
         
         converted_file = convert_to_subtitle_free_video(
@@ -1150,8 +1037,6 @@ def main():
             print("  Conversion done.")
             verify_converted_audio_streams(converted_file)
             
-        # 3. Extract Subtitles from the Backup file
-        # Force explicit output to original dir so 'SRT' folder attempts to be in root
         extract_subtitles(backup_file_path, mode=args.format, output_dir_override=original_dir, target_lang=args.lang, selected_subs=sel_subs)
 
     print("\nAll processing complete.")

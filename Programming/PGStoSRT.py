@@ -12,6 +12,7 @@ import sys
 import base64
 import urllib.request
 import urllib.error
+import re
 
 # ==========================================
 # DEPENDENCY CHECK
@@ -58,7 +59,7 @@ def check_dependencies():
 # Run check before importing
 check_dependencies()
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 import pytesseract
 from tqdm import tqdm
 
@@ -163,6 +164,10 @@ class PGSDecoder:
         self.mkv_timings = mkv_timings or {}
         self.frames_dir = frames_dir
         self.frame_count = 0
+        self._ods_buffer = bytearray()
+        self._ods_expected_len = None
+        self._ods_width = 0
+        self._ods_height = 0
         if frames_dir:
             os.makedirs(frames_dir, exist_ok=True)
 
@@ -203,16 +208,15 @@ class PGSDecoder:
 
     def _parse_pds(self, data):
         pos = 2 
-        while pos < len(data):
+        while pos + 4 < len(data):
             idx = data[pos]
             y = data[pos+1]
             cr = data[pos+2]
             cb = data[pos+3]
             a_raw = data[pos+4]
-            # PGS spec: alpha 0x00 = fully opaque, 0xFF = fully transparent
-            # PIL RGBA: alpha 255 = fully opaque, 0 = fully transparent
-            # Invert to match PIL convention
-            a = 255 - a_raw
+            # PGS stores opacity in the palette alpha byte; Pillow uses the same
+            # 0 transparent .. 255 opaque convention.
+            a = a_raw
             r = y + 1.402 * (cr - 128)
             g = y - 0.34414 * (cb - 128) - 0.71414 * (cr - 128)
             b = y + 1.772 * (cb - 128)
@@ -220,72 +224,91 @@ class PGSDecoder:
             pos += 5
 
     def _parse_ods(self, data):
-        if len(data) < 11:
+        if len(data) < 4:
             return
-        width = (data[7] << 8) | data[8]
-        height = (data[9] << 8) | data[10]
-        rle_data = data[11:]
-        self.current_bitmap_idx = self._decode_rle(rle_data, width, height)
-        self.current_width = width
-        self.current_height = height
+        sequence = data[3]
+        is_first = bool(sequence & 0x80)
+        is_last = bool(sequence & 0x40)
+
+        if is_first:
+            if len(data) < 11:
+                return
+            self._ods_expected_len = (data[4] << 16) | (data[5] << 8) | data[6]
+            self._ods_width = (data[7] << 8) | data[8]
+            self._ods_height = (data[9] << 8) | data[10]
+            self._ods_buffer = bytearray(data[11:])
+        else:
+            if self._ods_expected_len is None:
+                return
+            self._ods_buffer.extend(data[4:])
+
+        if is_last:
+            width = self._ods_width
+            height = self._ods_height
+            rle_data = bytes(self._ods_buffer[:self._ods_expected_len])
+            self.current_bitmap_idx = self._decode_rle(rle_data, width, height)
+            self.current_width = width
+            self.current_height = height
+            self._ods_buffer = bytearray()
+            self._ods_expected_len = None
 
     def _decode_rle(self, data, width, height):
         if width <= 0 or height <= 0:
             return []
-        pixels = []
+        pixels = [0] * (width * height)
         reader = BitReader(data)
-        target_pixels = width * height
-        # Guard against malformed streams causing non-progress loops.
-        stall_count = 0
-        while len(pixels) < target_pixels:
-            before_len = len(pixels)
+        x = 0
+        y = 0
+
+        def write_run(color, length):
+            nonlocal x, y
+            while length > 0 and y < height:
+                room = width - x
+                count = min(length, room)
+                start = y * width + x
+                pixels[start:start + count] = [color] * count
+                x += count
+                length -= count
+                if x >= width:
+                    x = 0
+                    y += 1
+
+        while y < height:
             b = reader.read_byte()
             if b is None:
                 break
             if b != 0:
-                pixels.append(b)
-            else:
-                flags = reader.read_byte()
-                if flags is None:
-                    break
-                if flags == 0:
-                    # Explicit no-op marker; too many in a row likely means bad/truncated payload.
-                    stall_count += 1
-                    if stall_count > 1024:
-                        break
-                elif flags < 64: pixels.extend([0] * flags)
-                elif flags & 0x40:
-                    if flags & 0x80:
-                        if flags & 0xC0 == 0xC0:
-                            length_lo = reader.read_byte()
-                            color = reader.read_byte()
-                            if length_lo is None or color is None:
-                                break
-                            length = ((flags & 0x3F) << 8) | length_lo
-                            pixels.extend([color] * length)
-                        else: pass
-                    else:
-                        length_lo = reader.read_byte()
-                        if length_lo is None:
-                            break
-                        length = ((flags & 0x3F) << 8) | length_lo
-                        pixels.extend([0] * length)
+                write_run(b, 1)
+                continue
+
+            flags = reader.read_byte()
+            if flags is None:
+                break
+            if flags == 0:
+                # End of line. PGS RLE rows may be shorter than the bitmap width.
+                if x:
+                    x = 0
+                    y += 1
                 else:
-                    length = flags & 0x3F
-                    color = reader.read_byte()
-                    if color is None:
-                        break
-                    pixels.extend([color] * length)
-            if len(pixels) == before_len:
-                stall_count += 1
-                if stall_count > 1024:
+                    y += 1
+            elif flags < 0x40:
+                write_run(0, flags)
+            elif flags < 0x80:
+                length_lo = reader.read_byte()
+                if length_lo is None:
                     break
+                write_run(0, ((flags & 0x3F) << 8) | length_lo)
+            elif flags < 0xC0:
+                color = reader.read_byte()
+                if color is None:
+                    break
+                write_run(color, flags & 0x3F)
             else:
-                stall_count = 0
-        if len(pixels) < target_pixels:
-            pixels.extend([0] * (target_pixels - len(pixels)))
-        elif len(pixels) > target_pixels:
-            pixels = pixels[:target_pixels]
+                length_lo = reader.read_byte()
+                color = reader.read_byte()
+                if length_lo is None or color is None:
+                    break
+                write_run(color, ((flags & 0x3F) << 8) | length_lo)
         return pixels
 
     def _parse_pcs(self, data, pts):
@@ -410,14 +433,17 @@ def preprocess_for_easyocr(img):
     else:
         bg_black.paste(img.convert("RGB"))
     
-    # Upscale small images — EasyOCR's CRAFT text detector struggles with
-    # images shorter than ~80px (typical PGS subtitle bitmaps are 30-60px tall).
-    MIN_HEIGHT = 80
+    bg_black = ImageOps.autocontrast(bg_black.convert("L")).convert("RGB")
+
+    # Upscale subtitle bitmaps aggressively; Blu-ray subtitle glyphs are often
+    # only 25-45 px tall after cropping, which is too soft for EasyOCR.
+    MIN_HEIGHT = 160
     w, h = bg_black.size
     if h < MIN_HEIGHT:
         scale = MIN_HEIGHT / h
         new_w = int(w * scale)
         bg_black = bg_black.resize((new_w, MIN_HEIGHT), Image.LANCZOS)
+    bg_black = bg_black.filter(ImageFilter.SHARPEN)
     
     return bg_black
 
@@ -484,7 +510,8 @@ def ocr_image(img):
             img_np = np.array(proc_img)
             try:
                 results = reader.readtext(img_np, detail=0, paragraph=True,
-                                          text_threshold=0.3, low_text=0.3)
+                                          text_threshold=0.4, low_text=0.3,
+                                          mag_ratio=1.5)
                 return " ".join(results)
             except Exception:
                 return ""
@@ -514,6 +541,50 @@ def ocr_image(img):
             return ""
 
     return ""
+
+def clean_ocr_text(text):
+    text = text.strip()
+    if not text:
+        return ""
+
+    text = text.replace('|', 'I').replace('\n', ' ')
+    text = re.sub(r'\s+', ' ', text)
+
+    # Common EasyOCR confusions on white PGS subtitles.
+    replacements = {
+        "AIl": "All",
+        "aIl": "all",
+        "IlI": "I'll",
+        "III": "I'll",
+        "They'Il": "They'll",
+        "they'Il": "they'll",
+        "you'Il": "you'll",
+        "we'Il": "we'll",
+        "I'Il": "I'll",
+        "Iegal": "legal",
+        "Iaunch": "launch",
+        "out off": "cut off",
+        "uS": "us",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+
+    text = re.sub(r'\bI(?=(?:wish|want|need|can|can\'t|could|couldn\'t|just|don\'t|didn\'t|doubt|know|knew|thought|hope|had|have|am|was|will|would)\b)', 'I ', text)
+    text = re.sub(r'\b([Tt]hey|[Ww]e|[Yy]ou|[Ss]he|[Hh]e)' + r"'Il\b", r"\1'll", text)
+    text = re.sub(r'(?<![-\w.])(?:0|9)(?![-\w.%])', '', text)
+
+    # Subtitle outlines/shadows are often read as junk at line ends.
+    text = re.sub(r'\s*(?:[_"“”\'`]+|\d+|[0O])+\s*$', '', text)
+    text = re.sub(r'([A-Za-z])_\b', r'\1', text)
+    text = re.sub(r'\s+([,.;:!?])', r'\1', text)
+    text = re.sub(r'([.!?])\s*[._]+$', r'\1', text)
+    text = re.sub(r'_\s*$', '.', text)
+
+    # EasyOCR frequently reads a final exclamation mark as lowercase L.
+    text = re.sub(r'\b([A-Za-z]{2,})l([.!?]?)$', lambda m: m.group(1) + ('!' if not m.group(2) else m.group(2)), text)
+    text = re.sub(r'\s+', ' ', text)
+
+    return text.strip()
 
 def format_time(seconds):
     ms = int((seconds % 1) * 1000)
@@ -556,10 +627,7 @@ def perform_ocr_from_folder(frames_dir, output_srt):
             # Load the frame from disk
             img = Image.open(frame_path).convert('RGBA')
             
-            text = ocr_image(img)
-            
-            # Common Cleanup
-            text = text.strip().replace('|', 'I')
+            text = clean_ocr_text(ocr_image(img))
             
             time_str = f"{format_time(start_time)} --> {format_time(end_time)}"
             clean_text = text.replace('\n', ' ')
@@ -603,6 +671,7 @@ def perform_ocr_from_folder(frames_dir, output_srt):
 # ==========================================
 
 def get_subtitle_tracks(mkv_path):
+    video_width, video_height = get_video_dimensions(mkv_path)
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "s",
         "-show_entries", "stream=index,codec_name,width,height:stream_tags=language",
@@ -624,10 +693,26 @@ def get_subtitle_tracks(mkv_path):
                 'sub_idx': sub_idx,
                 'codec': codec,
                 'lang': stream.get('tags', {}).get('language', 'und'),
-                'width': stream.get('width'),
-                'height': stream.get('height')
+                'width': stream.get('width') or video_width,
+                'height': stream.get('height') or video_height
             })
     return tracks
+
+def get_video_dimensions(mkv_path):
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "json", mkv_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        width = int(stream.get("width") or 1920)
+        height = int(stream.get("height") or 1080)
+        return width, height
+    except Exception:
+        return 1920, 1080
 
 def get_mkv_packet_entries(mkv_path, track_selector):
     """
@@ -658,16 +743,16 @@ def get_mkv_packet_entries(mkv_path, track_selector):
         print(f"   [WARN] Could not extract packet timing list: {e}")
         return []
 
-def get_mkv_timings(mkv_path, track_index):
+def get_mkv_timings(mkv_path, track_selector):
     """
     Extracts packet timings (pts_time, duration_time) for a specific track.
     Returns a dictionary mapping start_time -> end_time (approx).
     Or better, a list of (start, end) tuples we can search.
     """
-    print(f"   [SYNC] extraction packet timings from MKV (track {track_index})...")
+    print(f"   [SYNC] extraction packet timings from MKV ({track_selector})...")
     cmd = [
         "ffprobe", "-v", "error", 
-        "-select_streams", f"{track_index}",
+        "-select_streams", str(track_selector),
         "-show_entries", "packet=pts_time,duration_time",
         "-of", "json", mkv_path
     ]
@@ -699,7 +784,7 @@ def get_mkv_timings(mkv_path, track_index):
         print(f"   [WARN] Could not extract packet timings: {e}")
         return {}
 
-def render_vobsub_frame(mkv_path, sub_idx, start_time, width=720, height=480):
+def render_image_subtitle_frame(mkv_path, sub_idx, start_time, width=720, height=480):
     # Small offset helps ensure we sample during the subtitle duration, not at the boundary.
     # 0.1s is usually safe for VobSub/PGS.
     sample_time = start_time + 0.1
@@ -724,48 +809,155 @@ def render_vobsub_frame(mkv_path, sub_idx, start_time, width=720, height=480):
     try:
         result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0 or not result.stdout:
+            if not getattr(render_image_subtitle_frame, "_warned", False):
+                err = result.stderr.decode("utf-8", errors="replace").strip()
+                if err:
+                    tqdm.write(f"   [WARN] ffmpeg subtitle render failed: {err.splitlines()[-1]}")
+                render_image_subtitle_frame._warned = True
             return None
         return Image.open(io.BytesIO(result.stdout)).convert('RGBA')
-    except Exception:
+    except Exception as e:
+        if not getattr(render_image_subtitle_frame, "_warned", False):
+            tqdm.write(f"   [WARN] ffmpeg subtitle render failed: {e}")
+            render_image_subtitle_frame._warned = True
         return None
 
-def decode_vobsub_captions(mkv_path, track, frames_dir=None):
-    print(f"   [VOBSUB] Rendering subtitle bitmaps from stream {track['index']}...")
+def subtitle_image_fingerprint(img):
+    """
+    Small perceptual-ish fingerprint used only to skip repeated rendered states.
+    Exact OCR text comparison is too expensive because OCR is the slow part.
+    """
+    sample = img.convert("L").resize((64, 36), Image.Resampling.BILINEAR)
+    return sample.tobytes()
+
+def get_pgs_display_events(sup_file):
+    """
+    Read only PGS presentation composition segments for display/clear timing.
+    Bitmap decoding stays delegated to ffmpeg so OCR sees player-rendered frames.
+    """
+    events = []
+    try:
+        file_size = os.path.getsize(sup_file)
+        with open(sup_file, 'rb') as f:
+            with tqdm(total=file_size, unit='B', unit_scale=True, desc="[1/2] Reading PGS Events") as pbar:
+                while True:
+                    header = f.read(13)
+                    if len(header) < 13:
+                        break
+                    pbar.update(13)
+                    magic, pts, _dts, seg_type, seg_size = struct.unpack('>2sIIBH', header)
+                    if magic != b'PG':
+                        f.seek(-12, 1)
+                        continue
+                    payload = f.read(seg_size)
+                    pbar.update(seg_size)
+                    if seg_type != 0x16 or len(payload) < 11:
+                        continue
+                    start = pts / 90000.0
+                    obj_count = payload[10]
+                    events.append({'start': start, 'type': 'caption' if obj_count else 'clear'})
+    except Exception as e:
+        print(f"   [WARN] Could not read PGS display events: {e}")
+    return events
+
+def decode_pgs_captions(mkv_path, track, sup_file, frames_dir=None):
+    print(f"   [PGS] Reading display events from stream {track['index']}...")
+    events = get_pgs_display_events(sup_file)
+    if not events:
+        print("   [PGS] No display events found.")
+        return
+
+    width = int(track.get('width') or 1920)
+    height = int(track.get('height') or 1080)
+    print(f"   [PGS] Render canvas: {width}x{height}")
+
+    if frames_dir:
+        os.makedirs(frames_dir, exist_ok=True)
+
+    frame_num = 0
+    last_caption_fp = None
+    with tqdm(total=len(events), desc="[1/2] Rendering PGS Events", unit="evt") as pbar:
+        for event in events:
+            start = event['start']
+            if event['type'] == 'clear':
+                last_caption_fp = None
+                yield event
+                pbar.update(1)
+                continue
+
+            img = render_image_subtitle_frame(mkv_path, track['sub_idx'], start, width, height)
+            if not img or is_image_blank(img):
+                pbar.update(1)
+                continue
+
+            fp = subtitle_image_fingerprint(img)
+            if fp == last_caption_fp:
+                pbar.update(1)
+                continue
+            last_caption_fp = fp
+
+            img = autocrop_image(img, padding=20)
+            if frames_dir:
+                frame_filename = f"frame_{frame_num:04d}.png"
+                img.save(os.path.join(frames_dir, frame_filename))
+                yield {'start': start, 'end': None, 'type': 'caption', 'frame': frame_filename}
+                frame_num += 1
+            else:
+                yield {'start': start, 'end': None, 'type': 'caption', 'image': img}
+            pbar.update(1)
+
+def decode_image_subtitle_captions(mkv_path, track, frames_dir=None):
+    codec_label = "PGS" if track.get('codec') == "hdmv_pgs_subtitle" else "VobSub"
+    print(f"   [{codec_label}] Rendering subtitle bitmaps from stream {track['index']}...")
     width = int(track.get('width') or 720)
     height = int(track.get('height') or 480)
+    print(f"   [{codec_label}] Render canvas: {width}x{height}")
     packet_entries = get_mkv_packet_entries(mkv_path, f"s:{track['sub_idx']}")
     if not packet_entries:
-        print("   [VOBSUB] No packet timings found for this stream.")
+        print(f"   [{codec_label}] No packet timings found for this stream.")
         return
 
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
 
     frame_num = 0
-    with tqdm(total=len(packet_entries), desc="[1/2] Decoding VobSub Stream", unit="pkt") as pbar:
+    last_caption_fp = None
+    was_showing_caption = False
+    with tqdm(total=len(packet_entries), desc=f"[1/2] Rendering {codec_label} Stream", unit="pkt") as pbar:
         for item in packet_entries:
             start = item['start']
             duration = item.get('duration')
             end = start + duration if duration else None
-            img = render_vobsub_frame(mkv_path, track['sub_idx'], start, width, height)
+            img = render_image_subtitle_frame(mkv_path, track['sub_idx'], start, width, height)
             if img:
+                if is_image_blank(img):
+                    last_caption_fp = None
+                    if was_showing_caption:
+                        was_showing_caption = False
+                        yield {'start': start, 'type': 'clear'}
+                    pbar.update(1)
+                    continue
+
+                fp = subtitle_image_fingerprint(img)
+                if fp == last_caption_fp:
+                    pbar.update(1)
+                    continue
+                last_caption_fp = fp
+                was_showing_caption = True
+
                 if frames_dir:
-                    if not is_image_blank(img):
-                        # Dynamic crop with padding to avoid massive disk usage for VobSub
-                        img = autocrop_image(img, padding=20)
-                        
-                        frame_filename = f"frame_{frame_num:04d}.png"
-                        img.save(os.path.join(frames_dir, frame_filename))
-                        res = {'start': start, 'end': end, 'type': 'caption', 'frame': frame_filename}
-                        yield res
-                        frame_num += 1
-                    else:
-                        tqdm.write(f"    [SKIP] Found empty VobSub frame at {format_time(start)}")
+                    # Dynamic crop with padding to avoid massive disk usage
+                    img = autocrop_image(img, padding=20)
+
+                    frame_filename = f"frame_{frame_num:04d}.png"
+                    img.save(os.path.join(frames_dir, frame_filename))
+                    res = {'start': start, 'end': end, 'type': 'caption', 'frame': frame_filename}
+                    yield res
+                    frame_num += 1
                 else:
-                    if not is_image_blank(img):
-                        img = autocrop_image(img, padding=20)
-                        res = {'start': start, 'end': end, 'type': 'caption', 'image': img}
-                        yield res
+                    img = autocrop_image(img, padding=20)
+                    res = {'start': start, 'end': end, 'type': 'caption', 'image': img}
+                    yield res
             pbar.update(1)
 
 def extract_sup(mkv_path, track_index, output_sup):
@@ -822,9 +1014,7 @@ def perform_ocr_streaming(generator, output_srt):
             
         time_str = f"{format_time(start_time)} --> {format_time(end_time)}"
         
-        text = ocr_image(img)
-            
-        text = text.strip().replace('|', 'I')
+        text = clean_ocr_text(ocr_image(img))
         clean_text = text.replace('\n', ' ')
         
         if text:
@@ -900,11 +1090,9 @@ def process_file(mkv_path, args):
                 print("   [STREAM] Starting in-memory OCR stream...")
                 if codec == "hdmv_pgs_subtitle":
                     extract_sup(mkv_path, idx, temp_sup)
-                    packet_timings = get_mkv_timings(mkv_path, idx)
-                    decoder = PGSDecoder(temp_sup, mkv_timings=packet_timings)
-                    perform_ocr_streaming(decoder.parse(), output_srt)
+                    perform_ocr_streaming(decode_pgs_captions(mkv_path, track, temp_sup), output_srt)
                 else:
-                    perform_ocr_streaming(decode_vobsub_captions(mkv_path, track), output_srt)
+                    perform_ocr_streaming(decode_image_subtitle_captions(mkv_path, track), output_srt)
             else:
                 # === DISK MODE (Flagged via --dump) ===
                 timings_file = os.path.join(frames_dir, 'timings.json')
@@ -916,11 +1104,9 @@ def process_file(mkv_path, args):
                     print("   [DISK] Decoding and dumping frames to disk...")
                     if codec == "hdmv_pgs_subtitle":
                         extract_sup(mkv_path, idx, temp_sup)
-                        packet_timings = get_mkv_timings(mkv_path, idx)
-                        decoder = PGSDecoder(temp_sup, mkv_timings=packet_timings, frames_dir=frames_dir)
-                        captions = list(decoder.parse())
+                        captions = list(decode_pgs_captions(mkv_path, track, temp_sup, frames_dir=frames_dir))
                     else:
-                        captions = list(decode_vobsub_captions(mkv_path, track, frames_dir=frames_dir))
+                        captions = list(decode_image_subtitle_captions(mkv_path, track, frames_dir=frames_dir))
                     
                     if not captions:
                          print("   Warning: No captions decoded.")
@@ -1035,7 +1221,10 @@ def main():
         for p in patterns:
             p = p.strip()
             if not p: continue
-            matched = glob.glob(p)
+            if os.path.isfile(p):
+                matched = [p]
+            else:
+                matched = glob.glob(p)
             if not matched and ('*' in p or '?' in p):
                 import fnmatch
                 try:

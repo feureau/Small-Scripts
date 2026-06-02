@@ -93,7 +93,7 @@ python iazip.py -t -M
     -   **Images**: `.jpg`, `.png`, `.tif`, etc. -> `_images.zip`
     -   **Media**: `.mp4`, `.mp3`, `.wav`, etc. -> `_{ext}_media.zip`
     -   **Text**: Plaintext files with numeric naming -> `_{ext}_text.zip`
-3.  **Compression**: Uses standard ZIP DEFLATED compression at the highest level (9).
+3.  **Compression**: Uses ZIP stored mode by default for faster archiving with no recompression.
 """
 
 import os
@@ -341,10 +341,8 @@ def process_directory(
 
             print(f"Archiving {len(group_files)} files to {zip_name}...")
 
-            # CREATE: Zip archive with maximum compression (level 9)
-            with zipfile.ZipFile(
-                zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9
-            ) as zf:
+            # CREATE: Zip archive using stored mode for fastest packaging
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
                 for gf in group_files:
                     zf.write(os.path.join(root, gf), arcname=gf)
 

@@ -46,8 +46,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(
         description=(
             "Convert video files by copying the video and re-encoding the audio.\n"
-            "When using the '5.1' layout, this script specifically outputs the 'film' \n"
-            "channel order (L, C, R, Ls, Rs, LFE) for compatibility with DaVinci Resolve."
+            "Utilizes native FFmpeg channel scaling via command-line options down to standard layouts."
         ),
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -80,17 +79,15 @@ def main():
     
     print(f"Desired layout: {desired_layout} => {channels} channel(s)")
     if desired_layout == "5.1":
-        print("Note: Forcing 5.1 (film) channel layout: L, C, R, Ls, Rs, LFE")
+        print("Note: Forcing standard 5.1 channel layout sequence: FL, FR, FC, LFE, BL, BR")
     print(f"Selected audio encoder: {audio_encoder} at bitrate {audio_bitrate}")
     
-    # Handle pattern differently - if it's the default, expand it to actual file patterns
     if args.pattern == "*.[Mm][Pp]4|*.[Mm][Kk][Vv]|*.[Aa][Vv][Ii]|*.[Mm][Oo][Vv]|*.[Ww][Ee][Bb][Mm]|*.[Tt][Ss]":
-        # Use glob with multiple extensions
         extensions = ['*.mp4', '*.MP4', '*.mkv', '*.MKV', '*.avi', '*.AVI', '*.mov', '*.MOV', '*.webm', '*.WEBM', '*.ts', '*.TS']
         files = []
         for ext in extensions:
             files.extend(glob.glob(ext))
-        files = list(set(files))  # Remove duplicates
+        files = list(set(files))
     else:
         files = glob.glob(file_pattern)
     
@@ -107,6 +104,7 @@ def main():
         base, _ = os.path.splitext(os.path.basename(file))
         output_file = os.path.join(output_dir, base + ".mp4")
         
+        # Stream downmixing parameters are bound globally to the track selection mapping architecture
         command = [
             "ffmpeg", "-y",
             "-i", file,
