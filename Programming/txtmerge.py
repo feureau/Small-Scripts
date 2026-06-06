@@ -4,15 +4,23 @@
 r"""
 ================================================================================
  SCRIPT NAME: Advanced Text File Merger
- VERSION: 4.2 (Natural Sorting Fix)
+ VERSION: 4.3 (Recursive by Default)
  AUTHOR: Contributor (Patched by ChatGPT, Refactored by Gemini)
- DATE: December 13, 2025
+ DATE: June 7, 2026
 ================================================================================
 
 PURPOSE & DESCRIPTION:
 ----------------------
 This script merges multiple text-based files (e.g., .txt, .srt, .md, .log)
 into a single, consolidated output file.
+
+NEW IN V4.3:
+- When no file patterns are provided, the script now automatically enables
+  recursive subfolder traversal (-r) and markers (-m). This means running
+  `txtmerge.py` with no arguments will scan the entire subfolder tree and
+  merge all plaintext files into one output in the working directory.
+- File paths in markers and listing show relative paths from the working
+  directory so you can identify which subfolder each file came from.
 
 NEW IN V4.2:
 - Fixed sorting logic. Now uses "Natural Sorting" (alphanumeric split) instead
@@ -23,6 +31,8 @@ NEW IN V4.2:
 --------------------------------------------------------------------------------
 CORE FEATURES:
 --------------------------------------------------------------------------------
+-   Recursive by Default: When no patterns are given, automatically traverses
+    the entire subfolder tree to find and merge all plaintext files.
 -   Natural Sorting: Sorts filenames like a human would (e.g., "File 9" comes
     before "File 10", and "Chapter 109 (1)" follows "Chapter 109").
 -   Content Sanitization: Automatically removes Markdown code fences
@@ -43,11 +53,13 @@ COMMAND-LINE ARGUMENTS:
 -   `-lb, --linebreak` (Optional): Inserts an extra blank line between files.
 
 -   `-r, --recursive` (Optional): Scans subdirectories for matching files.
+    Automatically enabled when no file patterns are provided.
 
 -   `-strip, --strip` (Optional): Removes single line breaks within paragraphs
     and de-hyphenates words.
 
 -   `-m, --markers` (Optional): Inserts headers/footers around file content.
+    Automatically enabled when no file patterns are provided.
 
 -   `--no-remove-strings` (Optional): Disables markdown code fence removal.
 
@@ -274,12 +286,12 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
             output_extension = derive_output_extension(files_to_merge, file_patterns)
             output_filename = f"{output_basename}.{output_extension}"
 
-        # Apply Natural Sorting
+        # Apply Natural Sorting (use full relative path for consistent ordering)
         files_to_merge.sort(key=get_numerical_sort_key)
 
         # Ensure we don't try to merge the output file into itself
-        if output_filename in files_to_merge:
-            files_to_merge.remove(output_filename)
+        abs_output = os.path.abspath(output_filename)
+        files_to_merge = [f for f in files_to_merge if os.path.abspath(f) != abs_output]
 
         print(f"Merging files in Natural Sort order:")
         for f in files_to_merge:
@@ -318,14 +330,15 @@ def merge_text_files(file_patterns, output_filename, add_linebreak=False, strip_
                                 any_footnotes = True
 
                         if add_markers:
-                            base_name = os.path.basename(filename)
-                            outfile.write(START_MARKER_FORMAT.format(filename=base_name))
+                            # Use relative path if recursive, basename otherwise
+                            display_name = filename if recursive else os.path.basename(filename)
+                            outfile.write(START_MARKER_FORMAT.format(filename=display_name))
 
                         outfile.write(content)
 
                         if add_markers:
-                            base_name = os.path.basename(filename)
-                            outfile.write(END_MARKER_FORMAT.format(filename=base_name))
+                            display_name = filename if recursive else os.path.basename(filename)
+                            outfile.write(END_MARKER_FORMAT.format(filename=display_name))
 
                         if add_linebreak:
                             outfile.write("\n\n")
@@ -368,10 +381,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Use default plaintext extensions if no patterns provided
+    # Also auto-enable recursive mode and markers for full subfolder traversal
     if not args.file_patterns:
         args.file_patterns = [f"*.{ext}" for ext in DEFAULT_PLAINTEXT_EXTENSIONS]
+        args.recursive = True
+        args.markers = True
         print(f"No file patterns specified. Using default plaintext extensions:")
-        print(f"  {', '.join(DEFAULT_PLAINTEXT_EXTENSIONS)}\n")
+        print(f"  {', '.join(DEFAULT_PLAINTEXT_EXTENSIONS)}")
+        print(f"  Recursive subfolder scan: ENABLED (auto)")
+        print(f"  File markers: ENABLED (auto)\n")
 
     # Heuristic: If -o wasn't used, and we have multiple patterns, and the last pattern
     # doesn't look like a glob AND doesn't exist as a file, treat it as output.

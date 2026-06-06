@@ -377,6 +377,10 @@ LMSTUDIO_API_URL = os.environ.get("LMSTUDIO_API_URL", "http://localhost:1234/v1"
 LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
 LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
 
+UNSLOTH_API_URL = os.environ.get("UNSLOTH_API_URL", "http://127.0.0.1:8888/v1")
+UNSLOTH_MODELS_ENDPOINT = f"{UNSLOTH_API_URL}/models"
+UNSLOTH_CHAT_COMPLETIONS_ENDPOINT = f"{UNSLOTH_API_URL}/chat/completions"
+
 USER_PROMPT_TEMPLATE = """Analyze the provided content."""
 CONTEXT_PROMPT_PLACEHOLDER = "{{CONTEXT_TEXT}}"
 
@@ -1524,6 +1528,33 @@ def fetch_lmstudio_models():
         return [], str(e)
 
 
+def fetch_unsloth_models(api_key=None):
+    try:
+        console_log("Fetching Unsloth Studio models...", "INFO")
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response = requests.get(UNSLOTH_MODELS_ENDPOINT, headers=headers, timeout=5)
+        response.raise_for_status()
+        models = sorted(
+            [m.get("id") for m in response.json().get("data", []) if m.get("id")]
+        )
+        console_log(
+            f"Unsloth Studio endpoint: {UNSLOTH_CHAT_COMPLETIONS_ENDPOINT} | models: {len(models)}",
+            "INFO",
+        )
+        if VERBOSE_DIAGNOSTICS and models:
+            console_log(f"DEBUG UNSLOTH MODELS: {models[:12]}", "DEBUG")
+        # Unsloth Studio uses "current" to refer to the loaded model;
+        # ensure it's always available even if the endpoint returns a list.
+        if "current" not in models:
+            models.insert(0, "current")
+        return models, None
+    except Exception as e:
+        console_log(f"Unsloth Studio model fetch failed ({e}), using default 'current'.", "WARN")
+        return ["current"], None
+
+
 def read_file_content(filepath):
     _, extension = os.path.splitext(filepath)
     ext = extension.lower()
@@ -1594,6 +1625,8 @@ def call_generative_ai_api(engine, prompt_text, api_key, model_name, **kwargs):
         response_text = call_ollama_api(prompt_text, model_name, **kwargs)
     elif engine == "lmstudio":
         response_text = call_lmstudio_api(prompt_text, model_name, **kwargs)
+    elif engine == "unsloth":
+        response_text = call_unsloth_api(prompt_text, model_name, api_key, **kwargs)
     else:
         return f"Error: Unknown engine '{engine}'"
 
@@ -1930,8 +1963,11 @@ def _call_openai_compatible_chat(
     cancellation_event=None,
     enable_thinking=False,
     job_id=None,
+    api_key=None,
 ):
     headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     images_data_list = images_data_list or []
 
     console_log(
@@ -3310,6 +3346,89 @@ def get_api_key(force_gui=False):
 ################################################################################
 
 
+
+class EngineConfigDialog(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Engine Configuration")
+        self.geometry("550x450")
+        self.configure(bg=parent.DARK_BG)
+        self.transient(parent)
+        self.grab_set()
+
+        self.parent = parent
+        self.result = False
+
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.vars = {}
+
+        # Google
+        self.add_engine_tab("google", "Google Gemini", has_url=False)
+        # Ollama
+        self.add_engine_tab("ollama", "Ollama", has_url=True)
+        # LM Studio
+        self.add_engine_tab("lmstudio", "LM Studio", has_url=True)
+        # Unsloth
+        self.add_engine_tab("unsloth", "Unsloth Studio", has_url=True)
+
+        btn_f = ttk.Frame(self)
+        btn_f.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(btn_f, text="Save", command=self.save).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_f, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
+
+        self._fit_to_parent()
+
+    def add_engine_tab(self, engine_id, display_name, has_url):
+        tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab, text=display_name)
+        
+        cfg = self.parent.engine_configs.get(engine_id, {})
+        
+        self.vars[engine_id] = {}
+        row = 0
+
+        if has_url:
+            ttk.Label(tab, text="Base URL:").grid(row=row, column=0, sticky="w", pady=5)
+            url_var = tk.StringVar(value=cfg.get("api_url", ""))
+            self.vars[engine_id]["api_url"] = url_var
+            ttk.Entry(tab, textvariable=url_var, width=50).grid(row=row, column=1, sticky="w", pady=5, padx=5)
+            row += 1
+
+            ttk.Label(tab, text="URL Env Var:").grid(row=row, column=0, sticky="w", pady=5)
+            url_env_var = tk.StringVar(value=cfg.get("api_url_env", ""))
+            self.vars[engine_id]["api_url_env"] = url_env_var
+            ttk.Entry(tab, textvariable=url_env_var, width=50).grid(row=row, column=1, sticky="w", pady=5, padx=5)
+            row += 1
+
+        ttk.Label(tab, text="API Key:").grid(row=row, column=0, sticky="w", pady=5)
+        key_var = tk.StringVar(value=cfg.get("api_key", ""))
+        self.vars[engine_id]["api_key"] = key_var
+        ttk.Entry(tab, textvariable=key_var, width=50, show="*").grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        row += 1
+
+        ttk.Label(tab, text="API Key Env Var:").grid(row=row, column=0, sticky="w", pady=5)
+        key_env_var = tk.StringVar(value=cfg.get("api_key_env", ""))
+        self.vars[engine_id]["api_key_env"] = key_env_var
+        ttk.Entry(tab, textvariable=key_env_var, width=50).grid(row=row, column=1, sticky="w", pady=5, padx=5)
+
+    def save(self):
+        for engine_id, v_dict in self.vars.items():
+            cfg = self.parent.engine_configs.get(engine_id, {})
+            for k, v in v_dict.items():
+                cfg[k] = v.get().strip()
+            self.parent.engine_configs[engine_id] = cfg
+        self.result = True
+        self.destroy()
+
+    def _fit_to_parent(self):
+        self.update_idletasks()
+        if self.parent and self.parent.winfo_exists():
+            x = self.parent.winfo_rootx() + (self.parent.winfo_width() - self.winfo_width()) // 2
+            y = self.parent.winfo_rooty() + (self.parent.winfo_height() - self.winfo_height()) // 2
+            self.geometry(f"+{x}+{y}")
+
 class ModelSelectionDialog(tk.Toplevel):
     def __init__(
         self,
@@ -3372,7 +3491,7 @@ class ModelSelectionDialog(tk.Toplevel):
         self.provider_combo = ttk.Combobox(
             grid_frame,
             textvariable=self.provider_var,
-            values=["google", "ollama", "lmstudio"],
+            values=["google", "ollama", "lmstudio", "unsloth"],
             state="readonly",
             width=15,
         )
@@ -3517,7 +3636,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             signal.signal(signal.SIGTERM, self._handle_sigint)
         self._check_signal()
 
-        self.api_key = initial_api_key
+        # --- Engine Configurations ---
+        self.engine_configs = {
+            "google": {"api_key": initial_api_key or os.environ.get("GOOGLE_API_KEY", ""), "api_key_env": "GOOGLE_API_KEY", "api_url": "", "api_url_env": ""},
+            "ollama": {"api_key": os.environ.get("OLLAMA_API_KEY", ""), "api_key_env": "OLLAMA_API_KEY", "api_url": "http://localhost:11434", "api_url_env": "OLLAMA_API_URL"},
+            "lmstudio": {"api_key": os.environ.get("LMSTUDIO_API_KEY", ""), "api_key_env": "LMSTUDIO_API_KEY", "api_url": "http://localhost:1234/v1", "api_url_env": "LMSTUDIO_API_URL"},
+            "unsloth": {"api_key": os.environ.get("UNSLOTH_API_KEY", ""), "api_key_env": "UNSLOTH_API_KEY", "api_url": "http://127.0.0.1:8888/v1", "api_url_env": "UNSLOTH_API_URL"},
+        }
         self.args = args
         self.job_queue = queue.Queue()
         self.result_queue = queue.Queue()
@@ -3768,7 +3893,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.api_status_label = ttk.Label(
             toolbar,
-            text=f"API Key: {'Set' if self.api_key else 'Not Set'}",
+            text=f"API Key: {'Set' if self._get_resolved_api_key(self.engine_var.get()) else 'Not Set'}",
             foreground="skyblue",
         )
         self.api_status_label.pack(side=tk.RIGHT, padx=10)
@@ -3897,7 +4022,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ttk.Combobox(
             tab_ai,
             textvariable=self.engine_var,
-            values=["google", "ollama", "lmstudio"],
+            values=["google", "ollama", "lmstudio", "unsloth"],
             state="readonly",
         ).grid(row=0, column=1, sticky="ew", padx=5)
         ttk.Label(tab_ai, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
@@ -4646,6 +4771,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.update_models()
             set_var(self.model_var, "model")
             set_var(self.output_dir_var, "output_folder")
+            
+            # Load engine configs
+            saved_configs = data.get("engine_configs", {})
+            for eng, cfg in saved_configs.items():
+                if eng in self.engine_configs:
+                    self.engine_configs[eng]["api_key_env"] = cfg.get("api_key_env", self.engine_configs[eng]["api_key_env"])
+                    self.engine_configs[eng]["api_url"] = cfg.get("api_url", self.engine_configs[eng]["api_url"])
+                    self.engine_configs[eng]["api_url_env"] = cfg.get("api_url_env", self.engine_configs[eng]["api_url_env"])
+
             set_var(self.output_under_input_var, "output_under_input", False)
             set_var(self.merge_outputs_var, "merge_outputs", False)
             set_var(self.suffix_var, "output_suffix")
@@ -4736,6 +4870,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         return {
             "prompt": self.prompt_text.get("1.0", tk.END).strip(),
             "engine": self.engine_var.get(),
+            "engine_configs": {
+                eng: {
+                    "api_key_env": cfg.get("api_key_env", ""),
+                    "api_url": cfg.get("api_url", ""),
+                    "api_url_env": cfg.get("api_url_env", ""),
+                } for eng, cfg in self.engine_configs.items()
+            },
             "model": self.model_var.get(),
             "output_folder": self.output_dir_var.get(),
             "output_under_input": self.output_under_input_var.get(),
@@ -4926,22 +5067,58 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.toggle_grouping()  # Restore correct state based on checkbox
 
     def prompt_for_api_key(self):
-        k = get_api_key(True)
-        if k:
-            self.api_key = k
-            self.api_status_label.config(text="API Key: Set")
+        dialog = EngineConfigDialog(self)
+        self.wait_window(dialog)
+        if dialog.result:
+            # Sync URLs back to globals for immediate fetch usage
+            cfg_ollama = self.engine_configs.get("ollama", {})
+            cfg_lmstudio = self.engine_configs.get("lmstudio", {})
+            cfg_unsloth = self.engine_configs.get("unsloth", {})
+            
+            global OLLAMA_API_URL, OLLAMA_TAGS_ENDPOINT, OLLAMA_CHAT_COMPLETIONS_ENDPOINT
+            global LMSTUDIO_API_URL, LMSTUDIO_MODELS_ENDPOINT, LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT
+            global UNSLOTH_API_URL, UNSLOTH_MODELS_ENDPOINT, UNSLOTH_CHAT_COMPLETIONS_ENDPOINT
+            
+            if cfg_ollama.get("api_url"):
+                OLLAMA_API_URL = cfg_ollama["api_url"]
+                OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_API_URL}/api/tags"
+                OLLAMA_CHAT_COMPLETIONS_ENDPOINT = f"{OLLAMA_API_URL}/v1/chat/completions"
+            if cfg_lmstudio.get("api_url"):
+                LMSTUDIO_API_URL = cfg_lmstudio["api_url"]
+                LMSTUDIO_MODELS_ENDPOINT = f"{LMSTUDIO_API_URL}/models"
+                LMSTUDIO_CHAT_COMPLETIONS_ENDPOINT = f"{LMSTUDIO_API_URL}/chat/completions"
+            if cfg_unsloth.get("api_url"):
+                UNSLOTH_API_URL = cfg_unsloth["api_url"]
+                UNSLOTH_MODELS_ENDPOINT = f"{UNSLOTH_API_URL}/models"
+                UNSLOTH_CHAT_COMPLETIONS_ENDPOINT = f"{UNSLOTH_API_URL}/chat/completions"
+
+            # Re-fetch models
             self.update_models()
+
+
+    def _get_resolved_api_key(self, provider):
+        cfg = self.engine_configs.get(provider, {})
+        # Return manual key if set, else check env var
+        if cfg.get("api_key"):
+            return cfg["api_key"]
+        env_var = cfg.get("api_key_env")
+        if env_var:
+            return os.environ.get(env_var, "")
+        return ""
 
     def get_models_for_provider(self, provider):
         if provider in self.model_cache:
             return self.model_cache[provider]
         m, err = [], None
+        key = self._get_resolved_api_key(provider)
         if provider == "google":
-            m, err = fetch_google_models(self.api_key)
+            m, err = fetch_google_models(key)
         elif provider == "ollama":
             m, err = fetch_ollama_models()
         elif provider == "lmstudio":
             m, err = fetch_lmstudio_models()
+        elif provider == "unsloth":
+            m, err = fetch_unsloth_models(key)
         if m:
             self.model_cache[provider] = m
         return m or []
@@ -5356,7 +5533,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if not mod or "Error" in mod:
             tkinter.messagebox.showwarning("Error", "Invalid Model.")
             return
-        if self.engine_var.get() == "google" and not self.api_key:
+        if self.engine_var.get() == "google" and not self._get_resolved_api_key("google"):
             tkinter.messagebox.showwarning("Error", "No API Key.")
             return
 
@@ -5540,7 +5717,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "user_prompt": prompt_text,
             "engine": self.engine_var.get(),
             "model_name": mod,
-            "api_key": self.api_key,
+            "api_key": self._get_resolved_api_key(self.engine_var.get()),
             "output_folder": self.output_dir_var.get(),
             "add_filename_to_prompt": self.add_filename_var.get(),
             "output_suffix": self.suffix_var.get()
@@ -6209,7 +6386,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 params["model_name"] = self.global_runtime_overrides["model_name"]
                 if params["engine"] == "google":
                     if not params.get("api_key"):
-                        params["api_key"] = self.api_key
+                        params["api_key"] = self._get_resolved_api_key("google")
                     if isinstance(params.get("safety_settings"), dict):
                         params["safety_settings"] = [
                             types.SafetySetting(
@@ -6335,7 +6512,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                 params["engine"] = new_engine
                                 params["model_name"] = new_model
                                 if new_engine == "google":
-                                    params["api_key"] = self.api_key
+                                    params["api_key"] = self._get_resolved_api_key(new_engine)
                                     if isinstance(params.get("safety_settings"), dict):
                                         params["safety_settings"] = [
                                             types.SafetySetting(

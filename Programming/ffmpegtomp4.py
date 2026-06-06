@@ -7,15 +7,17 @@ Convert video files by copying the video and re‑encoding the audio.
     `5.1` (default) – explicit channel layout via `-ch_layout <layout>`
     `6`           – channel count only via `-ac <channels>`
 - Only processes layouts up to 8 channels (AAC limitation).
-- By default searches for common video formats in the current directory.
+- Recursively searches subdirectories for common video formats.
+- Creates `input` and `output` folders inside each file's own directory
+  (only when files are actually found and processed).
 """
 
 import sys
-import glob
 import subprocess
 import os
 import argparse
 import shutil
+import fnmatch
 
 # List of standard layout names as reported by "ffmpeg -layouts"
 LAYOUTS = [
@@ -70,17 +72,35 @@ def parse_arguments():
     )
     return parser.parse_args()
 
+def find_video_files_recursive(base_dir, pattern, extensions_default):
+    """Walk the directory tree and return a list of video file paths."""
+    use_default = (pattern == "*.[Mm][Pp]4|*.[Mm][Kk][Vv]|*.[Aa][Vv][Ii]|*.[Mm][Oo][Vv]|*.[Ww][Ee][Bb][Mm]|*.[Tt][Ss]")
+    found = []
+
+    if use_default:
+        valid_exts = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}
+        for dirpath, dirnames, filenames in os.walk(base_dir):
+            # Skip any 'input' or 'output' directories we created
+            dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'output')]
+            for fname in filenames:
+                if os.path.splitext(fname)[1].lower() in valid_exts:
+                    found.append(os.path.join(dirpath, fname))
+    else:
+        for dirpath, dirnames, filenames in os.walk(base_dir):
+            dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'output')]
+            for fname in filenames:
+                if fnmatch.fnmatch(fname, pattern):
+                    found.append(os.path.join(dirpath, fname))
+
+    return found
+
+
 def main():
     args = parse_arguments()
     file_pattern = args.pattern
     desired_layout = args.layout
     downmix_method = args.downmix
     channels = calculate_channel_count(desired_layout)
-
-    input_dir = "input"
-    output_dir = "output"
-    os.makedirs(input_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
 
     # AAC encoding for all channel counts (up to 8 channels)
     audio_encoder = "aac"
@@ -96,18 +116,20 @@ def main():
     print(f"Selected audio encoder: {audio_encoder} at bitrate {audio_bitrate}")
     print(f"Downmix method: {downmix_method}")
 
-    if args.pattern == "*.[Mm][Pp]4|*.[Mm][Kk][Vv]|*.[Aa][Vv][Ii]|*.[Mm][Oo][Vv]|*.[Ww][Ee][Bb][Mm]|*.[Tt][Ss]":
-        extensions = ['*.mp4', '*.MP4', '*.mkv', '*.MKV', '*.avi', '*.AVI', '*.mov', '*.MOV', '*.webm', '*.WEBM', '*.ts', '*.TS']
-        files = []
-        for ext in extensions:
-            files.extend(glob.glob(ext))
-        files = list(set(files))
-    else:
-        files = glob.glob(file_pattern)
+    # Recursively find video files in the current directory and all subfolders
+    base_dir = os.getcwd()
+    files = find_video_files_recursive(base_dir, file_pattern, None)
 
     if not files:
         print(f"No files found matching: {file_pattern}")
         sys.exit(1)
+
+    # Sort files for predictable processing order
+    files.sort()
+
+    print(f"\nFound {len(files)} file(s) across directory tree:")
+    for f in files:
+        print(f"  {os.path.relpath(f, base_dir)}")
 
     success_items = []
     failed_items = []
@@ -115,7 +137,12 @@ def main():
     for file in files:
         print(f"\nProcessing: {file}")
 
+        file_dir = os.path.dirname(file)
         base, _ = os.path.splitext(os.path.basename(file))
+
+        # input/output directories are created inside the file's own folder
+        input_dir = os.path.join(file_dir, "input")
+        output_dir = os.path.join(file_dir, "output")
         output_file = os.path.join(output_dir, base + ".mp4")
 
         # Build the downmix arguments based on the chosen method
@@ -139,6 +166,9 @@ def main():
         ]
 
         print("Running command: " + " ".join(command))
+
+        # Create output dir only now that we are about to process a file
+        os.makedirs(output_dir, exist_ok=True)
 
         # --- Run ffmpeg with real‑time stderr output ---
         stderr_lines = []
@@ -168,8 +198,11 @@ def main():
 
         if proc.returncode == 0:
             print(f"Successfully created: {output_file}")
-            shutil.move(file, os.path.join(input_dir, os.path.basename(file)))
-            print(f"Moved original file to: {os.path.join(input_dir, os.path.basename(file))}")
+            # Create input dir only on success, right before moving
+            os.makedirs(input_dir, exist_ok=True)
+            moved_path = os.path.join(input_dir, os.path.basename(file))
+            shutil.move(file, moved_path)
+            print(f"Moved original file to: {moved_path}")
             success_items.append({
                 "source": file,
                 "output": output_file,
