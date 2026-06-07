@@ -367,6 +367,7 @@ def cleanup_all_temp_folders():
 atexit.register(cleanup_all_temp_folders)
 
 API_KEY_ENV_VAR_NAME = "GOOGLE_API_KEY"
+GOOGLE_API_KEY_ENV_VARS = ["GOOGLE_API_KEY", "GEMINI_API_KEY"]
 DEFAULT_GOOGLE_MODEL = "models/gemini-1.5-flash"
 
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
@@ -3326,11 +3327,11 @@ def process_file_group(
 
 
 def get_api_key(force_gui=False):
-    api_key = os.environ.get(API_KEY_ENV_VAR_NAME)
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key or force_gui:
         if not force_gui:
             console_log(
-                f"{API_KEY_ENV_VAR_NAME} not in environment. Prompting...", "WARN"
+                "Neither GOOGLE_API_KEY nor GEMINI_API_KEY in environment. Prompting...", "WARN"
             )
         root = tk.Tk()
         root.withdraw()
@@ -3411,7 +3412,13 @@ class EngineConfigDialog(tk.Toplevel):
         ttk.Label(tab, text="API Key Env Var:").grid(row=row, column=0, sticky="w", pady=5)
         key_env_var = tk.StringVar(value=cfg.get("api_key_env", ""))
         self.vars[engine_id]["api_key_env"] = key_env_var
-        ttk.Entry(tab, textvariable=key_env_var, width=50).grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        if engine_id == "google":
+            cb = ttk.Combobox(tab, textvariable=key_env_var, values=GOOGLE_API_KEY_ENV_VARS, state="readonly", width=47)
+            cb.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+            if not key_env_var.get() and GOOGLE_API_KEY_ENV_VARS:
+                cb.current(0)
+        else:
+            ttk.Entry(tab, textvariable=key_env_var, width=50).grid(row=row, column=1, sticky="w", pady=5, padx=5)
 
     def save(self):
         for engine_id, v_dict in self.vars.items():
@@ -3560,12 +3567,69 @@ class ModelSelectionDialog(tk.Toplevel):
                 self.model_combo.current(0)
         else:
             self.model_combo.set("No models found")
+            
+        if engine == "google":
+            if not hasattr(self, 'api_key_combo'):
+                self.api_key_frame = ttk.Frame(self.model_combo.master)
+                self.api_key_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=5)
+                
+                ttk.Label(self.api_key_frame, text="API Key:").pack(side=tk.LEFT, padx=(5, 10))
+                self.api_key_combo_var = tk.StringVar()
+                self.api_key_combo = ttk.Combobox(
+                    self.api_key_frame, textvariable=self.api_key_combo_var, state="readonly", width=25
+                )
+                self.api_key_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+                self.api_key_combo.bind("<<ComboboxSelected>>", self.on_api_key_change)
+                
+                self.api_key_manual_var = tk.StringVar()
+                self.api_key_manual_entry = ttk.Entry(self.api_key_frame, textvariable=self.api_key_manual_var, width=30, show="*")
+            else:
+                self.api_key_frame.grid()
+                
+            cfg = self.parent.engine_configs.get("google", {})
+            values = []
+            for env_var in GOOGLE_API_KEY_ENV_VARS:
+                values.append(env_var)
+            values.append("Custom Key...")
+            self.api_key_combo["values"] = values
+            
+            if cfg.get("api_key"):
+                self.api_key_combo.set("Custom Key...")
+                self.api_key_manual_var.set(cfg.get("api_key"))
+                self.api_key_manual_entry.pack(side=tk.LEFT, padx=5)
+            else:
+                curr_env = cfg.get("api_key_env")
+                for v in values:
+                    if v.startswith(curr_env):
+                        self.api_key_combo.set(v)
+                        break
+                self.api_key_manual_entry.pack_forget()
+        elif hasattr(self, 'api_key_combo'):
+            self.api_key_frame.grid_remove()
+            
+        self._fit_to_content()
+
+    def on_api_key_change(self, event):
+        if self.api_key_combo_var.get() == "Custom Key...":
+            self.api_key_manual_entry.pack(side=tk.LEFT, padx=5)
+        else:
+            self.api_key_manual_entry.pack_forget()
         self._fit_to_content()
 
     def on_ok(self):
         raw_model = self.model_combo_var.get()
         clean_model = raw_model.split(self.issue_marker)[0]
-        self.result = (self.provider_var.get(), clean_model)
+        engine = self.provider_var.get()
+        if engine == "google" and hasattr(self, 'api_key_combo_var'):
+            cfg = self.parent.engine_configs.get("google", {})
+            if self.api_key_combo_var.get() == "Custom Key...":
+                cfg["api_key"] = self.api_key_manual_var.get().strip()
+            else:
+                env_var = self.api_key_combo_var.get().split(" ")[0]
+                cfg["api_key"] = ""
+                cfg["api_key_env"] = env_var
+            self.parent.engine_configs["google"] = cfg
+        self.result = (engine, clean_model)
         self.destroy()
 
     def on_cancel(self):
@@ -3637,8 +3701,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self._check_signal()
 
         # --- Engine Configurations ---
+        initial_google_env = "GOOGLE_API_KEY" if os.environ.get("GOOGLE_API_KEY") else "GEMINI_API_KEY"
+        is_manual = False
+        if initial_api_key and initial_api_key != os.environ.get("GOOGLE_API_KEY") and initial_api_key != os.environ.get("GEMINI_API_KEY"):
+            is_manual = True
+
         self.engine_configs = {
-            "google": {"api_key": initial_api_key or os.environ.get("GOOGLE_API_KEY", ""), "api_key_env": "GOOGLE_API_KEY", "api_url": "", "api_url_env": ""},
+            "google": {"api_key": initial_api_key if is_manual else "", "api_key_env": initial_google_env, "api_url": "", "api_url_env": ""},
             "ollama": {"api_key": os.environ.get("OLLAMA_API_KEY", ""), "api_key_env": "OLLAMA_API_KEY", "api_url": "http://localhost:11434", "api_url_env": "OLLAMA_API_URL"},
             "lmstudio": {"api_key": os.environ.get("LMSTUDIO_API_KEY", ""), "api_key_env": "LMSTUDIO_API_KEY", "api_url": "http://localhost:1234/v1", "api_url_env": "LMSTUDIO_API_URL"},
             "unsloth": {"api_key": os.environ.get("UNSLOTH_API_KEY", ""), "api_key_env": "UNSLOTH_API_KEY", "api_url": "http://127.0.0.1:8888/v1", "api_url_env": "UNSLOTH_API_URL"},
@@ -3765,6 +3834,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
+        self.engine_var.trace_add("write", self._update_main_api_key_combo)
         self.engine_var.trace_add("write", self._update_folder_preview)
         self.model_var.trace_add("write", self._update_folder_preview)
         self.output_dir_var.trace_add("write", self._update_folder_preview)
@@ -3772,6 +3842,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.multipass_count_var.trace_add("write", self._on_multipass_count_change)
 
         self.after(200, self.update_models)
+        self.after(200, self._update_main_api_key_combo)
         self.after(300, self._update_folder_preview)
         self.after(100, self._check_result_queue)
 
@@ -3891,15 +3962,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             side=tk.LEFT, padx=1
         )
 
-        self.api_status_label = ttk.Label(
+        self.main_api_key_source_var = tk.StringVar()
+        self.main_api_key_combo = ttk.Combobox(
             toolbar,
-            text=f"API Key: {'Set' if self._get_resolved_api_key(self.engine_var.get()) else 'Not Set'}",
-            foreground="skyblue",
+            textvariable=self.main_api_key_source_var,
+            state="readonly",
+            width=26
         )
-        self.api_status_label.pack(side=tk.RIGHT, padx=10)
-        ttk.Button(toolbar, text="Update Key", command=self.prompt_for_api_key).pack(
-            side=tk.RIGHT
-        )
+        self.main_api_key_combo.bind("<<ComboboxSelected>>", self._on_main_api_key_source_change)
+        self.main_api_key_combo.pack(side=tk.RIGHT, padx=10)
 
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -5094,7 +5165,50 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
             # Re-fetch models
             self.update_models()
+            self._update_main_api_key_combo()
 
+
+    def _update_main_api_key_combo(self, *args):
+        engine = self.engine_var.get()
+        values = []
+        
+        if engine == "google":
+            cfg = self.engine_configs.get("google", {})
+            for env_var in GOOGLE_API_KEY_ENV_VARS:
+                values.append(env_var)
+            values.append("Custom Key...")
+            self.main_api_key_combo["values"] = values
+            
+            if cfg.get("api_key"):
+                self.main_api_key_source_var.set("Custom Key...")
+            else:
+                curr_env = cfg.get("api_key_env")
+                for v in values:
+                    if v == curr_env:
+                        self.main_api_key_source_var.set(v)
+                        break
+        else:
+            engine_names = {"ollama": "Ollama", "lmstudio": "LM Studio", "unsloth": "Unsloth"}
+            display_name = engine_names.get(engine, engine.capitalize())
+            values.append(f"{display_name} API")
+            values.append("Custom Key...")
+            self.main_api_key_combo["values"] = values
+            self.main_api_key_source_var.set(values[0])
+
+    def _on_main_api_key_source_change(self, event):
+        val = self.main_api_key_source_var.get()
+        engine = self.engine_var.get()
+        
+        if val == "Custom Key...":
+            self.prompt_for_api_key()
+            self._update_main_api_key_combo()
+        elif engine == "google" and "API" not in val:
+            cfg = self.engine_configs.get("google", {})
+            env_var = val.split(" ")[0]
+            cfg["api_key"] = ""
+            cfg["api_key_env"] = env_var
+            self.refresh_model_list()
+            self._update_main_api_key_combo()
 
     def _get_resolved_api_key(self, provider):
         cfg = self.engine_configs.get(provider, {})

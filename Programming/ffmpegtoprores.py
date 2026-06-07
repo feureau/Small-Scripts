@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Convert video files by copying the video and re‑encoding the audio.
+Convert video files to Apple ProRes in a MOV container.
 
-- Uses AAC at 640 kbps.
-- Supports two downmix methods:
-    `5.1` (default) – explicit channel layout via `-ch_layout <layout>`
-    `6`           – channel count only via `-ac <channels>`
-- Only processes layouts up to 8 channels (AAC limitation).
+- Fast Mode (GPU Decode + prores_aw) is enabled by default.
+- Default profile is now ProRes LT.
+- Original files are moved into a folder named after their extension (e.g. 'MP4').
+- Converted files are placed in a folder named after the format (e.g. 'ProRes_LT').
+- Uses uncompressed 24-bit PCM audio (`pcm_s24le`), standard for ProRes.
 - Recursively searches subdirectories for common video formats.
-- Creates `input` and `output` folders inside each file's own directory
-  (only when files are actually found and processed).
 """
 
 import sys
@@ -28,7 +26,6 @@ LAYOUTS = [
     "7.1.2", "7.1.4", "7.2.3", "9.1.4", "hexadecagonal", "downmix", "22.2"
 ]
 
-# Predefined mapping for common layout names to channel counts.
 NAMED_LAYOUTS = {
     "mono": 1, "stereo": 2, "2.1": 3, "3.0": 3, "3.0(back)": 3, "4.0": 4,
     "quad": 4, "quad(side)": 4, "3.1": 4, "5.0": 5, "5.0(side)": 5, "4.1": 5,
@@ -49,10 +46,7 @@ def calculate_channel_count(layout: str) -> int:
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description=(
-            "Convert video files by copying the video and re-encoding the audio.\n"
-            "Utilizes native FFmpeg channel scaling via command-line options down to standard layouts."
-        ),
+        description="Convert video files to ProRes (.mov) and re-encode the audio to PCM.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
@@ -61,39 +55,53 @@ def parse_arguments():
         help="Input file pattern (e.g., \"*.mkv\"). If not provided, searches for common video formats."
     )
     parser.add_argument(
+        "-p", "--profile", choices=["proxy", "lt", "standard", "hq", "4444", "4444xq"],
+        default="lt",
+        help="ProRes profile to use. Default: lt\n"
+             "  proxy    - ProRes 422 Proxy (Profile 0)\n"
+             "  lt       - ProRes 422 LT (Profile 1)\n"
+             "  standard - ProRes 422 (Profile 2)\n"
+             "  hq       - ProRes 422 HQ (Profile 3)\n"
+             "  4444     - ProRes 4444 (Profile 4)\n"
+             "  4444xq   - ProRes 4444 XQ (Profile 5)"
+    )
+    parser.add_argument(
+        "--slow", action="store_true",
+        help="Disable default Fast Mode. Forces CPU decoding and uses the slower 'prores_ks' encoder."
+    )
+    parser.add_argument(
         "-l", "--layout", default="5.1",
-        help="Desired audio channel layout. Possible values:\n" +
-             ", ".join(LAYOUTS) + "\n(default: 5.1)"
+        help="Desired audio channel layout (default: 5.1)"
     )
     parser.add_argument(
         "-d", "--downmix", choices=["5.1", "6"], default="5.1",
-        help="Downmix method: '5.1' uses explicit channel layout (-ch_layout), "
-             "'6' uses channel count only (-ac). Default: 5.1"
+        help="Downmix method: '5.1' (-ch_layout) or '6' (-ac). Default: 5.1"
     )
     return parser.parse_args()
 
-def find_video_files_recursive(base_dir, pattern, extensions_default):
-    """Walk the directory tree and return a list of video file paths."""
+def find_video_files_recursive(base_dir, pattern):
     use_default = (pattern == "*.[Mm][Pp]4|*.[Mm][Kk][Vv]|*.[Aa][Vv][Ii]|*.[Mm][Oo][Vv]|*.[Ww][Ee][Bb][Mm]|*.[Tt][Ss]")
     found = []
 
-    if use_default:
-        valid_exts = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}
-        for dirpath, dirnames, filenames in os.walk(base_dir):
-            # Skip any 'input' or 'output' directories we created
-            dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'output')]
-            for fname in filenames:
-                if os.path.splitext(fname)[1].lower() in valid_exts:
+    # Directories to ignore so we don't process previously moved files
+    skip_exts = {'mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'input', 'output'}
+
+    for dirpath, dirnames, filenames in os.walk(base_dir):
+        # Exclude directories named after extensions or starting with 'ProRes_'
+        dirnames[:] = [
+            d for d in dirnames 
+            if d.lower() not in skip_exts and not d.lower().startswith('prores_')
+        ]
+        
+        for fname in filenames:
+            if use_default:
+                if os.path.splitext(fname)[1].lower() in {f".{ext}" for ext in skip_exts}:
                     found.append(os.path.join(dirpath, fname))
-    else:
-        for dirpath, dirnames, filenames in os.walk(base_dir):
-            dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'output')]
-            for fname in filenames:
+            else:
                 if fnmatch.fnmatch(fname, pattern):
                     found.append(os.path.join(dirpath, fname))
 
     return found
-
 
 def main():
     args = parse_arguments()
@@ -101,32 +109,46 @@ def main():
     desired_layout = args.layout
     downmix_method = args.downmix
     channels = calculate_channel_count(desired_layout)
+    
+    profile_map = {
+        "proxy": "0", "lt": "1", "standard": "2", 
+        "hq": "3", "4444": "4", "4444xq": "5"
+    }
+    prores_profile_num = profile_map[args.profile]
 
-    # AAC encoding for all channel counts (up to 8 channels)
-    audio_encoder = "aac_mf"
-    audio_bitrate = "640k"
+    # Pixel Format handling
+    if args.profile in ["4444", "4444xq"]:
+        pix_fmt_args = [] 
+    else:
+        pix_fmt_args = ["-pix_fmt", "yuv422p10le"]
 
-    if channels > 8:
-        print(f"Error: Requested layout '{desired_layout}' implies {channels} channels, but AAC supports at most 8 channels.")
-        sys.exit(1)
+    # Fast Mode Logic (Enabled by default)
+    is_fast = not args.slow
+    
+    video_encoder = "prores_ks"
+    speed_mode = "High Quality (CPU Decode + prores_ks)"
+    
+    if is_fast:
+        if args.profile in ["4444", "4444xq"]:
+            speed_mode = "Mixed (GPU Decode + prores_ks for Alpha)"
+        else:
+            video_encoder = "prores_aw"
+            speed_mode = "Fast (GPU Decode + prores_aw)"
 
-    print(f"Desired layout: {desired_layout} => {channels} channel(s)")
-    if desired_layout == "5.1":
-        print("Note: Forcing standard 5.1 channel layout sequence: FL, FR, FC, LFE, BL, BR")
-    print(f"Selected audio encoder: {audio_encoder} at bitrate {audio_bitrate}")
-    print(f"Downmix method: {downmix_method}")
+    audio_encoder = "pcm_s24le"
 
-    # Recursively find video files in the current directory and all subfolders
+    print(f"Target Video Codec: Apple ProRes ({args.profile.upper()})")
+    print(f"Speed Profile     : {speed_mode}")
+    print(f"Desired Audio     : {desired_layout} => {channels} channel(s) ({audio_encoder})")
+
     base_dir = os.getcwd()
-    files = find_video_files_recursive(base_dir, file_pattern, None)
+    files = find_video_files_recursive(base_dir, file_pattern)
 
     if not files:
         print(f"No files found matching: {file_pattern}")
         sys.exit(1)
 
-    # Sort files for predictable processing order
     files.sort()
-
     print(f"\nFound {len(files)} file(s) across directory tree:")
     for f in files:
         print(f"  {os.path.relpath(f, base_dir)}")
@@ -138,54 +160,72 @@ def main():
         print(f"\nProcessing: {file}")
 
         file_dir = os.path.dirname(file)
-        base, _ = os.path.splitext(os.path.basename(file))
+        base, ext_with_dot = os.path.splitext(os.path.basename(file))
+        
+        # Determine dynamic folder names
+        ext = ext_with_dot.lstrip('.').upper()
+        if not ext:
+            ext = "INPUT"  # Fallback if a file has no extension
+            
+        prores_folder_name = f"ProRes_{args.profile.upper()}"
 
-        # input/output directories are created inside the file's own folder
-        input_dir = os.path.join(file_dir, "input")
-        output_dir = os.path.join(file_dir, "output")
-        output_file = os.path.join(output_dir, base + ".mp4")
+        # Assign Input and Output directories
+        input_dir = os.path.join(file_dir, ext)
+        output_dir = os.path.join(file_dir, prores_folder_name)
+        output_file = os.path.join(output_dir, base + ".mov")
 
-        # Build the downmix arguments based on the chosen method
         if downmix_method == "5.1":
-            # Explicit channel layout (e.g. -ch_layout 5.1)
             layout_args = ["-ch_layout", desired_layout]
-        else:  # "6"
-            # Channel count only (e.g. -ac 6)
+        else:
             layout_args = ["-ac", str(channels)]
 
-        command = [
-            "ffmpeg", "-y",
+        # --- Build Command Dynamically ---
+        command = ["ffmpeg", "-y"]
+        
+        # 1. Add HW Accel flags BEFORE the input if fast mode is enabled
+        if is_fast:
+            command.extend(["-hwaccel", "auto"])
+            
+        # 2. Add Input and Video arguments
+        command.extend([
             "-i", file,
             "-map", "0:v:0",
-            "-c:v", "copy",
-            "-map", "0:a",
+            "-c:v", video_encoder,
+            "-profile:v", prores_profile_num,
+            "-vendor", "ap10",
+        ])
+        
+        # 3. Add Pixel Format args
+        command.extend(pix_fmt_args)
+        
+        # 4. Add Audio arguments
+        command.extend([
+            "-map", "0:a?",
             "-c:a", audio_encoder,
-            "-b:a", audio_bitrate,
-        ] + layout_args + [
-            output_file
-        ]
+        ])
+        
+        # 5. Add Layout and Output
+        command.extend(layout_args)
+        command.append(output_file)
 
         print("Running command: " + " ".join(command))
 
-        # Create output dir only now that we are about to process a file
         os.makedirs(output_dir, exist_ok=True)
 
-        # --- Run ffmpeg with real‑time stderr output ---
         stderr_lines = []
         try:
             proc = subprocess.Popen(
                 command,
                 stderr=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,   # ignore stdout (ffmpeg uses stderr for progress)
+                stdout=subprocess.DEVNULL,   
                 text=True,
                 encoding="utf-8",
                 errors="replace"
             )
-            # Stream stderr line by line, printing to console and collecting for later
             for line in proc.stderr:
-                sys.stderr.write(line)        # display progress live
+                sys.stderr.write(line)       
                 sys.stderr.flush()
-                stderr_lines.append(line)     # save for error reporting
+                stderr_lines.append(line)    
             proc.wait()
         except Exception as e:
             print(f"Unexpected error running ffmpeg: {e}")
@@ -198,7 +238,6 @@ def main():
 
         if proc.returncode == 0:
             print(f"Successfully created: {output_file}")
-            # Create input dir only on success, right before moving
             os.makedirs(input_dir, exist_ok=True)
             moved_path = os.path.join(input_dir, os.path.basename(file))
             shutil.move(file, moved_path)
@@ -233,21 +272,6 @@ def main():
         for idx, item in enumerate(success_items, 1):
             print(f"{idx}. {item['source']}")
             print(f"   Output: {item['output']}")
-
-    if failed_items:
-        print("\nFailed files:")
-        for idx, item in enumerate(failed_items, 1):
-            print(f"{idx}. {item['source']}")
-            if "returncode" in item:
-                print(f"   Return code: {item['returncode']}")
-            print(f"   Type: {item['status']}")
-            reason = item.get("reason", "").strip()
-            if reason:
-                print("   Reason:")
-                for line in reason.splitlines()[:12]:
-                    print(f"   {line}")
-                if len(reason.splitlines()) > 12:
-                    print("   ... (truncated)")
 
 if __name__ == '__main__':
     main()

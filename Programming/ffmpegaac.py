@@ -83,7 +83,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     # AAC encoding for all channel counts (up to 8 channels)
-    audio_encoder = "aac"
+    audio_encoder = "aac_mf"
     audio_bitrate = "640k"
 
     if channels > 8:
