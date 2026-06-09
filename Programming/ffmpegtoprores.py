@@ -3,10 +3,11 @@
 Convert video files to Apple ProRes in a MOV container.
 
 - Fast Mode (GPU Decode + prores_aw) is enabled by default.
-- Default profile is now ProRes LT.
+- Default profile is ProRes LT.
+- Default audio exactly matches original script: AAC via `aac_mf` at 640k.
+- Supports choosing between AAC (compressed) or PCM (uncompressed) audio.
 - Original files are moved into a folder named after their extension (e.g. 'MP4').
 - Converted files are placed in a folder named after the format (e.g. 'ProRes_LT').
-- Uses uncompressed 24-bit PCM audio (`pcm_s24le`), standard for ProRes.
 - Recursively searches subdirectories for common video formats.
 """
 
@@ -46,7 +47,7 @@ def calculate_channel_count(layout: str) -> int:
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Convert video files to ProRes (.mov) and re-encode the audio to PCM.",
+        description="Convert video files to ProRes (.mov) with flexible audio options.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
@@ -64,6 +65,12 @@ def parse_arguments():
              "  hq       - ProRes 422 HQ (Profile 3)\n"
              "  4444     - ProRes 4444 (Profile 4)\n"
              "  4444xq   - ProRes 4444 XQ (Profile 5)"
+    )
+    parser.add_argument(
+        "-a", "--audio", choices=["aac", "pcm"], default="aac",
+        help="Audio format to use. Default: aac\n"
+             "  aac - Compressed AAC (aac_mf) at 640kbps (Matches original script)\n"
+             "  pcm - Uncompressed 24-bit PCM (Industry standard for ProRes)"
     )
     parser.add_argument(
         "--slow", action="store_true",
@@ -124,7 +131,6 @@ def main():
 
     # Fast Mode Logic (Enabled by default)
     is_fast = not args.slow
-    
     video_encoder = "prores_ks"
     speed_mode = "High Quality (CPU Decode + prores_ks)"
     
@@ -135,11 +141,28 @@ def main():
             video_encoder = "prores_aw"
             speed_mode = "Fast (GPU Decode + prores_aw)"
 
-    audio_encoder = "pcm_s24le"
+    # Audio Logic (100% matched to original ffmpegtomp4.py)
+    if args.audio == "aac":
+        if channels > 8:
+            print(f"Error: Requested layout '{desired_layout}' implies {channels} channels, but AAC supports at most 8 channels.")
+            sys.exit(1)
+        audio_encoder = "aac_mf"
+        audio_bitrate = "640k"
+        audio_args = [
+            "-map", "0:a",
+            "-c:a", audio_encoder,
+            "-b:a", audio_bitrate
+        ]
+    else:
+        audio_encoder = "pcm_s24le"
+        audio_args = [
+            "-map", "0:a",
+            "-c:a", audio_encoder
+        ]
 
     print(f"Target Video Codec: Apple ProRes ({args.profile.upper()})")
     print(f"Speed Profile     : {speed_mode}")
-    print(f"Desired Audio     : {desired_layout} => {channels} channel(s) ({audio_encoder})")
+    print(f"Desired Audio     : {desired_layout} => {channels} channel(s) ({audio_encoder.upper()})")
 
     base_dir = os.getcwd()
     files = find_video_files_recursive(base_dir, file_pattern)
@@ -199,10 +222,7 @@ def main():
         command.extend(pix_fmt_args)
         
         # 4. Add Audio arguments
-        command.extend([
-            "-map", "0:a?",
-            "-c:a", audio_encoder,
-        ])
+        command.extend(audio_args)
         
         # 5. Add Layout and Output
         command.extend(layout_args)
