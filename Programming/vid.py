@@ -183,7 +183,7 @@ DEFAULT_NVENC_SUPERRES_MODE = "1"                   # NVVFX SuperRes mode. Defau
 DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 1, Range: 1-4
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
-DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), original
+DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), hybrid-duo (dual source), original
 DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate, blur, ambient
 DEFAULT_PAD_COLOR = "#000000"                       # Padding color for Aspect Ratio Handling set to "pad" (Fit). Default: #000000
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
@@ -2774,6 +2774,8 @@ class VideoProcessorApp:
         self.orientation_original_rb.pack(side=tk.LEFT, padx=5)
         self.orientation_hybrid_rb = ttk.Radiobutton(orientation_frame, text="Hybrid", variable=self.orientation_var, value="hybrid (stacked)", command=self._toggle_orientation_options)
         self.orientation_hybrid_rb.pack(side=tk.LEFT, padx=(5,0))
+        self.orientation_hybrid_duo_rb = ttk.Radiobutton(orientation_frame, text="Hybrid Duo", variable=self.orientation_var, value="hybrid-duo (dual source)", command=self._toggle_orientation_options)
+        self.orientation_hybrid_duo_rb.pack(side=tk.LEFT, padx=(5,0))
 
         self.aspect_ratio_frame = ttk.LabelFrame(geometry_group, text="Aspect Ratio", padding=10); self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         self.aspect_columns_frame = ttk.Frame(self.aspect_ratio_frame)
@@ -3571,7 +3573,7 @@ class VideoProcessorApp:
                 self.merged_aspect_var.set(self.horizontal_aspect_var.get() or DEFAULT_HORIZONTAL_ASPECT)
             orientation = "horizontal + vertical"
 
-        if orientation == "hybrid (stacked)":
+        if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             if current_alignment != "seam":
                 self.last_standard_alignment.set(current_alignment)
                 self.subtitle_alignment_var.set("seam")
@@ -3597,13 +3599,34 @@ class VideoProcessorApp:
             self.horizontal_rb_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
             self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
-        elif orientation == "hybrid (stacked)":
+        elif orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             self.hybrid_frame.pack(fill=tk.X, pady=5)
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
 
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
+
+    def _resolve_to_top_sibling(self, video_path):
+        if not video_path:
+            return video_path
+        base, ext = os.path.splitext(video_path)
+        suffixes_top = ["-top", "_top"]
+        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom"]
+        
+        for s in suffixes_top:
+            if base.endswith(s):
+                return video_path
+                
+        for s in suffixes_bot:
+            if base.endswith(s):
+                prefix = base[:-len(s)]
+                for st in suffixes_top:
+                    candidate = prefix + st + ext
+                    if os.path.exists(candidate):
+                        return candidate
+                return prefix + "-top" + ext
+        return video_path
 
     def _aspect_to_orientation(self, aspect_str, fallback="horizontal"):
         try:
@@ -3757,6 +3780,8 @@ class VideoProcessorApp:
             self.orientation_both_rb.config(state="normal")
         if hasattr(self, "orientation_hybrid_rb"):
             self.orientation_hybrid_rb.config(state="normal")
+        if hasattr(self, "orientation_hybrid_duo_rb"):
+            self.orientation_hybrid_duo_rb.config(state="normal")
 
         # Disable FFmpeg-only tabs in NVEncC-only (and video-only tabs in video+audio mode)
         for tab in [getattr(self, "audio_tab", None), getattr(self, "loudness_tab", None),
@@ -4398,6 +4423,18 @@ class VideoProcessorApp:
             del self.processing_jobs[index]; self.job_listbox.delete(index)
     
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
+        orientation = options.get("orientation", DEFAULT_ORIENTATION)
+        if orientation == "hybrid-duo (dual source)":
+            resolved_top = self._resolve_to_top_sibling(video_path)
+            # Check if this top video is already added for this preset
+            for existing_job in self.processing_jobs:
+                if existing_job.get("preset_name") == preset_name:
+                    existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
+                    if existing_path_resolved == resolved_top:
+                        print(f"[INFO] Skipping duplicate Hybrid Duo job for: {video_path}")
+                        return # Deduplicated!
+            video_path = resolved_top
+
         if subtitle_path is None:
             preset = self.preset_manager.get_preset(preset_name) if preset_name else None
             triggers = preset.get('triggers', {}) if preset else {}
@@ -4723,7 +4760,7 @@ class VideoProcessorApp:
             if options.get("normalize_audio", False):
                 lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
-                fc_parts.append(f"{proc_tag}loudnorm=i={lt}:lra={lr}:tp={tp}{ln_tag}")
+                fc_parts.append(f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true{ln_tag}")
                 proc_tag = ln_tag
 
             final_tag = proc_tag
@@ -4733,13 +4770,13 @@ class VideoProcessorApp:
             final_maps.extend(["-map", resample_tag])
             
             if track_type == "mono":
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
                 title = "Mono"
             elif "stereo" in track_type:
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{STEREO_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{STEREO_BITRATE_K}k"])
                 title = "Stereo (Binaural)" if track_type == "stereo_sofalizer" else "Stereo"
             elif track_type == "surround_51":
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
                 title = "5.1 Surround"
             
             disposition = "default" if output_audio_index == 0 else "0"
@@ -4758,8 +4795,8 @@ class VideoProcessorApp:
         # --- Override backend for NVEncC + Hybrid Stacked ---
         # NVEncC lacks native vpp-stacking, so if the user requested an NVEncC-only pipeline
         # alongside Hybrid mode, we seamlessly route it through FFmpeg preprocessing.
-        if orientation == "hybrid (stacked)" and encoder_backend in ["nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
-            print(f"[INFO] Hybrid (Stacked) requires FFmpeg preprocessing. Using 'nvencc_with_ffmpeg' for '{job['display_name']}'.")
+        if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and encoder_backend in ["nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
+            print(f"[INFO] {orientation} requires FFmpeg preprocessing. Using 'nvencc_with_ffmpeg' for '{job['display_name']}'.")
             encoder_backend = "nvencc_with_ffmpeg"
             # Update the option so downstream functions use the correct backend path
             options["encoder_backend"] = encoder_backend
@@ -4783,7 +4820,7 @@ class VideoProcessorApp:
         else:
             if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
                 folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
-                if orientation == "hybrid (stacked)": folder_name += "_Hybrid_Stacked"
+                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]: folder_name += "_Hybrid_Stacked"
                 elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
                 elif orientation == "original": folder_name += "_Original"
                 else:
@@ -4814,6 +4851,12 @@ class VideoProcessorApp:
         CURRENT_JOB_TEMP_DIR = output_dir
 
         original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+        
+        if orientation == "hybrid-duo (dual source)":
+            if original_basename.endswith("-top"):
+                original_basename = original_basename[:-4] # Strip "-top" for a cleaner output name
+            elif original_basename.endswith("_top"):
+                original_basename = original_basename[:-4]
         
         # Tag
         tag = job.get('display_tag', "").strip()
@@ -4920,7 +4963,7 @@ class VideoProcessorApp:
                 res_key = options.get('resolution')
                 sub_target_w, sub_target_h = 1920, 1080 # Fallback
                 
-                if orientation == "hybrid (stacked)":
+                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
                     width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320} # Hybrid uses Vertical widths? Or Horizontal? Hybrid usually based on horz width, but stacked.
                     # Wait, hybrid stack usually implies vertical output? 
                     # Existing code: width_map = {"HD": 1080, "4k": 2160...} => implies 1080 width for HD. 
@@ -4961,7 +5004,7 @@ class VideoProcessorApp:
                     else: print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'.")
                 elif os.path.exists(sub_identifier): subtitle_source_file = sub_identifier
                 if subtitle_source_file:
-                    if orientation == "hybrid (stacked)" and options.get("subtitle_alignment") == "seam":
+                    if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and options.get("subtitle_alignment") == "seam":
                          try:
                             # Re-calculate split for seam logic (redundant but safe)
                             width_map_h = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
@@ -5073,7 +5116,11 @@ class VideoProcessorApp:
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
 
-                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, options, orientation, info=get_video_info(temp_preproc), base_dir=base_dir)
+                # Copy options and strip seek_start/seek_duration so NVEncC doesn't double-seek
+                nvencc_options = copy.deepcopy(options)
+                nvencc_options.pop("seek_start", None)
+                nvencc_options.pop("seek_duration", None)
+                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, nvencc_options, orientation, info=get_video_info(temp_preproc), base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration, progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
@@ -5188,7 +5235,7 @@ class VideoProcessorApp:
     def compute_target_resolution_for_options(self, options, info, orientation):
         orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
-        if orientation == "hybrid (stacked)":
+        if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
             target_w = width_map.get(res_key, 1080)
             target_h = (int(target_w * 16 / 9) // 2) * 2 # Standard vertical 9:16
@@ -5540,7 +5587,34 @@ class VideoProcessorApp:
             cmd.extend(["-ss", str(seek_start)])
             
         cmd += (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder else []) + ["-c:v", decoder, "-i", file_path]
-        
+
+        # Second Input for Hybrid-Duo
+        if orientation == "hybrid-duo (dual source)":
+            base_name, ext = os.path.splitext(file_path)
+            if base_name.endswith("-top"):
+                bot_path = base_name[:-4] + "-bot" + ext
+            elif base_name.endswith("_top"):
+                bot_path = base_name[:-4] + "_bot" + ext
+            else:
+                bot_path = base_name + "-bot" + ext
+                
+            if not os.path.exists(bot_path):
+                # Fallback replacement
+                bot_path_alt = file_path.replace("-top", "-bot").replace("_top", "_bot")
+                if os.path.exists(bot_path_alt):
+                    bot_path = bot_path_alt
+                else:
+                    raise VideoProcessingError(f"Hybrid-Duo requires a bottom video. Could not find: {bot_path}")
+
+            info_bot = get_video_info(bot_path)
+            decoder_available_bot, _ = check_decoder_availability(info_bot["codec_name"])
+            decoder_bot = decoder_map.get(info_bot["codec_name"], info_bot["codec_name"]) if decoder_available_bot else info_bot["codec_name"]
+            use_cuda_decoder_bot = "_cuvid" in decoder_bot
+
+            if seek_start is not None:
+                cmd.extend(["-ss", str(seek_start)])
+            cmd += (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] if use_cuda_decoder_bot else []) + ["-c:v", decoder_bot, "-i", bot_path]
+
         if seek_duration is not None:
             cmd.extend(["-t", str(seek_duration)])
 
@@ -5554,6 +5628,16 @@ class VideoProcessorApp:
             cuda_video_in = "[v_cuda_in]"
         else:
             cuda_video_in = "[0:v]"
+
+        cuda_video_in_top = cuda_video_in
+        if orientation == "hybrid-duo (dual source)":
+            if not use_cuda_decoder_bot:
+                upload_fmt_bot = "p010le" if info_bot["bit_depth"] == 10 else "nv12"
+                filter_complex_parts.append(f"[1:v]format={upload_fmt_bot},hwupload_cuda[v_cuda_in_bot]")
+                cuda_video_in_bot = "[v_cuda_in_bot]"
+            else:
+                cuda_video_in_bot = "[1:v]"
+
         upscale_algo = options.get("upscale_algo")
         use_nvencc_resize = encoder_backend == "preprocess" and upscale_algo in ["nvvfx-superres", "ngx-vsr"]
         ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
@@ -5566,7 +5650,7 @@ class VideoProcessorApp:
             audio_fc_str = audio_cmd_parts.pop(audio_fc_index + 1)
             audio_cmd_parts.pop(audio_fc_index)
         except ValueError: pass
-        if orientation == "hybrid (stacked)":
+        if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             res_key = options.get('resolution')
             # Fix width_map for vertical/hybrid consistency (720p should be 720 wide)
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
@@ -5630,12 +5714,24 @@ class VideoProcessorApp:
             else:
                 final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
 
-            video_fc_parts = [
-                f"{cuda_video_in}split=2[v_top_in][v_bot_in]", f"[v_top_in]{top_vf}[v_top_out]", f"[v_bot_in]{bot_vf}[v_bot_out]",
-                f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
+            if orientation == "hybrid-duo (dual source)":
+                video_fc_parts = [
+                    f"{cuda_video_in_top}{top_vf}[v_top_out]", 
+                    f"{cuda_video_in_bot}{bot_vf}[v_bot_out]"
+                ]
+            else:
+                video_fc_parts = [
+                    f"{cuda_video_in}split=2[v_top_in][v_bot_in]",
+                    f"[v_top_in]{top_vf}[v_top_out]", 
+                    f"[v_bot_in]{bot_vf}[v_bot_out]"
+                ]
+
+            video_fc_parts.extend([
+                f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", 
+                f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
                 "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
                 final_v_out
-            ]
+            ])
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
         else:
