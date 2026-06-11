@@ -3462,8 +3462,10 @@ class VideoProcessorApp:
             tag = display_tag if display_tag is not None else self._build_display_tag_for_subtitle(subtitle_path)
             self._apply_subtitle_to_job(index, subtitle_path, tag)
 
-    def _detect_subtitles_for_video(self, video_path):
+    def _detect_subtitles_for_video_single(self, video_path):
         detected_subs = []
+        if not video_path or not os.path.exists(video_path):
+            return detected_subs
         dir_name = os.path.dirname(video_path)
         video_basename = os.path.splitext(os.path.basename(video_path))[0]
         try:
@@ -3489,6 +3491,47 @@ class VideoProcessorApp:
             detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
 
         return detected_subs
+
+    def _detect_subtitles_for_video(self, video_path):
+        base, ext = os.path.splitext(video_path)
+        suffixes_top = ["-top", "_top"]
+        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom"]
+        
+        is_paired = False
+        prefix = None
+        for s in suffixes_top + suffixes_bot:
+            if base.endswith(s):
+                is_paired = True
+                prefix = base[:-len(s)]
+                break
+        
+        if is_paired:
+            top_file = None
+            bot_file = None
+            for s in suffixes_top:
+                candidate = prefix + s + ext
+                if os.path.exists(candidate):
+                    top_file = candidate
+                    break
+            if not top_file:
+                top_file = prefix + "-top" + ext
+                
+            for s in suffixes_bot:
+                candidate = prefix + s + ext
+                if os.path.exists(candidate):
+                    bot_file = candidate
+                    break
+            if not bot_file:
+                bot_file = prefix + "-bot" + ext
+                
+            top_subs = self._detect_subtitles_for_video_single(top_file)
+            bot_subs = self._detect_subtitles_for_video_single(bot_file)
+            
+            if top_subs:
+                return top_subs
+            return bot_subs
+        else:
+            return self._detect_subtitles_for_video_single(video_path)
 
     def _pick_preferred_subtitle(self, detected_subs):
         if not detected_subs:
@@ -3600,6 +3643,11 @@ class VideoProcessorApp:
             self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         elif orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
+            self.aspect_ratio_frame.config(text="Canvas Aspect Ratio (Overall)")
+            self.aspect_columns_frame.pack(fill="x")
+            self.horizontal_rb_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
+            self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
+            self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
             self.hybrid_frame.pack(fill=tk.X, pady=5)
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
@@ -4283,32 +4331,8 @@ class VideoProcessorApp:
             dir_name = os.path.dirname(video_path)
             video_basename = os.path.splitext(os.path.basename(video_path))[0]
             
-            # Detect Subtitles
-            detected_subs = []
-            
-            # Scan external
-            try:
-                for item in os.listdir(dir_name):
-                    item_lower = item.lower()
-                    if item_lower.endswith((".srt", ".ass", ".ssa")):
-                        sub_basename = os.path.splitext(item)[0]
-                        if sub_basename == video_basename:
-                            detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': sub_basename})
-                        elif sub_basename.startswith(video_basename):
-                            remainder = sub_basename[len(video_basename):]
-                            if remainder and remainder[0] in [' ', '.', '-', '_']:
-                                full_path = os.path.join(dir_name, item)
-                                detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': sub_basename})
-            except Exception: pass
-            
-             # Scan embedded
-            embedded_subs = get_subtitle_stream_info(video_path)
-            for relative_index, sub_stream in enumerate(embedded_subs):
-                tags = sub_stream.get("tags", {})
-                lang = tags.get("language", "und")
-                title = tags.get("title", f"Track {sub_stream.get('index')}")
-                detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
-
+            # Detect Subtitles (Pair-Aware scanning)
+            detected_subs = self._detect_subtitles_for_video(video_path)
             has_subs = len(detected_subs) > 0
             
             # Iterate Presets
@@ -4953,48 +4977,12 @@ class VideoProcessorApp:
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         base_dir = base_dir or os.getcwd()
         try:
+            info = get_video_info(job['video_path'])
+            sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
+
             segment_sub_path = options.get("segment_subtitle_path")
             subtitle_input = segment_sub_path or job.get('subtitle_path')
             if options.get("burn_subtitles") and subtitle_input:
-                # --- Calculate Target Resolution for Subtitles ---
-                # We need to know the final output resolution to set PlayResX/Y correctly in the ASS file
-                # so that text wrapping works as expected (especially for vertical/hybrid/4k).
-                
-                res_key = options.get('resolution')
-                sub_target_w, sub_target_h = 1920, 1080 # Fallback
-                
-                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
-                    width_map = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320} # Hybrid uses Vertical widths? Or Horizontal? Hybrid usually based on horz width, but stacked.
-                    # Wait, hybrid stack usually implies vertical output? 
-                    # Existing code: width_map = {"HD": 1080, "4k": 2160...} => implies 1080 width for HD. 
-                    # Let's standardize to the Vertical set for Hybrid Stacked as it produces vertical video.
-                    sub_target_w = width_map.get(res_key, 1080)
-                    try:
-                        num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
-                        num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
-                        top_h = (int(sub_target_w * den_top / num_top) // 2) * 2; bot_h = (int(sub_target_w * den_bot / num_bot) // 2) * 2
-                        sub_target_h = top_h + bot_h
-                    except: sub_target_h = 1920 # Fallback for hybrid if calc fails
-                elif orientation == "vertical":
-                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
-                    sub_target_w = width_map.get(res_key, 1080)
-                    try:
-                        num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
-                        sub_target_h = int(sub_target_w * den / num)
-                    except: sub_target_h = 1920
-                elif orientation == "original":
-                    info = get_video_info(job['video_path'])
-                    sub_target_w, sub_target_h = compute_original_target_resolution(res_key, info)
-                    if not sub_target_w or not sub_target_h:
-                        sub_target_w, sub_target_h = info['width'], info['height']
-                else: # Horizontal / Default
-                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
-                    sub_target_w = width_map.get(res_key, 1920)
-                    try:
-                        num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
-                        sub_target_h = int(sub_target_w * den / num)
-                    except: sub_target_h = 1080
-
                 sub_identifier = subtitle_input
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
@@ -5006,16 +4994,9 @@ class VideoProcessorApp:
                 if subtitle_source_file:
                     if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and options.get("subtitle_alignment") == "seam":
                          try:
-                            # Re-calculate split for seam logic (redundant but safe)
-                            width_map_h = {"720p": 1280, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
-                            target_w_h = width_map_h.get(res_key, 1080)
                             num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
-                            num_bot, den_bot = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
-                            top_h = (int(target_w_h * den_top / num_top) // 2) * 2; bot_h = (int(target_w_h * den_bot / num_bot) // 2) * 2
-                            total_real_h = top_h + bot_h
-                            if total_real_h > 0:
-                                seam_y_on_canvas = int((top_h / total_real_h) * sub_target_h) # Map to PlayRes
-                                options["calculated_pos"] = (sub_target_w // 2, seam_y_on_canvas)
+                            top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
+                            options["calculated_pos"] = (sub_target_w // 2, top_h)
                          except (ValueError, AttributeError, ZeroDivisionError):
                             print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                     
@@ -5032,30 +5013,6 @@ class VideoProcessorApp:
             # --- Title Burn ASS Creation ---
             title_ass_path = None
             if options.get("title_burn_enabled"):
-                # Calculate target resolution if not already done
-                if 'sub_target_w' not in locals():
-                    res_key = options.get('resolution')
-                    sub_target_w, sub_target_h = 1920, 1080
-                    if orientation == "vertical":
-                        width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
-                        sub_target_w = width_map.get(res_key, 1080)
-                        try:
-                            num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
-                            sub_target_h = int(sub_target_w * den / num)
-                        except: sub_target_h = 1920
-                    elif orientation == "original":
-                        info = get_video_info(job['video_path'])
-                        sub_target_w, sub_target_h = compute_original_target_resolution(res_key, info)
-                        if not sub_target_w or not sub_target_h:
-                            sub_target_w, sub_target_h = info['width'], info['height']
-                    else:
-                        width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
-                        sub_target_w = width_map.get(res_key, 1920)
-                        try:
-                            num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
-                            sub_target_h = int(sub_target_w * den / num)
-                        except: sub_target_h = 1080
-                
                 # Get title text - priority: override > JSON
                 title_text = options.get("title_override_text", "").strip()
                 if not title_text:
@@ -5084,7 +5041,6 @@ class VideoProcessorApp:
                 else:
                     print("[WARN] Title burn enabled but no title text found (check JSON suffix or use override).")
             
-            info = get_video_info(job['video_path'])
             duration = options.get("seek_duration")
             if duration is None:
                 duration = get_file_duration(job['video_path'])
@@ -5236,10 +5192,20 @@ class VideoProcessorApp:
         orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
-            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
-            target_w = width_map.get(res_key, 1080)
-            target_h = (int(target_w * 16 / 9) // 2) * 2 # Standard vertical 9:16
-            return target_w, target_h
+            aspect_str = options.get("merged_aspect", "9:16")
+            canvas_orient = self._aspect_to_orientation(aspect_str, fallback="vertical")
+            if canvas_orient == "vertical":
+                width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+                target_w = width_map.get(res_key, 1080)
+            else:
+                width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680, "HD": 1920, "4k": 3840, "8k": 7680}
+                target_w = width_map.get(res_key, 1920)
+            try:
+                num, den = map(int, aspect_str.split(':'))
+                target_h = int(target_w * den / num)
+            except Exception:
+                target_h = int(target_w * 16 / 9) if canvas_orient == "vertical" else int(target_w * 9 / 16)
+            return (target_w // 2) * 2, (target_h // 2) * 2
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
             target_w = width_map.get(res_key, 1080)
@@ -5651,15 +5617,7 @@ class VideoProcessorApp:
             audio_cmd_parts.pop(audio_fc_index)
         except ValueError: pass
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
-            res_key = options.get('resolution')
-            # Fix width_map for vertical/hybrid consistency (720p should be 720 wide)
-            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
-            target_w = width_map.get(res_key)
-            if target_w is None: 
-                raise VideoProcessingError(f"Invalid resolution '{res_key}' for Hybrid mode.")
-            
-            # Target total height is fixed to 9:16 aspect of the width
-            total_h = (int(target_w * 16 / 9) // 2) * 2
+            target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
 
             def get_block_filters(aspect_str, mode, upscale_algo, override_h=None):
                 if not aspect_str: raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")

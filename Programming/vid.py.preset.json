@@ -2,7 +2,7 @@
     "Horizontal Hardsub (-cn)": {
         "options": {
             "resolution": "2160p",
-            "upscale_algo": "bicubic",
+            "upscale_algo": "nvvfx-superres",
             "output_format": "sdr",
             "video_codec": "h264",
             "encoder_backend": "nvencc_video_with_ffmpeg_audio",
@@ -1455,7 +1455,7 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": true,
+            "on_scan_subs": false,
             "auto_detect_subs": false,
             "suffix_filter": null
         }
@@ -2217,7 +2217,7 @@
     },
     "Hybrid Duo": {
         "options": {
-            "resolution": "4k",
+            "resolution": "1080p",
             "upscale_algo": "bicubic",
             "output_format": "sdr",
             "video_codec": "h264",
@@ -2243,11 +2243,11 @@
             "blur_sigma": "30",
             "blur_steps": "1",
             "horizontal_aspect": "16:9",
-            "vertical_aspect": "4:5",
-            "merged_aspect": "16:9",
+            "vertical_aspect": "9:16",
+            "merged_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "45000",
+            "manual_bitrate": "8000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": true,
@@ -2279,13 +2279,13 @@
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "subtitle_font": "HelveticaNeueLT Std Blk",
-            "subtitle_font_size": "128",
+            "subtitle_font_size": "48",
             "subtitle_alignment": "seam",
             "subtitle_bold": true,
             "subtitle_italic": false,
             "subtitle_underline": false,
             "subtitle_margin_v": "335",
-            "subtitle_margin_l": "50",
+            "subtitle_margin_l": "100",
             "subtitle_margin_r": "100",
             "subtitle_seam_h_offset": "0",
             "subtitle_seam_v_offset": "0",
@@ -2361,9 +2361,9 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": false,
+            "on_scan_subs": true,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": "-top"
         }
     }
 }
