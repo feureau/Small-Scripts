@@ -354,23 +354,34 @@ def sanitize_tags(raw_tags):
     return clean
 
 def sanitize_and_parse_json(content: str) -> dict | None:
+    # Clean control characters first
+    content_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content)
     try:
-        content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', content); start_index = content.find('{')
+        # 1. Try direct loading (most reliable for valid, clean JSON files)
+        return json.loads(content_cleaned, strict=False)
+    except Exception:
+        pass
+    
+    # 2. Fallback to bracket extractor if there is extra text before/after the JSON
+    try:
+        start_index = content_cleaned.find('{')
         if start_index == -1: return None
         brace_level, in_string, end_index = 1, False, -1
-        for i in range(start_index + 1, len(content)):
-            char = content[i]
-            if char == '"' and content[i-1] != '\\': in_string = not in_string
+        for i in range(start_index + 1, len(content_cleaned)):
+            char = content_cleaned[i]
+            if char == '"' and content_cleaned[i-1] != '\\': in_string = not in_string
             if in_string: continue
             if char == '{': brace_level += 1
             elif char == '}': brace_level -= 1
             if brace_level == 0: end_index = i + 1; break
         if end_index == -1: return None
-        json_str = content[start_index:end_index]
+        json_str = content_cleaned[start_index:end_index]
         def escape_quotes(match): return match.group(1) + match.group(2).replace('"', '\\"') + match.group(3)
-        json_str = re.sub(r'(".*?":\s*")(.*?)(")', escape_quotes, json_str, flags=re.DOTALL); json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-        return json.loads(json_str)
-    except Exception: return None
+        json_str = re.sub(r'(".*?":\s*")(.*?)(")', escape_quotes, json_str, flags=re.DOTALL)
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        return json.loads(json_str, strict=False)
+    except Exception:
+        return None
 
 # File Management Functions
 def generate_batch_id():
@@ -910,7 +921,7 @@ class MainApp:
                                 current_score = 5 # Penalty for Rec/Replay mismatch
 
                         # C. NUCLEAR TEXT MATCH (Score 1)
-                        if current_score > 1 and len(nuclear_file) > 8:
+                        if current_score > 1 and len(nuclear_file) > 8 and len(nuclear_title) > 0:
                             if nuclear_file in nuclear_title or nuclear_title in nuclear_file:
                                 current_score = 1
                         # D. Marker token match (handles "Marker X ..."-style names)

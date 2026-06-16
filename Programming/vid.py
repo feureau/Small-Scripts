@@ -2641,7 +2641,7 @@ class VideoProcessorApp:
         self.trigger_suffix_var = tk.StringVar(value="")
         entry_widget = ttk.Entry(row2_2, textvariable=self.trigger_suffix_var, width=8)
         entry_widget.pack(side=tk.LEFT, padx=5)
-        ToolTip(entry_widget, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Unchecked: Matches ALL subtitles.")
+        ToolTip(entry_widget, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nSupports multiple separated by commas: '-top, -bot'\nIf Unchecked: Matches ALL subtitles.")
 
         # Update Logic for UI states
         def update_trigger_ui(*args):
@@ -3527,9 +3527,13 @@ class VideoProcessorApp:
             top_subs = self._detect_subtitles_for_video_single(top_file)
             bot_subs = self._detect_subtitles_for_video_single(bot_file)
             
-            if top_subs:
-                return top_subs
-            return bot_subs
+            combined = []
+            seen = set()
+            for sub in top_subs + bot_subs:
+                if sub['path'] not in seen:
+                    seen.add(sub['path'])
+                    combined.append(sub)
+            return combined
         else:
             return self._detect_subtitles_for_video_single(video_path)
 
@@ -4320,7 +4324,9 @@ class VideoProcessorApp:
         for p_name in self.preset_manager.get_preset_names():
             p = self.preset_manager.get_preset(p_name)
             s_filter = p['triggers'].get('suffix_filter')
-            if s_filter: specific_suffix_filters.add(s_filter)
+            if s_filter: 
+                for s in s_filter.split(','):
+                    specific_suffix_filters.add(s.strip())
 
         files_processed_count = 0
         
@@ -4340,6 +4346,9 @@ class VideoProcessorApp:
                 preset = self.preset_manager.get_preset(preset_name)
                 triggers = preset['triggers']
                 video_trigger = triggers.get("video_trigger")
+                is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
+                if is_hybrid_duo and not (video_basename.endswith("-top") or video_basename.endswith("_top")):
+                    continue # Skip triggering on non-top files for hybrid-duo presets
                 if not video_trigger:
                     # Fallback for legacy presets (pre-Update)
                     t_no_sub = triggers.get('on_no_sub', False)
@@ -4376,9 +4385,11 @@ class VideoProcessorApp:
                              if not is_claimed_specifically: match = True
                         elif filter_suffix == "": # Strict Empty
                             if sub['suffix'] == "": match = True
-                        else: # Specific Suffix
-                             if sub['basename'] and sub['basename'].endswith(filter_suffix): match = True
-                             elif sub['suffix'] == filter_suffix: match = True
+                        else: # Specific Suffix (comma separated)
+                             valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
+                             for vs in valid_suffixes:
+                                 if sub['basename'] and sub['basename'].endswith(vs): match = True
+                                 elif sub['suffix'] == vs: match = True
                         
                         if match:
                              self._create_job_entry(video_path, sub['path'], preset['options'], preset_name, sub['display_tag'])
@@ -4450,12 +4461,14 @@ class VideoProcessorApp:
         orientation = options.get("orientation", DEFAULT_ORIENTATION)
         if orientation == "hybrid-duo (dual source)":
             resolved_top = self._resolve_to_top_sibling(video_path)
-            # Check if this top video is already added for this preset
+            new_job_hash = get_job_hash(options)
+            # Check if this top video is already added with these EXACT SAME options
             for existing_job in self.processing_jobs:
-                if existing_job.get("preset_name") == preset_name:
-                    existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
-                    if existing_path_resolved == resolved_top:
-                        print(f"[INFO] Skipping duplicate Hybrid Duo job for: {video_path}")
+                existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
+                if existing_path_resolved == resolved_top:
+                    existing_job_hash = get_job_hash(existing_job.get("options"))
+                    if existing_job_hash == new_job_hash:
+                        print(f"[INFO] Skipping duplicate Hybrid Duo file for: {os.path.basename(video_path)}")
                         return # Deduplicated!
             video_path = resolved_top
 
