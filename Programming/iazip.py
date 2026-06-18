@@ -33,17 +33,19 @@ python iazip.py [OPTIONS]
 
 ### Options
 
-| Flag | Long Flag | Description |
+| Flag / Arg | Long Flag | Description |
 | :--- | :--- | :--- |
+| `[input]` | | Optional target directory to process (positional, defaults to current directory). |
+| `-i` | `--input` | Specify the target directory to process. |
 | `-m` | `--move` | Move originals to an external sibling folder suffixed with `_original`. |
 | `-k` | `--keep` | Keep original files in their current location. |
 | `-t` | `--text` | Process only text files. |
 | `-M` | `--media` | Process only media files. |
-| `-i` | `--images` | Process only image files. |
+| `-I` | `--images` | Process only image files. |
 | `-o` | `--other` | Process other/unclassified files (e.g., binaries, archives). |
 | `-h` | `--help` | Show the help message and exit. |
 
-> Note: If no type flags (-t, -M, -i, -o) are specified, all file types will be processed by default.
+> Note: If no type flags (-t, -M, -I, -o) are specified, all file types will be processed by default.
 
 ## 📖 Examples
 
@@ -65,16 +67,16 @@ Creates archives but leaves all source files untouched.
 python iazip.py -k
 ```
 
-**4. Process Only Specific Classifications**
-Creates only `_text.zip` and `_images.zip` archives, leaving media and other files alone.
+**4. Process a Specific Folder**
+Process a named folder instead of the current directory.
 ```powershell
-python iazip.py -t -i
+python iazip.py -i "2026-06-15 - Indonesian Economic Policy" -k
 ```
 
-**5. Process Only Unclassified / Data Files**
-Creates only `_data.zip` archives.
+**5. Process Only Specific Classifications**
+Creates only `_text.zip` and `_images.zip` archives, leaving media and other files alone.
 ```powershell
-python iazip.py -o
+python iazip.py -t -I
 ```
 
 ## 🧠 How it Works
@@ -409,10 +411,23 @@ if __name__ == "__main__":
         "-M", "--media", action="store_true", help="Process only media files."
     )
     parser.add_argument(
-        "-i", "--images", action="store_true", help="Process only image files."
+        "-i",
+        "--input",
+        type=str,
+        default=None,
+        help="Specify the target directory to process.",
+    )
+    parser.add_argument(
+        "-I", "--images", action="store_true", help="Process only image files."
     )
     parser.add_argument(
         "-o", "--other", action="store_true", help="Process other/unclassified files (e.g., binaries, unknown extensions)."
+    )
+    parser.add_argument(
+        "input_positional",
+        nargs="?",
+        default=None,
+        help="Specify the target directory to process as a positional argument (defaults to current directory).",
     )
 
     args = parser.parse_args()
@@ -421,10 +436,17 @@ if __name__ == "__main__":
     if not any([args.text, args.media, args.images, args.other]):
         args.text = args.media = args.images = args.other = True
 
-    current_working_directory = os.getcwd()
+    target_dir_arg = args.input or args.input_positional
+    if target_dir_arg:
+        target_directory = os.path.abspath(target_dir_arg)
+        if not os.path.isdir(target_directory):
+            print(f"Error: '{target_dir_arg}' is not a valid directory.")
+            sys.exit(1)
+    else:
+        target_directory = os.getcwd()
     try:
         process_directory(
-            current_working_directory,
+            target_directory,
             args.move,
             args.keep,
             args.text,

@@ -245,7 +245,7 @@ def main():
     audio_bitrate = args.bitrate
     channels = calculate_channel_count(desired_layout)
 
-    audio_encoder = "aac"
+    audio_encoder = "aac_mf"
 
     if channels > 8:
         print(f"Error: Layout '{desired_layout}' implies {channels} channels. AAC supports max 8.")

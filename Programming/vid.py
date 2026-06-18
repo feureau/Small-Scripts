@@ -180,6 +180,7 @@ DEFAULT_OUTPUT_FORMAT = "sdr"                       # Output color format. Defau
 DEFAULT_VIDEO_CODEC = "h264"                        # Output codec. Default: h264, Options: h264, hevc, av1
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"             # Encoder backend. Default: ffmpeg_only, Options: ffmpeg_only, nvencc_with_ffmpeg, nvencc_only, nvencc_video_with_ffmpeg_audio
 DEFAULT_NVENC_SUPERRES_MODE = "1"                   # NVVFX SuperRes mode. Default: 1, Range: 0-1
+DEFAULT_NVENC_NVVFX_DENOISE = False                 # Enable NVVFX Video Denoising. Default: False
 DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 1, Range: 1-4
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
@@ -202,6 +203,7 @@ DEFAULT_BURN_SUBTITLES = True                       # Burn subtitles into video.
 DEFAULT_RENDER_BY_CHAPTERS = False                 # Render video by chapters if available. Default: False
 DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER = False          # Split and export subtitles matching chapters. Default: False
 DEFAULT_USE_SHARPENING = True                       # Enable video sharpening. Default: True
+DEFAULT_FFMPEG_DENOISE_VULKAN = False               # Enable FFmpeg Vulkan Denoise. Default: False
 
 # --- Encoder Config Group ---
 DEFAULT_NVENC_PRESET = "p1"                         # NVENC preset. Options: p1 to p7 (p1 is fastest/lowest quality)
@@ -1715,6 +1717,40 @@ class ToolTip:
             self.tip_window.destroy()
             self.tip_window = None
 
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, container, padding=0, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_window = ttk.Frame(self.canvas, padding=padding)
+
+        self.scrollable_window.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+        self.canvas.bind(
+            "<Configure>",
+            lambda e: self.canvas.itemconfig(self._window_id, width=e.width)
+        )
+
+        self._window_id = self.canvas.create_window((0, 0), window=self.scrollable_window, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+
+    def _on_mousewheel(self, event):
+        if self.winfo_ismapped():
+            x, y = self.winfo_pointerxy()
+            widget_under_mouse = self.winfo_containing(x, y)
+            if widget_under_mouse and str(widget_under_mouse).startswith(str(self)):
+                if self.scrollbar.get() != (0.0, 1.0):
+                    self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
 class CollapsiblePane(ttk.Frame):
     def __init__(self, parent, text="", initial_state='collapsed'):
         super().__init__(parent, padding=5)
@@ -2059,6 +2095,7 @@ class VideoProcessorApp:
         self.encoder_backend_var.trace_add('write', lambda *args: [self._update_selected_jobs('encoder_backend'), self._update_upscale_algo_options(), self._toggle_superres_options(), self._apply_backend_constraints()])
         self.nvenc_superres_mode_var = tk.StringVar(value=DEFAULT_NVENC_SUPERRES_MODE)
         self.nvenc_superres_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_superres_mode'))
+        self.nvenc_nvvfx_denoise_var = tk.BooleanVar(value=DEFAULT_NVENC_NVVFX_DENOISE)
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
@@ -2267,6 +2304,7 @@ class VideoProcessorApp:
         self.title_shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_blur'))
 
         self.use_sharpening_var = tk.BooleanVar(value=DEFAULT_USE_SHARPENING)
+        self.ffmpeg_denoise_vulkan_var = tk.BooleanVar(value=DEFAULT_FFMPEG_DENOISE_VULKAN)
         self.sharpening_algo_var = tk.StringVar(value=DEFAULT_SHARPENING_ALGO)
         self.sharpening_strength_var = tk.StringVar(value=DEFAULT_SHARPENING_STRENGTH)
         self.sharpening_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('sharpening_strength'))
@@ -2320,12 +2358,12 @@ class VideoProcessorApp:
 
         self.setup_input_pane(input_frame)
 
-        self.video_tab = ttk.Frame(settings_notebook, padding=10)
-        self.audio_tab = ttk.Frame(settings_notebook, padding=10)
-        self.loudness_tab = ttk.Frame(settings_notebook, padding=10)
-        self.title_tab = ttk.Frame(settings_notebook, padding=10)
-        self.subtitle_tab = ttk.Frame(settings_notebook, padding=10)
-        self.encoder_tab = ttk.Frame(settings_notebook, padding=10)
+        self.video_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.audio_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.loudness_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.title_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.subtitle_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.encoder_tab = ScrollableFrame(settings_notebook, padding=10)
 
         settings_notebook.add(self.video_tab, text="Video")
         settings_notebook.add(self.audio_tab, text="Audio")
@@ -2334,12 +2372,12 @@ class VideoProcessorApp:
         settings_notebook.add(self.subtitle_tab, text="Subtitles")
         settings_notebook.add(self.encoder_tab, text="Encoder")
 
-        self.setup_video_tab(self.video_tab)
-        self.setup_audio_tab(self.audio_tab)
-        self.setup_loudness_tab(self.loudness_tab)
-        self.setup_title_tab(self.title_tab)
-        self.setup_subtitle_tab(self.subtitle_tab)
-        self.setup_encoder_tab(self.encoder_tab)
+        self.setup_video_tab(self.video_tab.scrollable_window)
+        self.setup_audio_tab(self.audio_tab.scrollable_window)
+        self.setup_loudness_tab(self.loudness_tab.scrollable_window)
+        self.setup_title_tab(self.title_tab.scrollable_window)
+        self.setup_subtitle_tab(self.subtitle_tab.scrollable_window)
+        self.setup_encoder_tab(self.encoder_tab.scrollable_window)
     
         # Add Apply Buttons below settings
         apply_frame = ttk.Frame(right_pane_frame)
@@ -2895,6 +2933,15 @@ class VideoProcessorApp:
         self.ngx_vsr_quality_combo = ttk.Combobox(superres_frame, textvariable=self.nvenc_ngx_vsr_quality_var, values=["1", "2", "3", "4"], width=5, state="readonly")
         self.ngx_vsr_quality_combo.pack(side=tk.LEFT)
         ToolTip(self.ngx_vsr_quality_combo, "NVEncC ngx vsr-quality (1-4).")
+
+        self.nvvfx_denoise_check = ttk.Checkbutton(superres_frame, text="AI Video Denoising", variable=self.nvenc_nvvfx_denoise_var, command=lambda: self._update_selected_jobs("nvenc_nvvfx_denoise"))
+        self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(15, 0))
+        ToolTip(self.nvvfx_denoise_check, "Enable --vpp-nvvfx-denoise (NVEncC only).")
+
+        self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(superres_frame, text="FFmpeg Vulkan Denoise", variable=self.ffmpeg_denoise_vulkan_var, command=lambda: self._update_selected_jobs("ffmpeg_denoise_vulkan"))
+        self.ffmpeg_denoise_vulkan_check.pack(side=tk.LEFT, padx=(15, 0))
+        ToolTip(self.ffmpeg_denoise_vulkan_check, "Enable nlmeans_vulkan noise reduction (FFmpeg backend).")
+
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
@@ -3744,10 +3791,16 @@ class VideoProcessorApp:
         algo = self.upscale_algo_var.get()
         enable_superres = backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"] and algo == "nvvfx-superres"
         enable_ngx = backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"] and algo == "ngx-vsr"
+        enable_nvencc_features = backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"]
+        enable_ffmpeg_features = backend in ["ffmpeg_only", "nvencc_with_ffmpeg"]
         if hasattr(self, "superres_mode_combo"):
             self.superres_mode_combo.config(state="readonly" if enable_superres else "disabled")
         if hasattr(self, "ngx_vsr_quality_combo"):
             self.ngx_vsr_quality_combo.config(state="readonly" if enable_ngx else "disabled")
+        if hasattr(self, "nvvfx_denoise_check"):
+            self._set_widget_state_recursive(self.nvvfx_denoise_check, "normal" if enable_nvencc_features else "disabled")
+        if hasattr(self, "ffmpeg_denoise_vulkan_check"):
+            self._set_widget_state_recursive(self.ffmpeg_denoise_vulkan_check, "normal" if enable_ffmpeg_features else "disabled")
 
     def _toggle_nvencc_color_mode_controls(self):
         is_custom = getattr(self, "nvencc_color_tag_mode_var", None) and self.nvencc_color_tag_mode_var.get() == "custom"
@@ -3953,6 +4006,7 @@ class VideoProcessorApp:
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
             "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(),
             "encoder_backend": self.encoder_backend_var.get(),
+            "nvenc_nvvfx_denoise": self.nvenc_nvvfx_denoise_var.get(),
             "nvenc_superres_mode": self.nvenc_superres_mode_var.get(),
             "nvenc_ngx_vsr_quality": self.nvenc_ngx_vsr_quality_var.get(),
             "fruc": self.fruc_var.get(),
@@ -4016,6 +4070,7 @@ class VideoProcessorApp:
             "group_by_video": self.group_by_video_var.get(),
             "subfolder_override": self.subfolder_override_var.get(),
             "use_sharpening": self.use_sharpening_var.get(),
+            "ffmpeg_denoise_vulkan": self.ffmpeg_denoise_vulkan_var.get(),
             "sharpening_algo": self.sharpening_algo_var.get(),
             "sharpening_strength": self.sharpening_strength_var.get(),
             "nvenc_preset": self.nvenc_preset_var.get(),
@@ -4554,6 +4609,7 @@ class VideoProcessorApp:
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
         self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
+        self.nvenc_nvvfx_denoise_var.set(options.get("nvenc_nvvfx_denoise", DEFAULT_NVENC_NVVFX_DENOISE))
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
@@ -4626,6 +4682,7 @@ class VideoProcessorApp:
         self.audio_surround_51_var.set(options.get("audio_surround_51", DEFAULT_AUDIO_SURROUND_51))
         self.audio_passthrough_var.set(options.get("audio_passthrough", DEFAULT_AUDIO_PASSTHROUGH))
         self.use_sharpening_var.set(options.get("use_sharpening", DEFAULT_USE_SHARPENING))
+        self.ffmpeg_denoise_vulkan_var.set(options.get("ffmpeg_denoise_vulkan", DEFAULT_FFMPEG_DENOISE_VULKAN))
         self.sharpening_algo_var.set(options.get("sharpening_algo", DEFAULT_SHARPENING_ALGO))
         self.sharpening_strength_var.set(options.get("sharpening_strength", DEFAULT_SHARPENING_STRENGTH))
         self.output_suffix_override_var.set(options.get("output_suffix_override", ""))
@@ -4710,7 +4767,90 @@ class VideoProcessorApp:
             self.job_listbox.insert(actual_index + 1, new_job['display_name'])
             offset += 1
 
-    def build_audio_segment(self, file_path, options, base_dir=None):
+    def measure_loudnorm_first_pass(self, file_path, options, base_dir=None):
+        """
+        Runs a first-pass loudnorm analysis to measure audio loudness stats.
+        Returns a dict with measured values (input_i, input_tp, input_lra,
+        input_thresh, target_offset) that can be fed into the second pass
+        for instant, frame-accurate normalization with no ramp-up.
+        
+        The analysis chain mirrors the actual processing chain (compressor,
+        limiter, dynaudnorm) so loudnorm measures the signal it will actually
+        receive in the encode pass.
+        """
+        if options.get("audio_passthrough") or not options.get("normalize_audio", False):
+            return None
+
+        print(f"--- Loudnorm Pass 1/2: Analyzing '{os.path.basename(file_path)}' ---")
+        
+        # Build the analysis filter chain (mirrors the encode chain minus loudnorm)
+        af_parts = []
+        
+        # Compressor + Limiter (same as encode chain)
+        if options.get("use_loudness_war", False):
+            t = options.get("comp_threshold")
+            r = options.get("comp_ratio")
+            a = options.get("comp_attack")
+            re_val = options.get("comp_release")
+            m = options.get("comp_makeup")
+            l = options.get("limit_limit")
+            af_parts.append(f"acompressor=threshold={t}dB:ratio={r}:attack={a}:release={re_val}:makeup={m}")
+            af_parts.append(f"alimiter=limit={l}dB")
+        
+        # Dynamic normalization (same as encode chain)
+        if options.get("use_dynaudnorm", False):
+            f = options.get("dyn_frame_len")
+            g = options.get("dyn_gauss_win")
+            p = options.get("dyn_peak")
+            m = options.get("dyn_max_gain")
+            af_parts.append(f"dynaudnorm=f={f}:g={g}:p={p}:m={m}")
+        
+        # Loudnorm in measurement-only mode
+        lt = options.get("loudness_target")
+        tp = options.get("true_peak")
+        af_parts.append(f"loudnorm=I={lt}:LRA=1:tp={tp}:print_format=json")
+        
+        af_string = ",".join(af_parts)
+        
+        cmd = [FFMPEG_CMD, "-hide_banner", "-i", file_path, "-vn", "-sn", "-dn",
+               "-af", af_string, "-f", "null", "-"]
+        
+        debug_print("Loudnorm first-pass command:", " ".join(cmd))
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
+            output = (result.stdout or "") + (result.stderr or "")
+            
+            # FFmpeg outputs the JSON stats at the end of stderr
+            json_match = re.search(r'\{[\s\S]*?"target_offset"[\s\S]*?\}', output)
+            if not json_match:
+                # Fallback: find any JSON block
+                json_match = re.search(r'\{[\s\S]*?\}', output)
+            
+            if json_match:
+                stats = json.loads(json_match.group(0))
+                measured = {
+                    "input_i": stats.get("input_i", "-24.0"),
+                    "input_tp": stats.get("input_tp", "-2.0"),
+                    "input_lra": stats.get("input_lra", "7.0"),
+                    "input_thresh": stats.get("input_thresh", "-34.0"),
+                    "target_offset": stats.get("target_offset", "0.0"),
+                }
+                print(f"[INFO] Loudnorm measured: I={measured['input_i']} LUFS, "
+                      f"TP={measured['input_tp']} dBTP, LRA={measured['input_lra']}, "
+                      f"Offset={measured['target_offset']}")
+                return measured
+            else:
+                print("[WARN] Loudnorm first-pass: Could not parse measurement JSON. Falling back to single-pass.")
+                return None
+        except subprocess.TimeoutExpired:
+            print("[WARN] Loudnorm first-pass timed out (>10min). Falling back to single-pass.")
+            return None
+        except Exception as e:
+            print(f"[WARN] Loudnorm first-pass failed: {e}. Falling back to single-pass.")
+            return None
+
+    def build_audio_segment(self, file_path, options, base_dir=None, loudnorm_stats=None):
         if options.get("audio_passthrough"):
             return ["-map", "0:a?", "-c:a", "copy"]
 
@@ -4797,7 +4937,21 @@ class VideoProcessorApp:
             if options.get("normalize_audio", False):
                 lt, lr, tp = options.get("loudness_target"), options.get("loudness_range"), options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
-                fc_parts.append(f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true{ln_tag}")
+                if loudnorm_stats:
+                    # Two-pass mode: use measured values for instant, frame-accurate normalization
+                    mi = loudnorm_stats["input_i"]
+                    mtp = loudnorm_stats["input_tp"]
+                    mlra = loudnorm_stats["input_lra"]
+                    mthresh = loudnorm_stats["input_thresh"]
+                    moffset = loudnorm_stats["target_offset"]
+                    fc_parts.append(
+                        f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true"
+                        f":measured_I={mi}:measured_tp={mtp}:measured_LRA={mlra}"
+                        f":measured_thresh={mthresh}:offset={moffset}{ln_tag}"
+                    )
+                else:
+                    # Single-pass fallback (may have slow ramp-up at start)
+                    fc_parts.append(f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true{ln_tag}")
                 proc_tag = ln_tag
 
             final_tag = proc_tag
@@ -5059,6 +5213,13 @@ class VideoProcessorApp:
                 duration = get_file_duration(job['video_path'])
                 max_dur = float(options.get('max_duration', 0))
                 if max_dur > 0: duration = min(duration, max_dur)
+
+            # --- Two-Pass Loudnorm: Run first-pass analysis if loudnorm is enabled ---
+            loudnorm_stats = None
+            if options.get("normalize_audio", False) and not options.get("audio_passthrough"):
+                loudnorm_stats = self.measure_loudnorm_first_pass(job['video_path'], options, base_dir=base_dir)
+                if loudnorm_stats:
+                    options["_loudnorm_stats"] = loudnorm_stats
 
             seek_start = options.get("seek_start")
             seek_duration = options.get("seek_duration")
@@ -5455,6 +5616,9 @@ class VideoProcessorApp:
                 pad_color_hex = options.get("pad_color", DEFAULT_PAD_COLOR).lstrip('#')
                 cmd.extend(["--vpp-pad", f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
 
+        if options.get("nvenc_nvvfx_denoise"):
+            cmd.append("--vpp-nvvfx-denoise")
+
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
             cmd.extend(["--log", log_path, "--log-level", "info"])
@@ -5544,7 +5708,7 @@ class VideoProcessorApp:
         if seek_duration is not None:
             cmd.extend(["-t", str(seek_duration)])
         cmd.extend(["-vn", "-sn", "-dn"])
-        audio_cmd_parts = self.build_audio_segment(input_file, options)
+        audio_cmd_parts = self.build_audio_segment(input_file, options, loudnorm_stats=options.get("_loudnorm_stats"))
         cmd.extend(audio_cmd_parts)
         cmd.append(output_audio)
         return cmd
@@ -5622,7 +5786,7 @@ class VideoProcessorApp:
         ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
-        audio_cmd_parts = self.build_audio_segment(file_path, options, base_dir=base_dir)
+        audio_cmd_parts = self.build_audio_segment(file_path, options, base_dir=base_dir, loudnorm_stats=options.get("_loudnorm_stats"))
         audio_fc_str = ""
         try:
             audio_fc_index = audio_cmd_parts.index("-filter_complex")
@@ -5670,6 +5834,9 @@ class VideoProcessorApp:
                 strength = options.get("sharpening_strength", "0.5")
                 if algo == "cas": cpu_chain.append(f"cas=strength={strength}")
                 else: cpu_chain.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
+            if options.get("ffmpeg_denoise_vulkan"):
+                fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                cpu_chain.append(f"hwupload=vulkan,nlmeans_vulkan,hwdownload,format={fmt}")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
                 cpu_chain.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{total_h}") 
@@ -5836,6 +6003,9 @@ class VideoProcessorApp:
                 strength = options.get("sharpening_strength", "0.5")
                 if algo == "cas": cpu_filters.append(f"cas=strength={strength}")
                 else: cpu_filters.append(f"unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount={strength}")
+            if options.get("ffmpeg_denoise_vulkan"):
+                fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
+                cpu_filters.append(f"hwupload=vulkan,nlmeans_vulkan,hwdownload,format={fmt}")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
                 cpu_filters.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{target_h}")
