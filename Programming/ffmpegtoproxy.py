@@ -52,8 +52,10 @@ def parse_arguments():
         def_qscale = 10
 
     parser = argparse.ArgumentParser(description="Generate DaVinci Resolve compliant Proxy files.")
-    parser.add_argument("-i", "--input", default=DEFAULT_PATTERN, 
+    parser.add_argument("input", nargs="?", default=None,
                         help="Input file or wildcard pattern (e.g. *.mp4). Default searches all videos.")
+    parser.add_argument("-i", "--input", dest="input_flag", default=None, metavar="INPUT",
+                        help="Input file or wildcard pattern (alternative to positional argument).")
     parser.add_argument("--codec", choices=["dnxhr", "prores", "h264"], default=def_codec,
                         help=f"Proxy codec. Default: {def_codec}")
     parser.add_argument("-s", "--scale", type=float, default=DEFAULT_SCALE_MULTIPLIER,
@@ -66,7 +68,10 @@ def parse_arguments():
                         help=f"Audio codec. Default: {def_audio}")
     parser.add_argument("--slow", action="store_true", help="Disable hardware acceleration.")
     parser.add_argument("--no-scale", action="store_true", help="Keep exact original resolution (bypasses multiplier entirely).")
-    return parser.parse_args()
+    
+    args = parser.parse_args()
+    args.input = args.input or args.input_flag or DEFAULT_PATTERN
+    return args
 
 def is_nvenc_available():
     """

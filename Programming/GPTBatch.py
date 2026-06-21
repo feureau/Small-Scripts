@@ -6086,6 +6086,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.successful_output_paths = []
             # Shared launcher clock: prevents all workers from firing first requests at once.
             self.next_job_start_ts = time.monotonic()
+            self.global_runtime_overrides = None
+            self.exhausted_models.clear()
             
             if globals().get("RICH_AVAILABLE") and getattr(self, "stream_var", None) and self.stream_var.get() and STREAM_DASHBOARD:
                 STREAM_DASHBOARD.start()
@@ -6498,9 +6500,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             if self.global_runtime_overrides:
                 params["engine"] = self.global_runtime_overrides["engine"]
                 params["model_name"] = self.global_runtime_overrides["model_name"]
+                if "api_key" in self.global_runtime_overrides:
+                    params["api_key"] = self.global_runtime_overrides["api_key"]
+                else:
+                    params["api_key"] = self._get_resolved_api_key(params["engine"])
+
                 if params["engine"] == "google":
-                    if not params.get("api_key"):
-                        params["api_key"] = self._get_resolved_api_key("google")
                     if isinstance(params.get("safety_settings"), dict):
                         params["safety_settings"] = [
                             types.SafetySetting(
@@ -6577,9 +6582,17 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     if (is_quota or is_model_unavailable) and not is_temp_unavailable:
                         with self.model_switch_lock:
                             # Verify if another thread already resolved the model switch
-                            if self.global_runtime_overrides and (self.global_runtime_overrides["engine"] != params["engine"] or self.global_runtime_overrides["model_name"] != params["model_name"]):
+                            if self.global_runtime_overrides and (
+                                self.global_runtime_overrides["engine"] != params["engine"] or 
+                                self.global_runtime_overrides["model_name"] != params["model_name"] or
+                                self.global_runtime_overrides.get("api_key") != params.get("api_key")
+                            ):
                                 params["engine"] = self.global_runtime_overrides["engine"]
                                 params["model_name"] = self.global_runtime_overrides["model_name"]
+                                if "api_key" in self.global_runtime_overrides:
+                                    params["api_key"] = self.global_runtime_overrides["api_key"]
+                                else:
+                                    params["api_key"] = self._get_resolved_api_key(params["engine"])
                                 attempt -= 1
                                 continue
                             
@@ -6615,6 +6628,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                             user_result = event_container["result"]
                             if user_result:
                                 new_engine, new_model = user_result
+                                new_api_key = self._get_resolved_api_key(new_engine)
                                 console_log(
                                     f"Switching to: {new_engine} / {new_model} (Applied to ALL remaining jobs)",
                                     "ACTION",
@@ -6622,11 +6636,13 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                 self.global_runtime_overrides = {
                                     "engine": new_engine,
                                     "model_name": new_model,
+                                    "api_key": new_api_key,
                                 }
                                 params["engine"] = new_engine
                                 params["model_name"] = new_model
+                                params["api_key"] = new_api_key
+                                
                                 if new_engine == "google":
-                                    params["api_key"] = self._get_resolved_api_key(new_engine)
                                     if isinstance(params.get("safety_settings"), dict):
                                         params["safety_settings"] = [
                                             types.SafetySetting(

@@ -599,6 +599,10 @@ class MainApp:
         self.update_schedule_var = tk.BooleanVar(value=True); ttk.Checkbutton(sched, text="Update Schedule", variable=self.update_schedule_var, command=self._update_ui_states).grid(row=4, column=0, columnspan=2, sticky='w')
         self.update_visibility_var = tk.BooleanVar(value=False); self.vis_cb = ttk.Checkbutton(sched, text="Update Visibility Status", variable=self.update_visibility_var, command=self._update_ui_states); self.vis_cb.grid(row=5, column=0, columnspan=2, sticky='w')
         self.visibility_choice_var = tk.StringVar(value='private'); self.rad_private = ttk.Radiobutton(sched, text="Private", variable=self.visibility_choice_var, value='private'); self.rad_private.grid(row=6, column=0, columnspan=2, sticky='w', padx=10); self.rad_unlisted = ttk.Radiobutton(sched, text="Unlisted", variable=self.visibility_choice_var, value='unlisted'); self.rad_unlisted.grid(row=7, column=0, columnspan=2, sticky='w', padx=10); self.rad_public = ttk.Radiobutton(sched, text="Public", variable=self.visibility_choice_var, value='public'); self.rad_public.grid(row=8, column=0, columnspan=2, sticky='w', padx=10)
+        ttk.Label(sched, text='Schedule Order:').grid(row=9, column=0, sticky='w', pady=(5,0))
+        self.schedule_order_var = tk.StringVar(value='Random')
+        self.schedule_order_cb = ttk.Combobox(sched, textvariable=self.schedule_order_var, values=['As is', 'File Name (Asc)', 'File Name (Desc)', 'Random'], state="readonly", width=15)
+        self.schedule_order_cb.grid(row=9, column=1, sticky='w', padx=5, pady=(5,0), columnspan=3)
 
         ttk.Label(meta, text='Description:').grid(row=0, column=0, sticky='nw'); self.desc_txt = tk.Text(meta, height=3, width=40, wrap=tk.WORD); self.desc_txt.grid(row=0, column=1, sticky='ew', columnspan=3)
         ttk.Label(meta, text='Tags (comma-sep):').grid(row=1, column=0, sticky='w', pady=(5,0)); self.tags_ent = ttk.Entry(meta); self.tags_ent.grid(row=1, column=1, sticky='ew', pady=(5,0), columnspan=3)
@@ -976,12 +980,31 @@ class MainApp:
         selected_iids = self.tree.selection()
         if not selected_iids: return self.update_status("Error: No items selected.")
         self.process_button.config(state=tk.DISABLED)
+        order = self.schedule_order_var.get()
         if self.app_mode == "update":
-            selected_videos = [vd for vd in self.videos_to_process if isinstance(vd, VideoData) and vd.video_id in selected_iids]
+            selected_videos = []
+            for iid in selected_iids:
+                match = next((vd for vd in self.videos_to_process if isinstance(vd, VideoData) and vd.video_id == iid), None)
+                if match: selected_videos.append(match)
+            if order == 'File Name (Asc)':
+                selected_videos.sort(key=lambda x: str(x.original_upload_filename or x.current_title).lower())
+            elif order == 'File Name (Desc)':
+                selected_videos.sort(key=lambda x: str(x.original_upload_filename or x.current_title).lower(), reverse=True)
+            elif order == 'Random':
+                random.shuffle(selected_videos)
             processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_schedule": self.update_schedule_var.get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
             self.update_status("Updating... Check console."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
         elif self.app_mode == "upload":
-            selected_videos = [ve for ve in self.videos_to_process if isinstance(ve, VideoEntry) and ve.filepath in selected_iids]
+            selected_videos = []
+            for iid in selected_iids:
+                match = next((ve for ve in self.videos_to_process if isinstance(ve, VideoEntry) and ve.filepath == iid), None)
+                if match: selected_videos.append(match)
+            if order == 'File Name (Asc)':
+                selected_videos.sort(key=lambda x: Path(x.filepath).name.lower())
+            elif order == 'File Name (Desc)':
+                selected_videos.sort(key=lambda x: Path(x.filepath).name.lower(), reverse=True)
+            elif order == 'Random':
+                random.shuffle(selected_videos)
             self.update_status("Uploading... Check console."); threading.Thread(target=self.run_upload_processing, args=(selected_videos,), daemon=True).start()
 
     def run_update_processing(self, processing_data):

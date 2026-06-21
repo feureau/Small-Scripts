@@ -2308,7 +2308,7 @@
             "merged_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "12000",
+            "manual_bitrate": "8000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": true,
@@ -2425,7 +2425,7 @@
             "on_clean_copy_if_subs": false,
             "on_scan_subs": true,
             "auto_detect_subs": false,
-            "suffix_filter": "-top"
+            "suffix_filter": "-top, -bot"
         }
     },
     "Hybrid Duo - Chapter Split": {
