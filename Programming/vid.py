@@ -1644,7 +1644,9 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('sofa_file', ''),
         job_options.get('subtitle_alignment', ''),
         job_options.get('hybrid_top_aspect', ''),
+        job_options.get('hybrid_top_path', ''),
         job_options.get('hybrid_bottom_aspect', ''),
+        job_options.get('hybrid_bottom_path', ''),
         job_options.get('subtitle_font', ''),
         job_options.get('subtitle_font_size', ''),
         job_options.get('outline_width', ''),
@@ -1746,7 +1748,11 @@ class ScrollableFrame(ttk.Frame):
     def _on_mousewheel(self, event):
         if self.winfo_ismapped():
             x, y = self.winfo_pointerxy()
-            widget_under_mouse = self.winfo_containing(x, y)
+            try:
+                widget_under_mouse = self.winfo_containing(x, y)
+            except (KeyError, tk.TclError):
+                return
+
             if widget_under_mouse and str(widget_under_mouse).startswith(str(self)):
                 if self.scrollbar.get() != (0.0, 1.0):
                     self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
@@ -1818,8 +1824,10 @@ class WorkflowPresetManager:
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
             "hybrid_top_aspect": "16:9",
             "hybrid_top_mode": "pad",
+            "hybrid_top_path": "",
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
+            "hybrid_bottom_path": "",
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
@@ -2219,8 +2227,12 @@ class VideoProcessorApp:
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
         self.hybrid_top_mode_var = tk.StringVar(value="pad")
+        self.hybrid_top_path_var = tk.StringVar(value="")
+        self.hybrid_top_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_top_path'))
         self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
         self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
+        self.hybrid_bottom_path_var = tk.StringVar(value="")
+        self.hybrid_bottom_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_font_size'))
@@ -2737,6 +2749,7 @@ class VideoProcessorApp:
         
         self.input_scrollbar_v.config(command=self.input_listbox.yview)
         self.input_scrollbar_h.config(command=self.input_listbox.xview)
+        self.input_listbox.bind("<Button-1>", lambda e: self._handle_listbox_empty_click(e, self.input_listbox))
         # self.input_listbox.bind("<<ListboxSelect>>", self.on_input_file_select) # Maybe needed later
 
         # Input Toolbar
@@ -2778,7 +2791,8 @@ class VideoProcessorApp:
         
         self.job_scrollbar_v.config(command=self.job_listbox.yview)
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
-        self.job_listbox.bind("<<ListboxSelect>>", self.on_job_select) # Renamed method
+        self.job_listbox.bind("<<ListboxSelect>>", self.on_job_select)
+        self.job_listbox.bind("<Button-1>", lambda e: self._handle_listbox_empty_click(e, self.job_listbox))
 
         # Job Toolbar
         job_toolbar = ttk.Frame(job_frame)
@@ -2829,22 +2843,52 @@ class VideoProcessorApp:
         ttk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.merged_aspect_var, value="3:4", command=lambda: self._on_merged_aspect_change("3:4")).pack(anchor="w")
 
         self.hybrid_frame = ttk.Frame(geometry_group)
-        self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5); self.top_video_frame.pack(fill=tk.X, pady=(5,0))
-        ttk.Label(self.top_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(self.top_video_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.top_video_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.top_video_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=5)
-        ttk.Label(self.top_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        ttk.Radiobutton(self.top_video_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.top_video_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT, padx=5)
-        self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5); self.bottom_video_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(self.bottom_video_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(self.bottom_video_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.bottom_video_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.bottom_video_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=5)
-        ttk.Label(self.bottom_video_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        ttk.Radiobutton(self.bottom_video_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
-        ttk.Radiobutton(self.bottom_video_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
+        
+        # --- Top Video Frame ---
+        self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5)
+        self.top_video_frame.pack(fill=tk.X, pady=(5,0))
+        
+        self.top_file_frame = ttk.Frame(self.top_video_frame)
+        self.top_file_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(self.top_file_frame, text="File Override:").pack(side=tk.LEFT, padx=(0,5))
+        top_entry = ttk.Entry(self.top_file_frame, textvariable=self.hybrid_top_path_var)
+        top_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ToolTip(top_entry, "Leave blank to use primary job video, or browse to force a specific file.")
+        ttk.Button(self.top_file_frame, text="Browse", command=lambda: self._browse_hybrid_file('top'), width=7).pack(side=tk.LEFT, padx=(5,0))
+        ttk.Button(self.top_file_frame, text="Clear", command=lambda: self.hybrid_top_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5,0))
+
+        top_aspect_frame = ttk.Frame(self.top_video_frame)
+        top_aspect_frame.pack(fill=tk.X)
+        ttk.Label(top_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(top_aspect_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        ttk.Radiobutton(top_aspect_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT, padx=5)
+
+        # --- Bottom Video Frame ---
+        self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5)
+        self.bottom_video_frame.pack(fill=tk.X, pady=5)
+        
+        self.bot_file_frame = ttk.Frame(self.bottom_video_frame)
+        self.bot_file_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(self.bot_file_frame, text="File Override:").pack(side=tk.LEFT, padx=(0,5))
+        bot_entry = ttk.Entry(self.bot_file_frame, textvariable=self.hybrid_bottom_path_var)
+        bot_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ToolTip(bot_entry, "Leave blank to auto-detect '-bot' sibling, or browse to force a specific file.")
+        ttk.Button(self.bot_file_frame, text="Browse", command=lambda: self._browse_hybrid_file('bottom'), width=7).pack(side=tk.LEFT, padx=(5,0))
+        ttk.Button(self.bot_file_frame, text="Clear", command=lambda: self.hybrid_bottom_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5,0))
+
+        bot_aspect_frame = ttk.Frame(self.bottom_video_frame)
+        bot_aspect_frame.pack(fill=tk.X)
+        ttk.Label(bot_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(bot_aspect_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
+        ttk.Radiobutton(bot_aspect_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
         aspect_handling_frame = ttk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X, pady=5)
         ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
         self.aspect_crop_rb = ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options)
@@ -3654,6 +3698,17 @@ class VideoProcessorApp:
         self._update_selected_jobs("output_format", "video_codec")
         self._update_bitrate_display()
 
+    def _browse_hybrid_file(self, position):
+        file_path = filedialog.askopenfilename(
+            title=f"Select {position.capitalize()} Video",
+            filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"), ("All Files", "*.*")]
+        )
+        if file_path:
+            if position == 'top':
+                self.hybrid_top_path_var.set(file_path)
+            else:
+                self.hybrid_bottom_path_var.set(file_path)
+
     def _toggle_orientation_options(self):
         orientation = self.orientation_var.get()
         current_alignment = self.subtitle_alignment_var.get()
@@ -3703,6 +3758,13 @@ class VideoProcessorApp:
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
+
+        if orientation == "hybrid-duo (dual source)":
+            if hasattr(self, 'top_file_frame'): self._set_widget_state_recursive(self.top_file_frame, "normal")
+            if hasattr(self, 'bot_file_frame'): self._set_widget_state_recursive(self.bot_file_frame, "normal")
+        elif orientation == "hybrid (stacked)":
+            if hasattr(self, 'top_file_frame'): self._set_widget_state_recursive(self.top_file_frame, "disabled")
+            if hasattr(self, 'bot_file_frame'): self._set_widget_state_recursive(self.bot_file_frame, "disabled")
 
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
@@ -4048,7 +4110,9 @@ class VideoProcessorApp:
             "sofa_file": self.sofa_file_var.get(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(), "hybrid_top_mode": self.hybrid_top_mode_var.get(),
+            "hybrid_top_path": self.hybrid_top_path_var.get(),
             "hybrid_bottom_aspect": self.hybrid_bottom_aspect_var.get(), "hybrid_bottom_mode": self.hybrid_bottom_mode_var.get(),
+            "hybrid_bottom_path": self.hybrid_bottom_path_var.get(),
             "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(), "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(), "subtitle_underline": self.subtitle_underline_var.get(),
@@ -4527,6 +4591,27 @@ class VideoProcessorApp:
                         return # Deduplicated!
             video_path = resolved_top
 
+            # Pre-fill specific path options so the GUI reflects the found pair
+            if not options.get("hybrid_top_path"):
+                options["hybrid_top_path"] = video_path
+
+            if not options.get("hybrid_bottom_path"):
+                base_name, ext = os.path.splitext(video_path)
+                bot_path = ""
+                if base_name.endswith("-top"):
+                    bot_path = base_name[:-4] + "-bot" + ext
+                elif base_name.endswith("_top"):
+                    bot_path = base_name[:-4] + "_bot" + ext
+                else:
+                    bot_path = base_name + "-bot" + ext
+
+                if not os.path.exists(bot_path):
+                    bot_path_alt = video_path.replace("-top", "-bot").replace("_top", "_bot")
+                    if os.path.exists(bot_path_alt): bot_path = bot_path_alt
+
+                if os.path.exists(bot_path):
+                    options["hybrid_bottom_path"] = bot_path
+
         if subtitle_path is None:
             preset = self.preset_manager.get_preset(preset_name) if preset_name else None
             triggers = preset.get('triggers', {}) if preset else {}
@@ -4549,6 +4634,18 @@ class VideoProcessorApp:
         new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
         self.processing_jobs.append(new_job)
         self.job_listbox.insert(tk.END, new_job["display_name"])
+
+    def _handle_listbox_empty_click(self, event, listbox):
+        if listbox.size() > 0:
+            index = listbox.nearest(event.y)
+            bbox = listbox.bbox(index)
+            if bbox:
+                _, y, _, height = bbox
+                if event.y > y + height:
+                    listbox.selection_clear(0, tk.END)
+                    listbox.event_generate("<<ListboxSelect>>")
+                    return "break"
+        return None
 
     def on_job_select(self, event=None):
         sel = self.job_listbox.curselection()
@@ -4660,7 +4757,9 @@ class VideoProcessorApp:
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
         self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
+        self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
+        self.hybrid_bottom_path_var.set(options.get("hybrid_bottom_path", ""))
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD)); self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC)); self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
         self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
@@ -5044,6 +5143,9 @@ class VideoProcessorApp:
         original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
         
         if orientation == "hybrid-duo (dual source)":
+            explicit_top = options.get("hybrid_top_path", "").strip()
+            if explicit_top and os.path.exists(explicit_top):
+                original_basename = os.path.splitext(os.path.basename(explicit_top))[0]
             if original_basename.endswith("-top"):
                 original_basename = original_basename[:-4] # Strip "-top" for a cleaner output name
             elif original_basename.endswith("_top"):
@@ -5716,6 +5818,13 @@ class VideoProcessorApp:
     def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None, title_ass_path=None, encoder_backend="ffmpeg", base_dir=None):
         options = options or job['options']
         file_path = job['video_path']
+        
+        # Override Top video for hybrid-duo
+        if orientation == "hybrid-duo (dual source)":
+            explicit_top = options.get("hybrid_top_path", "").strip()
+            if explicit_top and os.path.exists(explicit_top):
+                file_path = explicit_top
+                
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
         decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid", "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
@@ -5733,21 +5842,25 @@ class VideoProcessorApp:
 
         # Second Input for Hybrid-Duo
         if orientation == "hybrid-duo (dual source)":
-            base_name, ext = os.path.splitext(file_path)
-            if base_name.endswith("-top"):
-                bot_path = base_name[:-4] + "-bot" + ext
-            elif base_name.endswith("_top"):
-                bot_path = base_name[:-4] + "_bot" + ext
+            explicit_bot = options.get("hybrid_bottom_path", "").strip()
+            if explicit_bot and os.path.exists(explicit_bot):
+                bot_path = explicit_bot
             else:
-                bot_path = base_name + "-bot" + ext
-                
-            if not os.path.exists(bot_path):
-                # Fallback replacement
-                bot_path_alt = file_path.replace("-top", "-bot").replace("_top", "_bot")
-                if os.path.exists(bot_path_alt):
-                    bot_path = bot_path_alt
+                base_name, ext = os.path.splitext(file_path)
+                if base_name.endswith("-top"):
+                    bot_path = base_name[:-4] + "-bot" + ext
+                elif base_name.endswith("_top"):
+                    bot_path = base_name[:-4] + "_bot" + ext
                 else:
-                    raise VideoProcessingError(f"Hybrid-Duo requires a bottom video. Could not find: {bot_path}")
+                    bot_path = base_name + "-bot" + ext
+                    
+                if not os.path.exists(bot_path):
+                    # Fallback replacement
+                    bot_path_alt = file_path.replace("-top", "-bot").replace("_top", "_bot")
+                    if os.path.exists(bot_path_alt):
+                        bot_path = bot_path_alt
+                    else:
+                        raise VideoProcessingError(f"Hybrid-Duo requires a bottom video. Could not find: {bot_path}")
 
             info_bot = get_video_info(bot_path)
             decoder_available_bot, _ = check_decoder_availability(info_bot["codec_name"])

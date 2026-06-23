@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from PIL import Image, ImageTk
 import os
 import shutil
@@ -9,6 +9,10 @@ class ImageSorterApp:
         self.root = root
         self.root.title("Image Sorter")
         self.root.geometry("800x600")
+        
+        # Track the active directory instead of hardcoding to os.getcwd()
+        self.current_working_dir = os.getcwd()
+        self.last_processed_dir = None
         
         self.image_files = []
         self.thumbnails = []
@@ -69,8 +73,15 @@ class ImageSorterApp:
         self.filmstrip_frame = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.filmstrip_frame, anchor=tk.NW)
         
+        # Buttons
         self.process_btn = ttk.Button(main_frame, text="Process Selected", command=self.process_files)
         self.process_btn.pack(side=tk.RIGHT, padx=10, pady=10)
+
+        self.load_processed_btn = ttk.Button(main_frame, text="Load Processed", command=self.load_processed_folder)
+        self.load_processed_btn.pack(side=tk.RIGHT, padx=10, pady=10)
+        
+        self.open_folder_btn = ttk.Button(main_frame, text="Open Folder", command=self.open_folder)
+        self.open_folder_btn.pack(side=tk.RIGHT, padx=10, pady=10)
 
         self.filmstrip_frame.bind("<Configure>", self.update_scrollregion)
         self.root.bind("<Configure>", self.window_resize)
@@ -91,19 +102,26 @@ class ImageSorterApp:
     def update_scrollregion(self, event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         
-    def load_images(self):
-        current_dir = os.getcwd()
-        valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
-        all_files = [f for f in os.listdir(current_dir) if f.lower().endswith(valid_extensions)]
+    def load_images(self, file_list=None):
+        # Look in the active working directory, not universally os.getcwd()
+        if file_list is None:
+            valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
+            try:
+                all_files = [f for f in os.listdir(self.current_working_dir) if f.lower().endswith(valid_extensions)]
+            except FileNotFoundError:
+                all_files = []
+        else:
+            all_files = file_list
+            
         self.image_files = []
         for filename in all_files:
-            # Only add files that successfully create a thumbnail
             if self.create_thumbnail(filename):
                 self.image_files.append(filename)
 
     def create_thumbnail(self, filename):
         try:
-            img_path = os.path.join(os.getcwd(), filename)
+            # Join the current directory path with the file name
+            img_path = os.path.join(self.current_working_dir, filename)
             with Image.open(img_path) as img:
                 img.thumbnail((100, 100))
                 photo = ImageTk.PhotoImage(img)
@@ -150,11 +168,12 @@ class ImageSorterApp:
 
     def load_preview_image(self, filename):
         try:
-            self.original_image = Image.open(filename)
+            # Need to specify full path so it doesn't just look where script was executed
+            img_path = os.path.join(self.current_working_dir, filename)
+            self.original_image = Image.open(img_path)
             self.reset_zoom()
         except Exception as e:
             print(f"Error loading preview for {filename}: {e}")
-            # Skip this file by moving to the next or previous available image
             if self.image_files:
                 if self.current_index < len(self.image_files) - 1:
                     self.show_preview(self.current_index + 1)
@@ -164,7 +183,6 @@ class ImageSorterApp:
                     self.preview_canvas.delete("all")
 
     def update_highlight(self):
-        # Configure the style once
         style = ttk.Style()
         style.configure('Selected.TFrame', background='#5555ff')
         for i, frame in enumerate(self.thumbnail_frames):
@@ -174,7 +192,6 @@ class ImageSorterApp:
                 frame.configure(style='TFrame')
 
     def center_filmstrip(self):
-        # Ensure current_index is valid
         if not self.thumbnail_frames or self.current_index >= len(self.thumbnail_frames):
             return
         frame = self.thumbnail_frames[self.current_index]
@@ -213,12 +230,11 @@ class ImageSorterApp:
             self.zoom(0.9, (event.x, event.y))
 
     def on_filmstrip_scroll(self, event):
-        """Reverse scroll direction for horizontal scrolling"""
-        if event.num == 4:    # Linux scroll up -> scroll left
+        if event.num == 4:    
             delta = 1
-        elif event.num == 5:  # Linux scroll down -> scroll right
+        elif event.num == 5:  
             delta = -1
-        else:                 # Windows/MacOS
+        else:                 
             delta = 1 if event.delta < 0 else -1
         
         self.canvas.xview_scroll(delta, "units")
@@ -277,25 +293,50 @@ class ImageSorterApp:
         self.image_canvas_img = img_id
         self.preview_canvas.config(scrollregion=self.preview_canvas.bbox(tk.ALL))
 
+    # --- NEW FOLDER LOADING LOGIC ---
     def process_files(self):
-        current_dir = os.getcwd()
-        # Only process files that are in the selected dictionary
         files_to_process = [f for f in self.image_files if self.selected.get(f) and self.selected[f].get()]
         
         for filename in files_to_process:
             ext = os.path.splitext(filename)[1][1:].lower()
             if not ext: 
                 continue
-            dest_dir = os.path.join(current_dir, ext.upper())
+            
+            # Destination directory is built inside the current working directory
+            dest_dir = os.path.join(self.current_working_dir, ext.upper())
             os.makedirs(dest_dir, exist_ok=True)
+            
             try:
-                shutil.move(os.path.join(current_dir, filename), os.path.join(dest_dir, filename))
+                source_path = os.path.join(self.current_working_dir, filename)
+                dest_path = os.path.join(dest_dir, filename)
+                shutil.move(source_path, dest_path)
+                
+                # Remember where we just moved the files
+                self.last_processed_dir = dest_dir 
             except Exception as e:
                 print(f"Error processing {filename}: {e}")
         
-        self.refresh_interface()
+        # Reload remaining files in the current folder
+        remaining_files = [f for f in self.image_files if os.path.exists(os.path.join(self.current_working_dir, f))]
+        self.refresh_interface(file_list=remaining_files)
 
-    def refresh_interface(self):
+    def load_processed_folder(self):
+        # Switches the app's folder to the newly created directory (e.g. JPG)
+        if self.last_processed_dir and os.path.exists(self.last_processed_dir):
+            self.current_working_dir = self.last_processed_dir
+            self.refresh_interface()
+        else:
+            print("No processed folder found to load.")
+
+    def open_folder(self):
+        # Allow the user to manually pick a folder 
+        folder = filedialog.askdirectory(initialdir=self.current_working_dir, title="Select Image Folder")
+        if folder:
+            self.current_working_dir = folder
+            self.last_processed_dir = None
+            self.refresh_interface()
+
+    def refresh_interface(self, file_list=None):
         for widget in self.filmstrip_frame.winfo_children():
             widget.destroy()
         self.image_files.clear()
@@ -303,9 +344,9 @@ class ImageSorterApp:
         self.selected.clear()
         self.thumbnail_frames.clear()
         self.preview_canvas.delete("all")
-        # Reset current_index so navigation starts fresh
+        
         self.current_index = 0
-        self.load_images()
+        self.load_images(file_list)
         self.root.after(100, self.initial_preview)
 
 if __name__ == "__main__":

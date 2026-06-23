@@ -22,8 +22,10 @@
 # 3. To sort ALL files in all subfolders:
 #    $ python your_script_name.py
 #
-# 4. To sort ONLY files with a specific extension (e.g., 'mp4'):
-#    $ python your_script_name.py mp4
+ # 4. To sort ONLY files with a specific extension (e.g., 'mp4'):
+ #    $ python your_script_name.py mp4
+ #    $ python your_script_name.py .mp4
+ #    $ python your_script_name.py *.mp4
 #
 # --- SCRIPT LOGIC AND REASONING ---
 #
@@ -105,8 +107,13 @@ def sort_files_locally(target_extension=None):
     root_dir = os.getcwd()
 
     if target_extension:
-        # Normalize the target extension (e.g., ".mp4" becomes "mp4")
-        target_extension = target_extension.lstrip('.').lower()
+        # Normalize: strip wildcards, dots, and make lowercase
+        # Handles: "srt", ".srt", "*.srt", or a full filename like "episode.srt"
+        target_extension = target_extension.strip().lstrip('*')
+        # If it looks like a filename with extension, extract just the extension part
+        if '.' in target_extension:
+            target_extension = target_extension.rsplit('.', 1)[-1]
+        target_extension = target_extension.lower()
         print(f"Searching for '.{target_extension}' files to sort into their local subfolders...")
     else:
         print(f"Sorting all files into their local subfolders...")
