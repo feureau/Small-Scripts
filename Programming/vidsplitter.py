@@ -35,6 +35,7 @@ log = logging.getLogger("vidsplit")
 # ----------------------------------------------------------------------
 def timestamp_to_seconds(ts: str) -> float:
     """Convert SRT timestamp HH:MM:SS,mmm to float seconds."""
+    ts = ts.replace(".", ",")
     hours, minutes, sec_ms = ts.strip().split(":")
     seconds, millis = sec_ms.split(",")
     return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
@@ -64,6 +65,40 @@ def get_video_duration(video_path: str) -> float:
     except (subprocess.CalledProcessError, ValueError) as e:
         log.error("Failed to get duration for %s: %s", video_path, e)
         sys.exit(1)
+
+
+def get_keyframes(video_path: str) -> list:
+    """
+    Extract video keyframe timestamps using ffprobe.
+    This ensures we can snap our clips to keyframes so that SRT files perfectly
+    sync with the resulting losslessly copied video.
+    """
+    cmd = [
+        "ffprobe",
+        "-loglevel", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time,dts_time,flags",
+        "-of", "csv=print_section=0",
+        video_path
+    ]
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
+        keyframes = []
+        for line in out.splitlines():
+            parts = line.strip().split(',')
+            # Expecting pts_time, dts_time, flags
+            if len(parts) >= 3 and 'K' in parts[2]:
+                pts = parts[0]
+                if not pts or pts == 'N/A':
+                    pts = parts[1]
+                try:
+                    keyframes.append(float(pts))
+                except ValueError:
+                    pass
+        return sorted(list(set(keyframes)))
+    except Exception as e:
+        log.warning("Failed to extract keyframes for %s: %s", video_path, e)
+        return []
 
 
 # ----------------------------------------------------------------------
@@ -269,7 +304,7 @@ def auto_tune(intervals: list) -> tuple:
 # ----------------------------------------------------------------------
 # Splitting engine
 # ----------------------------------------------------------------------
-def build_clips(intervals, merge_gap, buffer_sec, total_duration):
+def build_clips(intervals, merge_gap, buffer_sec, total_duration, keyframes=None):
     if not intervals:
         return []
 
@@ -279,6 +314,22 @@ def build_clips(intervals, merge_gap, buffer_sec, total_duration):
         speech = [Segment(*iv) for iv in intervals]
 
     buffered = add_buffer(speech, buffer_sec, total_duration)
+
+    # Snap to the nearest preceding keyframe to align `-c copy` behavior
+    # with the timestamp logic mapped to our subtitles.
+    if keyframes:
+        snapped = []
+        for seg in buffered:
+            start = seg.start
+            best_kf = 0.0
+            for kf in keyframes:
+                if kf <= start:
+                    best_kf = kf
+                else:
+                    break
+            snapped.append(Segment(best_kf, seg.end))
+        buffered = snapped
+
     final_segments = merge_overlaps(buffered)
 
     clips = []
@@ -324,7 +375,7 @@ def split_srt_for_video(srt_path, clips, output_dir, basename):
             e = min(block.end, clip.end)
             if s < e:
                 new_start = s - clip.start
-                new_end = e - clip.end
+                new_end = e - clip.start
                 clip_entries.append((new_start, new_end, block.text))
 
         out_name = f"{basename}_speech_{clip.index:03d}.srt"
@@ -454,7 +505,14 @@ def main():
         log.info("  Merge gap: %.1fs, Buffer: %.1fs", merge_gap, buffer_sec)
 
         dur = get_video_duration(video)
-        clips = build_clips(intervals, merge_gap, buffer_sec, dur)
+        
+        # New Step: Extract keyframes to avoid desync
+        log.info("  Extracting keyframes to sync SRT with copied video...")
+        keyframes = get_keyframes(video)
+        if not keyframes:
+            log.warning("    No keyframes found. Synchronization might be slightly off.")
+
+        clips = build_clips(intervals, merge_gap, buffer_sec, dur, keyframes=keyframes)
 
         if not clips:
             log.warning("  No speech segments produced, skipping.")

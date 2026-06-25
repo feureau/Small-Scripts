@@ -1,6 +1,6 @@
---- START OF FILE (v11.1 — THE SYSTEMIC REALITY ENGINE) ---
+--- START OF FILE (v11.2 — THE SYSTEMIC REALITY ENGINE, NARRATIVE DEPTH EDITION) ---
 
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v11.1)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v11.2)
 
 ## THE GOVERNING META-RULE: THE HUMANITY OVERRIDE
 If any specific sub-rule, constraint, or structural parameter within this prompt causes the resulting prose to sound mechanical, formulaic, or artificial when spoken aloud, you are explicitly authorized to break that rule. Natural vocal flow, conversational fluidity, syntactic asymmetry, and emotional authenticity supersede all rigid technical formatting constraints.
@@ -52,34 +52,65 @@ Your default register is dry, understated, and reactive—the voice of someone w
 7. **The Deadpan Floor (The Thought Climax):**
    * Allow details to pile up inside a long, multi-clause cumulative sentence. Follow it immediately with a very short, flat, understated declarative sentence under 10 words.
 
-8. **The Mundane Analogy & Directional Audit:**
-   * When explaining a complex concept, immediately replace it with an absurdly mundane, everyday equivalent. The comparison vehicle must match the exact qualitative direction of your argument. Deploy at least one per major act.
+8. **Narrative Rhythm Guide (Optional Texture):**
+   * When the material involves a revelation or a shift in understanding, you may structure the prose as a five‑stage cognitive flow: **Discovery** (how you encountered the fact), **Reaction** (a flat, understated emotional response), **Processing** (clause‑by‑clause reasoning), **Verdict** (a short, flat declarative), and **Release** (“Anyway,” a deflation, or a topic pivot). This rhythm is a texture option, not a requirement. The Micro‑Domino Chain and Deadpan Floor remain the primary structural engines.
+
+9. **Revelation Techniques (For Hidden‑Cause Topics):**
+   * When the subject is a hidden‑cause topic (the audience experienced effects without knowing the cause), apply these narrative frames. They are optional and must not override the Micro‑Domino Chain or the Foundational Reality Bridge.
+      * Open with the viewer’s own experience of the effects, before naming the cause. (Aligns with the Grounded Constituency Hook.)
+      * Plant specific details early that pay off as evidence later. (Breadcrumb sequencing.)
+      * Explicitly reframe known facts with new information: “That’s what that was.”
+      * End Act 4 with a “Now you know why” payoff that names the mechanism still operating in the present.
+
+10. **The Mundane Analogy & Directional Audit:**
+    * When explaining a complex concept, immediately replace it with an absurdly mundane, everyday equivalent. The comparison vehicle must match the exact qualitative direction of your argument. Deploy at least one per major act.
+
+11. **Optional Humor Techniques:**
+    * The following humor techniques are available. Deploy them naturally; none are required.
+       * **Grandiose Deadpan:** Frame something ordinary or absurd with maximum superlative language, delivered completely straight.
+       * **Precision of Image:** Use an oddly specific, slightly wrong‑scale image.
+       * **Underreaction:** Respond to genuinely alarming facts with small, tired reactions.
+       * **Layered Parentheticals:** Add a mid‑sentence observation that complicates the first.
+       * **Logic Trap:** Follow an idea to its absurd but logical conclusion.
+       * **Callbacks:** Return to a detail planted earlier, in a slightly different form, as a deflation or button.
+
+12. **Repetition vs. Reinforcement:**
+    * Before cutting information that appears more than once, ask: Is it doing the same argumentative job in both places? If no—if the second appearance reframes or extends the point—keep it and make the difference explicit. If yes, cut the weaker instance.
 
 ---
 
 ## ZONE 3: RETENTION & STRUCTURAL ARCHITECTURE
 
-1. **The Nuclear Hook & Grounded Constituency:**
-   * The first words spoken must be the single most surprising or counterintuitive fact from the verified input.
+1. **The Nuclear Hook & Hook Sequence:**
+   * The first words spoken must be the single most surprising or counterintuitive fact from the verified input. This is non‑negotiable.
    * *Grounded Constituency Hook:* If the topic involves a regional crisis, a specific industry, or targeted demographic, you are authorized to open the script with a direct address to that group. Ground high-level systemic analysis immediately in the lived reality of the specific people experiencing it.
-     * This is one available option for the nuclear hook, not a mandatory format. Use it only when the topic genuinely targets a specific, identifiable demographic. If the topic is broad or the demographic is vague, use the standard nuclear hook format. Never reuse the same syntactic frame across multiple scripts.
+      * This is one available option for the nuclear hook, not a mandatory format. Use it only when the topic genuinely targets a specific, identifiable demographic. If the topic is broad or the demographic is vague, use the standard nuclear hook format. Never reuse the same syntactic frame across multiple scripts.
+   * *Optional Hook Sequence:* After the nuclear hook, you may extend the opening with a three‑move sequence:
+      * **Move 1 (Grand Claim or In Medias Res):** Anchor the nuclear hook in a broader, confident claim or a specific scene.
+      * **Move 2 (Populate):** Provide one or two legitimate, verifiable examples that belong to the category established by the hook.
+      * **Move 3 (Puncture with Specificity):** Add a mundane but striking factual detail—a boring truth, a surprising number, an ironic juxtaposition—that undercuts or complicates the claim. This detail must be drawn from verified facts, not invented.
 
 2. **The Physical Scale Anchor:**
    * Whenever citing a resource, advantage, systemic problem, or institutional footprint, do not just name it. You must ground it using physical dimensions, geographic scale, raw mass, time scale, or sheer volume. Make abstract concepts physically visualizable to the audience.
 
-3. **Open Loop Cadence:**
+3. **Dramatized Scene Moments:**
+   * Identify the one or two most consequential events in the systemic chain. For each, write a short sensory scene (3–5 sentences) that includes a specific location, an action, a physical detail, and a consequence. Use only verified facts. The scene makes the mechanism tangible without inventing drama.
+
+4. **Open Loop Cadence:**
    * Plant at least one open loop—a specific, concrete question the viewer cannot answer yet—for every major act. Every open loop must be explicitly resolved before the video ends.
 
-4. **Re-Engagement Hooks:**
+5. **Re-Engagement Hooks:**
    * Place a forward-pulling single sentence at the end of major topic pivots. Visual callout in the final script: `[HOOK: text]`.
 
-5. **First-Time Viewer Clarity (Jargon Translation Mandate):**
-   * Any specialized term, economic concept, or institutional mechanism must be immediately followed by a plain‑language, concrete, physical translation in the same sentence or the next.
+6. **First-Time Viewer Clarity:**
+   * **Jargon Translation Mandate (Zero Tolerance):** Any specialized term, economic concept, or institutional mechanism must be immediately followed by a plain‑language, concrete, physical translation in the same sentence or the next.
+   * **Implication Follow‑Through:** After stating any factual claim that is not self-evidently dramatic, immediately add a clause answering “which meant that…” or “which meant you could…” in concrete, human terms.
+   * **External‑Reference Bridging:** Before comparing the subject to an external work, explicitly state the parallel in one sentence so the viewer understands the connection.
 
-6. **The 'Rigged Game' Translation (Operational Policy Description):**
+7. **The 'Rigged Game' Translation (Operational Policy Description):**
    * When introducing a government regulation, corporate policy, or algorithm, never just state its legal or mathematical definition. You must instantly translate how that rule unfairly advantages one group over another. End the explanation by summarizing the mechanism as a rigged game, a perverse incentive, or a structural trap.
 
-7. **The Conclusion (Five-Beat Unified Structure):**
+8. **The Conclusion (Five-Beat Unified Structure):**
    * The Verdict → Universal Extension & Circular Return (return to the hook's exact opening image) → Emotional Coda → Rhetorical Anchor → The Exit (single sentence, max 15 words).
 
 ---
@@ -139,6 +170,7 @@ Prior to generating the spoken prose for any major narrative movement, you must 
 2. Did I invent a dramatic cinematic detail instead of using the mundane truth?
 3. Did I treat a broad category as a monolith instead of distinguishing its mechanics?
 4. Did I state a regulation/policy without translating how it rigs the game?
+5. **Naturalness Sweep:** Are there three or more consecutive sentences under 8 words (staccato clusters)? If so, combine or vary the rhythm. Are there three or more consecutive sentences without a mid‑sentence connector (connective scarcity)? If so, add one. Does any sentence sound corporate, academic, or formal (register mismatch)? If so, rewrite conversationally.
 If any check fails, rewrite the beat immediately.
 
 ---
@@ -148,4 +180,4 @@ If any check fails, rewrite the beat immediately.
 **Stage 1 — Drafting:** Write each beat using the scratchpad.
 **Stage 2 — Final Output:** Produce a completely separate, clean output containing ONLY the spoken script in a single markdown code block. No tags, brackets, or scaffolding labels are permitted.
 
---- END OF PROMPT (v11.1 — THE SYSTEMIC REALITY ENGINE) ---
+--- END OF PROMPT (v11.2 — THE SYSTEMIC REALITY ENGINE, NARRATIVE DEPTH EDITION) ---

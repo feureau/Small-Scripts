@@ -7,10 +7,11 @@ Production-Grade Transcription Pipeline
 Changelog v5:
 - Changed Default Model to 'large-v2' per user request.
 - Retains Smart Compute Type & Error Handling from v4.
+- Added strict GPU/CUDA check to prevent CPU fallbacks.
 
 Dependencies:
-  pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-  pip install faster-whisper yt-dlp tqdm av demucs silero-vad
+  pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+  pip install faster-whisper yt-dlp tqdm av demucs silero-vad pyannote.audio
   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 """
 
@@ -70,6 +71,7 @@ if sys.platform == "win32":
                     except Exception: pass
 
 from faster_whisper import WhisperModel
+from pyannote.audio import Pipeline
 
 # --- Configuration ---
 MODEL_ALIASES = {
@@ -380,12 +382,13 @@ def format_srt_time(seconds: float) -> str:
 
 def get_audio_duration_seconds(file_path: str) -> float:
     try:
-        with av.open(file_path) as container:
-            if container.duration:
-                return float(container.duration / av.time_base)
-            if container.streams.audio and container.streams.audio[0].duration and container.streams.audio[0].time_base:
-                stream = container.streams.audio[0]
-                return float(stream.duration * stream.time_base)
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return max(0.0, float(result.stdout.strip()))
     except Exception:
         pass
     return 0.0
@@ -393,35 +396,50 @@ def get_audio_duration_seconds(file_path: str) -> float:
 # --- Validation & Processing ---
 def has_valid_audio_track(file_path: str) -> bool:
     try:
-        with av.open(file_path) as container:
-            if len(container.streams.audio) > 0: return True
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type",
+             "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+            capture_output=True, text=True, timeout=30
+        )
+        return result.returncode == 0 and "audio" in result.stdout
+    except Exception:
         return False
-    except Exception: return False
 
 def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
     try:
         wd = output_dir if output_dir else os.path.dirname(input_path)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
         temp_wav = os.path.join(wd, f"{base_name}_base.wav")
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", input_path, "-map", "0:a:0", "-ar", "16000", "-ac", "1", temp_wav], check=True)
+
+        duration = get_audio_duration_seconds(input_path)
+
+        cmd = ["ffmpeg", "-y", "-v", "error", "-progress", "pipe:1",
+               "-i", input_path, "-map", "0:a:0", "-ar", "16000", "-ac", "1", temp_wav]
+
+        with tqdm(total=duration if duration > 0 else None, unit='s',
+                  desc="   Extracting", dynamic_ncols=True, leave=False) as pbar:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     universal_newlines=True, encoding='utf-8', errors='replace')
+            last_time = 0.0
+            for line in proc.stdout:
+                if line.startswith("out_time_us="):
+                    current_time = int(line.strip().split("=")[1]) / 1_000_000
+                    delta = current_time - last_time
+                    if delta > 0 and duration > 0:
+                        pbar.update(delta)
+                    last_time = current_time
+            proc.wait()
+
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd)
+
         log_event(f"extract_audio_to_wav success input={input_path} output={temp_wav}")
         return temp_wav
     except Exception as e:
         print(f"   ⚠️ Audio extraction failed: {e}")
         log_event(f"extract_audio_to_wav error input={input_path} error={e}\n{traceback.format_exc()}")
         return None
-
-def get_audio_duration_seconds(file_path: str) -> float:
-    try:
-        with av.open(file_path) as container:
-            if container.duration is not None:
-                return float(container.duration / 1_000_000.0)
-            if container.streams.audio and container.streams.audio[0].duration is not None:
-                s = container.streams.audio[0]
-                return float(s.duration * s.time_base)
-    except Exception:
-        pass
-    return 0.0
 
 def extract_audio_chunk_to_wav(input_path: str, start_s: float, duration_s: float, output_path: str) -> bool:
     try:
@@ -502,6 +520,14 @@ def load_vad_model():
 def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD, min_silence_duration_ms=100):
     global vad_model, vad_utils
     if not load_vad_model(): return []
+
+    use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        try:
+            vad_model = vad_model.to('cuda')
+        except Exception:
+            use_cuda = False
+
     (get_speech_timestamps, _, _, _, _) = vad_utils
     try:
         with av.open(audio_path) as container:
@@ -517,12 +543,26 @@ def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD,
         wav = torch.from_numpy(wav_np)
         if wav.dim() > 1 and wav.shape[0] == 1: wav = wav.squeeze(0)
         if wav.dim() == 0: return []
-        timestamps = get_speech_timestamps(
-            wav,
-            vad_model,
-            threshold=threshold,
-            min_silence_duration_ms=min_silence_duration_ms
-        )
+
+        if use_cuda:
+            torch.backends.cudnn.enabled = False
+            wav_cuda = wav.to('cuda')
+            timestamps = get_speech_timestamps(
+                wav_cuda,
+                vad_model,
+                threshold=threshold,
+                min_silence_duration_ms=min_silence_duration_ms
+            )
+            del wav_cuda
+            torch.backends.cudnn.enabled = True
+        else:
+            timestamps = get_speech_timestamps(
+                wav,
+                vad_model,
+                threshold=threshold,
+                min_silence_duration_ms=min_silence_duration_ms
+            )
+
         del wav
         merged = []
         for ts in timestamps:
@@ -532,7 +572,7 @@ def detect_true_speech_regions(audio_path: str, threshold=DEFAULT_VAD_THRESHOLD,
         log_event(f"silero_vad regions={len(merged)} threshold={threshold} min_silence_ms={min_silence_duration_ms} audio={audio_path}")
         return merged
     except Exception as e:
-        print(f"   ⚠️ VAD Error: {e}")
+        print(f"   VAD Error: {e}")
         log_event(f"silero_vad error audio={audio_path} error={e}\n{traceback.format_exc()}")
         return []
 
@@ -575,7 +615,18 @@ def ensure_model_loaded(model_alias):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # --- STRICT GPU/CUDA ENFORCEMENT ---
+    if not torch.cuda.is_available():
+        print("\n❌ CRITICAL ERROR: CUDA (GPU acceleration) is not available!")
+        print("   The script is configured to strictly run on GPU to prevent extremely slow processing.")
+        print("   This fallback typically happens because a standard 'pip install' overwrote your CUDA-enabled PyTorch.")
+        print("\n   To resolve this immediately, please run:")
+        print("   pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu124")
+        print("   (Or ensure your CUDA toolkit and drivers are correctly configured.)")
+        sys.exit(1)
+
+    device = "cuda"
+    # -----------------------------------
     
     # Determine Compute Type
     if PREFERRED_COMPUTE_TYPE == "auto":
@@ -787,6 +838,65 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
 
     return {'segments': new_segments}
 
+diarization_pipeline = None
+
+def apply_diarization(wav_path: str, segments_data: dict, hf_token: str) -> dict:
+    global diarization_pipeline
+
+    if not hf_token:
+        print("   Skipping diarization: --hf-token is required")
+        log_event("apply_diarization skipped: no hf_token provided")
+        return segments_data
+
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    if diarization_pipeline is None:
+        print("   Loading Pyannote Diarization pipeline...")
+        try:
+            diarization_pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                token=hf_token
+            )
+            if torch.cuda.is_available():
+                diarization_pipeline.to(torch.device("cuda"))
+        except Exception as e:
+            print(f"   Failed to load diarization pipeline: {e}")
+            log_event(f"apply_diarization pipeline load error: {e}")
+            return segments_data
+
+    print("   Running speaker diarization...")
+    log_event(f"apply_diarization start file={wav_path}")
+    try:
+        diarization = diarization_pipeline(wav_path)
+
+        for seg in segments_data.get("segments", []):
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            mid_point = seg_start + ((seg_end - seg_start) / 2)
+
+            best_speaker = ""
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                if turn.start <= mid_point <= turn.end:
+                    best_speaker = speaker
+                    break
+
+            if best_speaker:
+                seg["speaker"] = best_speaker
+
+        print("   Diarization complete.")
+        log_event("apply_diarization success")
+    except Exception as e:
+        print(f"   Diarization failed: {e}")
+        log_event(f"apply_diarization error={e}")
+
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    return segments_data
+
 def convert_data_to_srt(data: dict, srt_path: str):
     try:
         with open(srt_path, 'w', encoding='utf-8') as f:
@@ -795,6 +905,9 @@ def convert_data_to_srt(data: dict, srt_path: str):
                 text = seg['text'].strip()
                 if not text: continue
                 start, end = format_srt_time(seg['start']), format_srt_time(seg['end'])
+                speaker = seg.get("speaker", "")
+                if speaker:
+                    text = f"[{speaker}] {text}"
                 f.write(f"{idx}\n{start} --> {end}\n{text}\n\n")
                 idx += 1
         return True
@@ -1244,9 +1357,6 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
               f"use_vad={args.use_vad} silero_vad_threshold={args.vad_threshold} "
               f"silero_vad_min_silence_ms={args.vad_min_silence_ms} pipeline={getattr(args, 'pipeline', [])}")
 
-    if not has_valid_audio_track(file_path):
-        return False, "Skipped (No Audio)"
-
     transcription_source = file_path
     temp_files = []
 
@@ -1560,6 +1670,13 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     )
     cleaned_data = normalize_timeline(cleaned_data, min_duration=args.min_sub_duration)
 
+    if getattr(args, 'diarize', False):
+        cleaned_data = apply_diarization(
+            transcription_source,
+            cleaned_data,
+            getattr(args, 'hf_token', None)
+        )
+
     success = convert_data_to_srt(cleaned_data, final_srt_path)
     log_event(f"run_transcription finished success={success} output={final_srt_path} final_segments={len(cleaned_data.get('segments', []))}")
 
@@ -1625,6 +1742,9 @@ def main():
     parser.add_argument("--demucs_model", type=str, default="htdemucs_ft")
     parser.add_argument("--demucs_shifts", type=int, default=2)
     parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=True, help="Write detailed per-run debug log")
+
+    parser.add_argument("-d", "--diarize", action="store_true", help="Enable speaker diarization via pyannote.audio")
+    parser.add_argument("--hf-token", type=str, default=os.environ.get("HF_TOKEN"), help="HuggingFace token for pyannote.audio (defaults to HF_TOKEN env var)")
 
     args = parser.parse_args()
 
