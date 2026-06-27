@@ -2347,8 +2347,10 @@
             "lut_file": "",
             "hybrid_top_aspect": "16:9",
             "hybrid_top_mode": "pad",
+            "hybrid_top_path": "D:\\2026-06-23 - The Amazing Digital Circus theatrical release post mortem\\o\\1. Assembly60p v21 SDR-top.mp4",
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
+            "hybrid_bottom_path": "D:\\2026-06-23 - The Amazing Digital Circus theatrical release post mortem\\o\\1. Assembly60p v21 SDR-bot.mp4",
             "subtitle_font": "HelveticaNeueLT Std Blk",
             "subtitle_font_size": "48",
             "subtitle_alignment": "seam",
@@ -2435,7 +2437,7 @@
             "on_clean_copy_if_subs": false,
             "on_scan_subs": true,
             "auto_detect_subs": false,
-            "suffix_filter": "-top, -bot"
+            "suffix_filter": null
         }
     },
     "Hybrid Duo - Chapter Split": {

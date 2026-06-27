@@ -288,7 +288,7 @@ def normalize_for_matching(text: str) -> str:
     text = text.lower()
     text = re.sub(r'[^a-z0-9\s]', ' ', text)
     text = re.sub(r'\s+', '_', text)
-    return text.strip()
+    return text.strip(' _')
 
 def nuclear_clean(text: str) -> str:
     if not text:
@@ -511,7 +511,7 @@ class VideoEntry:
                 c_nuclear = nuclear_clean(c_stem)
                 score = float('inf')
                 # Strong: direct nuclear containment
-                if c_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
+                if c_nuclear and p_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
                     score = 0
                 else:
                     # Fallback: marker-number alignment (handles "... - eng-yt.json" style names)
@@ -941,7 +941,7 @@ class MainApp:
                             if metadata_norm_title and yt_norm_title:
                                 if metadata_norm_title == yt_norm_title:
                                     current_score = 0.5
-                                elif metadata_norm_title in yt_norm_title or yt_norm_title in metadata_norm_title:
+                                elif (len(metadata_norm_title) > 4 and metadata_norm_title in yt_norm_title) or (len(yt_norm_title) > 4 and yt_norm_title in metadata_norm_title):
                                     current_score = min(current_score, 0.75)
 
                         if current_score < float('inf'):
