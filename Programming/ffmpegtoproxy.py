@@ -26,7 +26,7 @@ import fnmatch
 # ==========================================
 # Set your preferred default proxy format here. 
 # Options: "h264", "prores", or "dnxhr"
-DEFAULT_FORMAT = "h264"
+DEFAULT_FORMAT = "prores"
 
 # Set your default resolution downscale multiplier.
 # Example: 0.5 = Half resolution, 0.25 = Quarter resolution, 1.0 = Original resolution
@@ -40,15 +40,15 @@ def parse_arguments():
     # Automatically route ideal settings based on the user's DEFAULT_FORMAT choice above
     if DEFAULT_FORMAT.lower() == "h264":
         def_codec = "h264"
-        def_audio = "aac"
+        def_audio = "copy"
         def_qscale = 22
     elif DEFAULT_FORMAT.lower() == "dnxhr":
         def_codec = "dnxhr"
-        def_audio = "pcm"
+        def_audio = "copy"
         def_qscale = 10
     else:  # prores
         def_codec = "prores"
-        def_audio = "pcm"
+        def_audio = "copy"
         def_qscale = 10
 
     parser = argparse.ArgumentParser(description="Generate DaVinci Resolve compliant Proxy files.")
@@ -259,15 +259,23 @@ def main():
         # Audio stream evaluation and configuration routing
         aud_channels, aud_layout = get_audio_info(file)
         if aud_channels and aud_channels.isdigit() and int(aud_channels) > 0:
-            is_sony = aud_layout and aud_layout.lower() in ["unknown", "", "null"]
-            safe_layout = "stereo" if is_sony else (aud_layout or "stereo")
-            if is_sony or args.audio == "pcm":
-                audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ch_layout", safe_layout]
-            elif args.audio == "copy":
+            if args.audio == "copy":
                 audio_args = ["-map", "0:a?", "-c:a", "copy"]
             else:
-                aac_codec = "aac_mf" if use_aac_mf else "aac"
-                audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ch_layout", safe_layout]
+                is_sony = aud_layout and aud_layout.lower() in ["unknown", "", "null"]
+                if is_sony:
+                    # When layout is unknown, rely on channel count instead of forcing stereo downmix
+                    if args.audio == "pcm":
+                        audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ac", aud_channels]
+                    else:
+                        aac_codec = "aac_mf" if use_aac_mf else "aac"
+                        audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ac", aud_channels]
+                else:
+                    if args.audio == "pcm":
+                        audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ch_layout", aud_layout]
+                    else:
+                        aac_codec = "aac_mf" if use_aac_mf else "aac"
+                        audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ch_layout", aud_layout]
         else:
             audio_args = ["-an"]
 

@@ -4911,8 +4911,18 @@ class VideoProcessorApp:
         
         af_string = ",".join(af_parts)
         
-        cmd = [FFMPEG_CMD, "-hide_banner", "-i", file_path, "-vn", "-sn", "-dn",
-               "-af", af_string, "-f", "null", "-"]
+        cmd = [FFMPEG_CMD, "-hide_banner"]
+        
+        seek_start = options.get("seek_start")
+        if seek_start is not None:
+            cmd.extend(["-ss", str(seek_start)])
+            
+        seek_duration = options.get("seek_duration")
+        if seek_duration is not None:
+            cmd.extend(["-t", str(seek_duration)])
+            
+        cmd.extend(["-i", file_path, "-vn", "-sn", "-dn",
+               "-af", af_string, "-f", "null", "-"])
         
         debug_print("Loudnorm first-pass command:", " ".join(cmd))
         
