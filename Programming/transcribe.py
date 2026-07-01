@@ -406,7 +406,7 @@ def has_valid_audio_track(file_path: str) -> bool:
     except Exception:
         return False
 
-def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
+def extract_audio_to_wav(input_path: str, output_dir: str = None, track: int = None) -> str:
     try:
         wd = output_dir if output_dir else os.path.dirname(input_path)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
@@ -414,8 +414,10 @@ def extract_audio_to_wav(input_path: str, output_dir: str = None) -> str:
 
         duration = get_audio_duration_seconds(input_path)
 
+        audio_map = f"0:a:{max(0, track - 1)}" if track is not None else "0:a:0"
+
         cmd = ["ffmpeg", "-y", "-v", "error", "-progress", "pipe:1",
-               "-i", input_path, "-map", "0:a:0", "-ar", "16000", "-ac", "1", temp_wav]
+               "-i", input_path, "-map", audio_map, "-ar", "16000", "-ac", "1", temp_wav]
 
         with tqdm(total=duration if duration > 0 else None, unit='s',
                   desc="   Extracting", dynamic_ncols=True, leave=False) as pbar:
@@ -1361,10 +1363,12 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     temp_files = []
 
     if not file_path.lower().endswith(".wav"):
-        base_wav = extract_audio_to_wav(file_path, args.output_dir)
+        base_wav = extract_audio_to_wav(file_path, args.output_dir, track=getattr(args, 'track', None))
         if base_wav:
             transcription_source = base_wav
             temp_files.append(base_wav)
+        elif getattr(args, 'track', None) is not None:
+            return False, f"Failed to extract audio track {args.track} from {file_path}"
 
     for step in getattr(args, 'pipeline', []):
         new_source = None
@@ -1705,6 +1709,7 @@ def main():
     )
     parser.add_argument("--model-delete", type=str, help="Delete downloaded cache for a model alias/id and exit")
     parser.add_argument("--model-redownload", type=str, help="Delete cache for model alias/id, then load/download it and exit")
+    parser.add_argument("-t", "--track", type=int, default=None, help="Audio track number to transcribe")
     parser.add_argument("-l", "--lang", type=str)
     parser.add_argument("--task", type=str, default=DEFAULT_TASK)
     parser.add_argument("--precision", type=str, default="auto", choices=["auto", "float16", "int8", "float32"], help="Force compute type")

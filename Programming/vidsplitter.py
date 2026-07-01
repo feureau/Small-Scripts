@@ -11,8 +11,8 @@ import glob
 import logging
 import os
 import re
-import subprocess
 import statistics
+import subprocess
 import sys
 from collections import namedtuple
 
@@ -22,6 +22,46 @@ from collections import namedtuple
 Segment = namedtuple("Segment", "start end")
 Clip = namedtuple("Clip", "index start end duration")
 SRTBlock = namedtuple("SRTBlock", "index start end text")
+
+# ----------------------------------------------------------------------
+# Tunable parameters (adjust these or override via CLI)
+# ----------------------------------------------------------------------
+# MERGE_GAP_PERCENTILE — percentile of silence gaps between subtitles used
+#   to auto-tune the merge gap. E.g. 0.75 means: pick the gap value where
+#   75% of gaps are smaller.  Raising → wider merge gap → fewer, longer clips.
+#   Lowering → narrower merge gap → more, shorter clips.  Range: 0.0–1.0.
+MERGE_GAP_PERCENTILE = 0.50
+
+# MERGE_GAP_MIN / MERGE_GAP_MAX — the auto-tuned merge gap is clamped to
+#   stay within [MERGE_GAP_MIN, MERGE_GAP_MAX] seconds. A wider allowed
+#   range gives auto-tune more flexibility; a narrower range constrains it.
+#   Raising the min prevents ultra-aggressive merging; lowering the max
+#   prevents overly long clips.  Both in seconds.
+MERGE_GAP_MIN = 1.0
+MERGE_GAP_MAX = 5.0
+
+# BUFFER_RATIO — extra time added before/after each speech segment is
+#   auto-tuned as: median subtitle duration × BUFFER_RATIO.
+#   Raising → more context around each clip; lowering → tighter cuts.
+#   Note: also clamped by BUFFER_MIN / BUFFER_MAX below.
+BUFFER_RATIO = 0.5
+
+# BUFFER_MIN / BUFFER_MAX — the auto-tuned buffer is clamped to
+#   stay within [BUFFER_MIN, BUFFER_MAX] seconds. Raising the min
+#   guarantees at least that much context; lowering the max prevents
+#   clips from being too loose.
+BUFFER_MIN = 1.0
+BUFFER_MAX = 3.0
+
+# MIN_CLIP_DURATION — any clip shorter than this (seconds) is merged into
+#   the next clip (or extended if it's the last).  Raising → fewer very
+#   short clips but may merge unrelated speech.  Setting to 0 disables.
+MIN_CLIP_DURATION = 10
+
+# MAX_CLIP_DURATION — any clip longer than this (seconds) is split at a
+#   subtitle boundary into smaller clips.  Lowering → more, shorter clips.
+#   Setting to 0 disables.
+MAX_CLIP_DURATION = 180
 
 # ----------------------------------------------------------------------
 # Logging
@@ -54,9 +94,13 @@ def seconds_to_timestamp(secs: float) -> str:
 def get_video_duration(video_path: str) -> float:
     """Use ffprobe to return duration in seconds."""
     cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         video_path,
     ]
     try:
@@ -67,6 +111,22 @@ def get_video_duration(video_path: str) -> float:
         sys.exit(1)
 
 
+def get_actual_video_start(video_path: str) -> float:
+    """Probe the actual start time of the video stream in a generated clip."""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=start_time",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        return float(out) if out and out != "N/A" else 0.0
+    except Exception:
+        return 0.0
+
+
 def get_keyframes(video_path: str) -> list:
     """
     Extract video keyframe timestamps using ffprobe.
@@ -75,21 +135,25 @@ def get_keyframes(video_path: str) -> list:
     """
     cmd = [
         "ffprobe",
-        "-loglevel", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "packet=pts_time,dts_time,flags",
-        "-of", "csv=print_section=0",
-        video_path
+        "-loglevel",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "packet=pts_time,dts_time,flags",
+        "-of",
+        "csv=print_section=0",
+        video_path,
     ]
     try:
         out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
         keyframes = []
         for line in out.splitlines():
-            parts = line.strip().split(',')
+            parts = line.strip().split(",")
             # Expecting pts_time, dts_time, flags
-            if len(parts) >= 3 and 'K' in parts[2]:
+            if len(parts) >= 3 and "K" in parts[2]:
                 pts = parts[0]
-                if not pts or pts == 'N/A':
+                if not pts or pts == "N/A":
                     pts = parts[1]
                 try:
                     keyframes.append(float(pts))
@@ -151,7 +215,10 @@ def find_video_srt_pairs(args) -> list:
                     log.warning("No files matched pattern: %s", arg)
                     continue
                 for path in matches:
-                    if os.path.isfile(path) and os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS:
+                    if (
+                        os.path.isfile(path)
+                        and os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS
+                    ):
                         candidates.append(path)
             else:
                 if os.path.isfile(arg):
@@ -161,7 +228,9 @@ def find_video_srt_pairs(args) -> list:
                     log.warning("File not found: %s", arg)
     else:
         # current directory – recursive by default
-        candidates = _collect_videos_from_dir(os.getcwd(), recursive=not args.no_recursive)
+        candidates = _collect_videos_from_dir(
+            os.getcwd(), recursive=not args.no_recursive
+        )
 
     if not candidates:
         log.error("No video files found.")
@@ -197,7 +266,7 @@ SRT_BLOCK_RE = re.compile(
     r"(\d+)\s*\n"
     r"(\d{2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{1,3})\s*\n"
     r"((?:.+\n?)+?)(?=\n\n|\n\Z|\Z)",
-    re.MULTILINE
+    re.MULTILINE,
 )
 
 
@@ -216,7 +285,9 @@ def parse_srt_blocks(srt_path: str) -> list:
         end = timestamp_to_seconds(m.group(3))
         text = m.group(4).strip()
         if start >= end:
-            log.warning("Invalid SRT interval in block %d: %s -> %s, skipping.", idx, start, end)
+            log.warning(
+                "Invalid SRT interval in block %d: %s -> %s, skipping.", idx, start, end
+            )
             continue
         blocks.append(SRTBlock(idx, start, end, text))
 
@@ -277,7 +348,7 @@ def auto_tune(intervals: list) -> tuple:
 
     gaps = []
     for i in range(1, len(blocks)):
-        g = blocks[i].start - blocks[i-1].end
+        g = blocks[i].start - blocks[i - 1].end
         if g > 0:
             gaps.append(g)
 
@@ -285,18 +356,18 @@ def auto_tune(intervals: list) -> tuple:
 
     if len(gaps) >= 4:
         sorted_gaps = sorted(gaps)
-        idx = int((len(sorted_gaps) - 1) * 0.75)
-        p75 = sorted_gaps[idx]
-        auto_gap = max(1.0, min(5.0, p75))
+        idx = int((len(sorted_gaps) - 1) * MERGE_GAP_PERCENTILE)
+        pct = sorted_gaps[idx]
+        auto_gap = max(MERGE_GAP_MIN, min(MERGE_GAP_MAX, pct))
     else:
-        auto_gap = 2.0
+        auto_gap = max(MERGE_GAP_MIN, min(MERGE_GAP_MAX, 2.0))
 
     if durations:
         median_dur = statistics.median(durations)
-        auto_buf = median_dur * 0.5
-        auto_buf = max(1.0, min(3.0, auto_buf))
+        auto_buf = median_dur * BUFFER_RATIO
+        auto_buf = max(BUFFER_MIN, min(BUFFER_MAX, auto_buf))
     else:
-        auto_buf = 2.0
+        auto_buf = max(BUFFER_MIN, min(BUFFER_MAX, 2.0))
 
     return auto_gap, auto_buf
 
@@ -339,22 +410,129 @@ def build_clips(intervals, merge_gap, buffer_sec, total_duration, keyframes=None
     return clips
 
 
+def enforce_min_clip_duration(clips: list, min_duration: float) -> list:
+    """Merge clips shorter than min_duration into an adjacent clip.
+
+    Non-last clips are merged forward into the next clip.
+    The last clip (if too short) is merged backward into the previous clip.
+    """
+    if min_duration <= 0 or len(clips) <= 1:
+        return clips
+
+    result = []
+    i = 0
+    while i < len(clips):
+        c = clips[i]
+        if c.duration >= min_duration:
+            result.append(c)
+            i += 1
+            continue
+
+        # Short clip — merge with neighbour
+        if i < len(clips) - 1:
+            # Merge forward into next clip
+            next_c = clips[i + 1]
+            merged = Clip(
+                next_c.index,
+                c.start,
+                max(c.end, next_c.end),
+                max(c.end, next_c.end) - c.start,
+            )
+            result.append(merged)
+            i += 2
+        else:
+            # Last clip — merge backward into previous clip
+            prev = result.pop()
+            merged = Clip(
+                c.index,
+                prev.start,
+                max(prev.end, c.end),
+                max(prev.end, c.end) - prev.start,
+            )
+            result.append(merged)
+            i += 1
+
+    return [
+        Clip(idx, c.start, c.end, c.end - c.start) for idx, c in enumerate(result, 1)
+    ]
+
+
+def enforce_max_clip_duration(
+    clips: list,
+    max_duration: float,
+    intervals: list,
+    buffer_sec: float,
+    total_duration: float,
+    keyframes: list = None,
+) -> list:
+    """Split clips longer than max_duration at subtitle boundaries."""
+    if max_duration <= 0 or not clips:
+        return clips
+
+    result = []
+    for clip in clips:
+        if clip.duration <= max_duration:
+            result.append(clip)
+            continue
+
+        inner = [(s, e) for s, e in intervals if s < clip.end and e > clip.start]
+        if not inner:
+            result.append(clip)
+            continue
+
+        groups = []
+        cur = [inner[0]]
+        for iv in inner[1:]:
+            test_start = max(0.0, cur[0][0] - buffer_sec)
+            test_end = min(total_duration, iv[1] + buffer_sec)
+            if test_end - test_start <= max_duration:
+                cur.append(iv)
+            else:
+                groups.append(cur)
+                cur = [iv]
+        if cur:
+            groups.append(cur)
+
+        for g in groups:
+            start = max(0.0, g[0][0] - buffer_sec)
+            end = min(total_duration, g[-1][1] + buffer_sec)
+            if keyframes:
+                best_kf = 0.0
+                for kf in keyframes:
+                    if kf <= start:
+                        best_kf = kf
+                    else:
+                        break
+                start = best_kf
+            result.append(Clip(0, start, end, end - start))
+
+    return [Clip(idx, c.start, c.end, c.end - c.start) for idx, c in enumerate(result, 1)]
+
+
 def run_ffmpeg_split(video_path, clips, output_dir, basename, ext):
     for clip in clips:
         out_name = f"{basename}_speech_{clip.index:03d}{ext}"
         out_path = os.path.join(output_dir, out_name)
         cmd = [
-            "ffmpeg", "-y",
-            "-ss", str(clip.start),
-            "-to", str(clip.end),
-            "-i", video_path,
-            "-c", "copy",
-            "-avoid_negative_ts", "make_zero",
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(clip.start),
+            "-to",
+            str(clip.end),
+            "-i",
+            video_path,
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
             out_path,
         ]
         log.info("  Clip %d/%d: %s", clip.index, len(clips), out_name)
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
         except subprocess.CalledProcessError as e:
             log.error("ffmpeg failed for clip %d:\n%s", clip.index, e.stderr.decode())
             sys.exit(1)
@@ -363,19 +541,24 @@ def run_ffmpeg_split(video_path, clips, output_dir, basename, ext):
 # ----------------------------------------------------------------------
 # SRT splitting for clips
 # ----------------------------------------------------------------------
-def split_srt_for_video(srt_path, clips, output_dir, basename):
+def split_srt_for_video(srt_path, clips, output_dir, basename, ext):
     blocks = parse_srt_blocks(srt_path)
     if not blocks:
         return
 
     for clip in clips:
+        # Probe the actual video stream start time in the generated clip
+        out_name_video = f"{basename}_speech_{clip.index:03d}{ext}"
+        out_path_video = os.path.join(output_dir, out_name_video)
+        video_offset = get_actual_video_start(out_path_video)
+
         clip_entries = []
         for block in blocks:
             s = max(block.start, clip.start)
             e = min(block.end, clip.end)
             if s < e:
-                new_start = s - clip.start
-                new_end = e - clip.start
+                new_start = (s - clip.start) + video_offset
+                new_end = (e - clip.start) + video_offset
                 clip_entries.append((new_start, new_end, block.text))
 
         out_name = f"{basename}_speech_{clip.index:03d}.srt"
@@ -384,7 +567,9 @@ def split_srt_for_video(srt_path, clips, output_dir, basename):
         with open(out_path, "w", encoding="utf-8") as f:
             for idx, (start, end, text) in enumerate(clip_entries, 1):
                 f.write(f"{idx}\n")
-                f.write(f"{seconds_to_timestamp(start)} --> {seconds_to_timestamp(end)}\n")
+                f.write(
+                    f"{seconds_to_timestamp(start)} --> {seconds_to_timestamp(end)}\n"
+                )
                 f.write(f"{text}\n\n")
 
         if clip_entries:
@@ -400,21 +585,35 @@ def split_srt_for_video(srt_path, clips, output_dir, basename):
 def write_csv(csv_path, all_plans):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["source_video", "output_clip", "start_seconds", "end_seconds",
-                          "start_timecode", "end_timecode"])
-        for video_path, clips, _, _ in all_plans:
+        writer.writerow(
+            [
+                "source_video",
+                "output_clip",
+                "start_seconds",
+                "end_seconds",
+                "start_timecode",
+                "end_timecode",
+                "duration_seconds",
+                "word_count",
+            ]
+        )
+        for video_path, clips, _, _, word_counts in all_plans:
             base = os.path.splitext(os.path.basename(video_path))[0]
             ext = os.path.splitext(video_path)[1]
-            for clip in clips:
+            for clip, wc in zip(clips, word_counts):
                 out_name = f"{base}_speech_{clip.index:03d}{ext}"
-                writer.writerow([
-                    video_path,
-                    out_name,
-                    f"{clip.start:.3f}",
-                    f"{clip.end:.3f}",
-                    seconds_to_timestamp(clip.start),
-                    seconds_to_timestamp(clip.end),
-                ])
+                writer.writerow(
+                    [
+                        video_path,
+                        out_name,
+                        f"{clip.start:.3f}",
+                        f"{clip.end:.3f}",
+                        seconds_to_timestamp(clip.start),
+                        seconds_to_timestamp(clip.end),
+                        f"{clip.duration:.3f}",
+                        wc,
+                    ]
+                )
 
 
 # ----------------------------------------------------------------------
@@ -423,45 +622,75 @@ def write_csv(csv_path, all_plans):
 def main():
     parser = argparse.ArgumentParser(
         description="Losslessly split video into speech clips using SRT subtitles. "
-                    "Generates matching SRT files by default. "
-                    "Glob patterns and recursive subfolder scanning are supported."
+        "Generates matching SRT files by default. "
+        "Glob patterns and recursive subfolder scanning are supported."
     )
     parser.add_argument("videos", nargs="*", help="Video files (or glob patterns).")
     parser.add_argument("--dir", help="Process all videos in this directory.")
     parser.add_argument(
-        "--merge-gap", type=float, default=None,
+        "--merge-gap",
+        type=float,
+        default=None,
         help="Max silence (seconds) to merge adjacent subtitles. Overrides auto.",
     )
     parser.add_argument(
-        "--buffer", type=float, default=None,
+        "--buffer",
+        type=float,
+        default=None,
         help="Seconds to add before/after each speech segment. Overrides auto.",
     )
     parser.add_argument(
-        "--keep-silence", action="store_true",
+        "--keep-silence",
+        action="store_true",
         help="Treat every subtitle line as separate speech (skip merging).",
     )
     parser.add_argument(
-        "--output-dir", default="split_output",
+        "--output-dir",
+        default="split_output",
         help="Directory for output clips (default: ./split_output).",
     )
     parser.add_argument(
-        "--no-recursive", action="store_true",
+        "--no-recursive",
+        action="store_true",
         help="Do not scan subdirectories when processing --dir or current folder.",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Only print plan, do not split.",
     )
     parser.add_argument(
-        "--yes", "-y", action="store_true",
+        "--yes",
+        "-y",
+        action="store_true",
         help="Skip confirmation prompt and execute splitting.",
     )
     parser.add_argument(
-        "--csv", nargs="?", const="split_manifest.csv", default=None,
+        "--csv",
+        nargs="?",
+        const="split_manifest.csv",
+        default=None,
         help="Write CSV summary of clips. Optional filename (default: split_manifest.csv).",
     )
     parser.add_argument(
-        "--no-srt", action="store_true",
+        "--min-clip-duration",
+        type=float,
+        default=MIN_CLIP_DURATION,
+        help="Minimum clip duration in seconds. Clips shorter than this are merged "
+        "into the next clip (or extended if last). 0 = no minimum. "
+        f"(default: {MIN_CLIP_DURATION})",
+    )
+    parser.add_argument(
+        "--max-clip-duration",
+        type=float,
+        default=MAX_CLIP_DURATION,
+        help="Maximum clip duration in seconds. Longer clips are split at subtitle "
+        "boundaries. 0 = no maximum. "
+        f"(default: {MAX_CLIP_DURATION})",
+    )
+    parser.add_argument(
+        "--no-srt",
+        action="store_true",
         help="Do not generate accompanying SRT files for clips.",
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging.")
@@ -505,14 +734,38 @@ def main():
         log.info("  Merge gap: %.1fs, Buffer: %.1fs", merge_gap, buffer_sec)
 
         dur = get_video_duration(video)
-        
+
         # New Step: Extract keyframes to avoid desync
         log.info("  Extracting keyframes to sync SRT with copied video...")
         keyframes = get_keyframes(video)
         if not keyframes:
-            log.warning("    No keyframes found. Synchronization might be slightly off.")
+            log.warning(
+                "    No keyframes found. Synchronization might be slightly off."
+            )
 
         clips = build_clips(intervals, merge_gap, buffer_sec, dur, keyframes=keyframes)
+
+        if args.max_clip_duration > 0:
+            prev_count = len(clips)
+            clips = enforce_max_clip_duration(
+                clips, args.max_clip_duration, intervals, buffer_sec, dur, keyframes
+            )
+            if len(clips) != prev_count:
+                log.info(
+                    "  Max clip duration: %d clips split into %d",
+                    prev_count,
+                    len(clips),
+                )
+
+        if args.min_clip_duration > 0:
+            prev_count = len(clips)
+            clips = enforce_min_clip_duration(clips, args.min_clip_duration)
+            if len(clips) != prev_count:
+                log.info(
+                    "  Min clip duration: %d clips merged into %d",
+                    prev_count,
+                    len(clips),
+                )
 
         if not clips:
             log.warning("  No speech segments produced, skipping.")
@@ -520,12 +773,27 @@ def main():
 
         log.info("  Cutting plan for %s:", os.path.basename(video))
         for c in clips:
-            log.info("    Clip %2d: %s -> %s  (%.1fs)",
-                     c.index, seconds_to_timestamp(c.start),
-                     seconds_to_timestamp(c.end), c.duration)
+            log.info(
+                "    Clip %2d: %s -> %s  (%.1fs)",
+                c.index,
+                seconds_to_timestamp(c.start),
+                seconds_to_timestamp(c.end),
+                c.duration,
+            )
         log.info("  Total clips: %d", len(clips))
 
-        all_plans.append((video, clips, merge_gap, buffer_sec))
+        # Compute per-clip word counts for summary
+        srt_blocks = parse_srt_blocks(srt)
+        clip_word_counts = []
+        for clip in clips:
+            count = sum(
+                len(block.text.split())
+                for block in srt_blocks
+                if block.start < clip.end and block.end > clip.start
+            )
+            clip_word_counts.append(count)
+
+        all_plans.append((video, clips, merge_gap, buffer_sec, clip_word_counts))
 
     if not all_plans:
         log.info("Nothing to do.")
@@ -543,13 +811,38 @@ def main():
         log.info("Dry run complete. No files were split.")
         return
 
+    # Summary
+    total_clips = sum(len(clips) for _, clips, _, _, _ in all_plans)
+    total_words = sum(sum(wc) for _, _, _, _, wc in all_plans)
+    log.info("")
+    log.info("=" * 70)
+    log.info("  SUMMARY")
+    log.info("=" * 70)
+    log.info("  Videos to process:  %d", len(all_plans))
+    log.info("  Total clips:        %d", total_clips)
+    log.info("  Total words:        %d", total_words)
+    log.info("  Output directory:   %s", args.output_dir)
+    if args.min_clip_duration > 0:
+        log.info("  Min clip duration:  %gs", args.min_clip_duration)
+    if args.max_clip_duration > 0:
+        log.info("  Max clip duration:  %gs", args.max_clip_duration)
+    log.info("  Generate SRT files: %s", "No" if args.no_srt else "Yes")
+    log.info("")
+    for video, clips, _, _, word_counts in all_plans:
+        log.info("  %s", os.path.basename(video))
+        for c, wc in zip(clips, word_counts):
+            log.info("    Clip %2d:  %6.1fs  (%4d words)", c.index, c.duration, wc)
+        if len(clips) > 1:
+            log.info("           %s", "-" * 28)
+    log.info("=" * 70)
+
     if not args.yes:
         response = input("Proceed with splitting? [y/N]: ").strip().lower()
         if response not in ("y", "yes"):
             log.info("Aborted by user.")
             return
 
-    for video, clips, _, _ in all_plans:
+    for video, clips, _, _, _ in all_plans:
         base = os.path.splitext(os.path.basename(video))[0]
         ext = os.path.splitext(video)[1]
         log.info("Splitting %s...", os.path.basename(video))
@@ -558,7 +851,7 @@ def main():
 
         if not args.no_srt:
             srt_path = next(srt for v, srt in pairs if v == video)
-            split_srt_for_video(srt_path, clips, args.output_dir, base)
+            split_srt_for_video(srt_path, clips, args.output_dir, base, ext)
 
     log.info("All done. Clips saved to %s", args.output_dir)
 

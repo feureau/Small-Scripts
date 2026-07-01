@@ -2444,7 +2444,7 @@ class VideoProcessorApp:
         ToolTip(backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
 
         # Render by Chapters
-        cb_chapters = ttk.Checkbutton(basic_group, text="Render by Chapters (Split by metadata markers)", variable=self.render_by_chapters_var, command=lambda: self._update_selected_jobs('render_by_chapters'))
+        cb_chapters = ttk.Checkbutton(basic_group, text="Render by Chapters (Split by metadata markers)", variable=self.render_by_chapters_var, command=lambda: [self._update_audio_options_ui(), self._update_selected_jobs('render_by_chapters')])
         cb_chapters.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
         ToolTip(cb_chapters, "Detects chapter markers in the input file and renders each as a separate file named after its title.")
 
@@ -3559,20 +3559,53 @@ class VideoProcessorApp:
             return detected_subs
         dir_name = os.path.dirname(video_path)
         video_basename = os.path.splitext(os.path.basename(video_path))[0]
+        
+        prefixes = [video_basename]
+        for i in range(len(video_basename)-1, 0, -1):
+            if video_basename[i] in [' ', '.', '-', '_']:
+                prefixes.append(video_basename[:i])
+                
+        best_subs_by_suffix = {}
+        
         try:
             for item in sorted(os.listdir(dir_name)):
                 item_lower = item.lower()
                 if item_lower.endswith((".srt", ".ass", ".ssa")):
                     sub_basename = os.path.splitext(item)[0]
-                    if sub_basename == video_basename:
-                        detected_subs.append({'path': os.path.join(dir_name, item), 'suffix': "", 'display_tag': "(Default)", 'basename': sub_basename})
-                    elif sub_basename.startswith(video_basename):
-                        remainder = sub_basename[len(video_basename):]
-                        if remainder and remainder[0] in [' ', '.', '-', '_']:
+                    
+                    matched_prefix = None
+                    matched_suffix = None
+                    for prefix in prefixes:
+                        if sub_basename == prefix:
+                            matched_prefix = prefix
+                            matched_suffix = ""
+                            break
+                        elif sub_basename.startswith(prefix):
+                            remainder = sub_basename[len(prefix):]
+                            if remainder and remainder[0] in [' ', '.', '-', '_']:
+                                matched_prefix = prefix
+                                matched_suffix = remainder
+                                break
+                                
+                    if matched_prefix is not None:
+                        prefix_len = len(matched_prefix)
+                        if matched_suffix not in best_subs_by_suffix or prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']:
                             full_path = os.path.join(dir_name, item)
-                            detected_subs.append({'path': full_path, 'suffix': remainder, 'display_tag': f"({remainder.strip()})", 'basename': sub_basename})
+                            display_tag = "(Default)" if matched_suffix == "" else f"({matched_suffix.strip()})"
+                            best_subs_by_suffix[matched_suffix] = {
+                                'path': full_path,
+                                'suffix': matched_suffix,
+                                'display_tag': display_tag,
+                                'basename': sub_basename,
+                                'prefix_len': prefix_len
+                            }
         except Exception:
             pass
+
+        for suffix in sorted(best_subs_by_suffix.keys()):
+            sub_info = best_subs_by_suffix[suffix].copy()
+            del sub_info['prefix_len']
+            detected_subs.append(sub_info)
 
         embedded_subs = get_subtitle_stream_info(video_path)
         for relative_index, sub_stream in enumerate(embedded_subs):
@@ -3994,6 +4027,17 @@ class VideoProcessorApp:
         self._update_selected_jobs("normalize_audio", "use_dynaudnorm", "use_loudness_war")
 
     def _update_audio_options_ui(self):
+        # Force disable passthrough if chapter splitting is enabled
+        if hasattr(self, 'render_by_chapters_var') and hasattr(self, 'audio_cb_passthrough'):
+            if self.render_by_chapters_var.get():
+                if self.audio_passthrough_var.get():
+                    self.audio_passthrough_var.set(False)
+                    if not any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(), self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()]):
+                        self.audio_stereo_downmix_var.set(True)
+                self.audio_cb_passthrough.config(state="disabled")
+            else:
+                self.audio_cb_passthrough.config(state="normal")
+                
         is_passthrough = self.audio_passthrough_var.get()
         is_sofalizer = self.audio_stereo_sofalizer_var.get()
 
@@ -5011,21 +5055,24 @@ class VideoProcessorApp:
             proc_tag = f"[{track_type}_proc]"
             final_tag = proc_tag
 
+            # Prepend asetpts=PTS-STARTPTS to reset audio timestamps to 0.
+            # This is critical for chapter splits where -ss before -i may leave
+            # non-zero PTS values that cause some encoders to output silence.
             if track_type == "mono":
-                fc_parts.append(f"{input_tag}aformat=channel_layouts=mono{proc_tag}")
+                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=mono{proc_tag}")
             elif track_type == "stereo_downmix":
-                fc_parts.append(f"{input_tag}aformat=channel_layouts=stereo{proc_tag}")
+                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=stereo{proc_tag}")
             elif track_type == "stereo_sofalizer":
                 sofa_path = options.get("sofa_file", "").strip()
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-                fc_parts.append(f"{input_tag}sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
+                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
-                     fc_parts.append(f"{input_tag}channelmap=channel_layout=5.1(side){proc_tag}")
+                     fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,channelmap=channel_layout=5.1(side){proc_tag}")
                 else:
-                     fc_parts.append(f"{input_tag}aformat=channel_layouts=5.1{proc_tag}")
+                     fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=5.1{proc_tag}")
 
             # --- Loudness War (Compressor + Limiter) ---
             if options.get("use_loudness_war", False):
@@ -5070,13 +5117,13 @@ class VideoProcessorApp:
             final_maps.extend(["-map", resample_tag])
             
             if track_type == "mono":
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{MONO_BITRATE_K}k"])
                 title = "Mono"
             elif "stereo" in track_type:
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{STEREO_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{STEREO_BITRATE_K}k"])
                 title = "Stereo (Binaural)" if track_type == "stereo_sofalizer" else "Stereo"
             elif track_type == "surround_51":
-                final_maps.extend([f"-c:a:{output_audio_index}", "aac_mf", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
+                final_maps.extend([f"-c:a:{output_audio_index}", "aac", f"-b:a:{output_audio_index}", f"{SURROUND_BITRATE_K}k"])
                 title = "5.1 Surround"
             
             disposition = "default" if output_audio_index == 0 else "0"
@@ -5227,6 +5274,13 @@ class VideoProcessorApp:
                 if chapter['end_time'] is not None:
                     ch_options["seek_duration"] = chapter['end_time'] - chapter['start_time']
                     
+                # Prevent silent audio on subsequent chapters due to MP4 edit lists / AAC priming loss
+                # when copying streams with an input seek offset.
+                if ch_options.get("audio_passthrough"):
+                    ch_options["audio_passthrough"] = False
+                    if not any([ch_options.get("audio_mono"), ch_options.get("audio_stereo_downmix"), ch_options.get("audio_stereo_sofalizer"), ch_options.get("audio_surround_51")]):
+                        ch_options["audio_stereo_downmix"] = True
+                        
                 if do_subtitle_split and temp_extracted_srt and os.path.exists(temp_extracted_srt):
                     print(f"       -> Splitting subtitle chunk...")
                     success = split_srt_file(temp_extracted_srt, ch_srt_file, chapter['start_time'], chapter['end_time'])
@@ -5260,7 +5314,18 @@ class VideoProcessorApp:
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
 
             segment_sub_path = options.get("segment_subtitle_path")
-            subtitle_input = segment_sub_path or job.get('subtitle_path')
+            # NVEncC backends that directly seek the original video (nvencc_only,
+            # nvencc_video_with_ffmpeg_audio) render subtitles against the INPUT
+            # timeline, not the output timeline.  The chapter-local SRT has
+            # timestamps shifted to 0-based, which won't match the input PTS.
+            # So for those backends, always use the original (non-time-shifted)
+            # subtitle file; NVEncC's --seek/--seekto will naturally clip rendering
+            # to the correct chapter range.
+            nvencc_direct_backends = ("nvencc_only", "nvencc_video_with_ffmpeg_audio")
+            if encoder_backend in nvencc_direct_backends and options.get("seek_start") is not None:
+                subtitle_input = job.get('subtitle_path')
+            else:
+                subtitle_input = segment_sub_path or job.get('subtitle_path')
             if options.get("burn_subtitles") and subtitle_input:
                 sub_identifier = subtitle_input
                 subtitle_source_file = None
