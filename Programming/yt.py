@@ -718,13 +718,23 @@ class MainApp:
     def _sort_column(self, col, reverse):
         def get_sort_key(item_id):
             value = self.tree.set(item_id, col)
-            if col in ['publish_at', 'upload_date'] and self.app_mode == 'update' and value != "Not Scheduled":
-                try: return datetime.strptime(value.replace(' UTC', ''), '%Y-%m-%d %H:%M')
-                except ValueError: pass
-            return value.lower()
+
+            if col in ['publish_at', 'upload_date'] and self.app_mode == 'update':
+                if value == "Not Scheduled" or not value:
+                    return datetime.min
+                try:
+                    return datetime.strptime(value.replace(' UTC', ''), '%Y-%m-%d %H:%M')
+                except ValueError:
+                    return datetime.min
+
+            str_val = str(value).lower().strip()
+            if str_val in ["", "n/a", "none"]:
+                return "zzzzzz"
+            return str_val
+
         data = [(get_sort_key(k), k) for k in self.tree.get_children('')]; data.sort(reverse=reverse)
         for i, item in enumerate(data): self.tree.move(item[1], '', i)
-        self.tree.heading(col, command=lambda c=col: self._sort_column(col, not reverse))
+        self.tree.heading(col, command=lambda c=col: self._sort_column(c, not reverse))
     
     def update_status(self, message): self.root.after(0, lambda: self._set_status_text(message))
     def _set_status_text(self, message): self.status_bar.config(text=message)
