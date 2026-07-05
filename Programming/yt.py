@@ -933,6 +933,15 @@ class MainApp:
                             file_has_replay = "replay" in file_path.name.lower()
                             if yt_has_replay != file_has_replay:
                                 current_score = 5 # Penalty for Rec/Replay mismatch
+                                
+                            marker_num_file = extract_marker_number(file_path.stem)
+                            if marker_num_title is not None:
+                                if marker_num_file == marker_num_title:
+                                    current_score -= 0.05
+                                elif marker_num_file is not None:
+                                    current_score += 0.5
+                                else:
+                                    current_score += 0.1
 
                         # C. NUCLEAR TEXT MATCH (Score 1)
                         if current_score > 1 and len(nuclear_file) > 8 and len(nuclear_title) > 0:

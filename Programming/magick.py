@@ -25,7 +25,7 @@ DEPENDENCIES:
 
 USAGE:
     python magick.py [-q 85] [-d 300] [-i plane] [-s] [-r 1920x1080] \
-                     [-j 1] [-t auto] [-f jpg] [pattern]
+                     [-j 1] [-t auto] [-f jpg] [--stitch horizontal|vertical] [pattern]
 
 ARGUMENTS:
     pattern: optional glob pattern (defaults to all supported image types)
@@ -54,6 +54,10 @@ WHY WE USE `magick input output` INSTEAD OF `mogrify`:
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-07-04 (v2.3.0):
+    ▸ Added `--stitch` argument to stitch all matched input images together
+      horizontally (+append) or vertically (-append) into a single output file.
+
 2026-03-15 (v2.2.5):
     ▸ Fixed JP2 conversion producing unreadable files in all viewers.
     ▸ Root cause 1: `-interlace plane` (the default) was always applied, including
@@ -296,10 +300,11 @@ def main():
     parser.add_argument("-R", "--recursive", action="store_true", help="Recursively scan subdirectories")
     parser.add_argument("-f", "--format", default=None, help="Output format extension (e.g., png, webp, tiff). Can also be specified as last positional argument (default: jpg).")
     parser.add_argument("-t", "--threads", default=DEFAULT_THREADS, help="Number of ImageMagick internal threads per process (default: auto)")
+    parser.add_argument("--stitch", choices=["horizontal", "vertical"], help="Stitch all input images horizontally (+append) or vertically (-append) into a single file")
     args = parser.parse_args()
 
     # Determine target format: check if last positional arg looks like a format extension
-    target_format = DEFAULT_FORMAT
+    target_format = "png" if args.stitch else DEFAULT_FORMAT
     valid_patterns = []
     
     if args.format:
@@ -381,6 +386,75 @@ def main():
         else:
             print(f"Mode: JP2 quality override ({args.quality})")
     print("-" * 80)
+
+    if args.stitch:
+        output_file = os.path.join(output_folder_path, f"stitched.{target_format}")
+        
+        # Build command
+        magick_command = ["magick"]
+        magick_command.extend(input_files)
+        
+        # Apply thread limit if not auto
+        if str(args.threads).lower() != "auto":
+            magick_command.extend(["-limit", "thread", str(args.threads)])
+            
+        if target_format == "jp2":
+            user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
+            if not user_provided_quality:
+                magick_command.extend(["-quality", "0", "-define", "jp2:mode=int", "-define", "jp2:rate=1.0"])
+            else:
+                magick_command.extend(["-quality", str(args.quality)])
+        elif args.quality is not None:
+            magick_command.extend(["-quality", str(args.quality)])
+            
+        # We cannot use -flatten here because it composites all input images into a single image stack
+        # before the append operation. Instead, we use -alpha remove to composite each image over the background.
+        magick_command.extend(["-background", DEFAULT_BACKGROUND, "-alpha", "remove", "-alpha", "off"])
+        
+        if args.sampling_factor and target_format != "jp2":
+            magick_command.extend(["-sampling-factor", args.sampling_factor])
+        if args.density:
+            magick_command.extend(["-density", str(args.density)])
+        if args.interlace and target_format != "jp2":
+            magick_command.extend(["-interlace", args.interlace])
+        if args.strip:
+            magick_command.append("-strip")
+        if args.profile:
+            magick_command.extend(["-profile", args.profile])
+        if args.resize:
+            magick_command.extend(["-resize", args.resize])
+            
+        append_flag = "+append" if args.stitch == "horizontal" else "-append"
+        magick_command.append(append_flag)
+        
+        magick_command.append(output_file)
+        
+        start_batch = time.time()
+        print(f"Stitching {len(input_files)} images {args.stitch}ly... Please wait.")
+        
+        # Calculate total original size
+        total_o = sum(os.path.getsize(f) for f in input_files)
+        
+        try:
+            subprocess.run(magick_command, check=True, capture_output=True)
+            dur = time.time() - start_batch
+            n_sz = os.path.getsize(output_file)
+            
+            print("\n" + "=" * 80)
+            print(f"{'IMAGE STITCHING REPORT':^80}")
+            print("-" * 80)
+            print(f"Stitched {len(input_files)} files into {os.path.basename(output_file)}")
+            print(f"Total Original Size: {get_size_format(total_o)}")
+            print(f"New Stitched Size:   {get_size_format(n_sz)}")
+            print(f"Total Time:          {dur:.2f}s")
+            print("=" * 80)
+            
+        except subprocess.CalledProcessError as e:
+            print(f"[!] Error during stitching: {e}")
+            if e.stderr:
+                print(e.stderr.decode())
+        
+        return
 
     painter = DashboardPainter(max_workers, len(input_files))
     painter.start(shared_dict)
