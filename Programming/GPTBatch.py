@@ -3716,6 +3716,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.job_queue = queue.Queue()
         self.result_queue = queue.Queue()
         self.job_registry = {}
+        self.running_job_timers = {}
         self.current_presets = {}
         self.model_cache = {}
         self.exhausted_models = set()
@@ -6267,6 +6268,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         with self.job_queue.mutex:
             self.job_queue.queue.clear()
         self.job_registry.clear()
+        self.running_job_timers.clear()
         console_log("Queue cleared.", "INFO")
 
     def _reset_gui(self):
@@ -6283,6 +6285,19 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 res = self.result_queue.get_nowait()
                 jid, status = res["job_id"], res["status"]
                 if self.tree.exists(jid):
+                    
+                    # Heartbeat Timer Logic (Start/Stop)
+                    if status == "Running":
+                        group_name = self.tree.item(jid)["values"][1] if len(self.tree.item(jid)["values"]) > 1 else str(jid)
+                        self.running_job_timers[jid] = {
+                            "start": time.time(),
+                            "last_console_heartbeat": time.time(),
+                            "group_name": group_name
+                        }
+                    else:
+                        if jid in self.running_job_timers:
+                            del self.running_job_timers[jid]
+
                     self.tree.set(jid, "status", status)
                     tag = (
                         "success"
@@ -6305,6 +6320,20 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         except queue.Empty:
             pass
         
+        # Update the UI for actively running jobs
+        current_time = time.time()
+        for jid, timer_data in list(self.running_job_timers.items()):
+            if self.tree.exists(jid):
+                elapsed = int(current_time - timer_data["start"])
+                m, s = divmod(elapsed, 60)
+                time_str = f"{m}m {s}s" if m > 0 else f"{s}s"
+                self.tree.set(jid, "status", f"Running ({time_str})")
+                if current_time - timer_data["last_console_heartbeat"] >= 60.0:
+                    console_log(f"Job {timer_data['group_name']} is still generating... ({time_str} elapsed)", "INFO")
+                    timer_data["last_console_heartbeat"] = current_time
+            else:
+                del self.running_job_timers[jid]
+
         workers_alive = False
         if getattr(self, "worker_threads", None):
             workers_alive = any(t.is_alive() for t in self.worker_threads)
