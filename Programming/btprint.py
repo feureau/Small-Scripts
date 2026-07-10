@@ -693,10 +693,18 @@ def build_merged_document_image(doc):
 # 6. MAIN
 # ==============================================================================
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--printer", help="Override printer profile")
+    desc = "Bluetooth Thermal Printer Manager (TSPL & CPCL)"
+    epi = (
+        "Examples:\n"
+        "  python btprint.py label.pdf              # Auto-connect and print\n"
+        "  python btprint.py -s                     # List all available printers\n"
+        "  python btprint.py -s label.pdf           # List printers, pick one, and print\n"
+        "  python btprint.py -e                     # Open GUI Settings\n"
+    )
+    parser = argparse.ArgumentParser(description=desc, epilog=epi, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-p", "--printer", help="Override printer profile (e.g., 'Receipt')")
     parser.add_argument("-e", "--edit", action="store_true", help="Open Settings GUI")
-    parser.add_argument("-s", "--scan", action="store_true", help="Force manual port selection")
+    parser.add_argument("-s", "--scan", action="store_true", help="Scan and list COM ports. Run with a file to pick a printer and print, or without to just list them.")
     parser.add_argument("--individual-pages", action="store_true", help="Print each PDF page separately instead of merged")
     parser.add_argument("--merge-two-pages", action="store_true", help="Legacy option; merging is now default")
     parser.add_argument("files", nargs="*", help="PDF files")
@@ -704,6 +712,19 @@ def main():
 
     if args.edit:
         open_gui()
+        return
+
+    if args.scan and not args.files:
+        print("\n--- Scanning Ports (Registry Enhanced) ---")
+        pmap = get_friendly_port_map()
+        sorted_keys = sorted(pmap.keys(), key=lambda x: int(x.replace("COM","")) if "COM" in x else x)
+        if not sorted_keys:
+            print("No COM ports found.")
+        else:
+            for i, port in enumerate(sorted_keys):
+                name = pmap[port]
+                prefix = "** " if any(x in name.upper() for x in ["PRINTER", "LP-", "RPP", "POS"]) else "   "
+                print(f"[{i}] {port:<6} | {prefix}{name}")
         return
 
     if not args.files:
