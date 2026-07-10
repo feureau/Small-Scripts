@@ -2801,7 +2801,14 @@ def process_file_group(
         raw_prefix = f"{engine} - {clean_model}"
         prefix_str = sanitize_filename(raw_prefix)
 
-    if overwrite_original and len(filepaths_group) == 1:
+    # --- PATCH: Guardrail to prevent replacing images with AI text output ---
+    is_image_input = False
+    if len(filepaths_group) == 1:
+        ext_check = os.path.splitext(filepaths_group[0])[1].lower()
+        is_image_input = ext_check in SUPPORTED_IMAGE_EXTENSIONS
+
+    # Only allow text-overwrite if the input is NOT an image file.
+    if overwrite_original and len(filepaths_group) == 1 and not is_image_input:
         raw_path = filepaths_group[0]
         log_path = None
         if save_log:

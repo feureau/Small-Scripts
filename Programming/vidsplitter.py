@@ -53,9 +53,11 @@ BUFFER_RATIO = 0.5
 BUFFER_MIN = 1.0
 BUFFER_MAX = 3.0
 
-# MIN_CLIP_DURATION — any clip shorter than this (seconds) is merged into
-#   the next clip (or extended if it's the last).  Raising → fewer very
-#   short clips but may merge unrelated speech.  Setting to 0 disables.
+# MIN_CLIP_DURATION — any clip shorter than this (seconds) is padded 
+#   symmetrically to reach this length. If padding causes clips to overlap, 
+#   they are merged (unless merging would exceed MAX_CLIP_DURATION).
+#   Raising → eliminates very short standalone clips.
+#   Setting to 0 disables.
 MIN_CLIP_DURATION = 10
 
 # MAX_CLIP_DURATION — any clip longer than this (seconds) is split at a
@@ -410,51 +412,88 @@ def build_clips(intervals, merge_gap, buffer_sec, total_duration, keyframes=None
     return clips
 
 
-def enforce_min_clip_duration(clips: list, min_duration: float) -> list:
-    """Merge clips shorter than min_duration into an adjacent clip.
-
-    Non-last clips are merged forward into the next clip.
-    The last clip (if too short) is merged backward into the previous clip.
+def enforce_min_clip_duration(
+    clips: list, 
+    min_duration: float, 
+    max_duration: float, 
+    total_duration: float, 
+    keyframes: list = None
+) -> list:
     """
-    if min_duration <= 0 or len(clips) <= 1:
+    Ensure clips are at least min_duration by padding them symmetrically.
+    Overlapping clips are merged, provided they don't exceed max_duration.
+    """
+    if min_duration <= 0 or not clips:
         return clips
 
-    result = []
-    i = 0
-    while i < len(clips):
-        c = clips[i]
-        if c.duration >= min_duration:
-            result.append(c)
-            i += 1
-            continue
+    segments = []
+    for c in clips:
+        if c.duration < min_duration:
+            shortfall = min_duration - c.duration
+            left_pad = shortfall / 2
+            right_pad = shortfall / 2
 
-        # Short clip — merge with neighbour
-        if i < len(clips) - 1:
-            # Merge forward into next clip
-            next_c = clips[i + 1]
-            merged = Clip(
-                next_c.index,
-                c.start,
-                max(c.end, next_c.end),
-                max(c.end, next_c.end) - c.start,
-            )
-            result.append(merged)
-            i += 2
+            new_start = c.start - left_pad
+            new_end = c.end + right_pad
+
+            # Correct out of bounds adjustments gracefully
+            if new_start < 0.0:
+                new_end += (0.0 - new_start)
+                new_start = 0.0
+
+            if new_end > total_duration:
+                new_start -= (new_end - total_duration)
+                new_end = total_duration
+                if new_start < 0.0:
+                    new_start = 0.0
+
+            segments.append(Segment(new_start, new_end))
         else:
-            # Last clip — merge backward into previous clip
-            prev = result.pop()
-            merged = Clip(
-                c.index,
-                prev.start,
-                max(prev.end, c.end),
-                max(prev.end, c.end) - prev.start,
-            )
-            result.append(merged)
-            i += 1
+            segments.append(Segment(c.start, c.end))
 
-    return [
-        Clip(idx, c.start, c.end, c.end - c.start) for idx, c in enumerate(result, 1)
-    ]
+    # Re-snap the new expanded starts to keyframes to ensure ffmpeg -c copy is accurate
+    if keyframes:
+        snapped = []
+        for seg in segments:
+            start = seg.start
+            best_kf = 0.0
+            for kf in keyframes:
+                if kf <= start:
+                    best_kf = kf
+                else:
+                    break
+            snapped.append(Segment(best_kf, seg.end))
+        segments = snapped
+
+    # Merge overlaps, strictly respecting max_duration to prevent massive clips
+    if not segments:
+        return []
+    
+    segments = sorted(segments, key=lambda s: s.start)
+    merged = [segments[0]]
+    for current in segments[1:]:
+        last = merged[-1]
+        
+        # Determine if they overlap
+        if current.start <= last.end:
+            new_start = last.start
+            new_end = max(last.end, current.end)
+            
+            # Merge if the combined clip stays within max_duration limits 
+            # OR if one clip is fully engulfed by the other to prevent exact duplicates
+            if (
+                new_end == last.end 
+                or current.start == last.start 
+                or max_duration <= 0 
+                or (new_end - new_start) <= max_duration
+            ):
+                merged[-1] = Segment(new_start, new_end)
+            else:
+                merged.append(current)
+        else:
+            merged.append(current)
+
+    return [Clip(idx, s.start, s.end, s.end - s.start) for idx, s in enumerate(merged, 1)]
 
 
 def enforce_max_clip_duration(
@@ -676,8 +715,9 @@ def main():
         "--min-clip-duration",
         type=float,
         default=MIN_CLIP_DURATION,
-        help="Minimum clip duration in seconds. Clips shorter than this are merged "
-        "into the next clip (or extended if last). 0 = no minimum. "
+        help="Minimum clip duration in seconds. Clips shorter than this are padded "
+        "symmetrically to reach this length. Overlaps are merged up to max-duration. "
+        "0 = no minimum. "
         f"(default: {MIN_CLIP_DURATION})",
     )
     parser.add_argument(
@@ -745,6 +785,7 @@ def main():
 
         clips = build_clips(intervals, merge_gap, buffer_sec, dur, keyframes=keyframes)
 
+        # Enforce limits. Split exceedingly long segments first...
         if args.max_clip_duration > 0:
             prev_count = len(clips)
             clips = enforce_max_clip_duration(
@@ -757,12 +798,15 @@ def main():
                     len(clips),
                 )
 
+        # ...Then pad any short remaining segments
         if args.min_clip_duration > 0:
             prev_count = len(clips)
-            clips = enforce_min_clip_duration(clips, args.min_clip_duration)
+            clips = enforce_min_clip_duration(
+                clips, args.min_clip_duration, args.max_clip_duration, dur, keyframes
+            )
             if len(clips) != prev_count:
                 log.info(
-                    "  Min clip duration: %d clips merged into %d",
+                    "  Min clip duration: clip count adjusted from %d to %d due to overlap merging",
                     prev_count,
                     len(clips),
                 )

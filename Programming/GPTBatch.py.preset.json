@@ -258,7 +258,7 @@
                 "api_url_env": "UNSLOTH_API_URL"
             }
         },
-        "model": "models/gemini-flash-lite-latest",
+        "model": "models/gemma-4-31b-it",
         "output_folder": "Transcription",
         "output_under_input": false,
         "merge_outputs": false,
@@ -274,8 +274,8 @@
         "save_log": true,
         "allow_empty_files": false,
         "delay_min": 0,
-        "delay_sec": 20,
-        "concurrent_jobs": 5,
+        "delay_sec": 10,
+        "concurrent_jobs": 12,
         "upload_mode": "sequential",
         "stop_queue_on_model_unavailable": true,
         "add_filename_to_prompt": false,
