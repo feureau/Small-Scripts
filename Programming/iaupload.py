@@ -158,6 +158,12 @@ from pathlib import Path
 
 from internetarchive import get_item, get_session, upload
 
+# Import iazip's process_directory for -z/--zip flag integration
+try:
+    from iazip import process_directory as iazip_process
+except ImportError:
+    iazip_process = None
+
 
 
 # Fix Windows console encoding for special characters
@@ -1580,6 +1586,12 @@ def main():
         help="Automatically rename DJI .LRF files to _s.MP4 without prompting",
     )
     parser.add_argument(
+        "-z",
+        "--zip",
+        action="store_true",
+        help="Run iazip.py packaging on the folder before uploading (keeps originals, processes all types)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -1673,6 +1685,14 @@ def main():
 
         # --- PRE-UPLOAD FIXES ---
         handle_dji_lrf(folder_path, auto_confirm=args.fix_lrf)
+
+        # --- ZIP FILES BEFORE UPLOAD (if -z flag) ---
+        if args.zip:
+            if iazip_process is None:
+                print("Error: iazip.py not found in the same directory. Cannot use -z flag.")
+                sys.exit(1)
+            print("\n--- Running iazip packaging before upload (keep originals, all types) ---")
+            iazip_process(str(folder_path), move_mode=False, delete_mode=False)
 
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")

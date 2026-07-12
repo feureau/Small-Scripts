@@ -861,6 +861,9 @@ class MainApp:
             # High-Precision TIMESTAMP_PATTERN (Captures Seconds)
             TIMESTAMP_PATTERN = re.compile(r'(202\d)[\.\-\s_]?([01]\d)[\.\-\s_]?([0-3]\d).*?([0-2]\d)[\.\-\s_]?([0-5]\d)[\.\-\s_]?([0-5]\d)?')
             
+            used_metadata_files = set()
+            used_subtitle_files = set()
+
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
                 videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails,contentDetails").execute()
@@ -913,6 +916,8 @@ class MainApp:
                     for file_path in local_files:
                         # Guard: Skip blank files
                         if file_path.suffix.lower() in METADATA_EXTENSIONS and file_path.stat().st_size == 0: continue
+                        if file_path.suffix.lower() in METADATA_EXTENSIONS and file_path in used_metadata_files: continue
+                        if any(file_path.suffix.lower() == p.replace('*', '') for p in SUBTITLE_PATTERNS) and file_path in used_subtitle_files: continue
                         
                         current_score = float('inf')
                         file_ts = get_ts(file_path.name)
@@ -963,6 +968,10 @@ class MainApp:
                                 elif (len(metadata_norm_title) > 4 and metadata_norm_title in yt_norm_title) or (len(yt_norm_title) > 4 and yt_norm_title in metadata_norm_title):
                                     current_score = min(current_score, 0.75)
 
+                        # F. Hash Priority Override
+                        if hash_tiebreak == 1:
+                            current_score = -1
+
                         if current_score < float('inf'):
                             ext = file_path.suffix.lower()
                             if ext in METADATA_EXTENSIONS:
@@ -982,9 +991,11 @@ class MainApp:
                          if best_txt_match:
                              vd_obj.description_file_path = str(best_txt_match)
                              vd_obj.description_filename = best_txt_match.name
+                             used_metadata_files.add(best_txt_match)
                          if best_sub_match:
                              vd_obj.subtitle_file_path = str(best_sub_match)
                              vd_obj.subtitle_filename = best_sub_match.name
+                             used_subtitle_files.add(best_sub_match)
                          logger.info(f"  > MATCH FOUND -> metadata={best_meta_match_name or 'None'}, subtitle={best_sub_match_name or 'None'}")
                     else:
                          logger.info("  > NO LOCAL MATCH FOUND")
