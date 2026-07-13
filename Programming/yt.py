@@ -459,6 +459,7 @@ class VideoData:
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
         self.width, self.height = 0, 0
         self.original_upload_filename = None
+        self.main_json_dict = None
         if video_file_details:
             self.original_upload_filename = video_file_details.get('fileName')
             if 'videoStreams' in video_file_details and video_file_details['videoStreams']:
@@ -497,38 +498,55 @@ class VideoData:
         return self.duration_seconds <= 180 and is_vertical
 
 class VideoEntry:
-    def __init__(self, filepath):
+    def __init__(self, filepath, main_json_data=None):
         p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []; self.description_file_path = None
-        try:
-            # Skip blank files during scan
-            matching_metadata_files = [f for f in p.parent.iterdir() if f.is_file() and f.suffix.lower() in METADATA_EXTENSIONS and f.stat().st_size > 0]
-            best_metadata_file, best_score = None, float('inf')
-            p_nuclear = nuclear_clean(p.stem)
-            p_marker = extract_marker_number(p.stem)
-            p_has_eng = has_eng_token(p.stem)
-            for candidate in matching_metadata_files:
-                c_stem = candidate.stem
-                c_nuclear = nuclear_clean(c_stem)
-                score = float('inf')
-                # Strong: direct nuclear containment
-                if c_nuclear and p_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
-                    score = 0
-                else:
-                    # Fallback: marker-number alignment (handles "... - eng-yt.json" style names)
-                    c_marker = extract_marker_number(c_stem)
-                    if p_marker is not None and c_marker == p_marker:
-                        score = 1
-                        if p_has_eng and has_eng_token(c_stem):
-                            score = 0.5
-                if score < best_score:
-                    best_score = score
-                    best_metadata_file = candidate
-            if best_metadata_file:
-                metadata_file = best_metadata_file; logger.info(f"Found matching description file '{metadata_file.name}' for video '{p.name}'."); content = metadata_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
-                if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
-                else: self.description = content
-                self.description_source = metadata_file.name; self.description_file_path = str(metadata_file)
-        except Exception as e: logger.error(f"Error reading description file for '{p.name}': {e}")
+        
+        main_json_match = None
+        if main_json_data:
+            for item in main_json_data:
+                item_fn = item.get("filename", "")
+                if item_fn and (item_fn == p.stem or item_fn == p.name or nuclear_clean(item_fn) == nuclear_clean(p.stem)):
+                    main_json_match = item
+                    break
+
+        if main_json_match:
+            logger.info(f"Found matching entry in main.json for video '{p.name}'.")
+            self.title = sanitize_for_youtube(main_json_match.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH)
+            hashtags = " ".join(main_json_match.get("hashtags", []))
+            self.description = f"{main_json_match.get('description', '')}\n\n{hashtags}".strip()
+            self.tags = main_json_match.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
+            self.description_source = "main.json"
+        else:
+            try:
+                # Skip blank files during scan
+                matching_metadata_files = [f for f in p.parent.iterdir() if f.is_file() and f.suffix.lower() in METADATA_EXTENSIONS and f.stat().st_size > 0]
+                best_metadata_file, best_score = None, float('inf')
+                p_nuclear = nuclear_clean(p.stem)
+                p_marker = extract_marker_number(p.stem)
+                p_has_eng = has_eng_token(p.stem)
+                for candidate in matching_metadata_files:
+                    c_stem = candidate.stem
+                    c_nuclear = nuclear_clean(c_stem)
+                    score = float('inf')
+                    # Strong: direct nuclear containment
+                    if c_nuclear and p_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
+                        score = 0
+                    else:
+                        # Fallback: marker-number alignment (handles "... - eng-yt.json" style names)
+                        c_marker = extract_marker_number(c_stem)
+                        if p_marker is not None and c_marker == p_marker:
+                            score = 1
+                            if p_has_eng and has_eng_token(c_stem):
+                                score = 0.5
+                    if score < best_score:
+                        best_score = score
+                        best_metadata_file = candidate
+                if best_metadata_file:
+                    metadata_file = best_metadata_file; logger.info(f"Found matching description file '{metadata_file.name}' for video '{p.name}'."); content = metadata_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
+                    if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
+                    else: self.description = content
+                    self.description_source = metadata_file.name; self.description_file_path = str(metadata_file)
+            except Exception as e: logger.error(f"Error reading description file for '{p.name}': {e}")
         try:
             for pattern in SUBTITLE_PATTERNS:
                 found_subs = list(p.parent.glob(f"{p.stem}*.srt"))
@@ -542,7 +560,7 @@ def calculate_default_start_time():
 
 class MainApp:
     def __init__(self):
-        self.service = None; self.videos_to_process = []; self.dynamic_category_map = {}; self.app_mode = "update"
+        self.service = None; self.videos_to_process = []; self.dynamic_category_map = {}; self.app_mode = "update"; self.main_json_data = None
         self.root = tk.Tk(); setup_revocation_on_exit(); self.root.title('Ultimate YouTube Batch Uploader & Manager 1.7')
         self.build_gui(); self.root.protocol("WM_DELETE_WINDOW", self.on_exit); self._update_gui_for_mode(); self.root.mainloop()
     
@@ -550,7 +568,9 @@ class MainApp:
         frm = ttk.Frame(self.root, padding=10); frm.pack(fill=tk.BOTH, expand=True)
         top_frame = ttk.Frame(frm); top_frame.pack(fill=tk.X, pady=5)
         self.select_cred_button = ttk.Button(top_frame, text='1. Select client_secrets.json & Authenticate', command=self.select_credentials_and_auth)
-        self.select_cred_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.select_cred_button.pack(side=tk.TOP, fill=tk.X, expand=True, padx=(0, 5), pady=(0, 2))
+        self.load_main_json_button = ttk.Button(top_frame, text='Load Main JSON Data (Optional)', command=self.gui_load_main_json)
+        self.load_main_json_button.pack(side=tk.TOP, fill=tk.X, expand=True, padx=(0, 5))
 
         load_frame = ttk.Frame(frm); load_frame.pack(fill=tk.X, pady=5)
         self.load_existing_button = ttk.Button(load_frame, text='2. Load Existing Videos', command=self.gui_load_existing_videos, state=tk.DISABLED)
@@ -801,6 +821,17 @@ class MainApp:
             channels_resp = self.service.channels().list(part="snippet", mine=True).execute(); categories_resp = self.service.videoCategories().list(part="snippet", regionCode=channels_resp["items"][0]["snippet"].get("country", "US")).execute(); self.dynamic_category_map = {item['snippet']['title']: item['id'] for item in categories_resp.get("items", []) if item.get('snippet', {}).get('assignable', False)}; sorted_categories = sorted(self.dynamic_category_map.keys()); self.category_cb['values'] = ["Don't Change"] + sorted_categories; self.update_status("Authentication successful. Categories loaded.")
         except Exception as e: logger.error(f"Failed to load video categories: {e}"); self.update_status("Error: Could not load categories.")
     
+    def gui_load_main_json(self):
+        path = filedialog.askopenfilename(title='Select main.json', filetypes=[('JSON files', '*.json')])
+        if path:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    self.main_json_data = json.load(f)
+                self.update_status(f"Loaded Main JSON with {len(self.main_json_data)} entries.")
+            except Exception as e:
+                logger.error(f"Failed to load Main JSON: {e}")
+                self.update_status("Error loading Main JSON.")
+    
     def gui_load_existing_videos(self):
         self.app_mode = "update"; self._update_gui_for_mode()
         try: max_to_load = int(self.max_videos_var.get())
@@ -819,7 +850,7 @@ class MainApp:
         self.app_mode = "upload"; self._update_gui_for_mode(); self.videos_to_process = []; logger.info("Scanning for video files to upload...")
         for pat in VIDEO_PATTERNS:
             for f in glob.glob(pat):
-                if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f))
+                if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f, self.main_json_data if hasattr(self, 'main_json_data') else None))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     
     def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None):
@@ -900,6 +931,25 @@ class MainApp:
                     yt_norm_title = normalize_for_matching(vd_obj.current_title)
                     nuclear_title = nuclear_clean(vd_obj.current_title)
                     marker_num_title = extract_marker_number(vd_obj.current_title)
+                    
+                    main_json_item = None
+                    if hasattr(self, 'main_json_data') and self.main_json_data:
+                        for item in self.main_json_data:
+                            item_fn = item.get("filename", "")
+                            if item_fn and (item_fn == vd_obj.original_title or item_fn == vd_obj.original_upload_filename or nuclear_clean(item_fn) == nuclear_title):
+                                main_json_item = item
+                                break
+
+                    if main_json_item:
+                        vd_obj.main_json_dict = main_json_item
+                        vd_obj.description_filename = "main.json"
+                        best_meta_match_name = "main.json"
+                        if "title" in main_json_item: vd_obj.current_title = main_json_item["title"]
+                        hashtags = " ".join(main_json_item.get("hashtags", []))
+                        if "description" in main_json_item: vd_obj.current_description = f"{main_json_item['description']}\n\n{hashtags}".strip()
+                        if "tags" in main_json_item: vd_obj.current_tags = main_json_item["tags"]
+                        logger.info(f"  > MAIN JSON MATCH FOUND for '{vd_obj.original_title}'")
+
                     yt_hash_tokens = set()
                     for src in (vd_obj.current_title, vd_obj.original_upload_filename):
                         h = extract_trailing_hash8(src)
@@ -975,6 +1025,7 @@ class MainApp:
                         if current_score < float('inf'):
                             ext = file_path.suffix.lower()
                             if ext in METADATA_EXTENSIONS:
+                                if main_json_item: continue # Skip if main json matched
                                 if (current_score < best_txt_score) or (current_score == best_txt_score and hash_tiebreak > best_txt_hash_tiebreak):
                                     best_txt_score = current_score
                                     best_txt_match = file_path
@@ -1073,6 +1124,9 @@ def update_videos_on_youtube(service, processing_data):
 
         parts, body = [], {'id': vd.video_id}; description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
         if processing_data["description_override"].strip(): description_content = processing_data["description_override"]
+        elif hasattr(vd, 'main_json_dict') and vd.main_json_dict:
+            data = vd.main_json_dict
+            title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
         elif vd.description_file_path:
             try:
                 file_content = Path(vd.description_file_path).read_text(encoding='utf-8'); data = sanitize_and_parse_json(file_content)
