@@ -170,7 +170,7 @@ except ImportError:
 if sys.platform == "win32":
     try:
         sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace"
+            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
         )
         sys.stdin = io.TextIOWrapper(
             sys.stdin.buffer, encoding="utf-8", errors="replace"
@@ -1642,6 +1642,14 @@ def main():
 
         folder_path = Path(folder_path_str)
 
+        # --- ZIP FILES BEFORE UPLOAD (if -z flag) ---
+        if args.zip:
+            if iazip_process is None:
+                print("Error: iazip.py not found in the same directory. Cannot use -z flag.")
+                sys.exit(1)
+            print("\n--- Running iazip packaging before upload (keep originals, all types) ---")
+            iazip_process(str(folder_path), move_mode=False, delete_mode=False)
+
         # Extract suggested date and period from folder name early
         date_info = extract_date_from_string(folder_path.name)
         suggested_date = date_info["date"]
@@ -1685,14 +1693,6 @@ def main():
 
         # --- PRE-UPLOAD FIXES ---
         handle_dji_lrf(folder_path, auto_confirm=args.fix_lrf)
-
-        # --- ZIP FILES BEFORE UPLOAD (if -z flag) ---
-        if args.zip:
-            if iazip_process is None:
-                print("Error: iazip.py not found in the same directory. Cannot use -z flag.")
-                sys.exit(1)
-            print("\n--- Running iazip packaging before upload (keep originals, all types) ---")
-            iazip_process(str(folder_path), move_mode=False, delete_mode=False)
 
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")

@@ -1061,11 +1061,14 @@ def update_videos_on_youtube(service, processing_data):
     try: start_dt = datetime.strptime(processing_data["start_time_str"], '%Y-%m-%d %H:%M').astimezone(timezone.utc); delta = timedelta(hours=processing_data["interval_hours"], minutes=processing_data["interval_mins"])
     except ValueError: logger.error("Invalid date format."); return
     
+    success_count = 0; failed_videos = []; skipped_videos = []
+    
     for i, vd in enumerate(videos):
         # Blank File Safety Guard
         if vd.description_file_path:
             if Path(vd.description_file_path).stat().st_size == 0:
                 logger.warning(f"SKIPPING '{vd.original_title}': Matched file is blank (0 KB).")
+                skipped_videos.append(vd.original_title)
                 continue
 
         parts, body = [], {'id': vd.video_id}; description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
@@ -1082,23 +1085,48 @@ def update_videos_on_youtube(service, processing_data):
         body['snippet'] = snippet; parts.append('snippet')
         
         status = {'publicStatsViewable': processing_data["public_stats_viewable"], 'embeddable': processing_data["allow_embedding"]}
-        if processing_data["update_schedule"]: status['publishAt'] = (start_dt + i * delta).isoformat(timespec='milliseconds').replace('+00:00', 'Z'); status['privacyStatus'] = 'private'
-        elif processing_data["update_visibility"]: status['privacyStatus'] = processing_data["visibility_to_set"]
+        if processing_data["update_schedule"]:
+            # YouTube API rejects scheduling for videos that are already public/unlisted or if the time is in the past.
+            target_time = start_dt + i * delta
+            current_privacy = vd.video_status.get('privacyStatus', '')
+            if current_privacy in ['public', 'unlisted']:
+                logger.warning(f"Skipping schedule update for '{vd.original_title}' (already {current_privacy}). Updating metadata only.")
+            elif target_time < datetime.now(timezone.utc):
+                logger.warning(f"Skipping schedule update for '{vd.original_title}' (calculated time {target_time.strftime('%Y-%m-%d %H:%M')} is in the past).")
+            else:
+                status['publishAt'] = target_time.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                status['privacyStatus'] = 'private'
+        elif processing_data["update_visibility"]: 
+            status['privacyStatus'] = processing_data["visibility_to_set"]
+            
         if processing_data["made_for_kids"] != 'dont_change': status['selfDeclaredMadeForKids'] = (processing_data["made_for_kids"] == 'yes')
         body['status'] = status; parts.append('status')
         
-        if is_dry_run: logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}'"); continue
+        if is_dry_run: logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}'"); success_count += 1; continue
         try:
             service.videos().update(part=",".join(parts), body=body).execute(); logger.info(f"({i+1}/{len(videos)}) Updated '{snippet['title']}'.")
-        except HttpError as e: logger.error(f"FAILED update: {e.reason}")
-    logger.info("--- Update process complete. ---")
+            success_count += 1
+        except HttpError as e: logger.error(f"FAILED update: {e.reason}"); failed_videos.append(vd.original_title)
+    
+    logger.info("\n--- Update Process Summary ---")
+    logger.info(f"Total processed: {len(videos)}")
+    logger.info(f"Successfully updated: {success_count}")
+    if skipped_videos: logger.info(f"Skipped (blank metadata): {len(skipped_videos)}")
+    if failed_videos:
+        logger.error(f"Failed updates: {len(failed_videos)}")
+        for fv in failed_videos: logger.error(f"  - {fv}")
+    logger.info("------------------------------")
 
 def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
     batch_id = generate_batch_id(); uploaded_log = []
+    success_count = 0; failed_videos = []; skipped_videos = []
+    
     for e in video_entries:
         # Blank File Safety Guard
         if e.description_file_path and Path(e.description_file_path).stat().st_size == 0:
-            logger.warning(f"SKIPPING upload of {e.filepath}: Metadata file is blank."); continue
+            logger.warning(f"SKIPPING upload of {e.filepath}: Metadata file is blank.")
+            skipped_videos.append(e.title)
+            continue
 
         try: 
             media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
@@ -1106,9 +1134,20 @@ def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
             req = service.videos().insert(part='snippet,status', body=body, media_body=media); resp = None
             while resp is None: progress, resp = req.next_chunk()
             vid = resp['id']; logger.info(f"Uploaded: https://youtu.be/{vid}")
+            success_count += 1
             if move_files: move_uploaded_files(e, batch_id, True)
-        except Exception as ex: logger.error(f"Upload failed: {ex}")
-    logger.info("--- Upload process complete. ---")
+        except Exception as ex: 
+            logger.error(f"Upload failed: {ex}")
+            failed_videos.append(e.title)
+            
+    logger.info("\n--- Upload Process Summary ---")
+    logger.info(f"Total processed: {len(video_entries)}")
+    logger.info(f"Successfully uploaded: {success_count}")
+    if skipped_videos: logger.info(f"Skipped (blank metadata): {len(skipped_videos)}")
+    if failed_videos:
+        logger.error(f"Failed uploads: {len(failed_videos)}")
+        for fv in failed_videos: logger.error(f"  - {fv}")
+    logger.info("------------------------------")
 
 if __name__ == '__main__':
     MainApp()
