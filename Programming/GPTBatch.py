@@ -384,6 +384,7 @@ UNSLOTH_CHAT_COMPLETIONS_ENDPOINT = f"{UNSLOTH_API_URL}/chat/completions"
 
 USER_PROMPT_TEMPLATE = """Analyze the provided content."""
 CONTEXT_PROMPT_PLACEHOLDER = "{{CONTEXT_TEXT}}"
+PREVIOUS_OUTPUT_PLACEHOLDER = "{{PREVIOUS_OUTPUT}}"
 
 # --- AUTO-LOAD SETTINGS ---
 AUTO_LOAD_EXTENSIONS = [
@@ -939,6 +940,7 @@ def build_job_config_snapshot(
         "multipass_count": 1,
         "multipass_prompts": [],
         "safety_settings": [],
+        "use_previous_output_ref": False,
     }
     effective = {k: kwargs.get(k, d) for k, d in known_defaults.items()}
     extra_keys = sorted(
@@ -984,6 +986,8 @@ def build_job_config_snapshot(
                     user_prompt or "",
                 )
             ],
+            "use_previous_output_ref": bool(effective["use_previous_output_ref"]),
+            "previous_output_chars": len(kwargs.get("previous_output_text") or ""),
         },
         "output_behavior": {
             "overwrite_original": bool(overwrite_original),
@@ -2692,10 +2696,20 @@ def process_chunks_sequentially(
     return stitched, responses
 
 
-def apply_context_to_prompt(user_prompt, context_text):
+def apply_context_to_prompt(user_prompt, context_text, previous_output_text=""):
     prompt = user_prompt or ""
     context = (context_text or "").strip()
+    prev_out = (previous_output_text or "").strip()
 
+    # 1. Resolve PREVIOUS_OUTPUT_PLACEHOLDER
+    if PREVIOUS_OUTPUT_PLACEHOLDER in prompt:
+        prompt = prompt.replace(PREVIOUS_OUTPUT_PLACEHOLDER, prev_out)
+    elif prev_out:
+        # If the placeholder is NOT used but the option IS enabled (prev_out is passed),
+        # gracefully append it to the prompt.
+        prompt = f"{prompt}\n\nPrevious Outputs:\n{prev_out}"
+
+    # 2. Resolve CONTEXT_PROMPT_PLACEHOLDER
     if CONTEXT_PROMPT_PLACEHOLDER in prompt:
         return prompt.replace(CONTEXT_PROMPT_PLACEHOLDER, context)
     if context:
@@ -2858,7 +2872,7 @@ def process_file_group(
         multipass_prompts = [user_prompt]
 
     resolved_user_prompt_for_snapshot = apply_context_to_prompt(
-        multipass_prompts[0], context_text_for_job
+        multipass_prompts[0], context_text_for_job, kwargs.get("previous_output_text", "")
     )
 
     snapshot = build_job_config_snapshot(
@@ -3077,6 +3091,7 @@ def process_file_group(
                 resolved_pass_prompt = apply_context_to_prompt(
                     pass_prompt_raw,
                     context_text_for_job,
+                    kwargs.get("previous_output_text", ""),
                 )
 
                 if pass_num == 1:
@@ -3765,6 +3780,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.add_filename_var = tk.BooleanVar(
             value=getattr(self.args, "add_filename_to_prompt", False)
         )
+        self.use_previous_output_var = tk.BooleanVar(value=False)
         self.default_context_text = getattr(self.args, "context_text", "")
         self.persistent_context_var = tk.BooleanVar(value=False)
         self.global_context_text_value = self.default_context_text
@@ -4179,18 +4195,30 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         ttk.Checkbutton(
             tab_ai,
-            text="Persistent Context (Global)",
-            variable=self.persistent_context_var,
-            command=self.on_persistent_context_toggle,
+            text="Use All Previous Output as Reference",
+            variable=self.use_previous_output_var,
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        ttk.Label(tab_ai, text="Context Text:").grid(
+        ttk.Label(tab_ai, text="Previous Output Ref:").grid(
             row=8, column=0, sticky="w", pady=(6, 3)
         )
         ttk.Button(
-            tab_ai, text="Insert Context", command=self.insert_context_placeholder
+            tab_ai, text="Insert Previous Output", command=self.insert_previous_output_placeholder
         ).grid(row=8, column=1, sticky="e", pady=(6, 3))
+
+        ttk.Checkbutton(
+            tab_ai,
+            text="Persistent Context (Global)",
+            variable=self.persistent_context_var,
+            command=self.on_persistent_context_toggle,
+        ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(tab_ai, text="Context Text:").grid(
+            row=10, column=0, sticky="w", pady=(6, 3)
+        )
+        ttk.Button(
+            tab_ai, text="Insert Context", command=self.insert_context_placeholder
+        ).grid(row=10, column=1, sticky="e", pady=(6, 3))
         self.context_text = scrolledtext.ScrolledText(tab_ai, height=4)
-        self.context_text.grid(row=9, column=0, columnspan=2, sticky="ew")
+        self.context_text.grid(row=11, column=0, columnspan=2, sticky="ew")
         self.context_text.bind("<<Modified>>", self._on_context_text_modified)
         if self.default_context_text:
             self.context_text.insert(tk.END, self.default_context_text)
@@ -4800,6 +4828,34 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.prompt_text.focus_set()
         self.prompt_text.see(tk.INSERT)
 
+    def insert_previous_output_placeholder(self):
+        self.prompt_text.insert(tk.INSERT, PREVIOUS_OUTPUT_PLACEHOLDER)
+        self.prompt_text.focus_set()
+        self.prompt_text.see(tk.INSERT)
+
+    def _collect_previous_outputs(self):
+        outputs = []
+        for child in self.tree.get_children():
+            vals = self.tree.item(child)["values"]
+            if len(vals) < 3:
+                continue
+            jid_str = str(vals[0])
+            status = str(vals[2])
+            if status == "Completed":
+                try:
+                    jid = int(jid_str)
+                    if jid in self.job_registry:
+                        meta = self.job_registry[jid].get("result_metadata", {})
+                        out_path = meta.get("raw_output_path")
+                        if out_path and os.path.exists(out_path):
+                            with open(out_path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            filename = os.path.basename(out_path)
+                            outputs.append(f"--- Output from Job #{jid}: {filename} ---\n{content}\n")
+                except Exception as e:
+                    console_log(f"Error collecting output for job {jid_str}: {e}", "WARN")
+        return "\n".join(outputs)
+
     def _get_context_text(self):
         return self.context_text.get("1.0", tk.END).strip()
 
@@ -4868,6 +4924,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.thinking_var, "enable_thinking", False)
             set_var(self.add_filename_var, "add_filename_to_prompt", False)
             set_var(self.ollama_search_var, "enable_web_search", False)
+            set_var(self.use_previous_output_var, "use_previous_output_ref", False)
             set_var(self.persistent_context_var, "persistent_context", False)
             selected_local_context = data.get("context_text", "")
             selected_global_context = data.get(
@@ -4977,6 +5034,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "upload_mode": self.upload_mode_var.get(),
             "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
             "add_filename_to_prompt": self.add_filename_var.get(),
+            "use_previous_output_ref": self.use_previous_output_var.get(),
             "context_text": current_context,
             "persistent_context": self.persistent_context_var.get(),
             "global_context_text": self.global_context_text_value,
@@ -5848,6 +5906,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 if self.add_context_as_suffix_var.get() and current_context
                 else ""
             ),
+            "use_previous_output_ref": self.use_previous_output_var.get(),
             "context_text": self.global_context_text_value
             if use_persistent_context
             else current_context,
@@ -6526,6 +6585,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             
             if params.get("use_persistent_context"):
                 params["context_text"] = self.global_context_text_value
+
+            # Dynamically collect previous outputs right before execution
+            if params.get("use_previous_output_ref"):
+                params["previous_output_text"] = self._collect_previous_outputs()
 
             params["request_multipass_prompt"] = (
                 lambda pass_index, pass_count, group_name, prev_preview="", _jid=jid: self._request_runtime_multipass_prompt(

@@ -230,7 +230,7 @@
             "subtitle_margin_l": "50",
             "subtitle_margin_r": "100",
             "subtitle_seam_h_offset": "0",
-            "subtitle_seam_v_offset": "-128",
+            "subtitle_seam_v_offset": "0",
             "fill_color": "#FFAA00",
             "fill_alpha": 0,
             "outline_color": "#000000",
