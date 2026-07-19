@@ -230,6 +230,7 @@ DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Defau
 
 # -------------------------- Output Configuration --------------------------
 DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per video. Default: False
+DEFAULT_SUBFOLDER_BY_SUBTITLE = False               # Output subtitle tag as subfolder. Default: False
 DEFAULT_GROUP_BY_PRESET = False                     # Group output into preset subfolders. Default: False
 DEFAULT_GROUP_BY_VIDEO = False                      # Group output into video subfolders. Default: False
 DEFAULT_SUBFOLDER_OVERRIDE = ""                     # Custom override for subfolder name
@@ -1838,6 +1839,7 @@ class WorkflowPresetManager:
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
             "sharpening_strength": DEFAULT_SHARPENING_STRENGTH,
             "output_to_subfolders": DEFAULT_OUTPUT_TO_SUBFOLDERS,
+            "output_subfolder_by_subtitle": DEFAULT_SUBFOLDER_BY_SUBTITLE,
             "group_by_preset": DEFAULT_GROUP_BY_PRESET,
             "group_by_video": DEFAULT_GROUP_BY_VIDEO,
             "subfolder_override": DEFAULT_SUBFOLDER_OVERRIDE,
@@ -2107,6 +2109,7 @@ class VideoProcessorApp:
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
+        self.output_subfolder_by_subtitle_var = tk.BooleanVar(value=DEFAULT_SUBFOLDER_BY_SUBTITLE)
         self.group_by_preset_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_PRESET)
         self.group_by_video_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_VIDEO)
         self.subfolder_override_var = tk.StringVar(value=DEFAULT_SUBFOLDER_OVERRIDE)
@@ -2995,6 +2998,8 @@ class VideoProcessorApp:
         ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
                         command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
+        ttk.Checkbutton(output_format_frame, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
+                        command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle")).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Checkbutton(output_format_frame, text="Group by Preset", variable=self.group_by_preset_var, 
                         command=lambda: self._update_selected_jobs("group_by_preset")).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Checkbutton(output_format_frame, text="Group by Video", variable=self.group_by_video_var, 
@@ -4174,6 +4179,7 @@ class VideoProcessorApp:
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
             "output_to_subfolders": self.output_subfolders_var.get(),
+            "output_subfolder_by_subtitle": self.output_subfolder_by_subtitle_var.get(),
             "group_by_preset": self.group_by_preset_var.get(),
             "group_by_video": self.group_by_video_var.get(),
             "subfolder_override": self.subfolder_override_var.get(),
@@ -4754,6 +4760,7 @@ class VideoProcessorApp:
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
         self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
+        self.output_subfolder_by_subtitle_var.set(options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE))
         self.group_by_preset_var.set(options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET))
         self.group_by_video_var.set(options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO))
         self.subfolder_override_var.set(options.get("subfolder_override", DEFAULT_SUBFOLDER_OVERRIDE))
@@ -5174,9 +5181,12 @@ class VideoProcessorApp:
                     h_aspect = options.get('horizontal_aspect').replace(':', 'x')
                     if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
                 
-                tag = job.get('display_tag', "Subtitles")
-                safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-                sub_paths.append(os.path.join(folder_name, safe_subtitle_folder_name))
+                if options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE):
+                    tag = job.get('display_tag', "Subtitles")
+                    safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
+                    sub_paths.append(os.path.join(folder_name, safe_subtitle_folder_name))
+                else:
+                    sub_paths.append(folder_name)
             else:
                 sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
 
