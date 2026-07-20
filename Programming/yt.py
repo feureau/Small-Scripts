@@ -1140,10 +1140,10 @@ def update_videos_on_youtube(service, processing_data):
         
         status = {'publicStatsViewable': processing_data["public_stats_viewable"], 'embeddable': processing_data["allow_embedding"]}
         if processing_data["update_schedule"]:
-            # YouTube API rejects scheduling for videos that are already public/unlisted or if the time is in the past.
+            # YouTube API rejects scheduling for videos that are already public or if the time is in the past.
             target_time = start_dt + i * delta
             current_privacy = vd.video_status.get('privacyStatus', '')
-            if current_privacy in ['public', 'unlisted']:
+            if current_privacy == 'public':
                 logger.warning(f"Skipping schedule update for '{vd.original_title}' (already {current_privacy}). Updating metadata only.")
             elif target_time < datetime.now(timezone.utc):
                 logger.warning(f"Skipping schedule update for '{vd.original_title}' (calculated time {target_time.strftime('%Y-%m-%d %H:%M')} is in the past).")
