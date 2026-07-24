@@ -587,6 +587,7 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
         popen_kwargs = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
+            "stdin": subprocess.DEVNULL,
             "env": env,
             "text": True,
             "encoding": "utf-8",
@@ -2086,6 +2087,7 @@ class VideoProcessorApp:
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
         self.trigger_autodetect_subs_var = tk.BooleanVar(value=False)
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
+        self.trigger_include_suffix_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
         self.output_suffix_override_var = tk.StringVar(value="")
         self.output_suffix_override_var.trace_add("write", lambda *args: self._update_selected_jobs("output_suffix_override"))
@@ -2689,27 +2691,41 @@ class VideoProcessorApp:
         ToolTip(cb_autodetect, "Auto-pick a subtitle file/stream when adding jobs for this preset.")
         
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row2_2, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var).pack(side=tk.LEFT, padx=(10, 5))
+        self.trigger_include_suffix_var = tk.BooleanVar(value=False)
+        cb_restrict = ttk.Checkbutton(row2_2, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var)
+        cb_restrict.pack(side=tk.LEFT, padx=(10, 5))
+        
+        cb_include = ttk.Checkbutton(row2_2, text="Include Suffix:", variable=self.trigger_include_suffix_var)
+        cb_include.pack(side=tk.LEFT, padx=(5, 5))
 
         self.trigger_suffix_var = tk.StringVar(value="")
         entry_widget = ttk.Entry(row2_2, textvariable=self.trigger_suffix_var, width=8)
         entry_widget.pack(side=tk.LEFT, padx=5)
-        ToolTip(entry_widget, "If Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nSupports multiple separated by commas: '-top, -bot'\nIf Unchecked: Matches ALL subtitles.")
+        ToolTip(entry_widget, "If Restrict Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Include Checked: Matches main subtitle AND subtitles with this suffix.\nSupports multiple separated by commas: '-top, -bot'\nIf Unchecked: Matches ALL subtitles.")
 
         # Update Logic for UI states
         def update_trigger_ui(*args):
             scan_on = self.trigger_scan_subs_var.get()
-            suffix_filter_on = self.trigger_suffix_enable_var.get()
+            suffix_restrict = self.trigger_suffix_enable_var.get()
+            suffix_include = self.trigger_include_suffix_var.get()
             
-            # Entry is enabled only if Suffix Enable is ON AND Scan is ON
-            # Actually, if Scan is OFF, the Suffix Checkbox theoretically shouldn't matter, 
-            # but let's just control the entry for now.
-            entry_state = "normal" if (scan_on and suffix_filter_on) else "disabled"
+            entry_state = "normal" if (scan_on and (suffix_restrict or suffix_include)) else "disabled"
             entry_widget.config(state=entry_state)
+            
+        def on_restrict_toggle(*args):
+            if self.trigger_suffix_enable_var.get():
+                self.trigger_include_suffix_var.set(False)
+            update_trigger_ui()
+            
+        def on_include_toggle(*args):
+            if self.trigger_include_suffix_var.get():
+                self.trigger_suffix_enable_var.set(False)
+            update_trigger_ui()
         
         # Bind traces
         self.trigger_scan_subs_var.trace_add("write", lambda *a: update_trigger_ui())
-        self.trigger_suffix_enable_var.trace_add("write", lambda *a: update_trigger_ui())
+        self.trigger_suffix_enable_var.trace_add("write", on_restrict_toggle)
+        self.trigger_include_suffix_var.trace_add("write", on_include_toggle)
         
         # Initial call
         update_trigger_ui()
@@ -4271,11 +4287,19 @@ class VideoProcessorApp:
         self.trigger_autodetect_subs_var.set(triggers.get('auto_detect_subs', False))
 
         suffix_val = triggers.get('suffix_filter')
-        if suffix_val is not None:
-            self.trigger_suffix_enable_var.set(True)
-            self.trigger_suffix_var.set(suffix_val)
+        suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
+        if suffix_val is not None or suffix_mode != 'all':
+            if suffix_mode == 'include':
+                self.trigger_include_suffix_var.set(True)
+                self.trigger_suffix_enable_var.set(False)
+                self.trigger_suffix_var.set(suffix_val if suffix_val else "")
+            elif suffix_mode == 'restrict' or suffix_val is not None:
+                self.trigger_suffix_enable_var.set(True)
+                self.trigger_include_suffix_var.set(False)
+                self.trigger_suffix_var.set(suffix_val if suffix_val else "")
         else:
             self.trigger_suffix_enable_var.set(False)
+            self.trigger_include_suffix_var.set(False)
             self.trigger_suffix_var.set("")
 
         self.output_suffix_override_var.set(preset['options'].get("output_suffix_override", ""))
@@ -4393,7 +4417,8 @@ class VideoProcessorApp:
             "on_clean_copy_if_subs": on_clean_copy,
             "on_scan_subs": self.trigger_scan_subs_var.get(),
             "auto_detect_subs": self.trigger_autodetect_subs_var.get(),
-            "suffix_filter": self.trigger_suffix_var.get() if self.trigger_suffix_enable_var.get() else None
+            "suffix_filter": self.trigger_suffix_var.get() if (self.trigger_suffix_enable_var.get() or getattr(self, 'trigger_include_suffix_var', tk.BooleanVar(value=False)).get()) else None,
+            "suffix_mode": "restrict" if self.trigger_suffix_enable_var.get() else "include" if getattr(self, 'trigger_include_suffix_var', tk.BooleanVar(value=False)).get() else "all"
         }
         self.preset_manager.save_preset(name, options, triggers)
         messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
@@ -4493,7 +4518,8 @@ class VideoProcessorApp:
         for p_name in self.preset_manager.get_preset_names():
             p = self.preset_manager.get_preset(p_name)
             s_filter = p['triggers'].get('suffix_filter')
-            if s_filter: 
+            s_mode = p['triggers'].get('suffix_mode', 'restrict' if s_filter is not None else 'all')
+            if s_filter and (s_mode == 'restrict' or s_mode == 'include'): 
                 for s in s_filter.split(','):
                     specific_suffix_filters.add(s.strip())
 
@@ -4537,10 +4563,11 @@ class VideoProcessorApp:
                 # --- Subtitle Trigger ---
                 if has_subs and triggers.get('on_scan_subs'):
                     filter_suffix = triggers.get('suffix_filter')
+                    filter_mode = triggers.get('suffix_mode', 'restrict' if filter_suffix is not None else 'all')
                     
                     for sub in detected_subs:
                         match = False
-                        if filter_suffix is None: # Generic Wildcard
+                        if filter_mode == 'all' or (filter_mode == 'restrict' and filter_suffix is None): # Generic Wildcard
                              # Check Exclusivity
                              is_claimed_specifically = False
                              for specific in specific_suffix_filters:
@@ -4552,13 +4579,34 @@ class VideoProcessorApp:
                                      elif sub['suffix'] == specific: is_claimed_specifically = True
                              
                              if not is_claimed_specifically: match = True
-                        elif filter_suffix == "": # Strict Empty
-                            if sub['suffix'] == "": match = True
-                        else: # Specific Suffix (comma separated)
-                             valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
-                             for vs in valid_suffixes:
-                                 if sub['basename'] and sub['basename'].endswith(vs): match = True
-                                 elif sub['suffix'] == vs: match = True
+                        elif filter_mode == 'include':
+                             is_specific_match = False
+                             if filter_suffix:
+                                 valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
+                                 for vs in valid_suffixes:
+                                     if sub['basename'] and sub['basename'].endswith(vs): is_specific_match = True
+                                     elif sub['suffix'] == vs: is_specific_match = True
+                             
+                             if is_specific_match:
+                                 match = True
+                             else:
+                                 is_claimed_specifically = False
+                                 for specific in specific_suffix_filters:
+                                     if specific == "":
+                                         if sub['suffix'] == "": is_claimed_specifically = True
+                                     else:
+                                         if sub['basename'] and sub['basename'].endswith(specific): is_claimed_specifically = True
+                                         elif sub['suffix'] == specific: is_claimed_specifically = True
+                                 
+                                 if not is_claimed_specifically: match = True
+                        elif filter_mode == 'restrict':
+                             if filter_suffix == "": # Strict Empty
+                                 if sub['suffix'] == "": match = True
+                             else: # Specific Suffix (comma separated)
+                                 valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
+                                 for vs in valid_suffixes:
+                                     if sub['basename'] and sub['basename'].endswith(vs): match = True
+                                     elif sub['suffix'] == vs: match = True
                         
                         if match:
                              self._create_job_entry(video_path, sub['path'], preset['options'], preset_name, sub['display_tag'])
@@ -4729,11 +4777,19 @@ class VideoProcessorApp:
                 self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
                 self.trigger_autodetect_subs_var.set(triggers.get('auto_detect_subs', False))
                 suffix_val = triggers.get('suffix_filter')
-                if suffix_val is not None:
-                    self.trigger_suffix_enable_var.set(True)
-                    self.trigger_suffix_var.set(suffix_val)
+                suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
+                if suffix_val is not None or suffix_mode != 'all':
+                    if suffix_mode == 'include':
+                        self.trigger_include_suffix_var.set(True)
+                        self.trigger_suffix_enable_var.set(False)
+                        self.trigger_suffix_var.set(suffix_val if suffix_val else "")
+                    elif suffix_mode == 'restrict' or suffix_val is not None:
+                        self.trigger_suffix_enable_var.set(True)
+                        self.trigger_include_suffix_var.set(False)
+                        self.trigger_suffix_var.set(suffix_val if suffix_val else "")
                 else:
                     self.trigger_suffix_enable_var.set(False)
+                    self.trigger_include_suffix_var.set(False)
                     self.trigger_suffix_var.set("")
         else:
             self.current_preset_var.set("") # Custom or Unknown
@@ -4744,6 +4800,7 @@ class VideoProcessorApp:
             self.trigger_scan_subs_var.set(False)
             self.trigger_autodetect_subs_var.set(False)
             self.trigger_suffix_enable_var.set(False)
+            if hasattr(self, 'trigger_include_suffix_var'): self.trigger_include_suffix_var.set(False)
             self.trigger_suffix_var.set("")
 
         self._suppress_subtitle_path_trace = True
@@ -5825,7 +5882,7 @@ class VideoProcessorApp:
         global CURRENT_FFMPEG_PROCESS
         print("Running NVEncC command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                    env=env, text=True, encoding='utf-8', errors='replace', bufsize=1,
                                    cwd=cwd)
         CURRENT_FFMPEG_PROCESS = process
