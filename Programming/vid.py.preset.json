@@ -1,6 +1,7 @@
 {
     "Vertical Hybrid Seam Hardsub HD": {
         "options": {
+            "output_mode": "local",
             "resolution": "1080p",
             "upscale_algo": "bicubic",
             "output_format": "sdr",
@@ -15,7 +16,7 @@
             "close_gui_on_processing": true,
             "hibernate_when_done": false,
             "render_by_chapters": true,
-            "split_subtitles_by_chapter": true,
+            "split_subtitles_by_chapter": false,
             "orientation": "hybrid (stacked)",
             "aspect_mode": "crop",
             "pad_color": "#000000",
@@ -90,6 +91,7 @@
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
             "output_to_subfolders": true,
+            "output_subfolder_by_subtitle": false,
             "group_by_preset": true,
             "group_by_video": false,
             "subfolder_override": "",
@@ -151,7 +153,8 @@
             "on_clean_copy_if_subs": false,
             "on_scan_subs": false,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Vertical Hybrid Seam Hardsub 4K": {
@@ -1221,6 +1224,7 @@
     },
     "Vertical Ambient Offset 4K": {
         "options": {
+            "output_mode": "local",
             "resolution": "2160p",
             "upscale_algo": "bicubic",
             "output_format": "sdr",
@@ -1252,7 +1256,7 @@
             "merged_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "68000",
+            "manual_bitrate": "45000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": false,
@@ -1309,7 +1313,8 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
+            "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
@@ -1369,13 +1374,15 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": false,
+            "on_scan_subs": true,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Vertical Ambient Offset HD": {
         "options": {
+            "output_mode": "local",
             "resolution": "1080p",
             "upscale_algo": "lanczos",
             "output_format": "sdr",
@@ -1407,7 +1414,7 @@
             "merged_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "12000",
+            "manual_bitrate": "8000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": false,
@@ -1464,7 +1471,8 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
+            "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
@@ -1524,9 +1532,10 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": false,
+            "on_scan_subs": true,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Vertical Crop NVENCC HD": {
@@ -1562,7 +1571,7 @@
             "merged_aspect": "9:16",
             "burn_subtitles": true,
             "override_bitrate": false,
-            "manual_bitrate": "8000",
+            "manual_bitrate": "12000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": false,
@@ -1680,9 +1689,10 @@
             "video_trigger": "Never",
             "on_no_sub": false,
             "on_clean_copy_if_subs": false,
-            "on_scan_subs": true,
+            "on_scan_subs": false,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Vertical Pad FFMPEG 4K": {
@@ -1842,6 +1852,7 @@
     },
     "Original 4K": {
         "options": {
+            "output_mode": "local",
             "resolution": "2160p",
             "upscale_algo": "lanczos",
             "output_format": "sdr",
@@ -1873,7 +1884,7 @@
             "merged_aspect": "16:9",
             "burn_subtitles": false,
             "override_bitrate": false,
-            "manual_bitrate": "68000",
+            "manual_bitrate": "45000",
             "max_size_mb": "0",
             "max_duration": "0",
             "use_dynaudnorm": false,
@@ -1930,7 +1941,7 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
             "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,
@@ -2464,6 +2475,7 @@
     },
     "Horizontal Hardsub (w/Subtitle) 4K": {
         "options": {
+            "output_mode": "local",
             "resolution": "2160p",
             "upscale_algo": "nvvfx-superres",
             "output_format": "sdr",
@@ -2552,7 +2564,7 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
             "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,

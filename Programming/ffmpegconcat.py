@@ -128,13 +128,11 @@ Arguments:
 -- DEPENDENCIES --
 ---------------------------------
 1. Python 3 (with standard libraries: re, shutil, json, uuid, collections)
-2. FFmpeg: Must be installed and accessible in the system's PATH.
-3. ffmpeg-python: The required Python library (`pip install ffmpeg-python`).
+2. FFmpeg (and ffprobe): Must be installed and accessible in the system's PATH.
 
 """
 import argparse
 import subprocess
-import ffmpeg
 import os
 import sys
 import glob
@@ -149,6 +147,14 @@ VIDEO_EXTENSIONS = [
     '.mp4', '.mkv', '.mov', '.avi', '.flv', '.wmv', '.webm', '.mpeg', '.mpg', '.m4v'
 ]
 INPUT_SUBDIR = 'input'
+
+# --- Media Probing ---
+
+def probe_file(file_path):
+    """Probes a media file using ffprobe and returns the JSON output as a dictionary."""
+    cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', file_path]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+    return json.loads(result.stdout)
 
 # --- Helper Functions for Time Conversion ---
 
@@ -272,7 +278,7 @@ def main():
     stream_counts = {}
     for video_file in initial_video_files:
         try:
-            probe = ffmpeg.probe(video_file)
+            probe = probe_file(video_file)
             count = sum(1 for s in probe['streams'] if s['codec_type'] == 'audio')
             stream_counts[video_file] = count
         except Exception as e:
@@ -334,7 +340,7 @@ def main():
 
         for video_file in video_files_to_process:
             try:
-                probe = ffmpeg.probe(video_file)
+                probe = probe_file(video_file)
                 duration = float(probe['format']['duration'])
             except Exception as e:
                 print(f"CRITICAL: Could not probe duration for {video_file}. Aborting. Error: {e}")

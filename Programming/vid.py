@@ -3010,8 +3010,12 @@ class VideoProcessorApp:
         ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
         ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
         ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
-        ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local").pack(side=tk.LEFT)
-        ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled").pack(side=tk.LEFT, padx=5)
+        rb_local = ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local")
+        rb_local.pack(side=tk.LEFT)
+        ToolTip(rb_local, "The output files will be saved in the exact same folder as the original input video (os.path.dirname(job['video_path'])).")
+        rb_pooled = ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled")
+        rb_pooled.pack(side=tk.LEFT, padx=5)
+        ToolTip(rb_pooled, "The output files will all be saved in the script's current working directory (os.getcwd()), essentially pooling all outputs from different folders into one centralized place.")
         ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
                         command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
         ttk.Checkbutton(output_format_frame, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
@@ -4130,6 +4134,7 @@ class VideoProcessorApp:
 
     def get_current_gui_options(self):
         return {
+            "output_mode": self.output_mode_var.get(),
             "resolution": self.resolution_var.get(), "upscale_algo": self.upscale_algo_var.get(),
             "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(),
             "encoder_backend": self.encoder_backend_var.get(),
@@ -4810,6 +4815,8 @@ class VideoProcessorApp:
     def update_gui_from_job_options(self, job):
         options = job['options']
         self._is_loading_job_to_gui = True
+        self.output_mode_var.set(options.get("output_mode", self.output_mode))
+        self.output_mode = self.output_mode_var.get()
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION)); self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)); self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
         self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))

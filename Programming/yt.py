@@ -448,12 +448,16 @@ def save_upload_log(batch_id, upload_data):
     except Exception as e: logger.error(f"Failed to save upload log: {e}")
 
 class VideoData:
-    def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None, video_content_details=None):
+    def __init__(self, video_id, video_title, video_snippet, video_status, video_file_details=None, video_content_details=None, video_statistics=None):
         self.video_id = video_id
         self.original_title = video_title 
         self.video_snippet = video_snippet or {}
         self.video_status = video_status or {}
         self.video_content_details = video_content_details or {}
+        self.video_statistics = video_statistics or {}
+        self.view_count = self.video_statistics.get('viewCount', '0')
+        self.like_count = self.video_statistics.get('likeCount', '0')
+        self.comment_count = self.video_statistics.get('commentCount', '0')
         self.upload_date = self.video_snippet.get('publishedAt', '')
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
@@ -581,6 +585,11 @@ class MainApp:
         playlist_id_entry = ttk.Entry(load_frame, textvariable=self.playlist_id_entry_var, width=25)
         playlist_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
+        ttk.Label(load_frame, text='Mode:').pack(side=tk.LEFT, padx=(10, 2))
+        self.playlist_load_mode_var = tk.StringVar(value='Playlist Only')
+        playlist_load_mode_cb = ttk.Combobox(load_frame, textvariable=self.playlist_load_mode_var, values=['Playlist Only', 'Uploads + Playlist'], state="readonly", width=16)
+        playlist_load_mode_cb.pack(side=tk.LEFT, padx=(0, 5))
+        
         self.load_for_upload_button = ttk.Button(load_frame, text='OR: Load Files for Upload', command=self.gui_load_files_for_upload, state=tk.NORMAL)
         self.load_for_upload_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Label(load_frame, text='Max to Load:').pack(side=tk.LEFT, padx=(10, 2))
@@ -589,13 +598,13 @@ class MainApp:
 
         list_lf = ttk.LabelFrame(frm, text="Video List", padding=5); list_lf.pack(fill=tk.BOTH, expand=True, pady=5)
         tree_frame = ttk.Frame(list_lf); tree_frame.pack(fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(tree_frame, columns=('id_or_path', 'title', 'desc_file', 'sub_file', 'status', 'publish_at', 'upload_date'), show='headings', selectmode="extended")
+        self.tree = ttk.Treeview(tree_frame, columns=('id_or_path', 'title', 'views', 'likes', 'comments', 'desc_file', 'sub_file', 'status', 'publish_at', 'upload_date'), show='headings', selectmode="extended")
         for col in self.tree['columns']: self.tree.heading(col, command=lambda c=col: self._sort_column(c, False))
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview); self.tree.configure(yscrollcommand=vsb.set); self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); vsb.pack(side=tk.RIGHT, fill=tk.Y); self.tree.bind('<<TreeviewSelect>>', self.on_video_select_display_info)
 
         list_controls = ttk.Frame(list_lf); list_controls.pack(fill=tk.X, pady=(5, 0))
         self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
-        ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2)
+        ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Export Data', command=self.export_data).pack(side=tk.RIGHT, padx=2)
 
         bottom_frame = ttk.Frame(frm); bottom_frame.pack(fill=tk.X, pady=5)
         sched = ttk.LabelFrame(bottom_frame, text='Scheduling & Visibility', padding=10); sched.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
@@ -616,7 +625,14 @@ class MainApp:
         ttk.Spinbox(sched, from_=0, to=59, width=5, textvariable=self.interval_minute_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
         
         ttk.Separator(sched, orient='horizontal').grid(row=3, column=0, columnspan=2, sticky='ew', pady=10)
-        self.update_schedule_var = tk.BooleanVar(value=True); ttk.Checkbutton(sched, text="Update Schedule", variable=self.update_schedule_var, command=self._update_ui_states).grid(row=4, column=0, columnspan=2, sticky='w')
+        def _on_update_toggle():
+            if getattr(self, 'update_schedule_var', None) and self.update_schedule_var.get(): self.remove_schedule_var.set(False)
+            self._update_ui_states()
+        def _on_remove_toggle():
+            if getattr(self, 'remove_schedule_var', None) and self.remove_schedule_var.get(): self.update_schedule_var.set(False)
+            self._update_ui_states()
+        self.update_schedule_var = tk.BooleanVar(value=True); ttk.Checkbutton(sched, text="Update Schedule", variable=self.update_schedule_var, command=_on_update_toggle).grid(row=4, column=0, sticky='w')
+        self.remove_schedule_var = tk.BooleanVar(value=False); ttk.Checkbutton(sched, text="Remove Schedule", variable=self.remove_schedule_var, command=_on_remove_toggle).grid(row=4, column=1, sticky='w')
         self.update_visibility_var = tk.BooleanVar(value=False); self.vis_cb = ttk.Checkbutton(sched, text="Update Visibility Status", variable=self.update_visibility_var, command=self._update_ui_states); self.vis_cb.grid(row=5, column=0, columnspan=2, sticky='w')
         self.visibility_choice_var = tk.StringVar(value='private'); self.rad_private = ttk.Radiobutton(sched, text="Private", variable=self.visibility_choice_var, value='private'); self.rad_private.grid(row=6, column=0, columnspan=2, sticky='w', padx=10); self.rad_unlisted = ttk.Radiobutton(sched, text="Unlisted", variable=self.visibility_choice_var, value='unlisted'); self.rad_unlisted.grid(row=7, column=0, columnspan=2, sticky='w', padx=10); self.rad_public = ttk.Radiobutton(sched, text="Public", variable=self.visibility_choice_var, value='public'); self.rad_public.grid(row=8, column=0, columnspan=2, sticky='w', padx=10)
         ttk.Label(sched, text='Schedule Order:').grid(row=9, column=0, sticky='w', pady=(5,0))
@@ -651,6 +667,33 @@ class MainApp:
         
         self.process_button = ttk.Button(frm, text='PROCESS', command=self.start_processing_thread, state=tk.DISABLED); self.process_button.pack(fill=tk.X, ipady=8, pady=(5, 0)); self.status_bar = ttk.Label(frm, text="Welcome! Authenticate to load existing videos.", relief=tk.SUNKEN, anchor='w'); self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
     
+    def export_data(self):
+        if not self.tree.get_children():
+            messagebox.showinfo("No Data", "There is no data to export.")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
+            title="Export Data"
+        )
+        if not file_path:
+            return
+            
+        import csv
+        try:
+            with open(file_path, mode='w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                headers = [self.tree.heading(col)['text'] for col in self.tree['columns']]
+                writer.writerow(headers)
+                for item_id in self.tree.get_children():
+                    row_data = self.tree.item(item_id)['values']
+                    writer.writerow(row_data)
+            messagebox.showinfo("Export Successful", f"Data successfully exported to:\n{file_path}")
+        except Exception as e:
+            logger.error(f"Failed to export data: {e}")
+            messagebox.showerror("Export Failed", f"An error occurred while exporting data:\n{e}")
+
     def _read_interval_delta(self):
         try: hours = int(self.interval_hour_var.get()); mins = int(self.interval_minute_var.get())
         except ValueError: hours, mins = 2, 24
@@ -720,19 +763,21 @@ class MainApp:
     def _update_gui_for_mode(self):
         self.tree.delete(*self.tree.get_children())
         if self.app_mode == "update":
-            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('title', text='Title'); self.tree.heading('desc_file', text='Description File'); self.tree.heading('sub_file', text='Subtitle File'); self.tree.heading('status', text='Privacy'); self.tree.heading('publish_at', text='Publish At (UTC)'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
+            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('title', text='Title'); self.tree.heading('views', text='Views'); self.tree.column('views', width=60); self.tree.heading('likes', text='Likes'); self.tree.column('likes', width=60); self.tree.heading('comments', text='Comments'); self.tree.column('comments', width=70); self.tree.heading('desc_file', text='Description File'); self.tree.heading('sub_file', text='Subtitle File'); self.tree.heading('status', text='Privacy'); self.tree.heading('publish_at', text='Publish At (UTC)'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
             self.update_status("UPDATE MODE: Load existing videos or select from list.")
         elif self.app_mode == "upload":
-            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('title', text='Title'); self.tree.heading('desc_file', text='Description Source'); self.tree.heading('sub_file', text=''); self.tree.heading('status', text=''); self.tree.heading('publish_at', text=''); self.tree.heading('upload_date', text='Subtitle Source'); self.tree.column('upload_date', width=120)
+            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('title', text='Title'); self.tree.heading('views', text=''); self.tree.heading('likes', text=''); self.tree.heading('comments', text=''); self.tree.heading('desc_file', text='Description Source'); self.tree.heading('sub_file', text=''); self.tree.heading('status', text=''); self.tree.heading('publish_at', text=''); self.tree.heading('upload_date', text='Subtitle Source'); self.tree.column('upload_date', width=120)
             self.vis_cb.config(state=tk.DISABLED); self.rad_private.config(state=tk.DISABLED); self.rad_unlisted.config(state=tk.DISABLED); self.rad_public.config(state=tk.DISABLED)
             self.update_status("UPLOAD MODE: Load local files or select from list to upload.")
         self._update_ui_states()
     
     def _update_ui_states(self):
         is_scheduling = self.update_schedule_var.get()
+        is_removing = getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get()
         if self.app_mode == "update":
             state = tk.DISABLED if is_scheduling else tk.NORMAL
             if is_scheduling: self.update_visibility_var.set(True); self.visibility_choice_var.set('private')
+            if is_removing: self.update_visibility_var.set(True)
             self.vis_cb.config(state=state); self.rad_private.config(state=state); self.rad_unlisted.config(state=state); self.rad_public.config(state=state)
     
     def _sort_column(self, col, reverse):
@@ -746,6 +791,12 @@ class MainApp:
                     return datetime.strptime(value.replace(' UTC', ''), '%Y-%m-%d %H:%M')
                 except ValueError:
                     return datetime.min
+
+            if col in ['views', 'likes', 'comments']:
+                try:
+                    return int(value)
+                except ValueError:
+                    return -1
 
             str_val = str(value).lower().strip()
             if str_val in ["", "n/a", "none"]:
@@ -788,9 +839,9 @@ class MainApp:
                 if upload_date:
                     try: upload_date = datetime.fromisoformat(upload_date.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M UTC')
                     except (ValueError, TypeError): pass
-                self.tree.insert('', tk.END, values=(vd.video_id, vd.current_title, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date), iid=vd.video_id)
+                self.tree.insert('', tk.END, values=(vd.video_id, vd.current_title, vd.view_count, vd.like_count, vd.comment_count, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date), iid=vd.video_id)
         elif self.app_mode == "upload":
-            for ve in videos_to_display: self.tree.insert('', tk.END, values=(ve.filepath, ve.title, ve.description_source, '', '', '', ve.subtitle_source), iid=ve.filepath)
+            for ve in videos_to_display: self.tree.insert('', tk.END, values=(ve.filepath, ve.title, '', '', '', ve.description_source, '', '', '', ve.subtitle_source), iid=ve.filepath)
         self.update_status(f"Displaying {len(videos_to_display)} videos in {self.app_mode.upper()} mode.")
     
     def on_video_select_display_info(self, event):
@@ -837,11 +888,12 @@ class MainApp:
         try: max_to_load = int(self.max_videos_var.get())
         except ValueError: max_to_load = 50
         playlist_id = self.playlist_id_entry_var.get().strip()
+        load_mode = self.playlist_load_mode_var.get()
         self.update_status(f"Loading up to {max_to_load or 'ALL'} videos..."); self.load_existing_button.config(state=tk.DISABLED)
-        threading.Thread(target=self.run_video_load, args=(max_to_load, playlist_id), daemon=True).start()
+        threading.Thread(target=self.run_video_load, args=(max_to_load, playlist_id, load_mode), daemon=True).start()
     
-    def run_video_load(self, max_to_load, playlist_id=None):
-        self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load, playlist_id=playlist_id)
+    def run_video_load(self, max_to_load, playlist_id=None, load_mode="Playlist Only"):
+        self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load, playlist_id=playlist_id, load_mode=load_mode)
         self.root.after(100, self.finish_video_load)
 
     def finish_video_load(self): self.apply_filters(); self.process_button.config(state=tk.NORMAL); self.filter_menubutton.config(state=tk.NORMAL); self.load_existing_button.config(state=tk.NORMAL); self.update_status(f"Loaded {len(self.videos_to_process)} videos.")
@@ -853,31 +905,50 @@ class MainApp:
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f, self.main_json_data if hasattr(self, 'main_json_data') else None))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     
-    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None):
+    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None, load_mode="Playlist Only"):
         all_video_data_map, video_ids = {}, []
-        next_page_token = None
         
         try:
-            target_playlist_id = None
-            if playlist_id:
-                logger.info(f"Fetching from Playlist ID: {playlist_id}")
-                target_playlist_id = playlist_id
-            else:
-                logger.info("Fetching from default 'Uploads' playlist.")
+            target_playlist_ids = []
+            
+            uploads_playlist_id = None
+            if not playlist_id or load_mode == "Uploads + Playlist":
+                logger.info("Fetching default 'Uploads' playlist ID.")
                 uploads_id_req = self.service.channels().list(part="contentDetails", mine=True).execute()
                 if uploads_id_req.get("items"):
-                    target_playlist_id = uploads_id_req["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+                    uploads_playlist_id = uploads_id_req["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            
+            if not playlist_id:
+                if uploads_playlist_id:
+                    target_playlist_ids.append(uploads_playlist_id)
+            else:
+                if load_mode == "Uploads + Playlist":
+                    if uploads_playlist_id:
+                        target_playlist_ids.append(uploads_playlist_id)
+                    target_playlist_ids.append(playlist_id)
                 else:
-                    return []
-    
-            while True:
-                pl_resp = self.service.playlistItems().list(
-                    playlistId=target_playlist_id, part="contentDetails", maxResults=50, pageToken=next_page_token
-                ).execute()
-                video_ids.extend([item["contentDetails"]["videoId"] for item in pl_resp.get("items", [])])
+                    target_playlist_ids.append(playlist_id)
+            
+            if not target_playlist_ids:
+                return []
+            
+            for pid in target_playlist_ids:
+                next_page_token = None
+                logger.info(f"Fetching from Playlist ID: {pid}")
+                while True:
+                    pl_resp = self.service.playlistItems().list(
+                        playlistId=pid, part="contentDetails", maxResults=50, pageToken=next_page_token
+                    ).execute()
+                    
+                    for item in pl_resp.get("items", []):
+                        vid = item["contentDetails"]["videoId"]
+                        if vid not in video_ids:
+                            video_ids.append(vid)
+                            
+                    if max_videos_to_fetch and len(video_ids) >= max_videos_to_fetch: break
+                    next_page_token = pl_resp.get("nextPageToken")
+                    if not next_page_token: break
                 if max_videos_to_fetch and len(video_ids) >= max_videos_to_fetch: break
-                next_page_token = pl_resp.get("nextPageToken")
-                if not next_page_token: break
     
             if max_videos_to_fetch: video_ids = video_ids[:max_videos_to_fetch]
             if not video_ids: return []
@@ -897,7 +968,7 @@ class MainApp:
 
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
-                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails,contentDetails").execute()
+                videos_resp = self.service.videos().list(id=",".join(video_ids[i:i + 50]), part="snippet,status,fileDetails,contentDetails,statistics").execute()
                 
                 for item in videos_resp.get("items", []):
                     video_id = item["id"]
@@ -909,7 +980,8 @@ class MainApp:
                         item["snippet"],
                         item["status"],
                         item.get("fileDetails"),
-                        item.get("contentDetails")
+                        item.get("contentDetails"),
+                        item.get("statistics")
                     )
                     logger.info(f"\n[Processing Video]: {vd_obj.current_title[:60]}... (Original: {vd_obj.original_upload_filename or 'Unknown'})")
                     
@@ -1073,7 +1145,7 @@ class MainApp:
                 selected_videos.sort(key=lambda x: str(x.original_upload_filename or x.current_title).lower(), reverse=True)
             elif order == 'Random':
                 random.shuffle(selected_videos)
-            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_schedule": self.update_schedule_var.get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
+            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_schedule": self.update_schedule_var.get(), "remove_schedule": getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
             self.update_status("Updating... Check console."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
         elif self.app_mode == "upload":
             selected_videos = []
@@ -1150,6 +1222,8 @@ def update_videos_on_youtube(service, processing_data):
             else:
                 status['publishAt'] = target_time.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
                 status['privacyStatus'] = 'private'
+        elif processing_data.get("remove_schedule"):
+            status['privacyStatus'] = processing_data["visibility_to_set"] if processing_data["update_visibility"] else vd.video_status.get('privacyStatus', 'private')
         elif processing_data["update_visibility"]: 
             status['privacyStatus'] = processing_data["visibility_to_set"]
             
@@ -1160,7 +1234,12 @@ def update_videos_on_youtube(service, processing_data):
         try:
             service.videos().update(part=",".join(parts), body=body).execute(); logger.info(f"({i+1}/{len(videos)}) Updated '{snippet['title']}'.")
             success_count += 1
-        except HttpError as e: logger.error(f"FAILED update: {e.reason}"); failed_videos.append(vd.original_title)
+        except HttpError as e:
+            logger.error(f"FAILED update: {e.reason}")
+            failed_videos.append(vd.original_title)
+            if 'quota' in str(e).lower() or 'quota' in getattr(e, 'reason', '').lower():
+                logger.error("Quota exceeded. Stopping update process.")
+                break
     
     logger.info("\n--- Update Process Summary ---")
     logger.info(f"Total processed: {len(videos)}")
@@ -1193,6 +1272,9 @@ def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
         except Exception as ex: 
             logger.error(f"Upload failed: {ex}")
             failed_videos.append(e.title)
+            if isinstance(ex, HttpError) and ('quota' in str(ex).lower() or 'quota' in getattr(ex, 'reason', '').lower()):
+                logger.error("Quota exceeded. Stopping upload process.")
+                break
             
     logger.info("\n--- Upload Process Summary ---")
     logger.info(f"Total processed: {len(video_entries)}")
