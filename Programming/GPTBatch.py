@@ -385,6 +385,8 @@ UNSLOTH_CHAT_COMPLETIONS_ENDPOINT = f"{UNSLOTH_API_URL}/chat/completions"
 USER_PROMPT_TEMPLATE = """Analyze the provided content."""
 CONTEXT_PROMPT_PLACEHOLDER = "{{CONTEXT_TEXT}}"
 PREVIOUS_OUTPUT_PLACEHOLDER = "{{PREVIOUS_OUTPUT}}"
+CONTEXT_PRESETS_KEY = "_CONTEXT_PRESETS_"
+DEFAULT_CONTEXT_PRESET_NAME = "Default"
 
 # --- AUTO-LOAD SETTINGS ---
 AUTO_LOAD_EXTENSIONS = [
@@ -3784,6 +3786,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.default_context_text = getattr(self.args, "context_text", "")
         self.persistent_context_var = tk.BooleanVar(value=False)
         self.global_context_text_value = self.default_context_text
+        self.context_preset_var = tk.StringVar(value=DEFAULT_CONTEXT_PRESET_NAME)
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
@@ -4211,12 +4214,32 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             variable=self.persistent_context_var,
             command=self.on_persistent_context_toggle,
         ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        ttk.Label(tab_ai, text="Context Text:").grid(
-            row=10, column=0, sticky="w", pady=(6, 3)
+
+        # --- Context Preset Toolbar ---
+        ctx_toolbar = ttk.Frame(tab_ai)
+        ctx_toolbar.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(6, 3))
+        ttk.Label(ctx_toolbar, text="Context Preset:").pack(side=tk.LEFT, padx=(0, 5))
+        self.context_preset_combo = ttk.Combobox(
+            ctx_toolbar, textvariable=self.context_preset_var, state="readonly", width=20
         )
+        self.context_preset_combo.pack(side=tk.LEFT)
+        self.context_preset_combo.bind("<<ComboboxSelected>>", self.load_context_preset)
         ttk.Button(
-            tab_ai, text="Insert Context", command=self.insert_context_placeholder
-        ).grid(row=10, column=1, sticky="e", pady=(6, 3))
+            ctx_toolbar, text="\u2795 New", width=5, command=self.create_new_context_preset
+        ).pack(side=tk.LEFT, padx=(5, 1))
+        ttk.Button(
+            ctx_toolbar, text="\U0001F4BE Save", width=5, command=self.save_current_context_preset
+        ).pack(side=tk.LEFT, padx=1)
+        ttk.Button(
+            ctx_toolbar, text="\u270F\uFE0F Ren", width=5, command=self.rename_context_preset
+        ).pack(side=tk.LEFT, padx=1)
+        ttk.Button(
+            ctx_toolbar, text="\U0001F5D1\uFE0F Del", width=5, command=self.delete_context_preset
+        ).pack(side=tk.LEFT, padx=1)
+        ttk.Button(
+            ctx_toolbar, text="Insert Context", command=self.insert_context_placeholder
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+
         self.context_text = scrolledtext.ScrolledText(tab_ai, height=4)
         self.context_text.grid(row=11, column=0, columnspan=2, sticky="ew")
         self.context_text.bind("<<Modified>>", self._on_context_text_modified)
@@ -4877,15 +4900,152 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             return
 
         # When leaving global mode, restore the selected preset's saved local context.
-        name = self.preset_var.get()
-        if name in self.current_presets:
-            preset_local_context = self.current_presets[name].get("context_text", "")
-            self._set_context_text(preset_local_context)
+        ctx_name = self.context_preset_var.get()
+        self.load_context_preset()
+
+    # ── Context Preset Management ──────────────────────────────────────
+
+    def _get_context_presets_dict(self):
+        """Returns the _CONTEXT_PRESETS_ sub-dict from current_presets (never None)."""
+        return self.current_presets.get(CONTEXT_PRESETS_KEY, {})
+
+    def _set_context_presets_dict(self, d):
+        """Sets (and overwrites) the _CONTEXT_PRESETS_ sub-dict in current_presets."""
+        self.current_presets[CONTEXT_PRESETS_KEY] = d
+
+    def refresh_context_presets_combo(self):
+        """Rebuilds the context-preset dropdown. 'Default' is always first."""
+        ctx_presets = self._get_context_presets_dict()
+        names = [DEFAULT_CONTEXT_PRESET_NAME] + sorted(
+            [k for k in ctx_presets.keys() if k != DEFAULT_CONTEXT_PRESET_NAME]
+        )
+        self.context_preset_combo["values"] = names
+
+    def load_context_preset(self, event=None):
+        """Loads the text for the currently selected context preset into the editor."""
+        name = self.context_preset_var.get()
+        if not name or name == DEFAULT_CONTEXT_PRESET_NAME:
+            self._set_context_text("")
+            self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
+            return
+        ctx_presets = self._get_context_presets_dict()
+        text = ctx_presets.get(name, "")
+        self._set_context_text(text)
+
+    def create_new_context_preset(self):
+        new_name = tkinter.simpledialog.askstring(
+            "New Context Preset", "Enter name for new context preset:"
+        )
+        if not new_name:
+            return
+        if new_name == DEFAULT_CONTEXT_PRESET_NAME:
+            tkinter.messagebox.showwarning(
+                "Reserved Name",
+                f"'{DEFAULT_CONTEXT_PRESET_NAME}' is reserved and cannot be used.",
+            )
+            return
+        ctx_presets = self._get_context_presets_dict()
+        if new_name in ctx_presets:
+            if not tkinter.messagebox.askyesno(
+                "Overwrite", f"Context preset '{new_name}' exists. Overwrite?"
+            ):
+                return
+        ctx_presets[new_name] = self._get_context_text()
+        self._set_context_presets_dict(ctx_presets)
+        save_presets(self.current_presets)
+        self.refresh_context_presets_combo()
+        self.context_preset_var.set(new_name)
+        tkinter.messagebox.showinfo("Saved", f"Context preset '{new_name}' created.")
+
+    def save_current_context_preset(self):
+        name = self.context_preset_var.get()
+        if not name or name == DEFAULT_CONTEXT_PRESET_NAME:
+            tkinter.messagebox.showwarning(
+                "Save",
+                "Cannot save to the Default context preset. Create or select a named preset first.",
+            )
+            return
+        ctx_presets = self._get_context_presets_dict()
+        if name not in ctx_presets:
+            tkinter.messagebox.showerror("Error", f"Context preset '{name}' not found.")
+            return
+        ctx_presets[name] = self._get_context_text()
+        self._set_context_presets_dict(ctx_presets)
+        save_presets(self.current_presets)
+        tkinter.messagebox.showinfo("Saved", f"Context preset '{name}' updated.")
+
+    def rename_context_preset(self):
+        old_name = self.context_preset_var.get()
+        if not old_name or old_name == DEFAULT_CONTEXT_PRESET_NAME:
+            tkinter.messagebox.showwarning(
+                "Rename", "Cannot rename the Default context preset."
+            )
+            return
+        ctx_presets = self._get_context_presets_dict()
+        if old_name not in ctx_presets:
+            return
+        new_name = tkinter.simpledialog.askstring(
+            "Rename Context Preset",
+            f"Rename '{old_name}' to:",
+            initialvalue=old_name,
+        )
+        if not new_name or new_name == old_name:
+            return
+        if new_name == DEFAULT_CONTEXT_PRESET_NAME:
+            tkinter.messagebox.showwarning(
+                "Reserved Name",
+                f"'{DEFAULT_CONTEXT_PRESET_NAME}' is reserved and cannot be used.",
+            )
+            return
+        if new_name in ctx_presets:
+            if not tkinter.messagebox.askyesno(
+                "Overwrite", f"'{new_name}' exists. Overwrite?"
+            ):
+                return
+        ctx_presets[new_name] = ctx_presets.pop(old_name)
+        self._set_context_presets_dict(ctx_presets)
+        # Update any main presets referencing the old name
+        for pname, pdata in self.current_presets.items():
+            if pname == CONTEXT_PRESETS_KEY:
+                continue
+            if isinstance(pdata, dict) and pdata.get("context_preset_name") == old_name:
+                pdata["context_preset_name"] = new_name
+        save_presets(self.current_presets)
+        self.refresh_context_presets_combo()
+        self.context_preset_var.set(new_name)
+        tkinter.messagebox.showinfo(
+            "Renamed", f"Context preset '{old_name}' renamed to '{new_name}'."
+        )
+
+    def delete_context_preset(self):
+        name = self.context_preset_var.get()
+        if not name or name == DEFAULT_CONTEXT_PRESET_NAME:
+            tkinter.messagebox.showwarning(
+                "Delete", "Cannot delete the Default context preset."
+            )
+            return
+        ctx_presets = self._get_context_presets_dict()
+        if name not in ctx_presets:
+            return
+        if tkinter.messagebox.askyesno(
+            "Confirm", f"Delete context preset '{name}'?"
+        ):
+            del ctx_presets[name]
+            self._set_context_presets_dict(ctx_presets)
+            save_presets(self.current_presets)
+            self.refresh_context_presets_combo()
+            self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
+            self._set_context_text("")
 
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
-        self.preset_combo["values"] = sorted(list(self.current_presets.keys()))
+        # Filter out the special _CONTEXT_PRESETS_ key from the main preset list
+        preset_names = sorted(
+            [k for k in self.current_presets.keys() if k != CONTEXT_PRESETS_KEY]
+        )
+        self.preset_combo["values"] = preset_names
+        self.refresh_context_presets_combo()
 
     def load_preset(self, event=None):
         name = self.preset_var.get()
@@ -4926,17 +5086,28 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.ollama_search_var, "enable_web_search", False)
             set_var(self.use_previous_output_var, "use_previous_output_ref", False)
             set_var(self.persistent_context_var, "persistent_context", False)
-            selected_local_context = data.get("context_text", "")
-            selected_global_context = data.get(
-                "global_context_text", selected_local_context
-            )
+
+            # Load context preset selection
+            saved_ctx_preset = data.get("context_preset_name", "")
+            if saved_ctx_preset and saved_ctx_preset != DEFAULT_CONTEXT_PRESET_NAME:
+                ctx_presets = self._get_context_presets_dict()
+                if saved_ctx_preset in ctx_presets:
+                    self.context_preset_var.set(saved_ctx_preset)
+                else:
+                    # Referenced context preset was deleted; fall back to Default
+                    self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
+            else:
+                self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
 
             if self.persistent_context_var.get():
+                selected_global_context = data.get(
+                    "global_context_text", ""
+                )
                 if not self._get_context_text():
                     self._set_context_text(selected_global_context)
                 self.global_context_text_value = self._get_context_text()
             else:
-                self._set_context_text(selected_local_context)
+                self.load_context_preset()
 
             set_var(self.enable_safety_var, "enable_safety", False)
             set_var(self.harassment_var, "safety_harassment", "Off")
@@ -5036,6 +5207,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "add_filename_to_prompt": self.add_filename_var.get(),
             "use_previous_output_ref": self.use_previous_output_var.get(),
             "context_text": current_context,
+            "context_preset_name": self.context_preset_var.get(),
             "persistent_context": self.persistent_context_var.get(),
             "global_context_text": self.global_context_text_value,
             "enable_web_search": self.ollama_search_var.get(),
