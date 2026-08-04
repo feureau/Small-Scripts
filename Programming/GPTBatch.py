@@ -2698,6 +2698,68 @@ def process_chunks_sequentially(
     return stitched, responses
 
 
+def find_dynamic_context_file(input_file_path):
+    if not input_file_path:
+        return None
+    dir_name = os.path.dirname(input_file_path)
+    if not os.path.exists(dir_name):
+        return None
+    stem = os.path.splitext(os.path.basename(input_file_path))[0].lower()
+    
+    try:
+        cand_files = [f for f in os.listdir(dir_name) if f.lower().endswith(('.md', '.txt'))]
+    except Exception:
+        return None
+
+    # Step 1: Prefix match (case-insensitive)
+    prefix_matches = []
+    for f in cand_files:
+        cand_stem = os.path.splitext(f)[0].lower()
+        if stem.startswith(cand_stem) and cand_stem:
+            prefix_matches.append((len(cand_stem), f))
+    if prefix_matches:
+        prefix_matches.sort(key=lambda x: x[0], reverse=True)
+        return os.path.join(dir_name, prefix_matches[0][1])
+
+    # Step 2: Substring match (case-insensitive)
+    substring_matches = []
+    for f in cand_files:
+        cand_stem = os.path.splitext(f)[0].lower()
+        if cand_stem in stem and cand_stem:
+            substring_matches.append((len(cand_stem), f))
+    if substring_matches:
+        substring_matches.sort(key=lambda x: x[0], reverse=True)
+        return os.path.join(dir_name, substring_matches[0][1])
+
+    # Step 3: Shared words match
+    word_matches = []
+    stem_words = set(re.findall(r'\w+', stem))
+    for f in cand_files:
+        cand_stem = os.path.splitext(f)[0].lower()
+        cand_words = set(re.findall(r'\w+', cand_stem))
+        non_trivial = {w for w in cand_words if len(w) > 3}
+        shared = non_trivial.intersection(stem_words)
+        if shared:
+            word_matches.append((len(shared), f))
+    if word_matches:
+        word_matches.sort(key=lambda x: x[0], reverse=True)
+        return os.path.join(dir_name, word_matches[0][1])
+
+    # Step 4: Folder name match
+    folder_name = os.path.basename(dir_name).lower()
+    parent_folder_name = os.path.basename(os.path.dirname(dir_name)).lower()
+    for f in cand_files:
+        cand_stem = os.path.splitext(f)[0].lower()
+        if cand_stem == folder_name or cand_stem == parent_folder_name:
+            return os.path.join(dir_name, f)
+
+    # Step 5: Exactly one markdown/text file in directory fallback
+    if len(cand_files) == 1:
+        return os.path.join(dir_name, cand_files[0])
+
+    return None
+
+
 def apply_context_to_prompt(user_prompt, context_text, previous_output_text=""):
     prompt = user_prompt or ""
     context = (context_text or "").strip()
@@ -3787,6 +3849,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.persistent_context_var = tk.BooleanVar(value=False)
         self.global_context_text_value = self.default_context_text
         self.context_preset_var = tk.StringVar(value=DEFAULT_CONTEXT_PRESET_NAME)
+        self.load_context_from_file_var = tk.BooleanVar(value=False)
+        self.context_file_mode_var = tk.StringVar(value="static")
+        self.static_context_path_var = tk.StringVar(value="")
         self.group_files_var = tk.BooleanVar(value=False)
         self.group_size_var = tk.IntVar(value=3)
         self.overwrite_var = tk.BooleanVar(value=False)
@@ -3981,6 +4046,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ).pack(side=tk.LEFT, padx=(5, 1))
         ttk.Button(
             toolbar, text="💾 Save", width=6, command=self.save_current_preset
+        ).pack(side=tk.LEFT, padx=1)
+        ttk.Button(
+            toolbar, text="💾 As...", width=6, command=self.save_preset_as
         ).pack(side=tk.LEFT, padx=1)
         ttk.Button(toolbar, text="✏️ Ren", width=6, command=self.rename_preset).pack(
             side=tk.LEFT, padx=1
@@ -4241,11 +4309,75 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         ).pack(side=tk.RIGHT, padx=(5, 0))
 
         self.context_text = scrolledtext.ScrolledText(tab_ai, height=4)
-        self.context_text.grid(row=11, column=0, columnspan=2, sticky="ew")
+        self.context_text.grid(row=12, column=0, columnspan=2, sticky="ew")
         self.context_text.bind("<<Modified>>", self._on_context_text_modified)
         if self.default_context_text:
             self.context_text.insert(tk.END, self.default_context_text)
             self.context_text.edit_modified(False)
+
+        # --- File Context UI ---
+        file_ctx_frame = ttk.Frame(tab_ai)
+        file_ctx_frame.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(6, 3))
+
+        self.load_context_from_file_check = ttk.Checkbutton(
+            file_ctx_frame,
+            text="Load Context from File",
+            variable=self.load_context_from_file_var,
+            command=self.toggle_file_context_ui,
+        )
+        self.load_context_from_file_check.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.file_ctx_mode_static = ttk.Radiobutton(
+            file_ctx_frame,
+            text="Static File",
+            value="static",
+            variable=self.context_file_mode_var,
+            command=self.toggle_file_context_ui,
+        )
+        self.file_ctx_mode_static.pack(side=tk.LEFT, padx=5)
+
+        self.file_ctx_mode_dynamic = ttk.Radiobutton(
+            file_ctx_frame,
+            text="Dynamic (Match Input)",
+            value="dynamic",
+            variable=self.context_file_mode_var,
+            command=self.toggle_file_context_ui,
+        )
+        self.file_ctx_mode_dynamic.pack(side=tk.LEFT, padx=5)
+
+        self.static_context_path_entry = ttk.Entry(
+            file_ctx_frame,
+            textvariable=self.static_context_path_var,
+            width=25,
+        )
+        self.static_context_path_entry.pack(side=tk.LEFT, padx=(5, 2), fill=tk.X, expand=True)
+
+        self.static_context_browse_btn = ttk.Button(
+            file_ctx_frame,
+            text="...",
+            width=3,
+            command=self.browse_static_context_file,
+        )
+        self.static_context_browse_btn.pack(side=tk.LEFT, padx=1)
+
+        self.file_ctx_load_btn = ttk.Button(
+            file_ctx_frame,
+            text="Load to Field",
+            width=12,
+            command=self.load_file_context_to_field,
+        )
+        self.file_ctx_load_btn.pack(side=tk.LEFT, padx=(5, 1))
+
+        self.file_ctx_save_btn = ttk.Button(
+            file_ctx_frame,
+            text="Save to File",
+            width=12,
+            command=self.save_field_context_to_file,
+        )
+        self.file_ctx_save_btn.pack(side=tk.LEFT, padx=1)
+
+        # Call toggle initially to configure state
+        self.toggle_file_context_ui()
 
         tab_out = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(tab_out, text="Output & Batch")
@@ -5037,6 +5169,67 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
             self._set_context_text("")
 
+    def toggle_file_context_ui(self):
+        enabled = self.load_context_from_file_var.get()
+        mode = self.context_file_mode_var.get()
+
+        if not enabled:
+            self.file_ctx_mode_static.config(state="disabled")
+            self.file_ctx_mode_dynamic.config(state="disabled")
+            self.static_context_path_entry.config(state="disabled")
+            self.static_context_browse_btn.config(state="disabled")
+            self.file_ctx_load_btn.config(state="disabled")
+            self.file_ctx_save_btn.config(state="disabled")
+        else:
+            self.file_ctx_mode_static.config(state="normal")
+            self.file_ctx_mode_dynamic.config(state="normal")
+            if mode == "static":
+                self.static_context_path_entry.config(state="normal")
+                self.static_context_browse_btn.config(state="normal")
+                self.file_ctx_load_btn.config(state="normal")
+                self.file_ctx_save_btn.config(state="normal")
+            else:
+                self.static_context_path_entry.config(state="disabled")
+                self.static_context_browse_btn.config(state="disabled")
+                self.file_ctx_load_btn.config(state="disabled")
+                self.file_ctx_save_btn.config(state="disabled")
+
+    def browse_static_context_file(self):
+        file_path = filedialog.askopenfilename(
+            parent=self,
+            title="Select Static Context File",
+            filetypes=[("Text / Markdown Files", "*.md *.txt"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.static_context_path_var.set(file_path)
+
+    def load_file_context_to_field(self):
+        file_path = self.static_context_path_var.get()
+        if not file_path or not os.path.exists(file_path):
+            tkinter.messagebox.showwarning("Load Context", "Selected context file does not exist.")
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            self._set_context_text(content)
+            console_log(f"Loaded context from {file_path}", "INFO")
+        except Exception as e:
+            tkinter.messagebox.showerror("Load Context Error", f"Failed to load file: {e}")
+
+    def save_field_context_to_file(self):
+        file_path = self.static_context_path_var.get()
+        if not file_path:
+            tkinter.messagebox.showwarning("Save Context", "No static context file path selected.")
+            return
+        try:
+            content = self._get_context_text()
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            console_log(f"Saved context to {file_path}", "SUCCESS")
+            tkinter.messagebox.showinfo("Saved", f"Context text saved to {file_path}")
+        except Exception as e:
+            tkinter.messagebox.showerror("Save Context Error", f"Failed to save file: {e}")
+
     def refresh_presets_combo(self):
         console_log("Loading presets from script file...", "INFO")
         self.current_presets = load_presets()
@@ -5098,6 +5291,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
             else:
                 self.context_preset_var.set(DEFAULT_CONTEXT_PRESET_NAME)
+
+            # Load file context settings
+            self.load_context_from_file_var.set(data.get("load_context_from_file", False))
+            self.context_file_mode_var.set(data.get("context_file_mode", "static"))
+            self.static_context_path_var.set(data.get("static_context_path", ""))
+            self.toggle_file_context_ui()
 
             if self.persistent_context_var.get():
                 selected_global_context = data.get(
@@ -5208,6 +5407,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "use_previous_output_ref": self.use_previous_output_var.get(),
             "context_text": current_context,
             "context_preset_name": self.context_preset_var.get(),
+            "load_context_from_file": self.load_context_from_file_var.get(),
+            "context_file_mode": self.file_ctx_mode_static.get() if hasattr(self, "file_ctx_mode_static") and hasattr(self.file_ctx_mode_static, "get") else self.context_file_mode_var.get(),
+            "static_context_path": self.static_context_path_var.get(),
             "persistent_context": self.persistent_context_var.get(),
             "global_context_text": self.global_context_text_value,
             "enable_web_search": self.ollama_search_var.get(),
@@ -5248,9 +5450,92 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         save_presets(self.current_presets)
         tkinter.messagebox.showinfo("Saved", f"Preset '{name}' updated.")
 
+    def get_default_settings_dict(self):
+        return {
+            "prompt": "",
+            "engine": DEFAULT_ENGINE,
+            "engine_configs": {
+                eng: {
+                    "api_key_env": "",
+                    "api_url": "",
+                    "api_url_env": "",
+                } for eng in self.engine_configs.keys()
+            },
+            "model": "",
+            "output_folder": DEFAULT_OUTPUT_SUBFOLDER_NAME,
+            "output_under_input": False,
+            "merge_outputs": False,
+            "output_suffix": DEFAULT_RAW_OUTPUT_SUFFIX,
+            "output_extension": "",
+            "overwrite_original": False,
+            "stream_output": True,
+            "group_size": 3,
+            "group_files": False,
+            "validate_json": False,
+            "validate_json_keys": False,
+            "clean_markdown": True,
+            "save_log": False,
+            "allow_empty_files": False,
+            "delay_min": 0,
+            "delay_sec": 0,
+            "concurrent_jobs": 1,
+            "upload_mode": "parallel",
+            "stop_queue_on_model_unavailable": True,
+            "add_filename_to_prompt": False,
+            "use_previous_output_ref": False,
+            "context_text": "",
+            "context_preset_name": DEFAULT_CONTEXT_PRESET_NAME,
+            "load_context_from_file": False,
+            "context_file_mode": "static",
+            "static_context_path": "",
+            "persistent_context": False,
+            "global_context_text": "",
+            "enable_web_search": False,
+            "enable_safety": False,
+            "safety_harassment": "Off",
+            "safety_hate_speech": "Off",
+            "safety_sexually_explicit": "Off",
+            "safety_dangerous_content": "Off",
+            "enable_img_conversion": False,
+            "temp_img_fmt": "PNG",
+            "img_quality": 100,
+            "img_max_dim": 0,
+            "force_conversion": False,
+            "save_img_to_output": False,
+            "rename_mode": False,
+            "rename_method": "full",
+            "enable_thinking": False,
+            "enable_chunking": False,
+            "chunk_size": 4000,
+            "split_chunks_into_jobs": False,
+            "merge_chunks": True,
+            "model_prefix": False,
+            "add_context_as_suffix": False,
+            "enable_multipass": False,
+            "multipass_count": 1,
+            "multipass_prompts": [],
+        }
+
     def create_new_preset(self):
         new_name = tkinter.simpledialog.askstring(
             "New Preset", "Enter Name for New Preset:"
+        )
+        if not new_name:
+            return
+        if new_name in self.current_presets:
+            if not tkinter.messagebox.askyesno(
+                "Overwrite", f"Preset '{new_name}' exists. Overwrite?"
+            ):
+                return
+        self.current_presets[new_name] = self.get_default_settings_dict()
+        save_presets(self.current_presets)
+        self.refresh_presets_combo()
+        self.preset_var.set(new_name)
+        self.load_preset()
+
+    def save_preset_as(self):
+        new_name = tkinter.simpledialog.askstring(
+            "Save Preset As", "Enter Name for New Preset:"
         )
         if not new_name:
             return
@@ -6063,6 +6348,30 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def _build_base_job_data(self, jid, batch, prompt_text, mod, safe, total_delay, 
                             current_context, use_persistent_context,
                             multipass_enabled, multipass_count, multipass_prompts):
+        resolved_context = current_context
+        
+        # Resolve Context from File if enabled
+        if self.load_context_from_file_var.get():
+            mode = self.context_file_mode_var.get()
+            if mode == "static":
+                file_path = self.static_context_path_var.get()
+                if file_path and os.path.exists(file_path):
+                    try:
+                        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                            resolved_context = f.read()
+                    except Exception as e:
+                        console_log(f"Error loading static context file {file_path}: {e}", "ERROR")
+            elif mode == "dynamic" and batch:
+                # Dynamic matching based on first file in batch
+                matched_file = find_dynamic_context_file(batch[0])
+                if matched_file and os.path.exists(matched_file):
+                    try:
+                        with open(matched_file, "r", encoding="utf-8", errors="replace") as f:
+                            resolved_context = f.read()
+                        console_log(f"Matched and loaded context from: {os.path.basename(matched_file)} for {os.path.basename(batch[0])}", "INFO")
+                    except Exception as e:
+                        console_log(f"Error loading dynamic context file {matched_file}: {e}", "ERROR")
+
         return {
             "job_id": jid,
             "filepaths_group": batch,
@@ -6074,14 +6383,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "add_filename_to_prompt": self.add_filename_var.get(),
             "output_suffix": self.suffix_var.get()
             + (
-                sanitize_filename(current_context)
-                if self.add_context_as_suffix_var.get() and current_context
+                sanitize_filename(resolved_context)
+                if self.add_context_as_suffix_var.get() and resolved_context
                 else ""
             ),
             "use_previous_output_ref": self.use_previous_output_var.get(),
-            "context_text": self.global_context_text_value
-            if use_persistent_context
-            else current_context,
+            "context_text": resolved_context,
             "use_persistent_context": use_persistent_context,
             "overwrite_original": self.overwrite_var.get(),
             "output_under_input": self.output_under_input_var.get(),

@@ -88,12 +88,12 @@ MODEL_ALIASES = {
 
 DEFAULT_MODEL_KEY = "deepdml/faster-whisper-large-v3-turbo-ct2" # CHANGED
 DEFAULT_TASK = "transcribe"
-DEFAULT_VAD_THRESHOLD = 0.3
+DEFAULT_VAD_THRESHOLD = 0.1
 DEFAULT_VAD_MIN_SILENCE_MS = 300
-DEFAULT_WHISPER_VAD_THRESHOLD = 0.2
+DEFAULT_WHISPER_VAD_THRESHOLD = 0.05
 DEFAULT_WHISPER_VAD_MIN_SILENCE_MS = 500
 DEFAULT_MIN_SUB_DURATION = 0.7
-DEFAULT_MAX_REPEAT_RUN = 8
+DEFAULT_MAX_REPEAT_RUN = 20
 DEFAULT_PHRASE_PAUSE_SPLIT_S = 0.85
 DEFAULT_MAX_SUB_DURATION = 7.0
 DEFAULT_MAX_SUB_WORDS = 18
@@ -1723,7 +1723,7 @@ def main():
     parser.add_argument("--low-volume-mode", action="store_true", help="Bias toward keeping quiet speech (less aggressive Whisper VAD)")
     parser.add_argument("--rescue-missed", action=argparse.BooleanOptionalAction, default=True, help="Run a second no-VAD pass and merge likely-missed lines")
 
-    parser.add_argument("--use_vad", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use_vad", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--whisper_vad_threshold", type=float, default=DEFAULT_WHISPER_VAD_THRESHOLD)
     parser.add_argument("--whisper_vad_min_silence_ms", type=int, default=DEFAULT_WHISPER_VAD_MIN_SILENCE_MS)
     parser.add_argument("--min_sub_duration", type=float, default=DEFAULT_MIN_SUB_DURATION)
@@ -1738,7 +1738,7 @@ def main():
     parser.add_argument("--max_repeat_run", type=int, default=DEFAULT_MAX_REPEAT_RUN)
     parser.add_argument("--vad_threshold", type=float, default=DEFAULT_VAD_THRESHOLD)
     parser.add_argument("--vad_min_silence_ms", type=int, default=DEFAULT_VAD_MIN_SILENCE_MS)
-    parser.add_argument("--vad_filter", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--vad_filter", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--beam_size", type=int, default=5)
     parser.add_argument("--best_of", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0)
@@ -1746,7 +1746,7 @@ def main():
     parser.add_argument("--cl_ratio", type=float, default=2.0)
     parser.add_argument("--demucs_model", type=str, default="htdemucs_ft")
     parser.add_argument("--demucs_shifts", type=int, default=2)
-    parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=True, help="Write detailed per-run debug log")
+    parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=False, help="Write detailed per-run debug log")
 
     parser.add_argument("-d", "--diarize", action="store_true", help="Enable speaker diarization via pyannote.audio")
     parser.add_argument("--hf-token", type=str, default=os.environ.get("HF_TOKEN"), help="HuggingFace token for pyannote.audio (defaults to HF_TOKEN env var)")
@@ -1793,6 +1793,11 @@ def main():
     PREFERRED_COMPUTE_TYPE = args.precision
 
     if not hasattr(args, 'pipeline'): args.pipeline = []
+
+    # Force Compression/Limiter on by default to boost quiet background game voices
+    if 'cl' not in args.pipeline:
+        args.pipeline.append('cl')
+        args.cl = True
 
     if args.high_quality:
         args.model = "large-v3"

@@ -69,6 +69,10 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.14 - Subtitle Matching Fixes (2026-08-01)
+    • FIX: Removed over-aggressive prefix truncation that caused unrelated videos to steal subtitles (e.g., `Video - full` matching `Video - short.srt`).
+    • FIX: Added ownership checks to ensure shorter video names don't claim subtitles belonging to longer video names in the same folder.
+    • FEATURE: Hybrid video sub-detection now correctly searches for the base video name's subtitles in addition to `-top` or `-bot` specific subtitles.
 v8.9 - Codec Selection & Validation (2026-02-05)
     • FEATURE: Added explicit codec dropdown (H.264/HEVC/AV1) in the Encoder tab.
     • FEATURE: Codec list is linked to SDR/HDR output format (HDR requires HEVC/AV1).
@@ -3578,17 +3582,30 @@ class VideoProcessorApp:
             tag = display_tag if display_tag is not None else self._build_display_tag_for_subtitle(subtitle_path)
             self._apply_subtitle_to_job(index, subtitle_path, tag)
 
-    def _detect_subtitles_for_video_single(self, video_path):
+    def _detect_subtitles_for_video_single(self, video_path, mock_dir=None, mock_basename=None):
         detected_subs = []
-        if not video_path or not os.path.exists(video_path):
+        if video_path and os.path.exists(video_path):
+            dir_name = os.path.dirname(video_path)
+            video_basename = os.path.splitext(os.path.basename(video_path))[0]
+        else:
+            dir_name = mock_dir
+            video_basename = mock_basename
+            
+        if not dir_name or not os.path.isdir(dir_name) or not video_basename:
             return detected_subs
-        dir_name = os.path.dirname(video_path)
-        video_basename = os.path.splitext(os.path.basename(video_path))[0]
         
+        # Only use the exact video basename; do not truncate trailing words
         prefixes = [video_basename]
-        for i in range(len(video_basename)-1, 0, -1):
-            if video_basename[i] in [' ', '.', '-', '_']:
-                prefixes.append(video_basename[:i])
+        
+        # Build a set of all video basenames in the directory for ownership verification
+        all_video_basenames = set()
+        supported_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv'}
+        try:
+            for item in os.listdir(dir_name):
+                if os.path.splitext(item)[1].lower() in supported_exts:
+                    all_video_basenames.add(os.path.splitext(item)[0].lower())
+        except Exception:
+            pass
                 
         best_subs_by_suffix = {}
         
@@ -3608,15 +3625,27 @@ class VideoProcessorApp:
                         elif sub_basename.startswith(prefix):
                             remainder = sub_basename[len(prefix):]
                             if remainder and remainder[0] in [' ', '.', '-', '_']:
+                                # OWNERSHIP CHECK: Ensure this subtitle doesn't rightfully belong
+                                # to another video file with a longer, more specific name.
+                                belongs_to_other = False
+                                for other_vid in all_video_basenames:
+                                    if len(other_vid) > len(prefix) and sub_basename.lower().startswith(other_vid):
+                                        other_rem = sub_basename.lower()[len(other_vid):]
+                                        if not other_rem or other_rem[0] in [' ', '.', '-', '_']:
+                                            belongs_to_other = True
+                                            break
+                                if belongs_to_other:
+                                    continue
+                                
                                 matched_prefix = prefix
                                 matched_suffix = remainder
                                 break
                                 
                     if matched_prefix is not None:
+                        full_path = os.path.join(dir_name, item)
+                        display_tag = "(Default)" if matched_suffix == "" else f"({matched_suffix.strip()})"
                         prefix_len = len(matched_prefix)
                         if matched_suffix not in best_subs_by_suffix or prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']:
-                            full_path = os.path.join(dir_name, item)
-                            display_tag = "(Default)" if matched_suffix == "" else f"({matched_suffix.strip()})"
                             best_subs_by_suffix[matched_suffix] = {
                                 'path': full_path,
                                 'suffix': matched_suffix,
@@ -3632,12 +3661,13 @@ class VideoProcessorApp:
             del sub_info['prefix_len']
             detected_subs.append(sub_info)
 
-        embedded_subs = get_subtitle_stream_info(video_path)
-        for relative_index, sub_stream in enumerate(embedded_subs):
-            tags = sub_stream.get("tags", {})
-            lang = tags.get("language", "und")
-            title = tags.get("title", f"Track {sub_stream.get('index')}")
-            detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
+        if video_path and os.path.exists(video_path):
+            embedded_subs = get_subtitle_stream_info(video_path)
+            for relative_index, sub_stream in enumerate(embedded_subs):
+                tags = sub_stream.get("tags", {})
+                lang = tags.get("language", "und")
+                title = tags.get("title", f"Track {sub_stream.get('index')}")
+                detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "", 'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
 
         return detected_subs
 
@@ -3675,10 +3705,12 @@ class VideoProcessorApp:
                 
             top_subs = self._detect_subtitles_for_video_single(top_file)
             bot_subs = self._detect_subtitles_for_video_single(bot_file)
+            # Explicitly search for base-name subtitles shared by the hybrid pair
+            base_subs = self._detect_subtitles_for_video_single(None, mock_dir=os.path.dirname(video_path), mock_basename=os.path.basename(prefix))
             
             combined = []
             seen = set()
-            for sub in top_subs + bot_subs:
+            for sub in top_subs + bot_subs + base_subs:
                 if sub['path'] not in seen:
                     seen.add(sub['path'])
                     combined.append(sub)

@@ -613,10 +613,38 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
         
         current_preset_name.set(name)
 
+    def get_default_preset_data():
+        return {
+            'decoding_mode': "Hardware",
+            'max_processes': "1",
+            'frame_rate': frame_rate,
+            'output_color_mode': "Auto (Match Source)",
+            'ai_upscale_enable': False,
+            'resolution_choice': "No Resize",
+            'fruc_enable': False,
+            'denoise_enable': False,
+            'artifact_enable': False,
+            'rate_control_mode': "CQP",
+            'qvbr': default_qvbr,
+            'cqp_i': DEFAULT_CQP_I,
+            'cqp_p': DEFAULT_CQP_P,
+            'cqp_b': DEFAULT_CQP_B,
+            'gop_len': str(GOP_LENGTH),
+            'bracket_steps': "2",
+            'step_size': "3",
+            'crop_w': str(crop_params[0]),
+            'crop_h': str(crop_params[1]),
+            'crop_x': str(crop_params[2]),
+            'crop_y': str(crop_params[3]),
+            'no_crop': False,
+            'sleep_enable': False,
+            'audio_converts': [False] * len(convert_vars)
+        }
+
     def save_current_preset():
         name = current_preset_name.get()
         if not name:
-            create_new_preset()
+            save_preset_as()
             return
         
         # Gather data
@@ -653,6 +681,19 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
 
     def create_new_preset():
         name = simpledialog.askstring("New Preset", "Enter name for new preset:")
+        if name:
+            if name in presets_dict:
+                 if not messagebox.askyesno("Overwrite", f"Preset '{name}' already exists. Overwrite?"):
+                     return
+            presets_dict[name] = get_default_preset_data()
+            save_presets_to_file()
+            update_preset_combobox()
+            preset_combobox.set(name)
+            apply_preset()
+            messagebox.showinfo("Success", f"Created new preset '{name}' from defaults.")
+
+    def save_preset_as():
+        name = simpledialog.askstring("Save Preset As", "Enter name for new preset:")
         if name:
             if name in presets_dict:
                  if not messagebox.askyesno("Overwrite", f"Preset '{name}' already exists. Overwrite?"):
@@ -1050,6 +1091,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
     preset_btn_frame = tk.Frame(preset_frame)
     preset_btn_frame.pack(fill='x', padx=5, pady=2)
     tk.Button(preset_btn_frame, text="Save", command=save_current_preset).pack(side='left', fill='x', expand=True, padx=1)
+    tk.Button(preset_btn_frame, text="Save As", command=save_preset_as).pack(side='left', fill='x', expand=True, padx=1)
     tk.Button(preset_btn_frame, text="New", command=create_new_preset).pack(side='left', fill='x', expand=True, padx=1)
     tk.Button(preset_btn_frame, text="Rename", command=rename_preset).pack(side='left', fill='x', expand=True, padx=1)
     tk.Button(preset_btn_frame, text="Delete", command=delete_preset).pack(side='left', fill='x', expand=True, padx=1)
