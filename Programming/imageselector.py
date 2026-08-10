@@ -3,6 +3,41 @@ from tkinter import ttk, filedialog
 from PIL import Image, ImageTk
 import os
 import shutil
+import io
+from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+
+try:
+    import rawpy
+    import numpy as np
+    RAW_SUPPORT = True
+except ImportError:
+    RAW_SUPPORT = False
+
+RAW_EXTENSIONS = ('.cr2', '.cr3', '.nef', '.arw', '.dng', '.orf', '.rw2', '.pef', '.raf')
+STANDARD_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
+VALID_EXTENSIONS = STANDARD_EXTENSIONS + (RAW_EXTENSIONS if RAW_SUPPORT else ())
+
+def open_image_file(img_path, is_thumbnail=False):
+    ext = os.path.splitext(img_path)[1].lower()
+
+    if ext in RAW_EXTENSIONS and RAW_SUPPORT:
+        with rawpy.imread(img_path) as raw:
+            # First try extracting embedded JPEG preview (instant for both thumbnails and main previews)
+            try:
+                thumb = raw.extract_thumb()
+                if thumb.format == rawpy.ThumbFormat.JPEG:
+                    return Image.open(io.BytesIO(thumb.data))
+                elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                    return Image.fromarray(thumb.data)
+            except Exception:
+                pass
+
+            # Fallback if no embedded preview exists: half_size=is_thumbnail is much faster than full demosaicing
+            rgb = raw.postprocess(half_size=is_thumbnail, use_camera_wb=True)
+            return Image.fromarray(rgb)
+    else:
+        return Image.open(img_path)
 
 class ImageSorterApp:
     def __init__(self, root):
@@ -24,6 +59,11 @@ class ImageSorterApp:
         self.image_canvas_img = None
         self.cursor_x = 0
         self.cursor_y = 0
+
+        # Background loading & LRU caching (max 25 full images in RAM)
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.preview_cache = OrderedDict()
+        self.max_cache_size = 25
 
         self.create_widgets()
         self.setup_bindings()
@@ -105,9 +145,8 @@ class ImageSorterApp:
     def load_images(self, file_list=None):
         # Look in the active working directory, not universally os.getcwd()
         if file_list is None:
-            valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
             try:
-                all_files = [f for f in os.listdir(self.current_working_dir) if f.lower().endswith(valid_extensions)]
+                all_files = [f for f in os.listdir(self.current_working_dir) if f.lower().endswith(VALID_EXTENSIONS)]
             except FileNotFoundError:
                 all_files = []
         else:
@@ -122,28 +161,28 @@ class ImageSorterApp:
         try:
             # Join the current directory path with the file name
             img_path = os.path.join(self.current_working_dir, filename)
-            with Image.open(img_path) as img:
-                img.thumbnail((100, 100))
-                photo = ImageTk.PhotoImage(img)
-                self.thumbnails.append(photo)
-                
-                frame = ttk.Frame(self.filmstrip_frame)
-                frame.pack(side=tk.LEFT, padx=5, pady=5)
-                self.thumbnail_frames.append(frame)
-                self.add_scroll_bindings(frame)
-                
-                var = tk.BooleanVar(value=False)
-                self.selected[filename] = var
-                
-                cb = ttk.Checkbutton(frame, variable=var)
-                cb.pack(side=tk.TOP)
-                self.add_scroll_bindings(cb)
-                
-                lbl = ttk.Label(frame, image=photo)
-                lbl.image = photo
-                lbl.bind("<Button-1>", lambda e, f=filename: self.show_preview_by_filename(f))
-                self.add_scroll_bindings(lbl)
-                lbl.pack(side=tk.TOP)
+            img = open_image_file(img_path, is_thumbnail=True)
+            img.thumbnail((100, 100))
+            photo = ImageTk.PhotoImage(img)
+            self.thumbnails.append(photo)
+            
+            frame = ttk.Frame(self.filmstrip_frame)
+            frame.pack(side=tk.LEFT, padx=5, pady=5)
+            self.thumbnail_frames.append(frame)
+            self.add_scroll_bindings(frame)
+            
+            var = tk.BooleanVar(value=False)
+            self.selected[filename] = var
+            
+            cb = ttk.Checkbutton(frame, variable=var)
+            cb.pack(side=tk.TOP)
+            self.add_scroll_bindings(cb)
+            
+            lbl = ttk.Label(frame, image=photo)
+            lbl.image = photo
+            lbl.bind("<Button-1>", lambda e, f=filename: self.show_preview_by_filename(f))
+            self.add_scroll_bindings(lbl)
+            lbl.pack(side=tk.TOP)
             return True
         except Exception as e:
             print(f"Error loading {filename}: {e}")
@@ -165,22 +204,62 @@ class ImageSorterApp:
             filename = self.image_files[self.current_index]
             self.load_preview_image(filename)
             self.center_filmstrip()
+            self.prefetch_neighbors(index)
 
     def load_preview_image(self, filename):
-        try:
-            # Need to specify full path so it doesn't just look where script was executed
-            img_path = os.path.join(self.current_working_dir, filename)
-            self.original_image = Image.open(img_path)
+        if filename in self.preview_cache:
+            # Instant move-to-end for LRU cache hit
+            self.preview_cache.move_to_end(filename)
+            self.original_image = self.preview_cache[filename]
             self.reset_zoom()
+        else:
+            # Async background load off the main thread
+            self.executor.submit(self._async_load_image, filename, self.current_index)
+
+    def _async_load_image(self, filename, request_index):
+        try:
+            img_path = os.path.join(self.current_working_dir, filename)
+            img = open_image_file(img_path, is_thumbnail=False)
+            
+            # Store in cache
+            self.preview_cache[filename] = img
+            self.preview_cache.move_to_end(filename)
+            if len(self.preview_cache) > self.max_cache_size:
+                self.preview_cache.popitem(last=False)
+                
+            # If user is still looking at this image, update UI on main thread
+            if self.current_index == request_index:
+                self.root.after(0, self._apply_loaded_image, filename)
         except Exception as e:
             print(f"Error loading preview for {filename}: {e}")
-            if self.image_files:
-                if self.current_index < len(self.image_files) - 1:
-                    self.show_preview(self.current_index + 1)
-                elif self.current_index > 0:
-                    self.show_preview(self.current_index - 1)
-                else:
-                    self.preview_canvas.delete("all")
+
+    def _apply_loaded_image(self, filename):
+        if self.image_files and self.image_files[self.current_index] == filename:
+            if filename in self.preview_cache:
+                self.original_image = self.preview_cache[filename]
+                self.reset_zoom()
+
+    def prefetch_neighbors(self, index):
+        # Pre-fetch adjacent images in background thread (1 ahead, 1 behind, 2 ahead)
+        neighbors_indices = [index + 1, index - 1, index + 2, index - 2]
+        for idx in neighbors_indices:
+            if 0 <= idx < len(self.image_files):
+                fname = self.image_files[idx]
+                if fname not in self.preview_cache:
+                    self.executor.submit(self._async_prefetch_image, fname)
+
+    def _async_prefetch_image(self, filename):
+        try:
+            if filename in self.preview_cache:
+                return
+            img_path = os.path.join(self.current_working_dir, filename)
+            img = open_image_file(img_path, is_thumbnail=False)
+            self.preview_cache[filename] = img
+            self.preview_cache.move_to_end(filename)
+            if len(self.preview_cache) > self.max_cache_size:
+                self.preview_cache.popitem(last=False)
+        except Exception as e:
+            pass
 
     def update_highlight(self):
         style = ttk.Style()
@@ -343,6 +422,7 @@ class ImageSorterApp:
         self.thumbnails.clear()
         self.selected.clear()
         self.thumbnail_frames.clear()
+        self.preview_cache.clear()
         self.preview_canvas.delete("all")
         
         self.current_index = 0
