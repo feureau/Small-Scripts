@@ -90,9 +90,9 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
             "output_subfolder_by_subtitle": false,
-            "group_by_preset": true,
+            "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
             "use_sharpening": true,
@@ -234,7 +234,7 @@
             "subtitle_margin_l": "50",
             "subtitle_margin_r": "100",
             "subtitle_seam_h_offset": "0",
-            "subtitle_seam_v_offset": "-256",
+            "subtitle_seam_v_offset": "0",
             "fill_color": "#FFAA00",
             "fill_alpha": 0,
             "outline_color": "#000000",
@@ -248,9 +248,9 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
             "output_subfolder_by_subtitle": false,
-            "group_by_preset": true,
+            "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
             "use_sharpening": true,
@@ -317,6 +317,7 @@
     },
     "Vertical Blur Offset 4K": {
         "options": {
+            "output_mode": "local",
             "resolution": "2160p",
             "upscale_algo": "bicubic",
             "output_format": "sdr",
@@ -339,7 +340,7 @@
             "video_offset_y": "-360",
             "pixelate_multiplier": "16",
             "ambient_spread": "2",
-            "pixelate_brightness": "-0.4",
+            "pixelate_brightness": "-0.1",
             "pixelate_saturation": "0.6",
             "blur_sigma": "30",
             "blur_steps": "1",
@@ -406,6 +407,7 @@
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
             "output_to_subfolders": false,
+            "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
@@ -467,7 +469,8 @@
             "on_clean_copy_if_subs": false,
             "on_scan_subs": false,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Vertical Blur Offset HD": {

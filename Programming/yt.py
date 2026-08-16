@@ -603,6 +603,9 @@ class MainApp:
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview); self.tree.configure(yscrollcommand=vsb.set); self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); vsb.pack(side=tk.RIGHT, fill=tk.Y); self.tree.bind('<<TreeviewSelect>>', self.on_video_select_display_info)
 
         list_controls = ttk.Frame(list_lf); list_controls.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(list_controls, text="Search:").pack(side=tk.LEFT, padx=(0, 2))
+        self.search_var = tk.StringVar(); self.search_var.trace_add("write", lambda *args: self.apply_filters())
+        self.search_entry = ttk.Entry(list_controls, textvariable=self.search_var, width=20); self.search_entry.pack(side=tk.LEFT, padx=(0, 10))
         self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
         ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Export Data', command=self.export_data).pack(side=tk.RIGHT, padx=2)
 
@@ -811,20 +814,29 @@ class MainApp:
     def _set_status_text(self, message): self.status_bar.config(text=message)
 
     def apply_filters(self):
-        if self.app_mode != "update": return
-        active_filters = {key for key, var in self.filter_vars.items() if var.get()}
-        if not active_filters: return self._populate_treeview(self.videos_to_process)
+        search_text = getattr(self, 'search_var', tk.StringVar()).get().lower()
+        active_filters = {key for key, var in getattr(self, 'filter_vars', {}).items() if var.get()}
+        if not active_filters and not search_text: return self._populate_treeview(self.videos_to_process)
         filtered_list = []
         for vd in self.videos_to_process:
-            if not isinstance(vd, VideoData): continue
-            status = vd.video_status.get('privacyStatus'); has_schedule = bool(vd.video_status.get('publishAt'))
-            conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_desc_file": bool(vd.description_file_path), "no_desc_file": not vd.description_file_path, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path}
-            if vd.width > 0 and vd.height > 0: conditions.update({"is_horizontal": vd.width > vd.height, "is_vertical": vd.height >= vd.width})
-            if all(conditions.get(key, True) for key in active_filters): filtered_list.append(vd)
+            if isinstance(vd, VideoData):
+                if search_text and search_text not in vd.current_title.lower() and search_text not in vd.original_title.lower():
+                    continue
+                status = vd.video_status.get('privacyStatus'); has_schedule = bool(vd.video_status.get('publishAt'))
+                conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_desc_file": bool(vd.description_file_path), "no_desc_file": not vd.description_file_path, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path}
+                if vd.width > 0 and vd.height > 0: conditions.update({"is_horizontal": vd.width > vd.height, "is_vertical": vd.height >= vd.width})
+                if active_filters and not all(conditions.get(key, True) for key in active_filters): continue
+                filtered_list.append(vd)
+            elif isinstance(vd, VideoEntry):
+                if search_text and search_text not in vd.title.lower() and search_text not in Path(vd.filepath).name.lower():
+                    continue
+                filtered_list.append(vd)
         self._populate_treeview(filtered_list)
     
     def clear_filters(self):
-        for var in self.filter_vars.values(): var.set(False); self.apply_filters()
+        for var in getattr(self, 'filter_vars', {}).values(): var.set(False)
+        if hasattr(self, 'search_var'): self.search_var.set("")
+        self.apply_filters()
     
     def _populate_treeview(self, videos_to_display):
         self.tree.delete(*self.tree.get_children())
