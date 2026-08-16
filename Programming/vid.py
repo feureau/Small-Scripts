@@ -2124,6 +2124,9 @@ class VideoProcessorApp:
         self.split_subtitles_by_chapter_var = tk.BooleanVar(value=DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER)
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
+        self.aspect_blur_var = tk.BooleanVar(value=False)
+        self.aspect_pixelate_var = tk.BooleanVar(value=False)
+        self.aspect_ambient_var = tk.BooleanVar(value=False)
         self.pad_color_var = tk.StringVar(value=DEFAULT_PAD_COLOR)
         self.video_offset_x_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_X)
         self.video_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_x'))
@@ -2925,12 +2928,12 @@ class VideoProcessorApp:
         ToolTip(self.pad_color_btn, "Padding Color (FFmpeg Only). Disabled if NVEncC handles padding.")
         self.aspect_stretch_rb = ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options)
         self.aspect_stretch_rb.pack(side=tk.LEFT)
-        self.aspect_blur_rb = ttk.Radiobutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_mode_var, value="blur", command=self._toggle_upscale_options)
-        self.aspect_blur_rb.pack(side=tk.LEFT, padx=5)
-        self.aspect_pixelate_rb = ttk.Radiobutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_mode_var, value="pixelate", command=self._toggle_upscale_options)
-        self.aspect_pixelate_rb.pack(side=tk.LEFT)
-        self.aspect_ambient_rb = ttk.Radiobutton(aspect_handling_frame, text="Ambient (Glow)", variable=self.aspect_mode_var, value="ambient", command=self._toggle_upscale_options)
-        self.aspect_ambient_rb.pack(side=tk.LEFT, padx=5)
+        self.aspect_blur_cb = ttk.Checkbutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_blur_var, command=self._toggle_upscale_options)
+        self.aspect_blur_cb.pack(side=tk.LEFT, padx=5)
+        self.aspect_pixelate_cb = ttk.Checkbutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_pixelate_var, command=self._toggle_upscale_options)
+        self.aspect_pixelate_cb.pack(side=tk.LEFT)
+        self.aspect_ambient_cb = ttk.Checkbutton(aspect_handling_frame, text="Ambient (Glow)", variable=self.aspect_ambient_var, command=self._toggle_upscale_options)
+        self.aspect_ambient_cb.pack(side=tk.LEFT, padx=5)
         
         aspect_params_frame = ttk.Frame(geometry_group); aspect_params_frame.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(aspect_params_frame, text="Mult:").pack(side=tk.LEFT, padx=(0, 2))
@@ -3904,28 +3907,28 @@ class VideoProcessorApp:
         aspect_mode = self.aspect_mode_var.get()
         
         # Auto-boost saturation if switching to ambient and it's left at default 0.6
-        if aspect_mode == "ambient" and self.pixelate_saturation_var.get() == "0.6":
+        if self.aspect_ambient_var.get() and self.pixelate_saturation_var.get() == "0.6":
             self.pixelate_saturation_var.set("1.5")
             
         # Pixelate controls (Mult, Dark, Sat)
-        pixelate_state = "normal" if aspect_mode == "pixelate" else "disabled"
+        pixelate_state = "normal" if self.aspect_pixelate_var.get() else "disabled"
         self.pixelate_multiplier_entry.config(state=pixelate_state)
         
         # Shared controls (Dark, Sat) - enabled for both blur and pixelate and ambient (saturation)
-        shared_state = "normal" if aspect_mode in ["pixelate", "blur", "ambient"] else "disabled"
+        shared_state = "normal" if (self.aspect_pixelate_var.get() or self.aspect_blur_var.get() or self.aspect_ambient_var.get()) else "disabled"
         self.pixelate_brightness_entry.config(state=shared_state)
         self.pixelate_saturation_entry.config(state=shared_state)
         
         # Blur controls (Sigma, Steps)
-        blur_state = "normal" if aspect_mode in ["blur", "ambient"] else "disabled"
+        blur_state = "normal" if (self.aspect_blur_var.get() or self.aspect_ambient_var.get()) else "disabled"
         self.blur_sigma_entry.config(state=blur_state)
         self.blur_steps_entry.config(state=blur_state)
         
         # Ambient controls (Spread)
-        ambient_state = "normal" if aspect_mode == "ambient" else "disabled"
+        ambient_state = "normal" if self.aspect_ambient_var.get() else "disabled"
         self.ambient_spread_entry.config(state=ambient_state)
         
-        self._update_selected_jobs("aspect_mode")
+        self._update_selected_jobs("aspect_mode", "aspect_blur", "aspect_pixelate", "aspect_ambient")
 
     def _update_upscale_algo_options(self):
         backend = self.encoder_backend_var.get()
@@ -3990,6 +3993,10 @@ class VideoProcessorApp:
             # we will dynamically route it to nvencc_with_ffmpeg during process_file.
             if self.aspect_mode_var.get() in ["blur", "pixelate", "ambient"]:
                 self.aspect_mode_var.set("pad")
+            if self.aspect_blur_var.get() or self.aspect_pixelate_var.get() or self.aspect_ambient_var.get():
+                self.aspect_blur_var.set(False)
+                self.aspect_pixelate_var.set(False)
+                self.aspect_ambient_var.set(False)
             self.fruc_var.set(False)
             if is_nvencc_only:
                 self.normalize_audio_var.set(False)
@@ -4002,7 +4009,7 @@ class VideoProcessorApp:
                 self.audio_surround_51_var.set(False)
                 self.audio_passthrough_var.set(True)
             self._update_selected_jobs(
-                "orientation", "aspect_mode",
+                "orientation", "aspect_mode", "aspect_blur", "aspect_pixelate", "aspect_ambient",
                 "fruc"
             )
             if is_nvencc_only:
@@ -4021,13 +4028,13 @@ class VideoProcessorApp:
             self.title_burn_cb.config(state="normal")
 
         for rb in [getattr(self, "aspect_crop_rb", None), getattr(self, "aspect_pad_rb", None),
-                   getattr(self, "aspect_stretch_rb", None), getattr(self, "aspect_blur_rb", None),
-                   getattr(self, "aspect_pixelate_rb", None), getattr(self, "aspect_ambient_rb", None)]:
+                   getattr(self, "aspect_stretch_rb", None)]:
             if rb:
-                if rb in [getattr(self, "aspect_blur_rb", None), getattr(self, "aspect_pixelate_rb", None), getattr(self, "aspect_ambient_rb", None)]:
-                    rb.config(state="disabled" if is_nvencc_video_backend else "normal")
-                else:
-                    rb.config(state="normal")
+                rb.config(state="normal")
+        
+        for cb in [getattr(self, "aspect_blur_cb", None), getattr(self, "aspect_pixelate_cb", None), getattr(self, "aspect_ambient_cb", None)]:
+            if cb:
+                cb.config(state="disabled" if is_nvencc_video_backend else "normal")
                     
         if hasattr(self, "pad_color_btn"):
             self.pad_color_btn.config(state="disabled" if use_nvencc_resize else "normal")
@@ -4180,6 +4187,8 @@ class VideoProcessorApp:
             "render_by_chapters": self.render_by_chapters_var.get(),
             "split_subtitles_by_chapter": self.split_subtitles_by_chapter_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
+            "aspect_blur": self.aspect_blur_var.get(), "aspect_pixelate": self.aspect_pixelate_var.get(),
+            "aspect_ambient": self.aspect_ambient_var.get(),
             "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(),
             "video_offset_y": self.video_offset_y_var.get(),
@@ -4872,7 +4881,19 @@ class VideoProcessorApp:
         else:
             self.merged_aspect_var.set(options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT)))
             self.orientation_var.set(raw_orientation)
-        self.aspect_mode_var.set(options.get("aspect_mode", DEFAULT_ASPECT_MODE))
+        
+        legacy_mode = options.get("aspect_mode", DEFAULT_ASPECT_MODE)
+        if legacy_mode in ["blur", "pixelate", "ambient"]:
+            self.aspect_mode_var.set("pad")
+            self.aspect_blur_var.set(legacy_mode == "blur" or options.get("aspect_blur", False))
+            self.aspect_pixelate_var.set(legacy_mode == "pixelate" or options.get("aspect_pixelate", False))
+            self.aspect_ambient_var.set(legacy_mode == "ambient" or options.get("aspect_ambient", False))
+        else:
+            self.aspect_mode_var.set(legacy_mode)
+            self.aspect_blur_var.set(options.get("aspect_blur", False))
+            self.aspect_pixelate_var.set(options.get("aspect_pixelate", False))
+            self.aspect_ambient_var.set(options.get("aspect_ambient", False))
+            
         self.pad_color_var.set(options.get("pad_color", DEFAULT_PAD_COLOR))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
         self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
@@ -6213,81 +6234,88 @@ class VideoProcessorApp:
                 
                 scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
                 
-                aspect_mode = options.get("aspect_mode", "pad")
-                if aspect_mode == 'pixelate':
-                    mult = options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER)
-                    try: m = max(1, int(mult))
-                    except: m = 16
-                    
-                    bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
-                    sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
-                    
+                apply_pixelate = options.get("aspect_pixelate", False)
+                apply_blur = options.get("aspect_blur", False)
+                apply_ambient = options.get("aspect_ambient", False)
+                
+                has_bg_effect = apply_pixelate or apply_blur or apply_ambient
+                
+                if has_bg_effect:
                     target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-                    pixelate_fc = (
-                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
-                        f"[v_bg_in]scale_cuda=w={target_w//m}:h={target_h//m}:interp_algo={safe_algo}:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,eq=brightness={bright}:saturation={sat},hwupload_cuda,"
-                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:format={target_fmt}[v_bg_pixelated];"
-                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
-                        f"[v_bg_pixelated][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_pixelate_combined]"
-                    )
-                    filter_complex_parts.append(pixelate_fc)
-                    video_in_tag = "[v_pixelate_combined]"
-                elif aspect_mode == 'blur':
-                    # Blur mode: Downscale, blur on CPU, upscale
-                    sigma = options.get("blur_sigma", DEFAULT_BLUR_SIGMA)
-                    steps = options.get("blur_steps", DEFAULT_BLUR_STEPS)
-                    bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
-                    sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
+                    fc_parts = []
+                    fc_parts.append(f"{video_in_tag}split=2[v_bg_base][v_fg_in];")
+                    bg_current = "[v_bg_base]"
                     
-                    target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-                    # Downscale by 2x for performance
-                    blur_fc = (
-                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
-                        f"[v_bg_in]scale_cuda=w={target_w//2}:h={target_h//2}:interp_algo={safe_algo}:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=brightness={bright}:saturation={sat},format={target_fmt},hwupload_cuda,"
-                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];"
-                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
-                        f"[v_bg_blurred][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_blur_combined]"
-                    )
-                    filter_complex_parts.append(blur_fc)
-                    video_in_tag = "[v_blur_combined]"
-                elif aspect_mode == 'ambient':
-                    # Ambient Glow mode: crop to fill, blur on CPU, saturation boost
-                    sigma = options.get("blur_sigma", "25")
-                    steps = options.get("blur_steps", "1")
-                    sat = options.get("pixelate_saturation", "1.5")
-                    spread_str = options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD)
-                    try:
-                        spread = max(1, int(spread_str))
-                    except ValueError:
-                        spread = 2
+                    if apply_pixelate:
+                        mult = options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER)
+                        try: m = max(1, int(mult))
+                        except: m = 16
+                        bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
+                        sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
+                        
+                        fc_parts.append(f"{bg_current}scale_cuda=w={target_w//m}:h={target_h//m}:interp_algo={safe_algo}:format={target_fmt},")
+                        fc_parts.append(f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,eq=brightness={bright}:saturation={sat},hwupload_cuda,")
+                        fc_parts.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:format={target_fmt}[v_bg_pixelated];")
+                        bg_current = "[v_bg_pixelated]"
                     
-                    target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
-                    ambient_fc = (
-                        f"{video_in_tag}split=2[v_bg_in][v_fg_in];"
-                        f"[v_bg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt},"
-                        f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,"
-                        f"scale_cuda=w={target_w//spread}:h={target_h//spread}:interp_algo=bilinear:format={target_fmt},"
-                        f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=saturation={sat},format={target_fmt},hwupload_cuda,"
-                        f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_ambient];"
-                        f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];"
-                        f"[v_bg_ambient][v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_ambient_combined]"
-                    )
-                    filter_complex_parts.append(ambient_fc)
-                    video_in_tag = "[v_ambient_combined]"
-                elif aspect_mode == 'pad':
-                    pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
-                    vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
-                    vf_filters.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):{pad_color}")
-                elif aspect_mode == 'crop':
-                    vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
-                    cpu_filters.append(f"crop={target_w}:{target_h}")
-                else:
-                    if use_nvencc_resize and aspect_mode == "stretch":
-                        target_w, target_h = info["width"], info["height"]
+                    if apply_blur:
+                        sigma = options.get("blur_sigma", DEFAULT_BLUR_SIGMA)
+                        steps = options.get("blur_steps", DEFAULT_BLUR_STEPS)
+                        bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
+                        sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
+                        
+                        fc_parts.append(f"{bg_current}scale_cuda=w={target_w//2}:h={target_h//2}:interp_algo={safe_algo}:format={target_fmt},")
+                        fc_parts.append(f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps}")
+                        if not apply_pixelate:
+                            fc_parts.append(f",eq=brightness={bright}:saturation={sat}")
+                        fc_parts.append(f",format={target_fmt},hwupload_cuda,")
+                        fc_parts.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];")
+                        bg_current = "[v_bg_blurred]"
+                        
+                    if apply_ambient:
+                        sigma = options.get("blur_sigma", "25")
+                        steps = options.get("blur_steps", "1")
+                        sat = options.get("pixelate_saturation", "1.5")
+                        spread_str = options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD)
+                        try: spread = max(1, int(spread_str))
+                        except: spread = 2
+                        
+                        fc_parts.append(f"[v_fg_in]split=2[v_fg_for_ambient][v_fg_in_real];")
+                        fc_parts.append(f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt},")
+                        fc_parts.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,")
+                        fc_parts.append(f"scale_cuda=w={target_w//spread}:h={target_h//spread}:interp_algo=bilinear:format={target_fmt},")
+                        fc_parts.append(f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=saturation={sat},format={target_fmt},hwupload_cuda,")
+                        fc_parts.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_ambient_layer];")
+                        
+                        if apply_pixelate or apply_blur:
+                            fc_parts.append(f"{bg_current}hwdownload,format={target_fmt}[v_bg_sys];")
+                            fc_parts.append(f"[v_ambient_layer]hwdownload,format={target_fmt}[v_ambient_sys];")
+                            fc_parts.append(f"[v_bg_sys][v_ambient_sys]blend=c0_mode=screen:c1_mode=average:c2_mode=average,format={target_fmt},hwupload_cuda[v_composited_bg];")
+                            bg_current = "[v_composited_bg]"
+                        else:
+                            bg_current = "[v_ambient_layer]"
+                            
+                        fc_parts.append(f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
                     else:
-                        vf_filters.append(scale_base)
+                        fc_parts.append(f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
+                        
+                    fc_parts.append(f"{bg_current}[v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_bg_combined]")
+                    filter_complex_parts.append("".join(fc_parts))
+                    video_in_tag = "[v_bg_combined]"
+                else:
+                    aspect_mode = options.get("aspect_mode", "pad")
+                    if aspect_mode == 'pad':
+                        pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
+                        vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
+                        vf_filters.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):{pad_color}")
+                    elif aspect_mode == 'crop':
+                        vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
+                        cpu_filters.append(f"crop={target_w}:{target_h}")
+                    else:
+                        if use_nvencc_resize and aspect_mode == "stretch":
+                            target_w, target_h = info["width"], info["height"]
+                        else:
+                            vf_filters.append(scale_base)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
                 cpu_filters.append(f"lut3d=file={safe_lut}")
