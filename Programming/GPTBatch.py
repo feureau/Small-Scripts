@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.19
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.21
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -35,7 +35,9 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
-- ✅ **IMPROVEMENT**: Chunk token budget is now auto-computed from model context window with safety, output, and carry reserves; legacy chunk_size is treated as an optional cap.
+### v26.21
+- ✅ **FEATURE**: Added dynamic multi-string input file filtering with comma-separated terms and exclusion prefix (`!` or `-`) support.
+- ✅ **IMPROVEMENT**: Filtering preserves full file list in memory and updates visible count in real time.
 
 ### v26.20
 - ✅ **IMPROVEMENT**: Retry actions now reset existing jobs to Pending in-place instead of creating duplicate queue entries.
@@ -3818,7 +3820,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.next_job_start_ts = 0.0
         self.job_id_counter = 0
 
-        self.files_var = tk.Variable(value=list(command_line_files or []))
+        self.all_input_files = list(command_line_files or [])
+        self.files_var = tk.Variable(value=[])
+        self.file_filter_var = tk.StringVar(value="")
+        self.file_count_var = tk.StringVar(value="")
+        self.file_filter_var.trace_add("write", self._apply_file_filter)
         self.engine_var = tk.StringVar(
             value=getattr(self.args, "engine", DEFAULT_ENGINE)
         )
@@ -3923,6 +3929,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.create_widgets()
         self.apply_theme()
+        self._apply_file_filter()
         
         self.refresh_presets_combo()
         self.engine_var.trace_add("write", self.update_models)
@@ -4077,6 +4084,22 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         file_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
         list_frame = ttk.Frame(file_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        filter_frame = ttk.Frame(list_frame)
+        filter_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+
+        ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=(0, 4))
+        self.file_filter_entry = ttk.Entry(
+            filter_frame, textvariable=self.file_filter_var
+        )
+        self.file_filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        ttk.Button(
+            filter_frame, text="✕", width=3, command=self._clear_file_filter
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self.file_count_label = ttk.Label(
+            filter_frame, textvariable=self.file_count_var
+        )
+        self.file_count_label.pack(side=tk.RIGHT)
 
         listbox_frame = ttk.Frame(list_frame)
         listbox_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -5837,12 +5860,63 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if files:
             self._add_filepaths_to_list(files)
 
+    def _clear_file_filter(self):
+        self.file_filter_var.set("")
+
+    def _apply_file_filter(self, *args):
+        raw_filter = self.file_filter_var.get()
+        all_files = getattr(self, "all_input_files", [])
+
+        # Tokenize by comma
+        raw_tokens = [t.strip() for t in raw_filter.split(",") if t.strip()]
+
+        if not raw_tokens:
+            filtered = list(all_files)
+        else:
+            inclusion_terms = []
+            exclusion_terms = []
+            for token in raw_tokens:
+                if token.startswith("!") or token.startswith("-"):
+                    ex = token[1:].strip().lower()
+                    if ex:
+                        exclusion_terms.append(ex)
+                else:
+                    inc = token.lower()
+                    if inc:
+                        inclusion_terms.append(inc)
+
+            filtered = []
+            for p in all_files:
+                fname = os.path.basename(p).lower()
+                # If any exclusion term is in the filename, reject
+                if exclusion_terms and any(ex in fname for ex in exclusion_terms):
+                    continue
+                # If inclusion terms exist, at least one must be in the filename (OR logic)
+                if inclusion_terms and not any(inc in fname for inc in inclusion_terms):
+                    continue
+                filtered.append(p)
+
+        self.files_var.set(tuple(filtered))
+
+        total_count = len(all_files)
+        shown_count = len(filtered)
+        if raw_tokens:
+            self.file_count_var.set(
+                f"{shown_count} / {total_count} files"
+                if total_count != 1
+                else f"{shown_count} / {total_count} file"
+            )
+        else:
+            self.file_count_var.set(
+                f"{total_count} files" if total_count != 1 else "1 file"
+            )
+
     def _add_filepaths_to_list(self, filepaths):
-        cur = list(self.files_var.get())
+        cur = list(getattr(self, "all_input_files", []))
         new = []
         for f in filepaths:
             p = os.path.normpath(f)
-            if os.path.isfile(p) and p not in cur:
+            if os.path.isfile(p) and p not in cur and p not in new:
                 new.append(p)
             elif os.path.isdir(p):
                 # Optionally handle directories by scanning them
@@ -5854,18 +5928,23 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                             new.append(norm_f)
 
         if new:
-            self.files_var.set(tuple(sorted(cur + new, key=natural_sort_key)))
+            self.all_input_files = sorted(cur + new, key=natural_sort_key)
+            self._apply_file_filter()
 
     def remove_files(self):
         sel = self.file_listbox.curselection()
         if sel:
-            l = list(self.files_var.get())
-            for i in sorted(sel, reverse=True):
-                l.pop(i)
-            self.files_var.set(tuple(l))
+            visible_files = list(self.files_var.get())
+            to_remove = set(visible_files[i] for i in sel)
+            self.all_input_files = [
+                p for p in getattr(self, "all_input_files", []) if p not in to_remove
+            ]
+            self._apply_file_filter()
 
     def clear_files(self):
-        self.files_var.set([])
+        self.all_input_files = []
+        self._clear_file_filter()
+        self._apply_file_filter()
 
     def export_files_list(self):
         files = list(self.files_var.get())
@@ -5894,8 +5973,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def load_files_list(self):
         initial_dir = (
-            os.path.dirname(list(self.files_var.get())[0])
-            if self.files_var.get()
+            os.path.dirname(self.all_input_files[0])
+            if getattr(self, "all_input_files", None)
             else os.getcwd()
         )
         file_path = filedialog.askopenfilename(
