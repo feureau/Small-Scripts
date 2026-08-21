@@ -30,7 +30,7 @@
                 "api_url_env": "UNSLOTH_API_URL"
             }
         },
-        "model": "models/gemini-3.5-flash-lite",
+        "model": "models/gemini-3.1-pro-preview",
         "output_folder": "Transcription",
         "output_under_input": false,
         "merge_outputs": false,
@@ -73,7 +73,7 @@
         "save_img_to_output": false,
         "rename_mode": false,
         "rename_method": "full",
-        "enable_thinking": false,
+        "enable_thinking": true,
         "enable_chunking": false,
         "chunk_size": 4000,
         "split_chunks_into_jobs": false,

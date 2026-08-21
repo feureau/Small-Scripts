@@ -69,6 +69,11 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.15 - Title Background Shapes & Styling (2026-08-21)
+    • FEATURE: Added TikTok/Instagram-style rounded-corner background shapes for Title overlays.
+    • FEATURE: Supports both "Per-Line Pill" (wraps each line individually) and "Single Box" modes.
+    • FEATURE: Configurable background fill color, opacity (alpha), corner radius, and X/Y padding.
+    • PIPELINE: Rendered as native ASS vector Bézier paths on Layer 0 for flawless FFmpeg & NVEncC support.
 v8.14 - Subtitle Matching Fixes (2026-08-01)
     • FIX: Removed over-aggressive prefix truncation that caused unrelated videos to steal subtitles (e.g., `Video - full` matching `Video - short.srt`).
     • FIX: Added ownership checks to ensure shorter video names don't claim subtitles belonging to longer video names in the same folder.
@@ -338,6 +343,13 @@ DEFAULT_TITLE_SHADOW_ALPHA = 128                    # Title shadow transparency.
 DEFAULT_TITLE_SHADOW_OFFSET_X = "2"                 # Title shadow X offset. Default: 2
 DEFAULT_TITLE_SHADOW_OFFSET_Y = "3"                 # Title shadow Y offset. Default: 3
 DEFAULT_TITLE_SHADOW_BLUR = "4"                     # Title shadow blur. Default: 4
+DEFAULT_TITLE_BG_ENABLED = False                    # Enable title background shape. Default: False
+DEFAULT_TITLE_BG_MODE = "pill"                      # Background shape mode: pill (per-line) or box (unified). Default: pill
+DEFAULT_TITLE_BG_COLOR = "#000000"                  # Title background color. Default: #000000 (black)
+DEFAULT_TITLE_BG_ALPHA = 0                          # Title background transparency (0=solid, 255=transparent). Default: 0
+DEFAULT_TITLE_BG_RADIUS = "16"                      # Title background corner radius (pixels). Default: 16
+DEFAULT_TITLE_BG_PAD_X = "20"                       # Title background horizontal padding (pixels). Default: 20
+DEFAULT_TITLE_BG_PAD_Y = "10"                       # Title background vertical padding (pixels). Default: 10
 
 DEBUG_MODE = False
 
@@ -1054,11 +1066,22 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         f_size, m_l, m_r = 32.0, 50.0, 50.0
 
     available_width = play_res_x - m_l - m_r
-    # Heuristic: 1 "Unit" (Narrow char) is approx 0.5 * FontSize pixels wide.
-    # Wide char (CJK) is 2 Units (~1.0 * FontSize).
-    unit_width_px = f_size * 0.5
+
+    # Calculate a realistic character width based on the font's weight
+    fn_lower = font_name.lower()
+    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+    is_bold = options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD)
+
+    if is_heavy:
+        width_mult = 0.85
+    elif is_bold:
+        width_mult = 0.70
+    else:
+        width_mult = 0.55
+
+    unit_width_px = f_size * width_mult
     if unit_width_px < 1: unit_width_px = 10
-    
+
     calculated_limit = int(available_width / unit_width_px)
     
     # Use the stricter limit to prevent runoff, but don't go below a silly minimum (e.g. 10 chars)
@@ -1306,10 +1329,177 @@ def create_merged_ass_for_nvencc(sub_ass_path, title_ass_path):
         print(f"[ERROR] Could not create merged ASS file: {e}")
         return sub_ass_path
 
+def generate_ass_rounded_rect(x1, y1, x2, y2, radius):
+    """
+    Generates ASS vector drawing commands for a rounded rectangle.
+    Uses cubic Bézier curves for smooth rounded corners.
+    """
+    w = max(0.0, float(x2 - x1))
+    h = max(0.0, float(y2 - y1))
+    r = min(float(radius), w / 2.0, h / 2.0)
+    if r <= 0:
+        return f"m {x1:.1f} {y1:.1f} l {x2:.1f} {y1:.1f} l {x2:.1f} {y2:.1f} l {x1:.1f} {y2:.1f}"
+    
+    # Cubic Bézier circle approximation offset
+    c = r * 0.5522847498
+    
+    top_y = y1
+    bot_y = y2
+    left_x = x1
+    right_x = x2
+    
+    path = [
+        f"m {left_x + r:.1f} {top_y:.1f}",
+        f"l {right_x - r:.1f} {top_y:.1f}",
+        f"b {right_x - r + c:.1f} {top_y:.1f} {right_x:.1f} {top_y + r - c:.1f} {right_x:.1f} {top_y + r:.1f}",
+        f"l {right_x:.1f} {bot_y - r:.1f}",
+        f"b {right_x:.1f} {bot_y - r + c:.1f} {right_x - r + c:.1f} {bot_y:.1f} {right_x - r:.1f} {bot_y:.1f}",
+        f"l {left_x + r:.1f} {bot_y:.1f}",
+        f"b {left_x + r - c:.1f} {bot_y:.1f} {left_x:.1f} {bot_y - r + c:.1f} {left_x:.1f} {bot_y - r:.1f}",
+        f"l {left_x:.1f} {top_y + r:.1f}",
+        f"b {left_x:.1f} {top_y + r - c:.1f} {left_x + r - c:.1f} {top_y:.1f} {left_x + r:.1f} {top_y:.1f}"
+    ]
+    return " ".join(path)
+
+def _measure_text_gdi(lines, font_name, font_size_px, is_bold=False, is_italic=False):
+    """
+    Measures text line widths and line height using Windows GDI.
+    GDI resolves fonts by family name natively (same mechanism as libass/DirectWrite),
+    so no manual font file lookup is needed.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+
+        gdi32.CreateFontW.argtypes = [
+            wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT,
+            wintypes.INT, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+            wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+            wintypes.DWORD, wintypes.LPCWSTR
+        ]
+        gdi32.CreateFontW.restype = wintypes.HFONT
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.GetTextExtentPoint32W.argtypes = [
+            wintypes.HDC, wintypes.LPCWSTR, wintypes.INT, ctypes.POINTER(wintypes.SIZE)
+        ]
+        gdi32.GetTextExtentPoint32W.restype = wintypes.BOOL
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteObject.restype = wintypes.BOOL
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.GetDC.restype = wintypes.HDC
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        user32.ReleaseDC.restype = wintypes.INT
+
+        hdc = user32.GetDC(0)
+        if not hdc:
+            return None
+
+        # Determine font weight from name and bold flag
+        weight = 700 if is_bold else 400
+        fn_lower = font_name.lower()
+        if any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold')):
+            weight = 900
+        elif 'bold' in fn_lower:
+            weight = 700
+        elif any(k in fn_lower for k in ('light', 'thin')):
+            weight = 300
+
+        CLEARTYPE_QUALITY = 5
+        hfont = gdi32.CreateFontW(
+            -int(font_size_px), 0, 0, 0,
+            weight, 1 if is_italic else 0, 0, 0,
+            1, 0, 0, CLEARTYPE_QUALITY, 0,
+            font_name
+        )
+        if not hfont:
+            user32.ReleaseDC(0, hdc)
+            return None
+
+        old_font = gdi32.SelectObject(hdc, hfont)
+
+        widths = []
+        for line in lines:
+            if not line:
+                widths.append(0.0)
+                continue
+            size = wintypes.SIZE()
+            if gdi32.GetTextExtentPoint32W(hdc, str(line), len(line), ctypes.byref(size)):
+                widths.append(float(size.cx))
+            else:
+                widths.append(float(len(line) * font_size_px * 0.6))
+
+        line_height = int(round(font_size_px * 1.25))
+
+        gdi32.SelectObject(hdc, old_font)
+        gdi32.DeleteObject(hfont)
+        user32.ReleaseDC(0, hdc)
+
+        return widths, line_height
+    except Exception:
+        return None
+
+def measure_text_lines(lines, font_name, font_size, is_bold=False, is_italic=False):
+    """
+    Measures widths and line height for text lines.
+    Priority: Windows GDI (resolves by family name, same as libass) > Tkinter > heuristic.
+    Returns (line_widths, line_height).
+    """
+    font_size_px = max(8, int(round(float(font_size))))
+    line_height = int(round(font_size_px * 1.25))
+
+    # Method 1: Native Windows GDI - resolves fonts by family name just like libass does
+    gdi_res = _measure_text_gdi(lines, font_name, font_size_px, is_bold=is_bold, is_italic=is_italic)
+    if gdi_res is not None:
+        widths, line_h = gdi_res
+        if widths and any(w > 0 for w in widths):
+            return widths, line_h
+
+    # Method 2: Tkinter font with negative pixel sizing (resolves by family name)
+    try:
+        import tkinter.font as tkFont
+        weight = 'bold' if is_bold else 'normal'
+        slant = 'italic' if is_italic else 'roman'
+        f = tkFont.Font(family=font_name, size=-font_size_px, weight=weight, slant=slant)
+        widths = [float(f.measure(line)) for line in lines]
+        metrics = f.metrics()
+        line_height = metrics.get('linespace', int(round(font_size_px * 1.25)))
+        return widths, line_height
+    except Exception:
+        pass
+
+    # Method 3: Proportional character width heuristic
+    widths = []
+    fn_lower = font_name.lower()
+    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+    weight_mult = 1.18 if is_heavy else (1.08 if is_bold else 1.0)
+    for line in lines:
+        w = 0.0
+        for ch in line:
+            if ch in 'WM@%mw':
+                w += font_size_px * 0.95
+            elif ch.isupper() or ch in '0123456789':
+                w += font_size_px * 0.70
+            elif ch in 'ijl!|:;.,\'"`':
+                w += font_size_px * 0.28
+            elif ch in 'frt':
+                w += font_size_px * 0.38
+            elif ch == ' ':
+                w += font_size_px * 0.30
+            else:
+                w += font_size_px * 0.55
+        widths.append(w * weight_mult)
+    return widths, line_height
+
 def create_title_ass_file(title_text, options, target_res=None):
     """
-    Creates a temporary ASS file containing a single title entry.
-    Uses title-specific styling options (title_font, title_font_size, etc.)
+    Creates a temporary ASS file containing title text entry/entries and optional background shapes.
+    Uses title-specific styling options (title_font, title_font_size, title_bg_*, etc.)
     Returns path to temp ASS file.
     """
     global CURRENT_TEMP_FILE
@@ -1319,7 +1509,10 @@ def create_title_ass_file(title_text, options, target_res=None):
     
     # Get title-specific styling options
     font_name = options.get('title_font', DEFAULT_TITLE_FONT)
-    font_size = options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE)
+    try:
+        font_size = float(options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE))
+    except (ValueError, TypeError):
+        font_size = 48.0
     bold_flag = "-1" if options.get('title_bold', DEFAULT_TITLE_BOLD) else "0"
     italic_flag = "-1" if options.get('title_italic', DEFAULT_TITLE_ITALIC) else "0"
     underline_flag = "-1" if options.get('title_underline', DEFAULT_TITLE_UNDERLINE) else "0"
@@ -1333,10 +1526,37 @@ def create_title_ass_file(title_text, options, target_res=None):
     fill_alpha_val = options.get('title_fill_alpha', DEFAULT_TITLE_FILL_ALPHA)
     outline_color_hex = options.get('title_outline_color', DEFAULT_TITLE_OUTLINE_COLOR)
     outline_alpha_val = options.get('title_outline_alpha', DEFAULT_TITLE_OUTLINE_ALPHA)
-    outline_width = float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH))
+    try:
+        outline_width = float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH))
+    except (ValueError, TypeError):
+        outline_width = 3.0
     shadow_color_hex = options.get('title_shadow_color', DEFAULT_TITLE_SHADOW_COLOR)
     shadow_alpha_val = options.get('title_shadow_alpha', DEFAULT_TITLE_SHADOW_ALPHA)
-    shadow_offset_y = float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y))
+    try:
+        shadow_offset_y = float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y))
+    except (ValueError, TypeError):
+        shadow_offset_y = 3.0
+    
+    # Background options
+    bg_enabled = options.get('title_bg_enabled', DEFAULT_TITLE_BG_ENABLED)
+    bg_mode = options.get('title_bg_mode', DEFAULT_TITLE_BG_MODE)
+    bg_color_hex = options.get('title_bg_color', DEFAULT_TITLE_BG_COLOR)
+    try:
+        bg_alpha_val = int(options.get('title_bg_alpha', DEFAULT_TITLE_BG_ALPHA))
+    except (ValueError, TypeError):
+        bg_alpha_val = 0
+    try:
+        bg_radius = float(options.get('title_bg_radius', DEFAULT_TITLE_BG_RADIUS))
+    except (ValueError, TypeError):
+        bg_radius = 16.0
+    try:
+        pad_x = float(options.get('title_bg_pad_x', DEFAULT_TITLE_BG_PAD_X))
+    except (ValueError, TypeError):
+        pad_x = 20.0
+    try:
+        pad_y = float(options.get('title_bg_pad_y', DEFAULT_TITLE_BG_PAD_Y))
+    except (ValueError, TypeError):
+        pad_y = 10.0
     
     # Get timing
     start_time = options.get('title_start_time', DEFAULT_TITLE_START_TIME)
@@ -1344,7 +1564,6 @@ def create_title_ass_file(title_text, options, target_res=None):
     
     # Convert times to ASS format (h:mm:ss.cc)
     def time_to_ass(time_str):
-        # Input format: HH:MM:SS.cc or H:MM:SS.cc
         parts = time_str.split(':')
         if len(parts) == 3:
             h = int(parts[0])
@@ -1358,9 +1577,9 @@ def create_title_ass_file(title_text, options, target_res=None):
     start_ass = time_to_ass(start_time)
     end_ass = time_to_ass(end_time)
     
-    # Build style
+    # Build styles
     style_title = (
-        f"Style: __VID_TITLE__,{font_name},{font_size},"
+        f"Style: __VID_TITLE__,{font_name},{int(font_size)},"
         f"{hex_to_libass_color(fill_color_hex)},"
         "&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
@@ -1369,15 +1588,22 @@ def create_title_ass_file(title_text, options, target_res=None):
         f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
     )
     
+    bg_style = (
+        f"Style: __VID_TITLE_BG__,{font_name},{int(font_size)},"
+        f"&H00000000,&HFF000000,&HFF000000,&HFF000000,"
+        f"0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1"
+    )
+    
     header = f"""[Script Info]
 Title: Title Burn Overlay
 ScriptType: v4.00+
-WrapStyle: 0
+WrapStyle: 2
 PlayResX: {play_res_x}
 PlayResY: {play_res_y}
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {style_title}
+{bg_style}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
@@ -1391,26 +1617,114 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         m_v_offset, m_l, m_r = 50.0, 50.0, 50.0
     
     # Calculate horizontal center
-    cx = (m_l + (play_res_x - m_r)) / 2
-    
+    cx = (m_l + (play_res_x - m_r)) / 2.0
     align_mode = options.get("title_alignment", "top")
+
+    # Split title text into individual lines
+    raw_lines = [l.strip() for l in re.split(r'\r?\n|\\N', title_text) if l.strip()]
+    if not raw_lines:
+        raw_lines = [title_text.strip()] if title_text.strip() else [""]
+
+    # Auto-wrap title text to prevent unwrapped text from generating overly wide background pills
+    available_width = play_res_x - m_l - m_r
+
+    # Calculate a realistic character width based on the font's weight
+    fn_lower = font_name.lower()
+    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+    is_bold = options.get('title_bold', DEFAULT_TITLE_BOLD)
+
+    if is_heavy:
+        width_mult = 0.85
+    elif is_bold:
+        width_mult = 0.70
+    else:
+        width_mult = 0.55
+
+    unit_width_px = font_size * width_mult
+    if unit_width_px < 1: unit_width_px = 10
+    calculated_limit = max(5, int(available_width / unit_width_px))
+
+    wrapped_raw_lines = []
+    for line in raw_lines:
+        wrapped = smart_wrap_text(line, limit=calculated_limit)
+        if wrapped:
+            # Strip trailing spaces so pills are perfectly symmetrical
+            for w in wrapped:
+                w_clean = w.strip()
+                if w_clean:
+                    wrapped_raw_lines.append(w_clean)
+        else:
+            if line.strip():
+                wrapped_raw_lines.append(line.strip())
+
+    if not wrapped_raw_lines:
+        wrapped_raw_lines = [""]
+
+    raw_lines = wrapped_raw_lines
+
+    num_lines = len(raw_lines)
+    widths, line_h = measure_text_lines(
+        raw_lines,
+        font_name,
+        font_size,
+        is_bold=options.get('title_bold', DEFAULT_TITLE_BOLD),
+        is_italic=options.get('title_italic', DEFAULT_TITLE_ITALIC)
+    )
+
+    # Account for outline width in effective visual dimensions
+    eff_widths = [w + (outline_width * 2) for w in widths]
+    eff_line_h = line_h + (outline_width * 2)
+    line_spacing = max(eff_line_h, int(round(font_size * 1.25)))
+
+    # If Pill mode is enabled, expand line spacing to fit the padding so pills don't overlap vertically
+    if bg_enabled and bg_mode == "pill":
+        line_spacing = max(line_spacing, eff_line_h + (pad_y * 2) + 4) # 4px minimum gap
+
+    total_h = ((num_lines - 1) * line_spacing) + eff_line_h
+
+    # Determine vertical block placement
     if align_mode == "top":
-        cy = m_v_offset
-        pos_override = fr"{{\an8\pos({cx:.1f},{cy:.1f})}}"
+        block_top = m_v_offset
     elif align_mode == "middle":
-        cy = (play_res_y / 2) + m_v_offset
-        pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
+        block_center = (play_res_y / 2.0) + m_v_offset
+        block_top = block_center - (total_h / 2.0)
     else:  # bottom
-        cy = play_res_y - m_v_offset
-        pos_override = fr"{{\an2\pos({cx:.1f},{cy:.1f})}}"
-    
-    # Escape special characters in title
-    title_escaped = title_text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-    
-    # Build dialogue line
-    dialogue = f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE__,,0,0,0,,{pos_override}{title_escaped}"
-    
-    full_ass_content = header + dialogue
+        block_bottom = play_res_y - m_v_offset
+        block_top = block_bottom - total_h
+
+    # Line center Y positions for each line
+    line_cy_list = [block_top + (eff_line_h / 2.0) + (i * line_spacing) for i in range(num_lines)]
+
+    dialogue_lines = []
+
+    # Render background shapes if enabled (Layer 0)
+    if bg_enabled:
+        color_tag = f"\\1c{hex_to_libass_color(bg_color_hex)}\\1a&H{bg_alpha_val:02X}"
+        if bg_mode == "box":
+            # Single unified bounding box enclosing all lines
+            max_w = max(eff_widths) if eff_widths else 100.0
+            x1 = cx - (max_w / 2.0) - pad_x
+            x2 = cx + (max_w / 2.0) + pad_x
+            y1 = block_top - pad_y
+            y2 = block_top + total_h + pad_y
+            path = generate_ass_rounded_rect(x1, y1, x2, y2, bg_radius)
+            dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+        else:
+            # Per-line pill shape
+            for line_w, line_cy in zip(eff_widths, line_cy_list):
+                x1 = cx - (line_w / 2.0) - pad_x
+                x2 = cx + (line_w / 2.0) + pad_x
+                y1 = line_cy - (eff_line_h / 2.0) - pad_y
+                y2 = line_cy + (eff_line_h / 2.0) + pad_y
+                path = generate_ass_rounded_rect(x1, y1, x2, y2, bg_radius)
+                dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+
+    # Render text dialogue per line (Layer 1) - aligned exactly with its corresponding center
+    for line_str, line_cy in zip(raw_lines, line_cy_list):
+        line_escaped = line_str.replace("{", "\\{").replace("}", "\\}")
+        dialogue_lines.append(f"Dialogue: 1,{start_ass},{end_ass},__VID_TITLE__,,0,0,0,,{{\\an5\\pos({cx:.1f},{line_cy:.1f})}}{line_escaped}")
+
+    full_ass_content = header + "\n".join(dialogue_lines) + "\n"
     filename = f"vid_temp_title_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(get_temp_work_dir(), filename)
     try:
@@ -1698,6 +2012,13 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('title_shadow_offset_x', ''),
         job_options.get('title_shadow_offset_y', ''),
         job_options.get('title_shadow_blur', ''),
+        str(job_options.get('title_bg_enabled', False)),
+        job_options.get('title_bg_mode', ''),
+        job_options.get('title_bg_color', ''),
+        str(job_options.get('title_bg_alpha', 0)),
+        job_options.get('title_bg_radius', ''),
+        job_options.get('title_bg_pad_x', ''),
+        job_options.get('title_bg_pad_y', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
@@ -1945,7 +2266,14 @@ class WorkflowPresetManager:
             "title_shadow_alpha": DEFAULT_TITLE_SHADOW_ALPHA,
             "title_shadow_offset_x": DEFAULT_TITLE_SHADOW_OFFSET_X,
             "title_shadow_offset_y": DEFAULT_TITLE_SHADOW_OFFSET_Y,
-            "title_shadow_blur": DEFAULT_TITLE_SHADOW_BLUR
+            "title_shadow_blur": DEFAULT_TITLE_SHADOW_BLUR,
+            "title_bg_enabled": DEFAULT_TITLE_BG_ENABLED,
+            "title_bg_mode": DEFAULT_TITLE_BG_MODE,
+            "title_bg_color": DEFAULT_TITLE_BG_COLOR,
+            "title_bg_alpha": DEFAULT_TITLE_BG_ALPHA,
+            "title_bg_radius": DEFAULT_TITLE_BG_RADIUS,
+            "title_bg_pad_x": DEFAULT_TITLE_BG_PAD_X,
+            "title_bg_pad_y": DEFAULT_TITLE_BG_PAD_Y
         }
         self.load_presets()
 
@@ -2326,6 +2654,16 @@ class VideoProcessorApp:
         self.title_shadow_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_offset_y'))
         self.title_shadow_blur_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_BLUR)
         self.title_shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_blur'))
+        self.title_bg_enabled_var = tk.BooleanVar(value=DEFAULT_TITLE_BG_ENABLED)
+        self.title_bg_mode_var = tk.StringVar(value=DEFAULT_TITLE_BG_MODE)
+        self.title_bg_color_var = tk.StringVar(value=DEFAULT_TITLE_BG_COLOR)
+        self.title_bg_alpha_var = tk.IntVar(value=DEFAULT_TITLE_BG_ALPHA)
+        self.title_bg_radius_var = tk.StringVar(value=DEFAULT_TITLE_BG_RADIUS)
+        self.title_bg_radius_var.trace_add('write', lambda *args: self._update_selected_jobs('title_bg_radius'))
+        self.title_bg_pad_x_var = tk.StringVar(value=DEFAULT_TITLE_BG_PAD_X)
+        self.title_bg_pad_x_var.trace_add('write', lambda *args: self._update_selected_jobs('title_bg_pad_x'))
+        self.title_bg_pad_y_var = tk.StringVar(value=DEFAULT_TITLE_BG_PAD_Y)
+        self.title_bg_pad_y_var.trace_add('write', lambda *args: self._update_selected_jobs('title_bg_pad_y'))
 
         self.use_sharpening_var = tk.BooleanVar(value=DEFAULT_USE_SHARPENING)
         self.ffmpeg_denoise_vulkan_var = tk.BooleanVar(value=DEFAULT_FFMPEG_DENOISE_VULKAN)
@@ -3323,6 +3661,55 @@ class VideoProcessorApp:
         ttk.Label(shadow_pane.container, text="Blur:").grid(row=2, column=0, sticky="w", padx=(0,5), pady=(5,0))
         ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_blur_var, width=5).grid(row=2, column=1, pady=(5,0))
 
+        # Background
+        bg_pane = CollapsiblePane(main_style_group, "Background Properties")
+        bg_pane.pack(fill=tk.X, pady=2, padx=2)
+        bg_pane.container.columnconfigure(4, weight=1)
+
+        # Row 0: Enable Checkbox & Mode Selection
+        ttk.Checkbutton(
+            bg_pane.container,
+            text="Enable Background Shape",
+            variable=self.title_bg_enabled_var,
+            command=lambda: self._update_selected_jobs("title_bg_enabled")
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=(0, 5), pady=(0, 5))
+
+        mode_frame = ttk.Frame(bg_pane.container)
+        mode_frame.grid(row=0, column=2, columnspan=3, sticky="w", padx=(10, 0), pady=(0, 5))
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(
+            mode_frame,
+            text="Per-Line Pill",
+            variable=self.title_bg_mode_var,
+            value="pill",
+            command=lambda: self._update_selected_jobs("title_bg_mode")
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(
+            mode_frame,
+            text="Single Box",
+            variable=self.title_bg_mode_var,
+            value="box",
+            command=lambda: self._update_selected_jobs("title_bg_mode")
+        ).pack(side=tk.LEFT)
+
+        # Row 1: Color and Alpha
+        ttk.Label(bg_pane.container, text="Color:").grid(row=1, column=0, sticky="w", padx=(0, 5))
+        self.title_bg_swatch = tk.Label(bg_pane.container, text="    ", bg=self.title_bg_color_var.get(), relief="sunken")
+        self.title_bg_swatch.grid(row=1, column=1)
+        ttk.Button(bg_pane.container, text="..", command=lambda: self.choose_color(self.title_bg_color_var, self.title_bg_swatch, "title_bg_color"), width=3).grid(row=1, column=2, padx=5)
+        ttk.Label(bg_pane.container, text="Alpha:").grid(row=1, column=3, sticky="w", padx=(10, 5))
+        ttk.Scale(bg_pane.container, from_=0, to=255, variable=self.title_bg_alpha_var, orient=tk.HORIZONTAL, command=lambda v: self._update_selected_jobs("title_bg_alpha")).grid(row=1, column=4, sticky="ew")
+
+        # Row 2: Radius, Pad X, Pad Y
+        dim_frame = ttk.Frame(bg_pane.container)
+        dim_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(dim_frame, text="Radius:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.title_bg_radius_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(dim_frame, text="Pad X:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.title_bg_pad_x_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(dim_frame, text="Pad Y:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.title_bg_pad_y_var, width=5).pack(side=tk.LEFT)
+
     def _populate_title_fonts(self):
         """Populate title font combo with available fonts."""
         try:
@@ -4297,6 +4684,13 @@ class VideoProcessorApp:
             "title_shadow_offset_x": self.title_shadow_offset_x_var.get(),
             "title_shadow_offset_y": self.title_shadow_offset_y_var.get(),
             "title_shadow_blur": self.title_shadow_blur_var.get(),
+            "title_bg_enabled": self.title_bg_enabled_var.get(),
+            "title_bg_mode": self.title_bg_mode_var.get(),
+            "title_bg_color": self.title_bg_color_var.get(),
+            "title_bg_alpha": self.title_bg_alpha_var.get(),
+            "title_bg_radius": self.title_bg_radius_var.get(),
+            "title_bg_pad_x": self.title_bg_pad_x_var.get(),
+            "title_bg_pad_y": self.title_bg_pad_y_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -5011,12 +5405,20 @@ class VideoProcessorApp:
         self.title_shadow_offset_x_var.set(options.get("title_shadow_offset_x", DEFAULT_TITLE_SHADOW_OFFSET_X))
         self.title_shadow_offset_y_var.set(options.get("title_shadow_offset_y", DEFAULT_TITLE_SHADOW_OFFSET_Y))
         self.title_shadow_blur_var.set(options.get("title_shadow_blur", DEFAULT_TITLE_SHADOW_BLUR))
+        self.title_bg_enabled_var.set(options.get("title_bg_enabled", DEFAULT_TITLE_BG_ENABLED))
+        self.title_bg_mode_var.set(options.get("title_bg_mode", DEFAULT_TITLE_BG_MODE))
+        self.title_bg_color_var.set(options.get("title_bg_color", DEFAULT_TITLE_BG_COLOR))
+        self.title_bg_alpha_var.set(options.get("title_bg_alpha", DEFAULT_TITLE_BG_ALPHA))
+        self.title_bg_radius_var.set(options.get("title_bg_radius", DEFAULT_TITLE_BG_RADIUS))
+        self.title_bg_pad_x_var.set(options.get("title_bg_pad_x", DEFAULT_TITLE_BG_PAD_X))
+        self.title_bg_pad_y_var.set(options.get("title_bg_pad_y", DEFAULT_TITLE_BG_PAD_Y))
 
         self.fill_swatch.config(bg=self.fill_color_var.get()); self.outline_swatch.config(bg=self.outline_color_var.get()); self.shadow_swatch.config(bg=self.shadow_color_var.get())
         # Update title swatches if they exist
         if hasattr(self, 'title_fill_swatch'): self.title_fill_swatch.config(bg=self.title_fill_color_var.get())
         if hasattr(self, 'title_outline_swatch'): self.title_outline_swatch.config(bg=self.title_outline_color_var.get())
         if hasattr(self, 'title_shadow_swatch'): self.title_shadow_swatch.config(bg=self.title_shadow_color_var.get())
+        if hasattr(self, 'title_bg_swatch'): self.title_bg_swatch.config(bg=self.title_bg_color_var.get())
         self._toggle_bitrate_override(); self.toggle_fruc_fps(); self._toggle_orientation_options(); self._toggle_upscale_options(); self._toggle_audio_norm_options(); self._update_audio_options_ui()
         self._is_loading_job_to_gui = False
 
