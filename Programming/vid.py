@@ -1199,15 +1199,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             x = x + ho
             y = y - vo
             pos_override = fr"{{\an5\pos({x:.1f},{y:.1f})}}"
-        elif align_mode == "top":
-            cy = m_v_offset
-            pos_override = fr"{{\an8\pos({cx:.1f},{cy:.1f})}}"
         elif align_mode == "middle":
-            cy = (play_res_y / 2) + m_v_offset
+            cy = (play_res_y / 2.0) + m_v_offset
             pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
-        elif align_mode == "bottom":
-            cy = play_res_y - m_v_offset
-            pos_override = fr"{{\an2\pos({cx:.1f},{cy:.1f})}}"
 
         dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
 
@@ -3843,6 +3837,8 @@ class VideoProcessorApp:
         
         self.start_button = ttk.Button(parent, text="Start Processing", command=self.start_processing, style="Start.TButton")
         self.start_button.pack(side=tk.LEFT, padx=5, ipady=5)
+        self.test_button = ttk.Button(parent, text="Test Render (5s)", command=self.test_render, style="Start.TButton")
+        self.test_button.pack(side=tk.LEFT, padx=5, ipady=5)
         self.generate_log_checkbox = ttk.Checkbutton(parent, text="Generate Log File", variable=self.generate_log_var, command=lambda: self._update_selected_jobs("generate_log"))
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
         self.close_gui_checkbox = ttk.Checkbutton(parent, text="Close GUI on Processing", variable=self.close_gui_var, command=lambda: self._update_selected_jobs("close_gui_on_processing"))
@@ -6645,8 +6641,14 @@ class VideoProcessorApp:
                 if has_bg_effect:
                     target_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
                     fc_parts = []
-                    fc_parts.append(f"{video_in_tag}split=2[v_bg_base][v_fg_in];")
-                    bg_current = "[v_bg_base]"
+                    
+                    if apply_pixelate or apply_blur:
+                        fc_parts.append(f"{video_in_tag}split=2[v_bg_base][v_fg_in];")
+                        bg_current = "[v_bg_base]"
+                        v_fg_in_tag = "[v_fg_in]"
+                    else:
+                        bg_current = None
+                        v_fg_in_tag = video_in_tag
                     
                     if apply_pixelate:
                         mult = options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER)
@@ -6682,7 +6684,7 @@ class VideoProcessorApp:
                         try: spread = max(1, int(spread_str))
                         except: spread = 2
                         
-                        fc_parts.append(f"[v_fg_in]split=2[v_fg_for_ambient][v_fg_in_real];")
+                        fc_parts.append(f"{v_fg_in_tag}split=2[v_fg_for_ambient][v_fg_in_real];")
                         fc_parts.append(f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt},")
                         fc_parts.append(f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,")
                         fc_parts.append(f"scale_cuda=w={target_w//spread}:h={target_h//spread}:interp_algo=bilinear:format={target_fmt},")
@@ -6699,7 +6701,7 @@ class VideoProcessorApp:
                             
                         fc_parts.append(f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
                     else:
-                        fc_parts.append(f"[v_fg_in]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
+                        fc_parts.append(f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
                         
                     fc_parts.append(f"{bg_current}[v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_bg_combined]")
                     filter_complex_parts.append("".join(fc_parts))
@@ -6891,6 +6893,34 @@ class VideoProcessorApp:
             return False
         return True
 
+    def test_render(self):
+        if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files to the queue."); return
+        if not self.validate_processing_settings(): return
+        
+        # Get selected jobs, or first job if none selected
+        selected_indices = self.job_listbox.curselection()
+        if selected_indices:
+            jobs_to_test = [copy.deepcopy(self.processing_jobs[i]) for i in selected_indices]
+        else:
+            jobs_to_test = [copy.deepcopy(self.processing_jobs[0])]
+            
+        # Override to 5 seconds
+        for job in jobs_to_test:
+            job['options']['seek_duration'] = "5"
+            job['options']['seek_start'] = "0"
+            job['display_name'] = f"[TEST 5s] {job['display_name']}"
+            job['options']['output_suffix_override'] = "_test"
+            
+        self.output_mode = self.output_mode_var.get()
+        
+        # Disable button to prevent re-entry
+        self.start_button.config(state="disabled")
+        if hasattr(self, 'test_button'):
+            self.test_button.config(state="disabled")
+            
+        # Start Thread
+        threading.Thread(target=self._process_files_thread, args=(jobs_to_test,), daemon=True).start()
+
     def start_processing(self):
         if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files to the queue."); return
         if not self.validate_processing_settings(): return
@@ -6909,6 +6939,8 @@ class VideoProcessorApp:
         
         # Disable button to prevent re-entry
         self.start_button.config(state="disabled")
+        if hasattr(self, 'test_button'):
+            self.test_button.config(state="disabled")
         
         # Start Thread
         threading.Thread(target=self._process_files_thread, daemon=True).start()
@@ -6943,12 +6975,15 @@ class VideoProcessorApp:
             subprocess.run(["shutdown", "/h"], shell=True)
         sys.exit(0)
 
-    def _process_files_thread(self):
+    def _process_files_thread(self, jobs_to_process=None):
+        if jobs_to_process is None:
+            jobs_to_process = self.processing_jobs
+            
         print("\n" + "="*80 + "\n--- Starting processing batch ---")
         successful, failed = 0, 0
-        total_jobs = len(self.processing_jobs)
+        total_jobs = len(jobs_to_process)
         
-        for i, job in enumerate(self.processing_jobs):
+        for i, job in enumerate(jobs_to_process):
             self.root.after(0, lambda m=f"Processing {i + 1}/{total_jobs}: {job['display_name']}": self.update_status(m))
             self.root.after(0, lambda: self.progress_bar.config(value=0))
             
@@ -6971,6 +7006,8 @@ class VideoProcessorApp:
         self.root.after(0, lambda: self.update_status(final_message))
         self.root.after(0, lambda: self.progress_bar.config(value=0))
         self.root.after(0, lambda: self.start_button.config(state="normal"))
+        if hasattr(self, 'test_button'):
+            self.root.after(0, lambda: self.test_button.config(state="normal"))
         
         # Check if hibernate was requested
         if self.hibernate_when_done_var.get():

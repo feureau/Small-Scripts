@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.21
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.22
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,9 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.22
+- ✅ **FEATURE**: Added "Auto-add generated output files to Input Files list" option in Output & Batch tab. Completed jobs now append their output path to the input list when enabled, enabling seamless multi-step pipelines without manual re-adding. Fully integrated into presets, job config snapshots, and job payload.
 
 ### v26.21
 - ✅ **FEATURE**: Added dynamic multi-string input file filtering with comma-separated terms and exclusion prefix (`!` or `-`) support.
@@ -945,6 +948,7 @@ def build_job_config_snapshot(
         "multipass_prompts": [],
         "safety_settings": [],
         "use_previous_output_ref": False,
+        "add_output_to_input": False,
     }
     effective = {k: kwargs.get(k, d) for k, d in known_defaults.items()}
     extra_keys = sorted(
@@ -3919,6 +3923,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             value=False
         )  # Hibernate after all processing (excluded from presets)
         self.add_context_as_suffix_var = tk.BooleanVar(value=False)
+        self.add_output_to_input_var = tk.BooleanVar(value=False)
 
         # --- NEW: Multipass Prompting ---
         self.enable_multipass_var = tk.BooleanVar(value=False)
@@ -4589,6 +4594,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )
         self.stop_on_unavailable_check.grid(
             row=16, column=0, columnspan=3, sticky="w", pady=(5, 0)
+        )
+
+        self.add_output_to_input_check = ttk.Checkbutton(
+            tab_out,
+            text="Auto-add generated output files to Input Files list",
+            variable=self.add_output_to_input_var,
+        )
+        self.add_output_to_input_check.grid(
+            row=17, column=0, columnspan=3, sticky="w", pady=(5, 0)
         )
 
         # Delay and Concurrent Jobs moved to the bottom panel
@@ -5370,6 +5384,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             set_var(self.rename_method_var, "rename_method", "full")
             set_var(self.model_prefix_var, "model_prefix", False)
             set_var(self.add_context_as_suffix_var, "add_context_as_suffix", False)
+            set_var(self.add_output_to_input_var, "add_output_to_input", False)
             set_var(self.enable_multipass_var, "enable_multipass", False)
             set_var(self.multipass_count_var, "multipass_count", 1)
 
@@ -5456,6 +5471,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "merge_chunks": self.merge_chunks_var.get(),
             "model_prefix": self.model_prefix_var.get(),
             "add_context_as_suffix": self.add_context_as_suffix_var.get(),
+            "add_output_to_input": self.add_output_to_input_var.get(),
             "enable_multipass": self.enable_multipass_var.get(),
             "multipass_count": int(self.multipass_count_var.get() or 1),
             "multipass_prompts": self._collect_multipass_prompts_from_ui(True),
@@ -5534,6 +5550,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "merge_chunks": True,
             "model_prefix": False,
             "add_context_as_suffix": False,
+            "add_output_to_input": False,
             "enable_multipass": False,
             "multipass_count": 1,
             "multipass_prompts": [],
@@ -6494,6 +6511,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             "enable_chunking": self.enable_chunking_var.get(),
             "chunk_size": self.chunk_size_var.get(),
             "model_prefix": self.model_prefix_var.get(),
+            "add_output_to_input": self.add_output_to_input_var.get(),
             "enable_multipass": multipass_enabled,
             "multipass_count": multipass_count,
             "multipass_prompts": multipass_prompts,
@@ -6908,6 +6926,16 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             while not self.result_queue.empty():
                 res = self.result_queue.get_nowait()
                 jid, status = res["job_id"], res["status"]
+                
+                # Check for completed job and add output to input if flagged
+                if status == "Completed":
+                    job_data = self.job_registry.get(jid, {})
+                    if job_data.get("add_output_to_input"):
+                        out_path = res.get("out_path")
+                        # Verify the file was actually created and we aren't in rename mode bypassing it
+                        if out_path and os.path.exists(out_path):
+                            self._add_filepaths_to_list([out_path])
+                            
                 if self.tree.exists(jid):
                     
                     # Heartbeat Timer Logic (Start/Stop)
@@ -7203,7 +7231,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         if out_path and os.path.isfile(out_path):
                             with self.successful_output_lock:
                                 self.successful_output_paths.append(out_path)
-                        self.result_queue.put({"job_id": jid, "status": "Completed"})
+                        self.result_queue.put({"job_id": jid, "status": "Completed", "out_path": out_path})
                         break
                     else:
                         raise Exception(err)

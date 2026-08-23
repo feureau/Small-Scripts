@@ -2,8 +2,8 @@
 SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
-DATE: 2026-01-19
-VERSION: 6.20 (Filename Truncation Safeguard)
+DATE: 2026-08-22
+VERSION: 6.21 (Timeout Fix for get_item)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,10 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-08-22] VERSION 6.21 UPDATE
+   - FIXED: Added explicit timeout and try/except block to initial `get_item()` call to prevent crashes when Archive.org's metadata API is slow.
+   - CLEANUP: Removed leftover unreachable GUI code inside the metadata collection block.
+
 [2026-04-15] VERSION 6.20 UPDATE
    - ADDED: Automatic filename truncation for path components exceeding 230 bytes.
    - ADDED: IA rejects uploads with path components > 230 bytes; script now auto-truncates
@@ -666,215 +670,6 @@ def collect_metadata(
             metadata[key] = val
 
     return metadata
-
-
-
-    sec_context.columnconfigure(0, weight=1)
-    sec_context.columnconfigure(1, weight=1)
-    
-    create_field(sec_context, "Coverage", 0, 0, default_val=prefills.get("coverage", suggested_period or ""))
-    create_field(sec_context, "Temporal", 0, 1, default_val=prefills.get("temporal", suggested_period or ""))
-    create_field(sec_context, "Spatial", 1, 0, default_val=prefills.get("spatial", ""))
-    
-    # 5. LEGAL & LICENSING
-    sec_legal = create_section(content_frame, "Legal & Licensing", 2, 0, colspan=2)
-    sec_legal.columnconfigure(0, weight=2)
-    sec_legal.columnconfigure(1, weight=1)
-    sec_legal.columnconfigure(2, weight=1)
-    
-    license_var = tk.StringVar()
-    license_url_var = tk.StringVar(value=prefills.get("licenseurl", ""))
-    
-    # Custom creation for License due to its complexity
-    tk.Label(sec_legal, text="License Selection", bg=DARK_BG, fg=DARK_FG, font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w", padx=5)
-    license_combo = ttk.Combobox(sec_legal, textvariable=license_var, values=LICENSE_OPTIONS, state="readonly", width=50)
-    license_combo.grid(row=1, column=0, sticky="ew", padx=5)
-    
-    # Map current URL to license combo
-    def_idx = 0
-    for idx, opt in enumerate(LICENSE_OPTIONS):
-        if prefills.get("licenseurl", "") in opt:
-            def_idx = idx
-            break
-    license_combo.current(def_idx)
-    fields["License"] = license_var
-
-    create_field(sec_legal, "License URL", 0, 1, default_val=prefills.get("licenseurl", ""))
-    # Fix the reference in sync below
-    license_url_entry_var = fields["License URL"]
-    
-    create_field(sec_legal, "Rights", 0, 2, default_val=prefills.get("rights", ""))
-
-    def on_license_change(*args):
-        selection = license_var.get()
-        if selection != "Custom URL":
-            for opt in LICENSE_OPTIONS:
-                if opt == selection:
-                    # Sync Rights field
-                    rights_name = opt.split(" (")[0]
-                    if "Rights" in fields:
-                        fields["Rights"].set(rights_name)
-                    # Sync URL
-                    url_start = opt.find("http")
-                    if url_start > 0:
-                        url = opt[url_start:].rstrip(")")
-                        fields["License URL"].set(url)
-                    break
-    license_var.trace("w", on_license_change)
-
-    # 6. EXTRAS (Citation, Relation, Format)
-    sec_extras = create_section(content_frame, "Relationships & Formats", 3, 0, colspan=2)
-    sec_extras.columnconfigure(0, weight=2)
-    sec_extras.columnconfigure(1, weight=1)
-    sec_extras.columnconfigure(2, weight=1)
-    
-    create_field(sec_extras, "Citation", 0, 0, is_text=True, text_height=3, default_val=prefills.get("citation", ""))
-    create_field(sec_extras, "Relation (comma URLs)", 0, 1, default_val=prefills.get("relation", ""))
-    
-    f_val = ""
-    if prefills.get("format"):
-        f_val = ", ".join(prefills["format"]) if isinstance(prefills["format"], list) else str(prefills["format"])
-    create_field(sec_extras, "Format (comma sep)", 0, 2, default_val=f_val)
-
-    # 7. CUSTOM FIELDS (Dynamic)
-    sec_custom = create_section(content_frame, "Custom Metadata", 4, 0, colspan=2)
-    custom_container = tk.Frame(sec_custom, bg=DARK_BG)
-    custom_container.pack(fill="x")
-    
-    custom_fields_data = []
-    
-    def add_custom_row(key_val="", val_val=""):
-        idx = len(custom_fields_data)
-        row_frame = tk.Frame(custom_container, bg=DARK_BG)
-        row_frame.pack(fill="x", pady=2)
-        
-        k_var = tk.StringVar(value=key_val)
-        v_var = tk.StringVar(value=val_val)
-        
-        k_ent = tk.Entry(row_frame, textvariable=k_var, bg=ENTRY_BG, fg=DARK_FG, relief="flat", width=25)
-        k_ent.pack(side="left", padx=5)
-        
-        v_ent = tk.Entry(row_frame, textvariable=v_var, bg=ENTRY_BG, fg=DARK_FG, relief="flat", width=50)
-        v_ent.pack(side="left", padx=5, fill="x", expand=True)
-        
-        def remove_row():
-            row_frame.destroy()
-            custom_fields_data.remove(row_data)
-            
-        rem_btn = tk.Button(row_frame, text="X", bg=RED, fg="white", relief="flat", width=3, command=remove_row)
-        rem_btn.pack(side="right", padx=5)
-        
-        row_data = {"key_var": k_var, "value_var": v_var}
-        custom_fields_data.append(row_data)
-
-    # 8. ACCOUNT COLLECTIONS (Reference)
-    if account_collections:
-        sec_accounts = create_section(content_frame, "Account Collections (Ref)", 5, 0, colspan=2)
-        c_str = ", ".join(account_collections)
-        tk.Label(
-            sec_accounts,
-            text=f"Available for your account: {c_str}",
-            bg=DARK_BG,
-            fg="#888888",
-            font=("Segoe UI", 9, "italic"),
-            wraplength=900,
-            justify="left",
-        ).pack(fill="x", padx=5)
-
-    # --- BUTTON BAR (FOOTER) ---
-    button_frame = tk.Frame(root, bg=DARK_BG, pady=20, borderwidth=1, relief="flat")
-    button_frame.pack(side="bottom", fill="x")
-    
-    # Separator
-    tk.Frame(button_frame, bg=BORDER, height=1).place(relx=0, rely=0, relwidth=1)
-
-    def reset_to_defaults():
-        if messagebox.askyesno("Reset", "Reset all fields to defaults?"):
-            fields["Title"].set(prefills.get("title", ""))
-            fields["Mediatype"].set(prefills.get("mediatype", MEDIATYPE_OPTIONS[0]))
-            fields["Collection"].set(prefills.get("collection", ""))
-            fields["Creator"].set(prefills.get("creator", ""))
-            fields["Tags (comma sep)"].set(prefills.get("tags", ""))
-            
-            if "Description" in fields:
-                fields["Description"].delete("1.0", "end")
-                fields["Description"].insert("1.0", prefills.get("description", ""))
-
-            # Reset Extended & Properties
-            prop_fields = ["Date", "Language", "Type", "Publisher", "Contributor", "Source", "Coverage", "Temporal", "Spatial", "Rights"]
-            for f in prop_fields:
-                if f in fields:
-                    if f == "Date": fields[f].set(prefills.get("date", suggested_date or ""))
-                    elif f == "Language": fields[f].set(prefills.get("language", "en"))
-                    elif f == "Coverage": fields[f].set(prefills.get("coverage", suggested_period or ""))
-                    elif f == "Temporal": fields[f].set(prefills.get("temporal", suggested_period or ""))
-                    else: fields[f].set(prefills.get("rights", "") if f == "Rights" else "")
-
-            if "Citation" in fields:
-                fields["Citation"].delete("1.0", "end")
-                fields["Citation"].insert("1.0", prefills.get("citation", ""))
-            
-            fields["Relation (comma URLs)"].set(prefills.get("relation", ""))
-            
-            f_val = ""
-            if prefills.get("format"):
-                f_val = ", ".join(prefills["format"]) if isinstance(prefills["format"], list) else str(prefills["format"])
-            fields["Format (comma sep)"].set(f_val)
-
-    def on_proceed():
-        t_val = fields["Title"].get().strip()
-        if not t_val:
-            messagebox.showerror("Error", "Title is required!")
-            return
-        
-        metadata = {
-            "title": t_val,
-            "mediatype": fields["Mediatype"].get()
-        }
-        
-        # Simple string fields
-        for f, k in [("Collection", "collection"), ("Creator", "creator"), 
-                     ("Date", "date"), ("Language", "language"), ("Publisher", "publisher"),
-                     ("Rights", "rights"), ("Contributor", "contributor"), ("Source", "source"),
-                     ("Coverage", "coverage"), ("Temporal", "temporal"), ("Spatial", "spatial"),
-                     ("Type", "type"), ("License URL", "licenseurl")]:
-            if f in fields:
-                val = fields[f].get().strip()
-                if val: metadata[k] = val
-        
-        # Text fields
-        if "Description" in fields:
-            d = fields["Description"].get("1.0", "end").strip()
-            if d: metadata["description"] = d
-        if "Citation" in fields:
-            c = fields["Citation"].get("1.0", "end").strip()
-            if c: metadata["citation"] = c
-            
-        # List fields
-        tags = fields["Tags (comma sep)"].get().strip()
-        if tags: metadata["subject"] = [t.strip() for t in tags.split(",") if t.strip()]
-        
-        rel = fields["Relation (comma URLs)"].get().strip()
-        if rel: metadata["relation"] = [r.strip() for r in rel.split(",") if r.strip()]
-        
-        fmt = fields["Format (comma sep)"].get().strip()
-        if fmt: metadata["format"] = [f.strip() for f in fmt.split(",") if f.strip()]
-
-        # Custom fields
-        for item in custom_fields_data:
-            k = item["key_var"].get().strip()
-            v = item["value_var"].get().strip()
-            if k and v: metadata[k] = v
-
-        result_capture["metadata"] = metadata
-        root.destroy()
-
-    def on_cancel():
-        if messagebox.askyesno("Cancel", "Discard changes and cancel upload?"):
-            result_capture["metadata"] = None
-            root.destroy()
-
-
 
 
 def _xml_text(node):
@@ -1604,7 +1399,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.20) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.21) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if VERBOSE:
@@ -1696,7 +1491,17 @@ def main():
 
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")
-        item = get_item(identifier)
+        try:
+            item = get_item(
+                identifier, 
+                archive_session=session, 
+                request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)}
+            )
+        except Exception as e:
+            print(f"\n[!] Network Error while checking item: {e}")
+            print("Archive.org's API is currently slow or unavailable. Please try again in a few minutes.")
+            sys.exit(1)
+            
         metadata = {}
         is_new_item = False
         account_collections = get_account_collections(session)
