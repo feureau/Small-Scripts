@@ -343,6 +343,15 @@ DEFAULT_TITLE_SHADOW_ALPHA = 128                    # Title shadow transparency.
 DEFAULT_TITLE_SHADOW_OFFSET_X = "2"                 # Title shadow X offset. Default: 2
 DEFAULT_TITLE_SHADOW_OFFSET_Y = "3"                 # Title shadow Y offset. Default: 3
 DEFAULT_TITLE_SHADOW_BLUR = "4"                     # Title shadow blur. Default: 4
+
+# --- ADD THESE TWO LINES ---
+DEFAULT_TITLE_SPACING = "0"                         # Title letter spacing (kerning). Default: 0
+DEFAULT_TITLE_LINE_SPACING = "0"                    # Title extra line spacing (pixels). Default: 0
+# ---------------------------
+
+# --- ADD THIS LINE ---
+DEFAULT_TITLE_WRAP_LIMIT = "0"                      # Title wrap limit. 0 = auto-calculate based on width
+
 DEFAULT_TITLE_BG_ENABLED = False                    # Enable title background shape. Default: False
 DEFAULT_TITLE_BG_MODE = "pill"                      # Background shape mode: pill (per-line) or box (unified). Default: pill
 DEFAULT_TITLE_BG_COLOR = "#000000"                  # Title background color. Default: #000000 (black)
@@ -1515,7 +1524,19 @@ def create_title_ass_file(title_text, options, target_res=None):
     margin_r = options.get('title_margin_r', DEFAULT_TITLE_MARGIN_R)
     align_map = {"top": 8, "middle": 5, "bottom": 2}
     alignment = align_map.get(options.get('title_alignment', 'top'), 8)
-    
+
+    # --- ADD THESE VARIABLES ---
+    try:
+        title_spacing = float(options.get('title_spacing', DEFAULT_TITLE_SPACING))
+    except (ValueError, TypeError):
+        title_spacing = 0.0
+
+    try:
+        line_spacing_offset = float(options.get('title_line_spacing', DEFAULT_TITLE_LINE_SPACING))
+    except (ValueError, TypeError):
+        line_spacing_offset = 0.0
+    # ---------------------------
+
     fill_color_hex = options.get('title_fill_color', DEFAULT_TITLE_FILL_COLOR)
     fill_alpha_val = options.get('title_fill_alpha', DEFAULT_TITLE_FILL_ALPHA)
     outline_color_hex = options.get('title_outline_color', DEFAULT_TITLE_OUTLINE_COLOR)
@@ -1578,7 +1599,8 @@ def create_title_ass_file(title_text, options, target_res=None):
         "&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
-        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
+        # CHANGED: Replaced the hardcoded '0' after {underline_flag} with {title_spacing}
+        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,{title_spacing},0,1,"
         f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
     )
     
@@ -1622,34 +1644,60 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # Auto-wrap title text to prevent unwrapped text from generating overly wide background pills
     available_width = play_res_x - m_l - m_r
 
-    # Calculate a realistic character width based on the font's weight
-    fn_lower = font_name.lower()
-    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+    try:
+        user_wrap_limit = int(options.get('title_wrap_limit', DEFAULT_TITLE_WRAP_LIMIT))
+    except (ValueError, TypeError):
+        user_wrap_limit = 0
+
     is_bold = options.get('title_bold', DEFAULT_TITLE_BOLD)
-
-    if is_heavy:
-        width_mult = 0.85
-    elif is_bold:
-        width_mult = 0.70
-    else:
-        width_mult = 0.55
-
-    unit_width_px = font_size * width_mult
-    if unit_width_px < 1: unit_width_px = 10
-    calculated_limit = max(5, int(available_width / unit_width_px))
+    is_italic = options.get('title_italic', DEFAULT_TITLE_ITALIC)
 
     wrapped_raw_lines = []
     for line in raw_lines:
-        wrapped = smart_wrap_text(line, limit=calculated_limit)
-        if wrapped:
-            # Strip trailing spaces so pills are perfectly symmetrical
-            for w in wrapped:
-                w_clean = w.strip()
-                if w_clean:
-                    wrapped_raw_lines.append(w_clean)
+        if user_wrap_limit > 0:
+            # TRUE OVERRIDE: Ignore pixels, wrap exactly at user's requested character count
+            wrapped = smart_wrap_text(line, limit=user_wrap_limit)
+            if wrapped:
+                for w in wrapped:
+                    w_clean = w.strip()
+                    if w_clean:
+                        wrapped_raw_lines.append(w_clean)
+            else:
+                if line.strip():
+                    wrapped_raw_lines.append(line.strip())
         else:
-            if line.strip():
-                wrapped_raw_lines.append(line.strip())
+            # PIXEL-ACCURATE AUTO: Measure words against actual available horizontal pixel space
+            # 1. Tokenize (safely handling English words and CJK characters)
+            tokens = []
+            curr = ""
+            for char in line:
+                if char == ' ' or get_char_width(char) == 2:
+                    if curr: tokens.append(curr)
+                    tokens.append(char)
+                    curr = ""
+                else:
+                    curr += char
+            if curr: tokens.append(curr)
+
+            # 2. Build lines measuring pixel width dynamically
+            current_line = ""
+            for token in tokens:
+                if not current_line and token == ' ':
+                    continue # Skip leading spaces on new lines
+
+                test_line = current_line + token
+                widths, _ = measure_text_lines([test_line], font_name, font_size, is_bold=is_bold, is_italic=is_italic)
+                test_width = widths[0] if widths else 0
+
+                # If adding this token exceeds the margin (and we already have text on this line)
+                if test_width > available_width and current_line:
+                    wrapped_raw_lines.append(current_line.strip())
+                    current_line = token if token != ' ' else ""
+                else:
+                    current_line = test_line
+
+            if current_line.strip():
+                wrapped_raw_lines.append(current_line.strip())
 
     if not wrapped_raw_lines:
         wrapped_raw_lines = [""]
@@ -1673,6 +1721,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # If Pill mode is enabled, expand line spacing to fit the padding so pills don't overlap vertically
     if bg_enabled and bg_mode == "pill":
         line_spacing = max(line_spacing, eff_line_h + (pad_y * 2) + 4) # 4px minimum gap
+
+    # --- ADD THIS LINE TO APPLY THE USER'S CUSTOM LINE SPACING ---
+    line_spacing += line_spacing_offset
 
     total_h = ((num_lines - 1) * line_spacing) + eff_line_h
 
@@ -1989,6 +2040,9 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('title_end_time', ''),
         job_options.get('title_font', ''),
         job_options.get('title_font_size', ''),
+        job_options.get('title_spacing', ''),      # ADD THIS
+        job_options.get('title_line_spacing', ''), # ADD THIS
+        job_options.get('title_wrap_limit', ''),  # --- ADD THIS LINE ---
         str(job_options.get('title_bold', False)),
         str(job_options.get('title_italic', False)),
         str(job_options.get('title_underline', False)),
@@ -2261,6 +2315,11 @@ class WorkflowPresetManager:
             "title_shadow_offset_x": DEFAULT_TITLE_SHADOW_OFFSET_X,
             "title_shadow_offset_y": DEFAULT_TITLE_SHADOW_OFFSET_Y,
             "title_shadow_blur": DEFAULT_TITLE_SHADOW_BLUR,
+            # --- ADD THESE TWO LINES ---
+            "title_spacing": DEFAULT_TITLE_SPACING,
+            "title_line_spacing": DEFAULT_TITLE_LINE_SPACING,
+            # ---------------------------
+            "title_wrap_limit": DEFAULT_TITLE_WRAP_LIMIT,  # --- ADD THIS LINE ---
             "title_bg_enabled": DEFAULT_TITLE_BG_ENABLED,
             "title_bg_mode": DEFAULT_TITLE_BG_MODE,
             "title_bg_color": DEFAULT_TITLE_BG_COLOR,
@@ -2624,6 +2683,19 @@ class VideoProcessorApp:
         self.title_font_var = tk.StringVar(value=DEFAULT_TITLE_FONT)
         self.title_font_size_var = tk.StringVar(value=DEFAULT_TITLE_FONT_SIZE)
         self.title_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('title_font_size'))
+
+        # --- ADD THESE LINES ---
+        self.title_spacing_var = tk.StringVar(value=DEFAULT_TITLE_SPACING)
+        self.title_spacing_var.trace_add('write', lambda *args: self._update_selected_jobs('title_spacing'))
+        self.title_line_spacing_var = tk.StringVar(value=DEFAULT_TITLE_LINE_SPACING)
+        self.title_line_spacing_var.trace_add('write', lambda *args: self._update_selected_jobs('title_line_spacing'))
+        # -----------------------
+
+        # --- ADD THESE LINES ---
+        self.title_wrap_limit_var = tk.StringVar(value=DEFAULT_TITLE_WRAP_LIMIT)
+        self.title_wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('title_wrap_limit'))
+        # -----------------------
+
         self.title_bold_var = tk.BooleanVar(value=DEFAULT_TITLE_BOLD)
         self.title_italic_var = tk.BooleanVar(value=DEFAULT_TITLE_ITALIC)
         self.title_underline_var = tk.BooleanVar(value=DEFAULT_TITLE_UNDERLINE)
@@ -3597,7 +3669,19 @@ class VideoProcessorApp:
         self.root.after(100, self._populate_title_fonts)
         ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(font_frame, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
-        
+
+        # --- ADD THESE LINES FOR TYPOGRAPHY SETTINGS ---
+        ttk.Label(font_frame, text="Kerning:").pack(side=tk.LEFT, padx=(15, 5))
+        kern_entry = ttk.Entry(font_frame, textvariable=self.title_spacing_var, width=4)
+        kern_entry.pack(side=tk.LEFT)
+        ToolTip(kern_entry, "Letter Spacing (pixels). Can be negative.")
+
+        ttk.Label(font_frame, text="Line Spacing:").pack(side=tk.LEFT, padx=(15, 5))
+        line_sp_entry = ttk.Entry(font_frame, textvariable=self.title_line_spacing_var, width=4)
+        line_sp_entry.pack(side=tk.LEFT)
+        ToolTip(line_sp_entry, "Extra vertical space between lines (pixels). Can be negative.")
+        # -----------------------------------------------
+
         style_frame = ttk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(style_frame, text="Bold", variable=self.title_bold_var, command=lambda: self._update_selected_jobs("title_bold")).pack(side=tk.LEFT)
         ttk.Checkbutton(style_frame, text="Italic", variable=self.title_italic_var, command=lambda: self._update_selected_jobs("title_italic")).pack(side=tk.LEFT, padx=15)
@@ -3614,6 +3698,16 @@ class VideoProcessorApp:
         ttk.Entry(align_frame, textvariable=self.title_margin_l_var, width=5).pack(side=tk.LEFT)
         ttk.Label(align_frame, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(align_frame, textvariable=self.title_margin_r_var, width=5).pack(side=tk.LEFT)
+
+        # --- ADD THESE LINES FOR WRAP LIMIT ---
+        format_frame = ttk.Frame(general_style_frame)
+        format_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(format_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(0, 15))
+        wrap_entry = ttk.Entry(format_frame, textvariable=self.title_wrap_limit_var, width=5)
+        wrap_entry.pack(side=tk.LEFT)
+        ttk.Label(format_frame, text="chars (0 = auto pixels)").pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(wrap_entry, "Force text to wrap at this many characters. Use 0 to calculate automatically based on exact pixel margins.")
+        # --------------------------------------
 
         # Color Panes
         fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
@@ -4663,6 +4757,9 @@ class VideoProcessorApp:
             "title_end_time": self.title_end_time_var.get(),
             "title_font": self.title_font_var.get(),
             "title_font_size": self.title_font_size_var.get(),
+            "title_spacing": self.title_spacing_var.get(),          # ADD THIS
+            "title_line_spacing": self.title_line_spacing_var.get(), # ADD THIS
+            "title_wrap_limit": self.title_wrap_limit_var.get(),  # --- ADD THIS LINE ---
             "title_bold": self.title_bold_var.get(),
             "title_italic": self.title_italic_var.get(),
             "title_underline": self.title_underline_var.get(),
@@ -5384,6 +5481,9 @@ class VideoProcessorApp:
         self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
         self.title_font_var.set(options.get("title_font", DEFAULT_TITLE_FONT))
         self.title_font_size_var.set(options.get("title_font_size", DEFAULT_TITLE_FONT_SIZE))
+        self.title_spacing_var.set(options.get("title_spacing", DEFAULT_TITLE_SPACING))             # ADD THIS
+        self.title_line_spacing_var.set(options.get("title_line_spacing", DEFAULT_TITLE_LINE_SPACING)) # ADD THIS
+        self.title_wrap_limit_var.set(options.get("title_wrap_limit", DEFAULT_TITLE_WRAP_LIMIT)) # --- ADD THIS LINE ---
         self.title_bold_var.set(options.get("title_bold", DEFAULT_TITLE_BOLD))
         self.title_italic_var.set(options.get("title_italic", DEFAULT_TITLE_ITALIC))
         self.title_underline_var.set(options.get("title_underline", DEFAULT_TITLE_UNDERLINE))
