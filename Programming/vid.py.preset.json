@@ -2039,6 +2039,7 @@
     },
     "Original HD": {
         "options": {
+            "output_mode": "local",
             "resolution": "1080p",
             "upscale_algo": "lanczos",
             "output_format": "sdr",
@@ -2056,6 +2057,9 @@
             "split_subtitles_by_chapter": false,
             "orientation": "original",
             "aspect_mode": "crop",
+            "aspect_blur": false,
+            "aspect_pixelate": false,
+            "aspect_ambient": false,
             "pad_color": "#000000",
             "video_offset_x": "0",
             "video_offset_y": "0",
@@ -2127,7 +2131,8 @@
             "reformat_subtitles": true,
             "wrap_limit": "42",
             "subtitle_max_lines": "0",
-            "output_to_subfolders": true,
+            "output_to_subfolders": false,
+            "output_subfolder_by_subtitle": false,
             "group_by_preset": false,
             "group_by_video": false,
             "subfolder_override": "",
@@ -2165,6 +2170,9 @@
             "title_end_time": "00:00:03.00",
             "title_font": "HelveticaNeueLT Std Blk",
             "title_font_size": "48",
+            "title_spacing": "0",
+            "title_line_spacing": "0",
+            "title_wrap_limit": "0",
             "title_bold": true,
             "title_italic": false,
             "title_underline": false,
@@ -2181,15 +2189,23 @@
             "title_shadow_alpha": 128,
             "title_shadow_offset_x": "2",
             "title_shadow_offset_y": "3",
-            "title_shadow_blur": "4"
+            "title_shadow_blur": "4",
+            "title_bg_enabled": false,
+            "title_bg_mode": "pill",
+            "title_bg_color": "#000000",
+            "title_bg_alpha": 0,
+            "title_bg_radius": "16",
+            "title_bg_pad_x": "20",
+            "title_bg_pad_y": "10"
         },
         "triggers": {
-            "video_trigger": "Never",
-            "on_no_sub": false,
-            "on_clean_copy_if_subs": false,
+            "video_trigger": "Always (Clean/Backup)",
+            "on_no_sub": true,
+            "on_clean_copy_if_subs": true,
             "on_scan_subs": false,
             "auto_detect_subs": false,
-            "suffix_filter": null
+            "suffix_filter": null,
+            "suffix_mode": "all"
         }
     },
     "Hybrid Duo": {
