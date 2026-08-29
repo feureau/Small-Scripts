@@ -1,7 +1,7 @@
 """###############################################################################
 Image Conversion Script - GIMP/XCF/RAW/JPG Batch Converter
 -------------------------------------------------------------------------------
-Version: 2.2.5 (2026-03-15)
+Version: 2.3.1 (2026-08-29)
 
 PURPOSE:
     This script batch-converts images of many types (including GIMP 3 `.xcf` files)
@@ -24,7 +24,7 @@ DEPENDENCIES:
     ▸ Delegates for RAW (dcraw/libraw) if RAW support is needed.
 
 USAGE:
-    python magick.py [-q 85] [-d 300] [-i plane] [-s] [-r 1920x1080] \
+    python magick.py [-q 85] [-d 300] [-i plane] [-s] [-r 1920x1080] [-a] \
                      [-j 1] [-t auto] [-f jpg] [--stitch horizontal|vertical] [pattern]
 
 ARGUMENTS:
@@ -36,9 +36,11 @@ ARGUMENTS:
     -d / --density: Density for vector formats (PDF/SVG)
     -i / --interlace: Interlace mode (none, line, plane, partition)
     -s / --strip: Strip metadata (EXIF, profiles)
+    -a / --auto-orient: Automatically rotate images according to EXIF orientation
     -r / --resize: Resize to WxH or percentage (e.g. 50%)
     --sampling-factor: e.g. 4:2:0
     --profile: Path to ICC color profile to apply
+    --stitch: Stitch matched images together ("horizontal" or "vertical")
 
 SUPPORTED INPUT FORMATS:
     Web & Standard: PNG, JPEG, JPG, WEBP, BMP, TIFF, GIF
@@ -54,6 +56,15 @@ WHY WE USE `magick input output` INSTEAD OF `mogrify`:
 
 HISTORY:
 -------------------------------------------------------------------------------
+2026-08-29 (v2.3.1):
+    ▸ Fixed white border bug on two sides when converting RAW (.cr3, .cr2, .nef, etc.).
+      Root cause: LibRaw/dcraw sets the image's virtual canvas ('page' geometry) to the
+      full sensor size while decoding only the active area. `-flatten` created a white
+      canvas matching the sensor size, leaving white borders on right/bottom margins.
+      Fix: Applied `+repage` and restricted `-flatten` to multi-layer files (.xcf, .psd,
+      .psb, .ora), using `-alpha remove -alpha off` for standard and RAW files.
+    ▸ Added `-a / --auto-orient` flag to allow optional EXIF rotation before conversion.
+
 2026-07-04 (v2.3.0):
     ▸ Added `--stitch` argument to stitch all matched input images together
       horizontally (+append) or vertically (-append) into a single output file.
@@ -115,7 +126,6 @@ import time
 import threading
 import multiprocessing
 import shutil
-import io
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # ==========================================
@@ -129,12 +139,22 @@ DEFAULT_RESIZE = None          # e.g. "1920x1080" or "50%"
 DEFAULT_SAMPLING_FACTOR = "4:2:0"
 DEFAULT_PROFILE = None         # Path to ICC profile
 DEFAULT_JOBS = 1               # "auto" or integer. Sequential (1) or parallel processing.
-DEFAULT_THREADS = "auto"      # "auto" or integer. IM internal threads per process.
+DEFAULT_THREADS = "auto"       # "auto" or integer. IM internal threads per process.
 DEFAULT_BACKGROUND = "white"   # Safe for transparency/GIMP/PSD
 DEFAULT_FORMAT = "jpg"         # Default output format
+DEFAULT_AUTO_ORIENT = False    # Opt-in camera EXIF rotation
 
-# Supported input formats removed from here and moved to GLOBAL CONFIGURATION
-# ==========================================
+# Formats with multi-layer stacks that strictly require -flatten
+LAYERED_FORMATS = {'.xcf', '.psd', '.psb', '.ora'}
+
+# Supported input formats (extensions must be lowercase)
+SUPPORTED_EXTENSIONS = [
+    '.png', '.jpeg', '.jpg', '.webp', '.bmp', '.tiff', '.tif', '.gif',
+    '.heic', '.heif', '.psd', '.psb', '.xcf', '.ora',
+    '.svg', '.eps', '.pdf',
+    '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.dng', '.raf', '.srw', '.orf', '.kdc', '.pef', '.iiq',
+    '.exr', '.hdr'
+]
 
 # --- ANSI Constants ---
 C_UP = "\033[F"      # Move cursor to start of previous line
@@ -153,15 +173,6 @@ def get_size_format(b, factor=1024, suffix="B"):
             return f"{b:.2f} {unit}{suffix}"
         b /= factor
 
-# Supported input formats (extensions must be lowercase)
-SUPPORTED_EXTENSIONS = [
-    '.png', '.jpeg', '.jpg', '.webp', '.bmp', '.tiff', '.tif', '.gif',
-    '.heic', '.heif', '.psd', '.psb', '.xcf', '.ora',
-    '.svg', '.eps', '.pdf',
-    '.cr2', '.cr3', '.nef', '.arw', '.rw2', '.dng', '.raf', '.srw', '.orf', '.kdc', '.pef', '.iiq',
-    '.exr', '.hdr'
-]
-
 # --- UI Controller (The Painter) ---
 
 class DashboardPainter:
@@ -173,7 +184,7 @@ class DashboardPainter:
         self.log_queue = multiprocessing.Queue()
         self.running = True
         self.last_height = 0
-        self.term_width = 80 # Default
+        self.term_width = 80
         self._set_term_size()
 
     def _set_term_size(self):
@@ -189,7 +200,6 @@ class DashboardPainter:
     def stop(self):
         self.running = False
         self.thread.join()
-        # Final flush
         while not self.log_queue.empty():
             sys.stdout.write("\r" + C_CLEAR + self.log_queue.get() + "\n")
         sys.stdout.write(C_SHOW)
@@ -293,6 +303,7 @@ def main():
     parser.add_argument("-d", "--density", type=int, default=DEFAULT_DENSITY, help="Density (DPI) for vector formats")
     parser.add_argument("-i", "--interlace", choices=["none", "line", "plane", "partition"], default=DEFAULT_INTERLACE, help="Interlace mode")
     parser.add_argument("-s", "--strip", action="store_true" if not DEFAULT_STRIP else "store_false", help="Strip metadata and profiles")
+    parser.add_argument("-a", "--auto-orient", action="store_true", default=DEFAULT_AUTO_ORIENT, help="Auto-orient images based on EXIF camera orientation tag")
     parser.add_argument("-r", "--resize", default=DEFAULT_RESIZE, help="Resize geometry (e.g. 1920x1080, 50%%)")
     parser.add_argument("--sampling-factor", default=DEFAULT_SAMPLING_FACTOR, help="Chroma subsampling factor (e.g. 4:2:0)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Path to ICC color profile")
@@ -303,16 +314,14 @@ def main():
     parser.add_argument("--stitch", choices=["horizontal", "vertical"], help="Stitch all input images horizontally (+append) or vertically (-append) into a single file")
     args = parser.parse_args()
 
-    # Determine target format: check if last positional arg looks like a format extension
+    # Determine target format
     target_format = "png" if args.stitch else DEFAULT_FORMAT
     valid_patterns = []
     
     if args.format:
-        # Explicit -f/--format flag takes priority
         target_format = args.format.lstrip('.').lower()
         valid_patterns = [p for p in args.patterns if p.strip()] if args.patterns else []
     elif args.patterns:
-        # Check if last argument looks like a target format (no glob chars, no path separators, short string)
         last_arg = args.patterns[-1].strip() if args.patterns else ""
         is_format_specifier = (
             last_arg and
@@ -326,30 +335,21 @@ def main():
         else:
             valid_patterns = [p for p in args.patterns if p.strip()]
     
-    # Set output folder based on target format
     output_folder = target_format
 
     # Build file list
-
     input_files = []
-    
     if args.recursive:
-        # Recursive scanning
         if valid_patterns:
             for p in valid_patterns:
-                # If the user provided a pattern like "*.png", we want "**/*.png"
-                # If they already provided a recursive pattern, trust it, otherwise prepend "**/"
                 if "**" in p:
                     input_files.extend(glob.glob(p, recursive=True))
                 else:
-                    # glob.glob("**/" + p, recursive=True) handles both current dir and subdirs
                     input_files.extend(glob.glob(os.path.join("**", p), recursive=True))
         else:
-            # Recursive scan for all supported extensions
             for ext in SUPPORTED_EXTENSIONS:
                 input_files.extend(glob.glob(os.path.join("**", f"*{ext}"), recursive=True))
     else:
-        # Standard non-recursive scanning
         if valid_patterns:
             for p in valid_patterns:
                 input_files.extend(glob.glob(p))
@@ -373,12 +373,12 @@ def main():
     for i in range(1, max_workers + 1):
         shared_dict[f"W{i:02}"] = "IDLE - Waiting for task"
 
-    # jp2_lossless_mode removed in favor of conditional default in command building
-
     print("=" * 80)
-    print(f"IMAGE CONVERSION ENGINE (v2.2.5)")
+    print(f"IMAGE CONVERSION ENGINE (v2.3.1)")
     print("-" * 80)
     print(f"Workload: {len(input_files)} files | Target: {target_format.upper()} | Parallelism: {max_workers} Cores")
+    if args.auto_orient:
+        print("Option: Camera Auto-Orient active")
     if target_format == "jp2":
         user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
         if not user_provided_quality:
@@ -389,15 +389,17 @@ def main():
 
     if args.stitch:
         output_file = os.path.join(output_folder_path, f"stitched.{target_format}")
-        
-        # Build command
         magick_command = ["magick"]
         magick_command.extend(input_files)
         
-        # Apply thread limit if not auto
         if str(args.threads).lower() != "auto":
             magick_command.extend(["-limit", "thread", str(args.threads)])
             
+        if args.auto_orient:
+            magick_command.append("-auto-orient")
+            
+        magick_command.append("+repage")
+
         if target_format == "jp2":
             user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
             if not user_provided_quality:
@@ -407,8 +409,6 @@ def main():
         elif args.quality is not None:
             magick_command.extend(["-quality", str(args.quality)])
             
-        # We cannot use -flatten here because it composites all input images into a single image stack
-        # before the append operation. Instead, we use -alpha remove to composite each image over the background.
         magick_command.extend(["-background", DEFAULT_BACKGROUND, "-alpha", "remove", "-alpha", "off"])
         
         if args.sampling_factor and target_format != "jp2":
@@ -426,13 +426,10 @@ def main():
             
         append_flag = "+append" if args.stitch == "horizontal" else "-append"
         magick_command.append(append_flag)
-        
         magick_command.append(output_file)
         
         start_batch = time.time()
         print(f"Stitching {len(input_files)} images {args.stitch}ly... Please wait.")
-        
-        # Calculate total original size
         total_o = sum(os.path.getsize(f) for f in input_files)
         
         try:
@@ -448,12 +445,10 @@ def main():
             print(f"New Stitched Size:   {get_size_format(n_sz)}")
             print(f"Total Time:          {dur:.2f}s")
             print("=" * 80)
-            
         except subprocess.CalledProcessError as e:
             print(f"[!] Error during stitching: {e}")
             if e.stderr:
                 print(e.stderr.decode())
-        
         return
 
     painter = DashboardPainter(max_workers, len(input_files))
@@ -468,16 +463,17 @@ def main():
         for i, input_file in enumerate(input_files):
             base_name = os.path.splitext(os.path.basename(input_file))[0]
             output_file = os.path.join(output_folder_path, f"{base_name}.{target_format}")
+            in_ext = os.path.splitext(input_file)[1].lower()
 
             magick_command = ["magick", input_file]
 
-            # Apply thread limit if not auto
             if str(args.threads).lower() != "auto":
                 magick_command.extend(["-limit", "thread", str(args.threads)])
 
-            # Apply quality logic
+            if args.auto_orient:
+                magick_command.append("-auto-orient")
+
             if target_format == "jp2":
-                # Default to lossless unless the user explicitly provided -q/--quality
                 user_provided_quality = any(arg in sys.argv for arg in ["-q", "--quality"])
                 if not user_provided_quality:
                     magick_command.extend(["-quality", "0", "-define", "jp2:mode=int", "-define", "jp2:rate=1.0"])
@@ -486,12 +482,12 @@ def main():
             elif args.quality is not None:
                 magick_command.extend(["-quality", str(args.quality)])
 
-            # Always flatten with background (safe for alpha, xcf, psd) and explicitly strip alpha
-            # to prevent JP2 encoders from incorrectly writing 4-component sRGB files (Krita bug)
-            magick_command.extend(["-background", DEFAULT_BACKGROUND, "-flatten", "-alpha", "off"])
+            # Discard residual sensor/canvas offsets and handle flattening appropriately
+            if in_ext in LAYERED_FORMATS:
+                magick_command.extend(["-background", DEFAULT_BACKGROUND, "-flatten", "-alpha", "off", "+repage"])
+            else:
+                magick_command.extend(["+repage", "-background", DEFAULT_BACKGROUND, "-alpha", "remove", "-alpha", "off"])
 
-            # JPEG2000 does not use chroma subsampling or interlace modes — these are
-            # JPEG/PNG concepts and must be skipped entirely for JP2 to produce valid output.
             if args.sampling_factor and target_format != "jp2":
                 magick_command.extend(["-sampling-factor", args.sampling_factor])
             if args.density:
@@ -504,7 +500,6 @@ def main():
                 magick_command.extend(["-profile", args.profile])
             if args.resize:
                 magick_command.extend(["-resize", args.resize])
-
 
             magick_command.append(output_file)
 
