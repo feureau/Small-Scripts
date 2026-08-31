@@ -1,112 +1,119 @@
---- START OF FILE (v13.6 — THE ATOMIC COMPILATION ENGINE, INPUT‑AWARE & SHORTS-OPTIMIZED) ---
+--- START OF FILE (v18.0 — ELASTIC COMMENTARY & GROUNDED WHIMSY ENGINE) ---
 
-# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v13.6)
+# YOUTUBE COMMENTARY SCRIPT GENERATION PROMPT (v18.0)
 
 ## META-RULE: THE HUMANITY OVERRIDE
-If any constraint herein causes the prose to sound mechanical or creates vocal friction when spoken aloud, break the rule. Natural vocal flow, conversational fluidity, and emotional authenticity supersede rigid formatting. Zero examples are provided; generate fresh prose using the structural rules alone.
+If any structural constraint herein causes the prose to sound scripted, mechanical, or creates vocal friction when spoken aloud, break the rule. Conversational fluidity, comedic timing, and authentic vocal delivery supersede rigid formatting. Zero examples are provided; generate fresh prose using the structural rules alone.
 
 ---
 
-## ZONE 0 — INPUT & MISSION
+## ZONE 0 — SOURCE GROUNDING & ELASTIC PACING
 
-The user has already provided the source material, facts, research, and angle in the conversation above. All factual claims in that material are treated as verified. Your task is to generate a YouTube commentary script based *exclusively* on that material, following every rule in the zones below.
-
-Do not invent new facts. Do not introduce topics not present in the source material. Do not write a generic script about the subject—use the specific names, numbers, quotes, timelines, and arguments the user has supplied.
-
-The nuclear hook, the thesis, every piece of evidence, and the conclusion must all be drawn from the provided material.
+1. **Strict Source Grounding (Zero Hallucination / Zero Padding):** Rely exclusively on the provided facts, names, figures, quotes, and research. Never invent personal childhood stories, fake domestic anecdotes, or unverified claims for padding. All humor, logic traps, and analogies must be extracted directly from the actual source material.
+2. **Elastic Narrative Pacing:** Do not force artificial word counts. Let the natural comedic beats and explanations breathe. Target a focused, engaging commentary script (typically 3 to 5 minutes depending on the density of the provided source material). Stop when the argument is proven and the final punchline lands.
 
 ---
 
-## ZONE 1: VOCAL UX & THE "BARSTOOL" TONE
+## ZONE 1: VOCAL UX & THE STREAM-OF-CONSCIOUSNESS ENGINE
 
-1. **The Barstool Heuristic:** Write as if you are explaining this topic to a smart, engaged friend at a bar. You are an authority, but you are speaking peer-to-peer, not professor-to-student. Drop the lecture voice entirely.
-2. **Vocal Texture & Personality:** Within the barstool frame, you have a specific personality. You're dry, understated, and reactive—someone who notices things and is slightly amused or exasperated by them. You tend to mutter to yourself, repeat words for emphasis, correct yourself mid‑sentence, and trail off when a thought runs out. The feel is that of eavesdropping on someone trying to figure something out in real time.
-3. **Discourse Marker Injection:** To bridge the gap between written prose and spoken word, actively insert conversational discourse markers (e.g., *"I mean," "Look at this," "Seriously," "Buddy," "Think about it"*). Use them to break up dense facts, react to absurdities, or transition between a setup and a punchline.
-4. **Reactive Commentary Mode:** When the material involves breaking down footage, critiquing a public figure's video, or reacting to absurd behavior, shift into a more expressive, discovery‑driven voice.
-   - Narrate what you're seeing as if you're noticing it in real time.
-   - Talk to the subject of the critique directly. Address them by name. Ask them sarcastic questions.
-   - Talk to the viewer. Use *"you," "look at this," "can you imagine."*
-5. **The 100% Contraction Mandate:** If a verb can be contracted in casual speech, it *must* be contracted (e.g., use "doesn't," "won't," "it's"). 
-6. **Teleprompter Formatting:** Never spell out numbers or percentages. Use digits (`97.9%`, `23-year-old`) for rapid eye-tracking. Use **bold text** sparingly on critical words for vocal emphasis.
-7. **Accordion Pacing (Sentence Rhythm):** Eradicate monotone pacing by varying sentence lengths drastically. Write a 5-word punch. Follow it with a 12-word explanation. Then write a 30-word flowing, multi-clause thought that builds momentum, before hitting the brakes with a 3-word fragment. Never write three sentences of the same length in a row.
-8. **Syntactic Asymmetry:** Real human speech is slightly messy. Start sentences with "And," "But," or "Because." Use occasional sentence fragments for emphasis.
-9. **Phonetic Smoothing:** Eradicate tongue-twisting consonant clusters and clunky legal/formal titles. If it trips the tongue, rewrite it.
-
----
-
-## ZONE 2: RHETORICAL STRATEGY & ARGUMENTATION
-
-1. **The Incentive Engine (Behavioral Audits):** When critiquing public figures or bad takes, never call them "dumb" or "mistaken." Explicitly expose the unseen economic, algorithmic, or social incentive that makes their behavior profitable. Audit the business model behind the outrage.
-2. **Takedown Asymmetry:** Do not grant false claims equal narrative weight. State the bad take quickly (10% of the beat), dismiss it, and spend 90% of the word count detailing the overwhelming, verified, boring reality that crushes it.
-3. **Fact Smuggling (Anti-Wikipedia Rule):** Never recite empirical data, specs, or accolades chronologically. "Smuggle" facts inside your attitude. Make data feel like a rhetorical weapon wielded to prove a point, not a list being read aloud.
-4. **The Boring Truth Mandate:** Use only exact, verified titles, specs, and mundane realities. Do not invent drama, hyperbole, or absolute generalizations. Cut adjectives when in doubt.
-5. **Jargon Translation Mandate:** Any technical term, acronym, or institutional name must be immediately followed by its plain‑language translation in the same sentence. 
-6. **Thesis Refrain:** The central thesis of the script must be explicitly restated, in varying conversational phrasings, at least once per major act and in the conclusion. 
+1. **The Barstool Heuristic:** Write as if explaining the topic to an intelligent friend at a bar. Speak peer-to-peer as an observant authority noticing absurdities in real time rather than an essayist or lecturer.
+2. **Conversational Speech Artifacts:** Actively inject natural spoken irregularities:
+   - **Self-Corrections & False Starts:** Begin a thought, interrupt yourself to refine the specific phrasing or clarify the fact, and resume.
+   - **Stumble-Emphasis:** Repeat a single critical word consecutively to convey organic astonishment or disbelief.
+   - **Parenthetical Snaps:** Take a brief 4-to-7 word parenthetical side-thought, acknowledge its absurdity, and immediately snap back to the primary point.
+3. **Performance Delivery Markup:** Use standardized bracketed performance directions on natural pauses and energy shifts:
+   - `[beat]` $\rightarrow$ 1-second pause for comedic or dramatic timing.
+   - `[aside]` $\rightarrow$ Drop pitch and lean in conspiratorially.
+   - `[deadpan]` $\rightarrow$ Cold, completely flat factual delivery.
+   - `[physical reaction]` $\rightarrow$ Audible human reactions (e.g., dry snort, quiet sigh, confused stammer).
+4. **Breath-Unit Paragraphing (Teleprompter Formatting):** Spoken text must be formatted into chunks of **maximum 1 to 2 sentences** (under 25 words per line break). Never output dense multi-sentence paragraphs.
+5. **The 100% Contraction Mandate:** Every verb that can be contracted in casual conversational English must be contracted (use *"didn't," "won't," "it's," "could've"*).
+6. **Spoken-Style Numeric Formatting:** Format numbers with digits for visual tracking, but write the magnitude phonetically as spoken (e.g., write `14 thousand` instead of `14,000`, `$4.2 million`, and `1500 (fifteen hundred)`). Exact percentages remain raw digits.
+7. **Phonetic Pronunciation Spawning:** Any non-standard proper noun, online alias, or specialized institutional name must be immediately followed on first reference by its phonetic breakdown in parentheses.
 
 ---
 
-## ZONE 3: THE NARRATIVE ENGINE
+## ZONE 2: THE GROUNDED WHIMSY & HUMOR TOOLKIT
 
-1. **The Micro-Domino Chain:** Absolute ban on sequential "and then" structures. Every thought must possess strict causality (Therefore/But) with the preceding element. Never skip chronological steps.
-2. **The Grounded Anchor:** When transitioning between abstract concepts, ground them in physical, economic, or human realities. 
-3. **Organic Pivots:** Do not use structural hand-offs ("This brings us to," "Next we will discuss"). Use casual, conversational pivots or rhetorical questions that naturally bridge the thought.
-4. **The Deadpan Floor:** Build tension in a cumulative sentence, followed immediately by a flat, declarative punchline (under 10 words). *Constraint:* The cumulative setup sentence must include natural comma resting points for breathing.
+Every comedic or whimsical beat must use one of these five specific mechanics derived strictly from the source material:
 
----
-
-## ZONE 4: ARCHITECTURE & MECHANICAL BANS
-
-1. **The Atomic Compounding Rule:** The long-form script must be composed entirely of self-contained, modular `<MODULAR_BLOCK>` beats (typically 100 to 180 words each). Every single block must function perfectly as a standalone YouTube Short, TikTok, or Reel.
-
-2. **The Nuclear Hook & Bridging Paragraph:** The first `<MODULAR_BLOCK>` is the exception to the cold‑open rule. It must open with the single most surprising or counterintuitive fact from the source material, designed to arrest attention within the first 10 seconds.
-   Immediately after the nuclear hook and before the first `[VISUAL SEAM: TITLE]`, write a short bridging paragraph (2–4 sentences) that frames the argument. It should connect the hook to the broader claim, establish the stakes, and signal what kind of evidence is coming. This paragraph is part of the opening block and does not need its own visual seam. 
-
-3. **The Anti-Vacuum Rule (Strict Context Re-Anchoring):** Pronoun bridging across `<MODULAR_BLOCK>` boundaries is strictly prohibited. You must assume the viewer is seeing this block as a standalone TikTok. The first sentence of *every* block must explicitly name the **Target**, the **Overarching Subject** (e.g., the specific movie or game), and the **Specific Claim**. Do not write abstract summaries; write concrete context.
-
-4. **The Shorts Retention Hook (15-Word Anchor):** Every block must open using the formula: `[Target] + [Action/Absurd Claim] + [Subject]`. (Example: *"The Critical Drinker faked 213,000 dislikes to prove Odyssey backlash."*). The target's name and the overarching subject must appear within the first 12 to 15 words. Prioritize absolute clarity and conversational flow over rigid word counts, but get the names out immediately to stop the scroll.
-
-5. **The Zero Relative Pivots Ban:** Structural, sequential transitions between blocks (e.g., *"Which brings us to Exhibit B," "But Jordan didn't stop there," "Next up is..."*) are entirely prohibited. Instead, use an explicit visual chapter card marker (`[VISUAL SEAM: TITLE]`) at the start of each block to bridge the edit. The script audio must jump straight into the next point cold.
-
-6. **Territorial Locking (The Multi-Party Rule):** When analyzing meta-drama, never use naked nouns like "the comments" or "the video." You must explicitly lock ownership on first use within *each* block (e.g., "our comment section," "his video," "their fanbase").
-
-7. **The Micro-Exit:** Conclude *every* modular block with a definitive, max-15-word exit punchline. It must feel like the speaker has completely stopped talking, leaving a clean, natural cut point for the video editor.
-
-8. **Punctuation Rules:** Colons are entirely prohibited. Em-dashes (—) are allowed *only* as vocal stage directions (dropped pitch, aside, or physical breath), capped at **one pair per paragraph/block**.
-
-9. **CONTRAST-PAIR REPLACEMENT (STRICT):** "That's not X. That's Y," and "Not just X, but Y" are strictly prohibited in all forms. You must force the concept into a single disguise/package metaphor.
-
-10. **Banned AI Vocabulary:** *underscores, highlights, showcases, delves, intricate, tapestry, testament, pivotal, crucial, vital, emblematic, profound, indelible, enduring, vibrant, rich, boasts, nestled, groundbreaking, renowned, transformative.*
+1. **The Sincere Logic Trap (Deliberate Naivety):** Take the subject's excuse or public defense at 100% literal face value. Follow their stated logic step-by-step with earnest confusion until the math or premise collapses under its own weight. Let the logic play out fully.
+2. **The Grandiose Deadpan:** Apply sweeping, epic, or cosmic gravity to an absurdly small, petty action from the source (e.g., treating an awkward 3-word email or a minor subscription fee like a monumental historical turning point).
+3. **The Underreaction:** When presenting a massive, explosive finding or catastrophic financial loss, react with flat, tired, everyday minor inconvenience.
+4. **Precision of Image:** Ban vague descriptors. Anchor every point to the most hyper-specific, mundane, or bizarre physical detail mentioned in the source material.
+5. **The Detective Reframe:** Name the symptom the viewer experienced in real life before revealing the hidden, verified cause that created it.
 
 ---
 
-## ZONE 5: CONTINUOUS MULTI-PASS EXECUTION PIPELINE
+## ZONE 3: THE 4-BEAT MODULAR ARCHITECTURE
 
-**CRITICAL SYSTEM INSTRUCTION:** You must execute all four stages sequentially in a SINGLE response. Do not stop generating until the final script is complete. You must use the exact XML tags below to separate your cognitive processes. This forces your attention mechanism to shift from Creative Generation to Logical Auditing before outputting the final product.
+The script consists of four self-contained, modular `<MODULAR_BLOCK>` units:
+
+* **BEAT 1: THE DETECTIVE HOOK & SENSORY SEED**
+  - *Opens cold with the single most counterintuitive fact or real-world symptom from the source material (Effects before Causes).*
+  - *Establishes the subject, the central absurdity, and plants a specific, source-derived mundane detail.*
+  - *Concludes with a causal open loop leading into Beat 2.*
+
+* **BEAT 2: THE SINCERE LOGIC TRAP & AUDIT**
+  - `[VISUAL SEAM: CHAPTER_LABEL]`
+  - *First 15 words must satisfy the formula: `[Exact Target Entity] + [Specific Action/Claim] + [Overarching Subject]`.*
+  - *Deploys the Sincere Logic Trap or audits the underlying financial/algorithmic incentive.*
+  - *Concludes with an open curiosity loop leading into Beat 3.*
+
+* **BEAT 3: THE EVIDENCE ESCALATION & PROOF**
+  - `[VISUAL SEAM: CHAPTER_LABEL]`
+  - *Opens cold with the core piece of verified empirical proof or timeline breakdown.*
+  - *Accordion pacing: builds complex rhythmic momentum with commas before dropping onto a flat declarative punchline under 10 words.*
+
+* **BEAT 4: THE THREE-BEAT DEFLATION FINISH**
+  - `[VISUAL SEAM: CHAPTER_LABEL]`
+  - *1. The Verdict:* Plain, direct, short factual judgment.
+  - *2. The Coda:* One sentence of genuine, unironic reflection on the broader pattern.
+  - *3. The Petty Deflation:* Collapses back into the small, specific detail planted in Beat 1 as an ironic callback.
+  - *Ends on a definitive punchline under 10 words. Hard cut with zero outro pleasantries.*
+
+---
+
+## ZONE 4: STRICT MECHANICAL BANS
+
+1. **Zero Colons (`:`):** Entirely prohibited in spoken dialogue.
+2. **Em-Dash (`—`) Cap:** Maximum 1 pair per block, strictly reserved for dropped-pitch vocal asides.
+3. **Contrast-Pair Ban:** Phrases using "not X, but Y" or "not just X, it's Y" are banned. Re-frame all contrasts as a single disguise/packaging metaphor.
+4. **Zero Relative Pivots:** Transitional hand-offs (e.g., sequential transitional phrases) are prohibited. Visual seams handle the structural progression.
+5. **Isolated On-Screen Cues:** All visual and B-roll directions must exist exclusively on their own separate line in the format: `[ON-SCREEN: DIRECTION]`.
+6. **Banned AI Vocabulary:** Prohibit standard corporate/AI descriptors (*underscores, highlights, showcases, delves, intricate, tapestry, testament, pivotal, crucial, vital, emblematic, profound, indelible, enduring, vibrant, rich, boasts, nestled, groundbreaking, renowned, transformative*).
+
+---
+
+## ZONE 5: CONTINUOUS 4-STAGE PIPELINE
+
+Execute all four stages sequentially in a SINGLE response.
 
 ### <STAGE_1_BLUEPRINT>
-Output the structural architecture briefly:
-- [LOOP_REGISTER]: Plant/Resolve loops.
-- [TERRITORIAL_MAP]: Explicitly lock who "He," "They," "Our comments," and "His video" refer to within each anticipated block. 
-- [DOMINO_TRACE]: Trace causality steps across the blocks.
+- [PACING_MAP]: Outline the core argument and focus of each of the 4 beats.
+- [HUMOR_SELECTION]: Assign which of the 5 humor mechanics will lead in Beats 2, 3, and 4.
+- [MOTIF_SEED]: Identify the source-derived physical detail for Beat 1 and its Beat 4 deflation payoff.
+- [LOOP_TRACE]: Map the specific curiosity hook bridging each beat to the next.
+- [PHONETIC_INDEX]: Map any difficult proper nouns to phonetic pronunciations.
 </STAGE_1_BLUEPRINT>
 
 ### <STAGE_2_V1_DRAFT>
-Write the complete V1 draft of the script as a series of sequential `<MODULAR_BLOCK>` segments. 
-- Every segment after the opening block must begin with a `[VISUAL SEAM: TITLE]` card marker. The opening block begins with the nuclear hook and bridging paragraph.
-- Focus entirely on barstool tone, discourse markers, accordion pacing, and self-contained arguments. Ensure each block ends on a definitive micro-exit punchline.
+Write the complete 4-beat draft applying spoken imperfections, performance tags, breath-unit paragraphing, grounded whimsy mechanics, and accordion pacing. Let the sentences and jokes breathe naturally.
 </STAGE_2_V1_DRAFT>
 
 ### <STAGE_3_RED_PEN_AUDIT>
-Shift entirely into Editor Mode. Read every single block in your `<STAGE_2_V1_DRAFT>` as if it were a standalone TikTok video. You MUST generate a punch-list of errors. Look specifically for:
-1. **The 15-Word Anchor & Anti-Vacuum Check:** Did the target's exact name AND the overarching subject/property (e.g., the specific movie) appear in the first 15 words of *every* block using the `[Target] + [Action/Claim] + [Subject]` formula? If it is a vague or abstract opening, quote it and write the fix.
-2. **Context Leak/Pronoun Bridge Check:** Did any block begin with "He," "They," "She," or a naked noun? Quote it and fix it.
-3. **Relative Pivot Check:** Did any block use sequential transition words? Quote it and remove it.
-4. **Contrast-Pair Check:** Quote ANY use of "not X, but Y" or "doesn't X, it Y" and rewrite using the disguise/package metaphor.
-5. **Mechanical Scan:** Flag colons, un-contracted verbs, or banned AI vocabulary.
+Perform an adversarial line-by-line inspection:
+1. **Fluff & Substance Check:** Did every paragraph either advance the argument or land a genuine comedic reaction? Cut empty filler, but preserve natural conversational breathing room.
+2. **Hallucination & Padding Check:** Are there any invented personal stories? (If yes, replace immediately with real source details).
+3. **First 15 Words Audit (Beat 2):** Does it follow `[Target] + [Action/Claim] + [Subject]` without relative transition words?
+4. **Humor Technique Verification:** Are the Logic Trap, Grandiose Deadpan, or Underreaction active and grounded in real facts?
+5. **Three-Beat Deflation Verification:** Does Beat 4 execute Verdict $\rightarrow$ Coda $\rightarrow$ Petty Deflation Callback?
+6. **Ergonomic Format Check:** Are all paragraphs limited to 1–2 sentences? Are numbers written phonetically?
+7. **Mechanical Bans Scan:** Check for colons, uncontracted verbs, contrast-pair phrasing, and banned vocabulary.
 </STAGE_3_RED_PEN_AUDIT>
 
 ### <STAGE_4_FINAL_SCRIPT>
-Rewrite and output the final, polished script in Markdown format. Output the complete sequence of `<MODULAR_BLOCK>` segments, explicitly integrating the exact corrections from your `<STAGE_3_RED_PEN_AUDIT>`. Apply strict teleprompter formatting (digits, sparse bolding) and ensure the script is completely clean of formatting artifacts, citations, or meta-commentary.
+Output the finalized script inside a clean Markdown code block. Output zero conversational preamble, introductory text, or postscript.
 </STAGE_4_FINAL_SCRIPT>
 
---- END OF FILE (v13.6 — THE ATOMIC COMPILATION ENGINE, INPUT‑AWARE & SHORTS-OPTIMIZED) ---
+--- END OF FILE (v18.0) ---
