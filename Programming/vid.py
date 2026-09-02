@@ -1059,7 +1059,7 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     try:
         user_wrap_limit = int(options.get('wrap_limit', DEFAULT_WRAP_LIMIT))
     except (ValueError, TypeError):
-        user_wrap_limit = int(DEFAULT_WRAP_LIMIT)
+        user_wrap_limit = 0
         
     try:
         m_v_offset = float(margin_v)
@@ -1076,28 +1076,27 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
 
     available_width = play_res_x - m_l - m_r
 
-    # Calculate a realistic character width based on the font's weight
-    fn_lower = font_name.lower()
-    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
-    is_bold = options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD)
-
-    if is_heavy:
-        width_mult = 0.85
-    elif is_bold:
-        width_mult = 0.70
+    if user_wrap_limit > 0:
+        # TRUE OVERRIDE: Wrap exactly at the user's specified character limit
+        final_limit = user_wrap_limit
     else:
-        width_mult = 0.55
+        # AUTO: Calculate maximum characters based on resolution, font size, and margins
+        fn_lower = font_name.lower()
+        is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+        is_bold = options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD)
 
-    unit_width_px = f_size * width_mult
-    if unit_width_px < 1: unit_width_px = 10
+        if is_heavy:
+            width_mult = 0.85
+        elif is_bold:
+            width_mult = 0.70
+        else:
+            width_mult = 0.55
 
-    calculated_limit = int(available_width / unit_width_px)
+        unit_width_px = f_size * width_mult
+        if unit_width_px < 1: unit_width_px = 10
+        final_limit = max(10, int(available_width / unit_width_px))
     
-    # Use the stricter limit to prevent runoff, but don't go below a silly minimum (e.g. 10 chars)
-    # We want to respect the user's limit unless the physical geometry forbids it.
-    final_limit = min(user_limit for user_limit in [user_wrap_limit, calculated_limit] if user_limit > 5)
-    
-    # print(f"[DEBUG] Subtitle Wrap: User={user_wrap_limit}, Calc={calculated_limit} (W={available_width}), Final={final_limit}")
+    # print(f"[DEBUG] Subtitle Wrap: User={user_wrap_limit}, Calc={calculated_limit if user_wrap_limit <= 0 else 'N/A'} (W={available_width if user_wrap_limit <= 0 else 'N/A'}), Final={final_limit}")
     try:
         max_lines = int(options.get('subtitle_max_lines', DEFAULT_SUBTITLE_MAX_LINES))
     except (ValueError, TypeError):
@@ -1136,7 +1135,7 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     header = f"""[Script Info]
 Title: Corrected Single-Layer Subtitle File
 ScriptType: v4.00+
-WrapStyle: 0
+WrapStyle: 2
 PlayResX: {play_res_x}
 PlayResY: {play_res_y}
 [V4+ Styles]
@@ -5932,6 +5931,7 @@ class VideoProcessorApp:
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         ass_burn_path, temp_extracted_srt_path = None, None
         nvencc_subburn_path = None
+        title_ass_path = None
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         base_dir = base_dir or os.getcwd()
         try:
