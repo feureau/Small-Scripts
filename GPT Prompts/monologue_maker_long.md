@@ -26,7 +26,13 @@ If any structural constraint herein causes the prose to sound scripted, mechanic
    - `[aside]` $\rightarrow$ Drop pitch and lean in conspiratorially.
    - `[deadpan]` $\rightarrow$ Cold, completely flat factual delivery.
    - `[physical reaction]` $\rightarrow$ Audible human reactions (e.g., dry snort, quiet sigh, confused stammer).
-4. **Breath-Unit Paragraphing (Teleprompter Formatting):** Spoken text must be formatted into chunks of **maximum 1 to 2 sentences** (under 25 words per line break). Never output dense multi-sentence paragraphs.
+4. **Teleprompter Formatting (Clause Breaks & Mandatory Double Spacing):** Spoken text must be formatted with an empty blank line between every line (`\n\n`), strictly broken down into **one sentence or one comma-separated clause per line**:
+   - **Mandatory Double Line Breaks (`\n\n`):** Every single line must be followed by an empty blank line. Never output two consecutive lines of text touching each other.
+   - **Treat every comma as an immediate break (`\n\n`):** Start a new line with a blank line after every comma.
+   - **Treat terminal punctuation as an immediate break (`\n\n`):** Every period, question mark, or exclamation mark must end the line followed by a blank line.
+   - Never place multiple sentences or comma-separated clauses on the same line.
+   - Punctuation stays attached to the end of the line it terminates before the blank line.
+   - Headings, visual seams, and bracketed cues (`[beat]`, `[ON-SCREEN: ...]`) must also sit on their own lines separated by blank lines.
 5. **The 100% Contraction Mandate:** Every verb that can be contracted in casual conversational English must be contracted (use *"didn't," "won't," "it's," "could've"*).
 6. **Spoken-Style Numeric Formatting:** Format numbers with digits for visual tracking, but write the magnitude phonetically as spoken (e.g., write `14 thousand` instead of `14,000`, `$4.2 million`, and `1500 (fifteen hundred)`). Exact percentages remain raw digits.
 7. **Phonetic Pronunciation Spawning:** Any non-standard proper noun, online alias, or specialized institutional name must be immediately followed on first reference by its phonetic breakdown in parentheses.
@@ -63,7 +69,7 @@ The script consists of four self-contained, modular `<MODULAR_BLOCK>` units:
 * **BEAT 3: THE EVIDENCE ESCALATION & PROOF**
   - `[VISUAL SEAM: CHAPTER_LABEL]`
   - *Opens cold with the core piece of verified empirical proof or timeline breakdown.*
-  - *Accordion pacing: builds complex rhythmic momentum with commas before dropping onto a flat declarative punchline under 10 words.*
+  - *Accordion pacing: builds complex rhythmic momentum with cascading comma breaks before dropping onto a flat declarative punchline under 10 words.*
 
 * **BEAT 4: THE THREE-BEAT DEFLATION FINISH**
   - `[VISUAL SEAM: CHAPTER_LABEL]`
@@ -98,17 +104,17 @@ Execute all four stages sequentially in a SINGLE response.
 </STAGE_1_BLUEPRINT>
 
 ### <STAGE_2_V1_DRAFT>
-Write the complete 4-beat draft applying spoken imperfections, performance tags, breath-unit paragraphing, grounded whimsy mechanics, and accordion pacing. Let the sentences and jokes breathe naturally.
+Write the complete 4-beat draft applying spoken imperfections, performance tags, teleprompter double-spaced clause formatting (one sentence or comma-separated clause per line followed by an empty blank line), grounded whimsy mechanics, and accordion pacing. Let the sentences and jokes breathe naturally.
 </STAGE_2_V1_DRAFT>
 
 ### <STAGE_3_RED_PEN_AUDIT>
 Perform an adversarial line-by-line inspection:
-1. **Fluff & Substance Check:** Did every paragraph either advance the argument or land a genuine comedic reaction? Cut empty filler, but preserve natural conversational breathing room.
+1. **Fluff & Substance Check:** Did every line either advance the argument or land a genuine comedic reaction? Cut empty filler, but preserve natural conversational breathing room.
 2. **Hallucination & Padding Check:** Are there any invented personal stories? (If yes, replace immediately with real source details).
 3. **First 15 Words Audit (Beat 2):** Does it follow `[Target] + [Action/Claim] + [Subject]` without relative transition words?
 4. **Humor Technique Verification:** Are the Logic Trap, Grandiose Deadpan, or Underreaction active and grounded in real facts?
 5. **Three-Beat Deflation Verification:** Does Beat 4 execute Verdict $\rightarrow$ Coda $\rightarrow$ Petty Deflation Callback?
-6. **Ergonomic Format Check:** Are all paragraphs limited to 1–2 sentences? Are numbers written phonetically?
+6. **Teleprompter Format Check:** Is the text strictly formatted with one sentence or comma-separated clause per line, with an empty blank line (double line break `\n\n`) separating every single line? Are numbers written phonetically?
 7. **Mechanical Bans Scan:** Check for colons, uncontracted verbs, contrast-pair phrasing, and banned vocabulary.
 </STAGE_3_RED_PEN_AUDIT>
 

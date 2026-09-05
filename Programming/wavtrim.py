@@ -2,16 +2,17 @@
 
 """
 # 🔊 WAVTrimmer.py
-> **High-performance audio utility for batch trimming, joining, and segmenting WAV files.**
+> **High-performance audio utility for batch trimming, joining, and segmenting WAV files (with auto-conversion for non-WAV audio).**
 
-A versatile command-line tool designed for precision audio editing. It supports automatic silence detection, percentage-based trimming, and seamless file concatenation without re-encoding when possible.
+A versatile command-line tool designed for precision audio editing. It supports automatic silence detection, percentage-based trimming, seamless file concatenation without re-encoding when possible, and automatic conversion of non-WAV audio formats (MP3, FLAC, OGG, M4A, etc.) to WAV.
 
 ---
 
 ## 🚀 Key Features
 - 🔇 **Silence Trimming:** Automatically detect and remove silence from the start, end, or both.
+- 🔄 **Auto Format Conversion:** Automatically converts non-WAV audio (MP3, FLAC, OGG, M4A, etc.) to WAV.
 - ✂️ **Precision Segmenting:** Split files at specific timestamps or intervals.
-- 🔗 **Lossless Joining:** Concatenate multiple WAV files using FFmpeg's stream copy.
+- 🔗 **Lossless Joining:** Concatenate multiple audio files using FFmpeg's stream copy.
 - 🔄 **Safe Overwriting:** Overwrites original files by default using a safe temporary-swap strategy.
 - 📦 **Batch Processing:** Handle entire directories recursively.
 - ⚡ **FFmpeg Integration:** Uses FFmpeg for lightning-fast, high-quality operations.
@@ -208,6 +209,38 @@ class WAVTrimmer:
                 return audio_data, frame_rate, channels, sample_width, duration
         except Exception as e:
             raise Exception(f"Failed to load {filepath}: {e}")
+
+    def convert_to_wav(self, input_file: str, output_wav: str = None) -> str:
+        """
+        Converts a non-WAV audio file to standard PCM WAV format.
+        
+        WHAT: Uses FFmpeg (or soundfile fallback) to decode any audio format to PCM 16-bit WAV.
+        WHY:  Ensures all subsequent silence analysis, stream trimming, and manipulation
+              work seamlessly and losslessly on standard WAV audio.
+        """
+        if Path(input_file).suffix.lower() == ".wav":
+            return input_file
+
+        if output_wav is None:
+            output_wav = str(Path(input_file).with_suffix("")) + "_converted_tmp.wav"
+
+        self.log(
+            f"  Converting non-WAV to WAV: {os.path.basename(input_file)} -> {os.path.basename(output_wav)}"
+        )
+
+        if self.check_ffmpeg():
+            cmd = ["-y", "-i", input_file, "-vn", "-c:a", "pcm_s16le", output_wav]
+            self.run_ffmpeg(cmd, "convert_to_wav")
+        else:
+            try:
+                data, samplerate = sf.read(input_file, dtype="float32")
+                sf.write(output_wav, data, samplerate, subtype="PCM_16")
+            except Exception as e:
+                raise Exception(
+                    f"Cannot convert {input_file} to WAV. FFmpeg is required for non-WAV formats. Error: {e}"
+                )
+
+        return output_wav
 
     def save_wav(
         self,
@@ -721,11 +754,16 @@ Usage Examples:
     # 1. Expand wildcards/directories if in batch mode (no files provided or single *)
     input_files = []
     seen = set()
+    audio_extensions = [
+        "wav", "WAV", "mp3", "MP3", "flac", "FLAC", "ogg", "OGG",
+        "m4a", "M4A", "aac", "AAC", "wma", "WMA", "opus", "OPUS",
+        "aiff", "AIFF", "aif", "AIF", "webm", "WEBM",
+    ]
     for f in args.files or []:
         if f == "*":
-            extensions = ["wav", "WAV"]
             globs = [
-                f"**/*.{ext}" if args.recursive else f"*.{ext}" for ext in extensions
+                f"**/*.{ext}" if args.recursive else f"*.{ext}"
+                for ext in audio_extensions
             ]
             for g in globs:
                 for match in sorted(glob.glob(g, recursive=args.recursive)):
@@ -762,13 +800,16 @@ Usage Examples:
 
     # 1.5 Plan Reporting
     if args.verbose:
-        mode = "INFO ONLY (No changes)"
+        mode = "SILENCE TRIM (DEFAULT)"
         if args.info:
             mode = "INFO ONLY (No changes)"
         elif args.join:
             mode = "JOIN"
         elif args.segment:
             mode = "SEGMENT"
+        elif args.start is not None or args.end is not None:
+            mode = "TIME TRIM"
+        elif args.silence is not None:
             mode = "SILENCE TRIM"
             if not action_found:
                 mode += " (DEFAULT)"
@@ -793,7 +834,7 @@ Usage Examples:
         print(f"  Files:     {len(input_files)}")
         print(f"  Action:    {'COPY (_trimmed)' if args.copy else 'OVERWRITE (Original)'}")
         print(f"  Re-encode: {args.reencode}")
-        if args.silence is not None:
+        if args.silence is not None and not args.info and not args.join and not args.segment:
             print(
                 f"  Threshold: {args.silence}{'dB' if args.silence != 'auto' else ''}"
             )
@@ -808,7 +849,24 @@ Usage Examples:
     # 2. Case: Join
     if args.join:
         output = args.output or "combined.wav"
-        trimmer.join(input_files, output)
+        converted_temps = []
+        try:
+            wav_inputs = []
+            for f in input_files:
+                if Path(f).suffix.lower() != ".wav":
+                    temp_wav = trimmer.convert_to_wav(f)
+                    converted_temps.append(temp_wav)
+                    wav_inputs.append(temp_wav)
+                else:
+                    wav_inputs.append(f)
+            trimmer.join(wav_inputs, output)
+        finally:
+            for tmp in converted_temps:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
         sys.exit(0)
 
     # 3. Case: Segment (Single file only)
@@ -816,8 +874,22 @@ Usage Examples:
         if len(input_files) > 1:
             print("Error: --segment only supports one file at a time.")
             sys.exit(1)
-        output_dir = os.path.dirname(input_files[0]) or "."
-        trimmer.segment(input_files[0], output_dir, args.segment)
+        src_file = input_files[0]
+        converted_temp = None
+        try:
+            if Path(src_file).suffix.lower() != ".wav":
+                converted_temp = trimmer.convert_to_wav(src_file)
+                working_file = converted_temp
+            else:
+                working_file = src_file
+            output_dir = os.path.dirname(src_file) or "."
+            trimmer.segment(working_file, output_dir, args.segment)
+        finally:
+            if converted_temp and os.path.exists(converted_temp):
+                try:
+                    os.remove(converted_temp)
+                except OSError:
+                    pass
         sys.exit(0)
 
     # 4. Standard Processing (Single or Multiple)
@@ -826,33 +898,51 @@ Usage Examples:
             print(f"File not found: {input_file}")
             continue
 
+        is_non_wav = Path(input_file).suffix.lower() != ".wav"
+
         # Determine output name
         if len(input_files) == 1 and args.output:
             final_output = args.output
         elif args.copy:
             final_output = f"{Path(input_file).stem}_trimmed.wav"
         else:
-            final_output = input_file
+            # Overwrite mode: if input was non-wav (e.g. .mp3), output becomes .wav
+            final_output = str(Path(input_file).with_suffix(".wav"))
 
-        # Info mode doesn't need temp files
+        # Info mode doesn't need temp output files
         if args.info:
+            converted_temp = None
             try:
-                audio, fr, ch, sw, dur = trimmer.load_wav(input_file)
+                if is_non_wav:
+                    converted_temp = trimmer.convert_to_wav(input_file)
+                    target_info = converted_temp
+                else:
+                    target_info = input_file
+                audio, fr, ch, sw, dur = trimmer.load_wav(target_info)
                 trimmer.log(
                     f"File: {input_file} | {fr}Hz | {ch}ch | {trimmer.format_duration(dur)}"
                 )
             except Exception as e:
                 print(f"Error reading {input_file}: {e}")
+            finally:
+                if converted_temp and os.path.exists(converted_temp):
+                    try:
+                        os.remove(converted_temp)
+                    except OSError:
+                        pass
             continue
 
-        # For writing, always use a temp file first for safety.
-        # WHY: Writing output to a file that is also the input (overwrite) 
-        #      can lead to data truncation or corruption if the process crashes. 
-        #      Writing to a .tmp file and then 'os.replace'ing ensures atomicity.
-        #      We use a '.wav' extension so FFmpeg can correctly guess the format.
+        converted_temp = None
         temp_output = str(Path(final_output).with_suffix("")) + "_tmp_trim.wav"
         
         try:
+            # If input is not WAV, convert to a temporary WAV first for safe and exact processing
+            if is_non_wav:
+                converted_temp = trimmer.convert_to_wav(input_file)
+                working_input = converted_temp
+            else:
+                working_input = input_file
+
             if args.silence is not None:
                 # Determine trim mode
                 trim_mode = DEFAULT_TRIM_MODE
@@ -864,7 +954,7 @@ Usage Examples:
                     trim_mode = "start"
 
                 trimmer.trim_silence(
-                    input_file,
+                    working_input,
                     temp_output,
                     args.silence,
                     args.pad,
@@ -872,7 +962,7 @@ Usage Examples:
                     mode=trim_mode,
                 )
             elif args.start is not None or args.end is not None:
-                trimmer.trim_by_time(input_file, temp_output, args.start, args.end)
+                trimmer.trim_by_time(working_input, temp_output, args.start, args.end)
             
             # If successful, move temp to final
             if os.path.exists(temp_output):
@@ -882,6 +972,10 @@ Usage Examples:
                     if not mode & stat.S_IWRITE:
                         os.chmod(final_output, mode | stat.S_IWRITE)
 
+                # Collect open handles
+                import gc
+                gc.collect()
+
                 # Robust replace/rename with a small retry loop to handle transient locks
                 max_retries = 5
                 success = False
@@ -889,7 +983,7 @@ Usage Examples:
 
                 for attempt in range(max_retries):
                     try:
-                        if final_output == input_file:
+                        if final_output == working_input:
                             os.replace(temp_output, final_output)
                         else:
                             if os.path.exists(final_output):
@@ -903,17 +997,39 @@ Usage Examples:
                         time.sleep(0.1)
                 
                 if success:
+                    # In overwrite mode with non-WAV input, remove the original non-WAV file
+                    if is_non_wav and not args.copy and not args.output:
+                        if os.path.exists(input_file) and input_file != final_output:
+                            for _ in range(max_retries):
+                                try:
+                                    os.remove(input_file)
+                                    break
+                                except OSError:
+                                    time.sleep(0.1)
+                            trimmer.log(
+                                f"  Replaced original {os.path.basename(input_file)} -> {os.path.basename(final_output)}"
+                            )
+
                     trimmer.stats["processed"] += 1
                 else:
-                    raise Exception(f"Failed to overwrite {final_output} after {max_retries} attempts: {last_error}")
+                    raise Exception(f"Failed to write {final_output} after {max_retries} attempts: {last_error}")
             else:
                 trimmer.stats["skipped"] += 1
 
         except Exception as e:
             print(f"Error processing {input_file}: {e}")
             trimmer.stats["errors"] += 1
+        finally:
             if os.path.exists(temp_output):
-                os.remove(temp_output)
+                try:
+                    os.remove(temp_output)
+                except OSError:
+                    pass
+            if converted_temp and os.path.exists(converted_temp):
+                try:
+                    os.remove(converted_temp)
+                except OSError:
+                    pass
 
     trimmer.print_summary()
 

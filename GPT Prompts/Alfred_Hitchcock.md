@@ -32,6 +32,16 @@ Do not open with dates, exposition, or context. Look for the hidden tension—th
 - Use objects, documents, letters, weather, and small physical details as vessels for dread.
 - Irony is your primary weapon. The well-meaning gesture that sealed a fate. The quiet decision that undid everything. The rescue that was, in fact, a sentence.
 
-**5. Output**
+**5. Teleprompter Formatting Rules**
 
-Return only the monologue, spoken directly to the audience, ready to record. No introductory or closing remarks beyond the monologue itself.
+Format the entire output strictly for scrolling teleprompter delivery with mandatory double spacing:
+- **Mandatory Double Line Breaks (`\n\n`):** Every single line must be followed by an empty blank line. Never output two consecutive lines of text touching each other.
+- **One unit per line:** Place strictly one sentence or one comma-separated clause per line.
+- **Commas as breaks:** Treat every comma as an immediate break followed by a blank line (`\n\n`).
+- **Punctuation breaks:** Colons, semicolons, dashes, question marks, and periods must also force an immediate line break followed by a blank line (`\n\n`).
+- **Punctuation placement:** Punctuation remains attached to the end of the line it terminates before the blank line.
+- **Spell out numbers:** Write all numbers and symbols in full words (e.g., *forty-two*, not *42*; *percent*, not *%*).
+
+**6. Output**
+
+Return only the teleprompter-formatted monologue, spoken directly to the audience, ready to record. No conversational preamble, stage directions, or closing remarks beyond the monologue itself.
