@@ -1916,7 +1916,7 @@
         "output_suffix": "",
         "output_extension": "srt",
         "overwrite_original": true,
-        "stream_output": false,
+        "stream_output": true,
         "group_size": 3,
         "group_files": false,
         "validate_json": false,
