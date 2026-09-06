@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.22
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.23
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,10 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.23
+- ✅ **BUGFIX**: Fixed missing API key error when creating and immediately running a new blank preset by preserving default API key environment mappings and setting a default model.
+- ✅ **IMPROVEMENT**: Ensured `load_preset()` configures engine credentials before fetching models and updates the main toolbar API key combobox.
 
 ### v26.22
 - ✅ **FEATURE**: Added "Auto-add generated output files to Input Files list" option in Output & Batch tab. Completed jobs now append their output path to the input list when enabled, enabling seamless multi-step pipelines without manual re-adding. Fully integrated into presets, job config snapshots, and job payload.
@@ -5293,17 +5297,28 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     var.set(default)
 
             set_var(self.engine_var, "engine")
-            self.update_models()
-            set_var(self.model_var, "model")
-            set_var(self.output_dir_var, "output_folder")
-            
-            # Load engine configs
+
+            # Load engine configs before fetching models
             saved_configs = data.get("engine_configs", {})
             for eng, cfg in saved_configs.items():
                 if eng in self.engine_configs:
-                    self.engine_configs[eng]["api_key_env"] = cfg.get("api_key_env", self.engine_configs[eng]["api_key_env"])
-                    self.engine_configs[eng]["api_url"] = cfg.get("api_url", self.engine_configs[eng]["api_url"])
-                    self.engine_configs[eng]["api_url_env"] = cfg.get("api_url_env", self.engine_configs[eng]["api_url_env"])
+                    if cfg.get("api_key_env"):
+                        self.engine_configs[eng]["api_key_env"] = cfg["api_key_env"]
+                    elif not self.engine_configs[eng].get("api_key_env"):
+                        if eng == "google":
+                            self.engine_configs[eng]["api_key_env"] = "GOOGLE_API_KEY" if os.environ.get("GOOGLE_API_KEY") else "GEMINI_API_KEY"
+                        else:
+                            self.engine_configs[eng]["api_key_env"] = f"{eng.upper()}_API_KEY"
+                    if cfg.get("api_url"):
+                        self.engine_configs[eng]["api_url"] = cfg["api_url"]
+                    if cfg.get("api_url_env"):
+                        self.engine_configs[eng]["api_url_env"] = cfg["api_url_env"]
+
+            self.update_models()
+            if data.get("model"):
+                set_var(self.model_var, "model")
+            set_var(self.output_dir_var, "output_folder")
+            self._update_main_api_key_combo()
 
             set_var(self.output_under_input_var, "output_under_input", False)
             set_var(self.merge_outputs_var, "merge_outputs", False)
@@ -5490,17 +5505,41 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         tkinter.messagebox.showinfo("Saved", f"Preset '{name}' updated.")
 
     def get_default_settings_dict(self):
+        initial_google_env = "GOOGLE_API_KEY" if os.environ.get("GOOGLE_API_KEY") else "GEMINI_API_KEY"
+        default_engine_configs = {
+            "google": {
+                "api_key_env": self.engine_configs.get("google", {}).get("api_key_env") or initial_google_env,
+                "api_url": self.engine_configs.get("google", {}).get("api_url", ""),
+                "api_url_env": self.engine_configs.get("google", {}).get("api_url_env", ""),
+            },
+            "ollama": {
+                "api_key_env": self.engine_configs.get("ollama", {}).get("api_key_env") or "OLLAMA_API_KEY",
+                "api_url": self.engine_configs.get("ollama", {}).get("api_url") or "http://localhost:11434",
+                "api_url_env": self.engine_configs.get("ollama", {}).get("api_url_env") or "OLLAMA_API_URL",
+            },
+            "lmstudio": {
+                "api_key_env": self.engine_configs.get("lmstudio", {}).get("api_key_env") or "LMSTUDIO_API_KEY",
+                "api_url": self.engine_configs.get("lmstudio", {}).get("api_url") or "http://localhost:1234/v1",
+                "api_url_env": self.engine_configs.get("lmstudio", {}).get("api_url_env") or "LMSTUDIO_API_URL",
+            },
+            "unsloth": {
+                "api_key_env": self.engine_configs.get("unsloth", {}).get("api_key_env") or "UNSLOTH_API_KEY",
+                "api_url": self.engine_configs.get("unsloth", {}).get("api_url") or "http://127.0.0.1:8888/v1",
+                "api_url_env": self.engine_configs.get("unsloth", {}).get("api_url_env") or "UNSLOTH_API_URL",
+            },
+        }
+        for eng in self.engine_configs.keys():
+            if eng not in default_engine_configs:
+                default_engine_configs[eng] = {
+                    "api_key_env": self.engine_configs[eng].get("api_key_env", ""),
+                    "api_url": self.engine_configs[eng].get("api_url", ""),
+                    "api_url_env": self.engine_configs[eng].get("api_url_env", ""),
+                }
         return {
             "prompt": "",
             "engine": DEFAULT_ENGINE,
-            "engine_configs": {
-                eng: {
-                    "api_key_env": "",
-                    "api_url": "",
-                    "api_url_env": "",
-                } for eng in self.engine_configs.keys()
-            },
-            "model": "",
+            "engine_configs": default_engine_configs,
+            "model": DEFAULT_GOOGLE_MODEL,
             "output_folder": DEFAULT_OUTPUT_SUBFOLDER_NAME,
             "output_under_input": False,
             "merge_outputs": False,
