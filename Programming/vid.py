@@ -69,6 +69,13 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.16 - Hybrid Side-by-Side, Combined Aspect & Subtitle Exclusion (2026-09-08)
+    • FEATURE: Added side-by-side (`hstack`) layout for Hybrid and Hybrid Duo modes.
+    • FEATURE: Added "Auto (Follow Inputs)" canvas aspect ratio for both Stacked and Side-by-Side.
+    • FEATURE: Added Layout selector (`Auto`, `Stacked`, `Side-by-Side`) with dynamic UI labels (Top/Bottom vs Left/Right).
+    • FEATURE: Added sibling auto-pairing for `-left` and `-right` files in Hybrid Duo mode.
+    • FEATURE: Added `9:16` and `1:1` aspect ratio options for hybrid video inputs.
+    • FEATURE: Added "Exclude Suffix" preset trigger to exclude subtitles matching specific suffixes.
 v8.15 - Title Background Shapes & Styling (2026-08-21)
     • FEATURE: Added TikTok/Instagram-style rounded-corner background shapes for Title overlays.
     • FEATURE: Supports both "Per-Line Pill" (wraps each line individually) and "Single Box" modes.
@@ -194,6 +201,7 @@ DEFAULT_NVENC_NGX_VSR_QUALITY = "1"                 # NGX VSR quality. Default: 
 DEFAULT_MAX_SIZE_MB = 0                             # Max file size in MB (0 = Disabled)
 DEFAULT_MAX_DURATION = 0                            # Max duration in seconds (0 = Disabled)
 DEFAULT_ORIENTATION = "horizontal + vertical"       # Video orientation. Default: horizontal + vertical, Options: horizontal + vertical, hybrid (stacked), hybrid-duo (dual source), original
+DEFAULT_HYBRID_LAYOUT = "auto"                      # Hybrid layout mode. Default: auto, Options: auto, stacked, side_by_side
 DEFAULT_ASPECT_MODE = "crop"                        # Aspect ratio handling. Default: crop, Options: crop, pad, stretch, pixelate, blur, ambient
 DEFAULT_PAD_COLOR = "#000000"                       # Padding color for Aspect Ratio Handling set to "pad" (Fit). Default: #000000
 DEFAULT_PIXELATE_MULTIPLIER = "16"                  # Pixelation factor for background. Default: 16
@@ -2011,6 +2019,7 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('hybrid_top_path', ''),
         job_options.get('hybrid_bottom_aspect', ''),
         job_options.get('hybrid_bottom_path', ''),
+        job_options.get('hybrid_layout', ''),
         job_options.get('subtitle_font', ''),
         job_options.get('subtitle_font_size', ''),
         job_options.get('outline_width', ''),
@@ -2202,6 +2211,7 @@ class WorkflowPresetManager:
             "hybrid_bottom_aspect": "4:5",
             "hybrid_bottom_mode": "crop",
             "hybrid_bottom_path": "",
+            "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
@@ -2406,7 +2416,8 @@ class WorkflowPresetManager:
                 "video_trigger": "Always (Clean/Backup)",
                 "on_scan_subs": False,
                 "auto_detect_subs": False,
-                "suffix_filter": None 
+                "suffix_filter": None,
+                "exclude_suffix_filter": None
             }
         }
         
@@ -2426,7 +2437,8 @@ class WorkflowPresetManager:
                 "video_trigger": "Never",
                 "on_scan_subs": True,
                 "auto_detect_subs": False,
-                "suffix_filter": None # Matches ALL (Wildcard)
+                "suffix_filter": None, # Matches ALL (Wildcard)
+                "exclude_suffix_filter": None
             }
         }
 
@@ -2442,7 +2454,8 @@ class WorkflowPresetManager:
                 "video_trigger": "Never",
                 "on_scan_subs": True,
                 "auto_detect_subs": False,
-                "suffix_filter": "-cn" # Matches ONLY -cn
+                "suffix_filter": "-cn", # Matches ONLY -cn
+                "exclude_suffix_filter": None
             }
         }
 
@@ -2473,6 +2486,8 @@ class VideoProcessorApp:
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_include_suffix_var = tk.BooleanVar(value=False)
         self.trigger_suffix_var = tk.StringVar(value="")
+        self.trigger_exclude_suffix_enable_var = tk.BooleanVar(value=False)
+        self.trigger_exclude_suffix_var = tk.StringVar(value="")
         self.output_suffix_override_var = tk.StringVar(value="")
         self.output_suffix_override_var.trace_add("write", lambda *args: self._update_selected_jobs("output_suffix_override"))
         self.input_filter_var = tk.StringVar(value="")
@@ -2617,6 +2632,8 @@ class VideoProcessorApp:
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
+        self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
+        self.hybrid_layout_var.trace_add('write', lambda *args: (self._update_hybrid_ui_labels(), self._update_selected_jobs('hybrid_layout')))
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
         self.hybrid_top_mode_var = tk.StringVar(value="pad")
         self.hybrid_top_path_var = tk.StringVar(value="")
@@ -3113,14 +3130,26 @@ class VideoProcessorApp:
         entry_widget.pack(side=tk.LEFT, padx=5)
         ToolTip(entry_widget, "If Restrict Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Include Checked: Matches main subtitle AND subtitles with this suffix.\nSupports multiple separated by commas: '-top, -bot'\nIf Unchecked: Matches ALL subtitles.")
 
+        cb_exclude = ttk.Checkbutton(row2_2, text="Exclude Suffix:", variable=self.trigger_exclude_suffix_enable_var)
+        cb_exclude.pack(side=tk.LEFT, padx=(10, 5))
+
+        entry_exclude_widget = ttk.Entry(row2_2, textvariable=self.trigger_exclude_suffix_var, width=12)
+        entry_exclude_widget.pack(side=tk.LEFT, padx=5)
+        ToolTip(entry_exclude_widget, "If Exclude Checked: Prevents this preset from triggering on or auto-detecting subtitles containing any of these suffixes/strings (e.g. '-top, -bot, -left, -right').\nSupports comma-separated values.")
+
         # Update Logic for UI states
         def update_trigger_ui(*args):
             scan_on = self.trigger_scan_subs_var.get()
+            autodetect_on = self.trigger_autodetect_subs_var.get()
             suffix_restrict = self.trigger_suffix_enable_var.get()
             suffix_include = self.trigger_include_suffix_var.get()
+            suffix_exclude = self.trigger_exclude_suffix_enable_var.get()
             
             entry_state = "normal" if (scan_on and (suffix_restrict or suffix_include)) else "disabled"
             entry_widget.config(state=entry_state)
+
+            exclude_state = "normal" if ((scan_on or autodetect_on) and suffix_exclude) else ("normal" if suffix_exclude else "disabled")
+            entry_exclude_widget.config(state=exclude_state)
             
         def on_restrict_toggle(*args):
             if self.trigger_suffix_enable_var.get():
@@ -3134,8 +3163,10 @@ class VideoProcessorApp:
         
         # Bind traces
         self.trigger_scan_subs_var.trace_add("write", lambda *a: update_trigger_ui())
+        self.trigger_autodetect_subs_var.trace_add("write", lambda *a: update_trigger_ui())
         self.trigger_suffix_enable_var.trace_add("write", on_restrict_toggle)
         self.trigger_include_suffix_var.trace_add("write", on_include_toggle)
+        self.trigger_exclude_suffix_enable_var.trace_add("write", lambda *a: update_trigger_ui())
         
         # Initial call
         update_trigger_ui()
@@ -3270,10 +3301,21 @@ class VideoProcessorApp:
         ttk.Radiobutton(self.vertical_rb_frame, text="9:16 (Shorts/Reels)", variable=self.merged_aspect_var, value="9:16", command=lambda: self._on_merged_aspect_change("9:16")).pack(anchor="w")
         ttk.Radiobutton(self.vertical_rb_frame, text="4:5 (Instagram Post)", variable=self.merged_aspect_var, value="4:5", command=lambda: self._on_merged_aspect_change("4:5")).pack(anchor="w")
         ttk.Radiobutton(self.vertical_rb_frame, text="3:4 (Social Post)", variable=self.merged_aspect_var, value="3:4", command=lambda: self._on_merged_aspect_change("3:4")).pack(anchor="w")
+        self.auto_rb_frame = ttk.Frame(self.aspect_columns_frame)
+        ttk.Label(self.auto_rb_frame, text="Combined").pack(anchor="w")
+        ttk.Radiobutton(self.auto_rb_frame, text="Auto (Follow Inputs)", variable=self.merged_aspect_var, value="auto", command=lambda: self._on_merged_aspect_change("auto")).pack(anchor="w")
 
         self.hybrid_frame = ttk.Frame(geometry_group)
         
-        # --- Top Video Frame ---
+        # --- Hybrid Layout Selector ---
+        self.hybrid_layout_frame = ttk.Frame(self.hybrid_frame)
+        self.hybrid_layout_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(self.hybrid_layout_frame, text="Layout:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(self.hybrid_layout_frame, text="Auto", variable=self.hybrid_layout_var, value="auto", command=lambda: (self._update_hybrid_ui_labels(), self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT)
+        ttk.Radiobutton(self.hybrid_layout_frame, text="Stacked (Top/Bottom)", variable=self.hybrid_layout_var, value="stacked", command=lambda: (self._update_hybrid_ui_labels(), self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(self.hybrid_layout_frame, text="Side-by-Side (Left/Right)", variable=self.hybrid_layout_var, value="side_by_side", command=lambda: (self._update_hybrid_ui_labels(), self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT)
+
+        # --- Top / Left Video Frame ---
         self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5)
         self.top_video_frame.pack(fill=tk.X, pady=(5,0))
         
@@ -3290,13 +3332,15 @@ class VideoProcessorApp:
         top_aspect_frame.pack(fill=tk.X)
         ttk.Label(top_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(top_aspect_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="9:16", variable=self.hybrid_top_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(top_aspect_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(top_aspect_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(top_aspect_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(top_aspect_frame, text="1:1", variable=self.hybrid_top_aspect_var, value="1:1", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
         ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
         ttk.Radiobutton(top_aspect_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
         ttk.Radiobutton(top_aspect_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT, padx=5)
 
-        # --- Bottom Video Frame ---
+        # --- Bottom / Right Video Frame ---
         self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5)
         self.bottom_video_frame.pack(fill=tk.X, pady=5)
         
@@ -3305,7 +3349,7 @@ class VideoProcessorApp:
         ttk.Label(self.bot_file_frame, text="File Override:").pack(side=tk.LEFT, padx=(0,5))
         bot_entry = ttk.Entry(self.bot_file_frame, textvariable=self.hybrid_bottom_path_var)
         bot_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ToolTip(bot_entry, "Leave blank to auto-detect '-bot' sibling, or browse to force a specific file.")
+        ToolTip(bot_entry, "Leave blank to auto-detect '-bot' or '-right' sibling, or browse to force a specific file.")
         ttk.Button(self.bot_file_frame, text="Browse", command=lambda: self._browse_hybrid_file('bottom'), width=7).pack(side=tk.LEFT, padx=(5,0))
         ttk.Button(self.bot_file_frame, text="Clear", command=lambda: self.hybrid_bottom_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5,0))
 
@@ -3313,8 +3357,10 @@ class VideoProcessorApp:
         bot_aspect_frame.pack(fill=tk.X)
         ttk.Label(bot_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
         ttk.Radiobutton(bot_aspect_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="9:16", variable=self.hybrid_bottom_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(bot_aspect_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(bot_aspect_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(bot_aspect_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(bot_aspect_frame, text="1:1", variable=self.hybrid_bottom_aspect_var, value="1:1", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
         ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
         ttk.Radiobutton(bot_aspect_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
         ttk.Radiobutton(bot_aspect_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
@@ -4061,6 +4107,28 @@ class VideoProcessorApp:
             tag = display_tag if display_tag is not None else self._build_display_tag_for_subtitle(subtitle_path)
             self._apply_subtitle_to_job(index, subtitle_path, tag)
 
+    def _matches_suffix_pattern(self, sub_item, patterns):
+        if not patterns or not sub_item:
+            return False
+        sub_sfx = (sub_item.get('suffix') or '').lower().strip()
+        sub_base = (sub_item.get('basename') or '').lower().strip()
+        for raw_pat in patterns:
+            pat = raw_pat.strip().lower()
+            if not pat:
+                if sub_sfx == "":
+                    return True
+                continue
+            candidates = {pat}
+            if not pat.startswith(('-', '_')):
+                candidates.add(f"-{pat}")
+                candidates.add(f"_{pat}")
+            for p in candidates:
+                if sub_sfx == p or sub_sfx.endswith(p):
+                    return True
+                if sub_base.endswith(p):
+                    return True
+        return False
+
     def _detect_subtitles_for_video_single(self, video_path, mock_dir=None, mock_basename=None):
         detected_subs = []
         if video_path and os.path.exists(video_path):
@@ -4309,6 +4377,7 @@ class VideoProcessorApp:
         self.aspect_columns_frame.pack_forget()
         self.horizontal_rb_frame.pack_forget()
         self.vertical_rb_frame.pack_forget()
+        if hasattr(self, 'auto_rb_frame'): self.auto_rb_frame.pack_forget()
         self.hybrid_frame.pack_forget()
         
         if orientation == "horizontal + vertical":
@@ -4321,9 +4390,11 @@ class VideoProcessorApp:
             self.aspect_ratio_frame.config(text="Canvas Aspect Ratio (Overall)")
             self.aspect_columns_frame.pack(fill="x")
             self.horizontal_rb_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
-            self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
+            self.vertical_rb_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
+            if hasattr(self, 'auto_rb_frame'): self.auto_rb_frame.pack(side=tk.LEFT, fill="both", expand=True)
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
             self.hybrid_frame.pack(fill=tk.X, pady=5)
+            self._update_hybrid_ui_labels()
         elif orientation == "original":
             self.aspect_ratio_frame.config(text="Aspect Ratio (Original – unchanged)")
             self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
@@ -4341,8 +4412,8 @@ class VideoProcessorApp:
         if not video_path:
             return video_path
         base, ext = os.path.splitext(video_path)
-        suffixes_top = ["-top", "_top"]
-        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom"]
+        suffixes_top = ["-top", "_top", "-left", "_left"]
+        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom", "-right", "_right"]
         
         for s in suffixes_top:
             if base.endswith(s):
@@ -4351,14 +4422,19 @@ class VideoProcessorApp:
         for s in suffixes_bot:
             if base.endswith(s):
                 prefix = base[:-len(s)]
-                for st in suffixes_top:
+                delim = "_" if s.startswith("_") else "-"
+                paired_suffix = delim + ("left" if s in ["-right", "_right"] else "top")
+                pair_candidates = [paired_suffix, ("_left" if paired_suffix == "-left" else "-left") if "left" in paired_suffix else ("_top" if paired_suffix == "-top" else "-top")]
+                for st in pair_candidates:
                     candidate = prefix + st + ext
                     if os.path.exists(candidate):
                         return candidate
-                return prefix + "-top" + ext
+                return prefix + paired_suffix + ext
         return video_path
 
     def _aspect_to_orientation(self, aspect_str, fallback="horizontal"):
+        if not aspect_str or str(aspect_str).lower() == "auto":
+            return fallback
         try:
             num, den = map(int, str(aspect_str).split(":"))
             return "horizontal" if num >= den else "vertical"
@@ -4371,12 +4447,39 @@ class VideoProcessorApp:
             return self._aspect_to_orientation(merged_aspect, fallback="horizontal")
         return requested_orientation
 
+    def _resolve_hybrid_layout(self, options):
+        layout = options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT)
+        if layout in ["stacked", "side_by_side"]:
+            return layout
+        # Auto mode: derive layout from canvas aspect ratio
+        aspect = options.get("merged_aspect", "9:16")
+        if not aspect or str(aspect).lower() == "auto":
+            return "stacked"
+        orient = self._aspect_to_orientation(aspect, fallback="vertical")
+        return "side_by_side" if orient == "horizontal" else "stacked"
+
+    def _update_hybrid_ui_labels(self):
+        if not hasattr(self, 'top_video_frame') or not hasattr(self, 'bottom_video_frame'):
+            return
+        layout_mode = self.hybrid_layout_var.get() if hasattr(self, 'hybrid_layout_var') else "auto"
+        aspect = self.merged_aspect_var.get() if hasattr(self, 'merged_aspect_var') else "9:16"
+        opts = {"hybrid_layout": layout_mode, "merged_aspect": aspect}
+        eff_layout = self._resolve_hybrid_layout(opts)
+        if eff_layout == "side_by_side":
+            self.top_video_frame.config(text="Left Video (Video 1)")
+            self.bottom_video_frame.config(text="Right Video (Video 2)")
+        else:
+            self.top_video_frame.config(text="Top Video (Video 1)")
+            self.bottom_video_frame.config(text="Bottom Video (Video 2)")
+
     def _on_merged_aspect_change(self, aspect_value):
         self.merged_aspect_var.set(aspect_value)
-        if self._aspect_to_orientation(aspect_value) == "vertical":
-            self.vertical_aspect_var.set(aspect_value)
-        else:
-            self.horizontal_aspect_var.set(aspect_value)
+        if aspect_value != "auto":
+            if self._aspect_to_orientation(aspect_value) == "vertical":
+                self.vertical_aspect_var.set(aspect_value)
+            else:
+                self.horizontal_aspect_var.set(aspect_value)
+        self._update_hybrid_ui_labels()
         self._update_selected_jobs("merged_aspect", "horizontal_aspect", "vertical_aspect")
 
     def _toggle_upscale_options(self):
@@ -4700,6 +4803,7 @@ class VideoProcessorApp:
             "hybrid_top_path": self.hybrid_top_path_var.get(),
             "hybrid_bottom_aspect": self.hybrid_bottom_aspect_var.get(), "hybrid_bottom_mode": self.hybrid_bottom_mode_var.get(),
             "hybrid_bottom_path": self.hybrid_bottom_path_var.get(),
+            "hybrid_layout": self.hybrid_layout_var.get(),
             "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(), "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(), "subtitle_underline": self.subtitle_underline_var.get(),
@@ -4834,6 +4938,14 @@ class VideoProcessorApp:
             self.trigger_include_suffix_var.set(False)
             self.trigger_suffix_var.set("")
 
+        ex_val = triggers.get('exclude_suffix_filter')
+        if ex_val:
+            self.trigger_exclude_suffix_enable_var.set(True)
+            self.trigger_exclude_suffix_var.set(ex_val)
+        else:
+            self.trigger_exclude_suffix_enable_var.set(False)
+            self.trigger_exclude_suffix_var.set("")
+
         self.output_suffix_override_var.set(preset['options'].get("output_suffix_override", ""))
 
         self.current_preset_var.set(preset_name)
@@ -4950,7 +5062,8 @@ class VideoProcessorApp:
             "on_scan_subs": self.trigger_scan_subs_var.get(),
             "auto_detect_subs": self.trigger_autodetect_subs_var.get(),
             "suffix_filter": self.trigger_suffix_var.get() if (self.trigger_suffix_enable_var.get() or getattr(self, 'trigger_include_suffix_var', tk.BooleanVar(value=False)).get()) else None,
-            "suffix_mode": "restrict" if self.trigger_suffix_enable_var.get() else "include" if getattr(self, 'trigger_include_suffix_var', tk.BooleanVar(value=False)).get() else "all"
+            "suffix_mode": "restrict" if self.trigger_suffix_enable_var.get() else "include" if getattr(self, 'trigger_include_suffix_var', tk.BooleanVar(value=False)).get() else "all",
+            "exclude_suffix_filter": self.trigger_exclude_suffix_var.get().strip() if self.trigger_exclude_suffix_enable_var.get() else None
         }
         self.preset_manager.save_preset(name, options, triggers)
         messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
@@ -5074,8 +5187,8 @@ class VideoProcessorApp:
                 triggers = preset['triggers']
                 video_trigger = triggers.get("video_trigger")
                 is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
-                if is_hybrid_duo and not (video_basename.endswith("-top") or video_basename.endswith("_top")):
-                    continue # Skip triggering on non-top files for hybrid-duo presets
+                if is_hybrid_duo and not (video_basename.endswith("-top") or video_basename.endswith("_top") or video_basename.endswith("-left") or video_basename.endswith("_left")):
+                    continue # Skip triggering on non-primary files for hybrid-duo presets
                 if not video_trigger:
                     # Fallback for legacy presets (pre-Update)
                     t_no_sub = triggers.get('on_no_sub', False)
@@ -5084,20 +5197,26 @@ class VideoProcessorApp:
                     elif t_no_sub and not t_clean: video_trigger = "Fallback (If No Subs)"
                     else: video_trigger = "Never"
                 
+                # Evaluate excluded subtitles for this preset
+                exclude_suffix = triggers.get('exclude_suffix_filter')
+                exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()] if exclude_suffix else None
+                preset_detected_subs = [s for s in detected_subs if not self._matches_suffix_pattern(s, exclude_patterns)] if exclude_patterns else detected_subs
+                has_preset_subs = len(preset_detected_subs) > 0
+
                 # --- Video Trigger ---
                 if video_trigger == "Always (Clean/Backup)":
                      self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
                      files_processed_count += 1
-                elif video_trigger == "Fallback (If No Subs)" and not has_subs:
+                elif video_trigger == "Fallback (If No Subs)" and not has_preset_subs:
                      self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
                      files_processed_count += 1
                 
                 # --- Subtitle Trigger ---
-                if has_subs and triggers.get('on_scan_subs'):
+                if has_preset_subs and triggers.get('on_scan_subs'):
                     filter_suffix = triggers.get('suffix_filter')
                     filter_mode = triggers.get('suffix_mode', 'restrict' if filter_suffix is not None else 'all')
                     
-                    for sub in detected_subs:
+                    for sub in preset_detected_subs:
                         match = False
                         if filter_mode == 'all' or (filter_mode == 'restrict' and filter_suffix is None): # Generic Wildcard
                              # Check Exclusivity
@@ -5232,11 +5351,18 @@ class VideoProcessorApp:
                     bot_path = base_name[:-4] + "-bot" + ext
                 elif base_name.endswith("_top"):
                     bot_path = base_name[:-4] + "_bot" + ext
+                elif base_name.endswith("-left"):
+                    bot_path = base_name[:-5] + "-right" + ext
+                elif base_name.endswith("_left"):
+                    bot_path = base_name[:-5] + "_right" + ext
                 else:
                     bot_path = base_name + "-bot" + ext
 
                 if not os.path.exists(bot_path):
-                    bot_path_alt = video_path.replace("-top", "-bot").replace("_top", "_bot")
+                    bot_path_alt = (video_path.replace("-top", "-bot")
+                                              .replace("_top", "_bot")
+                                              .replace("-left", "-right")
+                                              .replace("_left", "_right"))
                     if os.path.exists(bot_path_alt): bot_path = bot_path_alt
 
                 if os.path.exists(bot_path):
@@ -5247,6 +5373,10 @@ class VideoProcessorApp:
             triggers = preset.get('triggers', {}) if preset else {}
             if triggers.get('auto_detect_subs'):
                 detected_subs = self._detect_subtitles_for_video(video_path)
+                exclude_suffix = triggers.get('exclude_suffix_filter')
+                if exclude_suffix:
+                    exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()]
+                    detected_subs = [s for s in detected_subs if not self._matches_suffix_pattern(s, exclude_patterns)]
                 preferred = self._pick_preferred_subtitle(detected_subs)
                 if preferred:
                     subtitle_path = preferred.get("path")
@@ -5323,6 +5453,12 @@ class VideoProcessorApp:
                     self.trigger_suffix_enable_var.set(False)
                     self.trigger_include_suffix_var.set(False)
                     self.trigger_suffix_var.set("")
+
+                ex_val = triggers.get('exclude_suffix_filter')
+                if hasattr(self, 'trigger_exclude_suffix_enable_var'):
+                    self.trigger_exclude_suffix_enable_var.set(bool(ex_val))
+                if hasattr(self, 'trigger_exclude_suffix_var'):
+                    self.trigger_exclude_suffix_var.set(ex_val if ex_val else "")
         else:
             self.current_preset_var.set("") # Custom or Unknown
             self.update_gui_from_job_options(selected_job)
@@ -5334,6 +5470,10 @@ class VideoProcessorApp:
             self.trigger_suffix_enable_var.set(False)
             if hasattr(self, 'trigger_include_suffix_var'): self.trigger_include_suffix_var.set(False)
             self.trigger_suffix_var.set("")
+            if hasattr(self, 'trigger_exclude_suffix_enable_var'):
+                self.trigger_exclude_suffix_enable_var.set(False)
+            if hasattr(self, 'trigger_exclude_suffix_var'):
+                self.trigger_exclude_suffix_var.set("")
 
         self._suppress_subtitle_path_trace = True
         self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
@@ -5410,10 +5550,12 @@ class VideoProcessorApp:
         self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
         self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
+        self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.hybrid_bottom_path_var.set(options.get("hybrid_bottom_path", ""))
+        self._update_hybrid_ui_labels()
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD)); self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC)); self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
         self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
@@ -5788,7 +5930,9 @@ class VideoProcessorApp:
         else:
             if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
                 folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
-                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]: folder_name += "_Hybrid_Stacked"
+                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
+                    eff_layout = self._resolve_hybrid_layout(options)
+                    folder_name += "_Hybrid_SideBySide" if eff_layout == "side_by_side" else "_Hybrid_Stacked"
                 elif orientation == "vertical": folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
                 elif orientation == "original": folder_name += "_Original"
                 else:
@@ -5827,10 +5971,10 @@ class VideoProcessorApp:
             explicit_top = options.get("hybrid_top_path", "").strip()
             if explicit_top and os.path.exists(explicit_top):
                 original_basename = os.path.splitext(os.path.basename(explicit_top))[0]
-            if original_basename.endswith("-top"):
-                original_basename = original_basename[:-4] # Strip "-top" for a cleaner output name
-            elif original_basename.endswith("_top"):
-                original_basename = original_basename[:-4]
+            for sfx in ["-top", "_top", "-left", "_left"]:
+                if original_basename.endswith(sfx):
+                    original_basename = original_basename[:-len(sfx)]
+                    break
         
         # Tag
         tag = job.get('display_tag', "").strip()
@@ -5962,12 +6106,21 @@ class VideoProcessorApp:
                 elif os.path.exists(sub_identifier): subtitle_source_file = sub_identifier
                 if subtitle_source_file:
                     if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and options.get("subtitle_alignment") == "seam":
-                         try:
-                            num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
-                            top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
-                            options["calculated_pos"] = (sub_target_w // 2, top_h)
-                         except (ValueError, AttributeError, ZeroDivisionError):
-                            print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
+                        eff_layout = self._resolve_hybrid_layout(options)
+                        if eff_layout == "side_by_side":
+                            try:
+                                num_left, den_left = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                                left_w = (int(sub_target_h * num_left / den_left) // 2) * 2
+                                options["calculated_pos"] = (left_w, sub_target_h // 2)
+                            except (ValueError, AttributeError, ZeroDivisionError):
+                                print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
+                        else:
+                            try:
+                                num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                                top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
+                                options["calculated_pos"] = (sub_target_w // 2, top_h)
+                            except (ValueError, AttributeError, ZeroDivisionError):
+                                print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                     
                     sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
                     if sub_ext in [".ass", ".ssa"]:
@@ -6169,6 +6322,56 @@ class VideoProcessorApp:
         res_key = options.get('resolution')
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             aspect_str = options.get("merged_aspect", "9:16")
+            eff_layout = self._resolve_hybrid_layout(options)
+
+            if str(aspect_str).lower() == "auto":
+                if eff_layout == "side_by_side":
+                    # Side-by-Side Auto Combined Aspect:
+                    # Height is anchored to resolution preset
+                    height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+                    if res_key and str(res_key).lower() == "original":
+                        target_h = info.get("height", 1080) if info else 1080
+                    else:
+                        target_h = height_map.get(res_key, 1080)
+                    
+                    try:
+                        num_l, den_l = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                        w_left = int(target_h * num_l / den_l)
+                    except Exception:
+                        w_left = int(target_h * 16 / 9)
+
+                    try:
+                        num_r, den_r = map(int, options.get('hybrid_bottom_aspect', '16:9').split(':'))
+                        w_right = int(target_h * num_r / den_r)
+                    except Exception:
+                        w_right = int(target_h * 16 / 9)
+
+                    target_w = w_left + w_right
+                    return (target_w // 2) * 2, (target_h // 2) * 2
+                else:
+                    # Stacked Auto Combined Aspect:
+                    # Width is anchored to resolution preset (portrait standard)
+                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
+                    if res_key and str(res_key).lower() == "original":
+                        target_w = info.get("width", 1080) if info else 1080
+                    else:
+                        target_w = width_map.get(res_key, 1080)
+
+                    try:
+                        num_t, den_t = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                        h_top = int(target_w * den_t / num_t)
+                    except Exception:
+                        h_top = int(target_w * 9 / 16)
+
+                    try:
+                        num_b, den_b = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
+                        h_bot = int(target_w * den_b / num_b)
+                    except Exception:
+                        h_bot = int(target_w * 5 / 4)
+
+                    target_h = h_top + h_bot
+                    return (target_w // 2) * 2, (target_h // 2) * 2
+
             canvas_orient = self._aspect_to_orientation(aspect_str, fallback="vertical")
             if canvas_orient == "vertical":
                 width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320, "HD": 1080, "4k": 2160, "8k": 4320}
@@ -6551,16 +6754,25 @@ class VideoProcessorApp:
                     bot_path = base_name[:-4] + "-bot" + ext
                 elif base_name.endswith("_top"):
                     bot_path = base_name[:-4] + "_bot" + ext
+                elif base_name.endswith("-left"):
+                    bot_path = base_name[:-5] + "-right" + ext
+                elif base_name.endswith("_left"):
+                    bot_path = base_name[:-5] + "_right" + ext
                 else:
                     bot_path = base_name + "-bot" + ext
                     
                 if not os.path.exists(bot_path):
                     # Fallback replacement
-                    bot_path_alt = file_path.replace("-top", "-bot").replace("_top", "_bot")
+                    bot_path_alt = (file_path.replace("-top", "-bot")
+                                            .replace("_top", "_bot")
+                                            .replace("-left", "-right")
+                                            .replace("_left", "_right"))
                     if os.path.exists(bot_path_alt):
                         bot_path = bot_path_alt
                     else:
-                        raise VideoProcessingError(f"Hybrid-Duo requires a bottom video. Could not find: {bot_path}")
+                        eff_layout = self._resolve_hybrid_layout(options)
+                        label = "right" if eff_layout == "side_by_side" else "bottom"
+                        raise VideoProcessingError(f"Hybrid-Duo requires a {label} video. Could not find: {bot_path}")
 
             info_bot = get_video_info(bot_path)
             decoder_available_bot, _ = check_decoder_availability(info_bot["codec_name"])
@@ -6608,33 +6820,75 @@ class VideoProcessorApp:
         except ValueError: pass
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
+            eff_layout = self._resolve_hybrid_layout(options)
 
-            def get_block_filters(aspect_str, mode, upscale_algo, override_h=None):
+            def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h):
                 if not aspect_str: raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")
                 if not mode: raise VideoProcessingError("Missing Mode setting in preset (Hybrid block).")
                 if not upscale_algo: raise VideoProcessingError("Missing Upscale Algorithm setting in preset.")
                 
-                try:
-                    num, den = map(int, aspect_str.split(':'))
-                except (ValueError, AttributeError):
-                    raise VideoProcessingError(f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
-                
-                target_h = override_h if override_h is not None else (int(target_w * den / num) // 2) * 2
-                scale = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={upscale_algo}"
-                if mode == 'stretch': return scale, "", target_h
+                scale = f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
+                if mode == 'stretch': return scale, "", block_w, block_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
                 pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
-                cpu = f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}" if mode == 'pad' else f"crop={target_w}:{target_h}"
-                return vf, cpu, target_h
+                cpu = f"pad={block_w}:{block_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}" if mode == 'pad' else f"crop={block_w}:{block_h}"
+                return vf, cpu, block_w, block_h
 
             safe_algo = ffmpeg_upscale_algo
             if not safe_algo: raise VideoProcessingError("Upscale algorithm not specified in preset.")
-            
-            # Top block uses its own aspect ratio to determine height
-            top_vf, top_cpu, top_h = get_block_filters(options.get('hybrid_top_aspect'), options.get('hybrid_top_mode'), safe_algo)
-            # Bottom block fills the remaining space
-            bot_h_needed = total_h - top_h
-            bot_vf, bot_cpu, bot_h = get_block_filters(options.get('hybrid_bottom_aspect'), options.get('hybrid_bottom_mode'), safe_algo, override_h=bot_h_needed)
+
+            if eff_layout == "side_by_side":
+                # Video 1 is Left, Video 2 is Right. Both share total_h.
+                left_aspect = options.get('hybrid_top_aspect')
+                right_aspect = options.get('hybrid_bottom_aspect')
+                try:
+                    num_l, den_l = map(int, left_aspect.split(':'))
+                    left_w = (int(total_h * num_l / den_l) // 2) * 2
+                except Exception:
+                    left_w = target_w // 2
+                
+                if str(options.get("merged_aspect")).lower() == "auto":
+                    try:
+                        num_r, den_r = map(int, right_aspect.split(':'))
+                        right_w = (int(total_h * num_r / den_r) // 2) * 2
+                    except Exception:
+                        right_w = target_w // 2
+                    target_w = left_w + right_w
+                else:
+                    right_w = max(2, target_w - left_w)
+                    if left_w >= target_w:
+                        left_w = (target_w // 4) * 2
+                        right_w = target_w - left_w
+
+                top_vf, top_cpu, _, _ = get_block_filters(left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h)
+                bot_vf, bot_cpu, _, _ = get_block_filters(right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h)
+                stack_filter = "hstack=inputs=2[stacked]"
+            else:
+                # Video 1 is Top, Video 2 is Bottom. Both share target_w.
+                top_aspect = options.get('hybrid_top_aspect')
+                bot_aspect = options.get('hybrid_bottom_aspect')
+                try:
+                    num_t, den_t = map(int, top_aspect.split(':'))
+                    top_h = (int(target_w * den_t / num_t) // 2) * 2
+                except Exception:
+                    top_h = total_h // 2
+                
+                if str(options.get("merged_aspect")).lower() == "auto":
+                    try:
+                        num_b, den_b = map(int, bot_aspect.split(':'))
+                        bot_h = (int(target_w * den_b / num_b) // 2) * 2
+                    except Exception:
+                        bot_h = total_h // 2
+                    total_h = top_h + bot_h
+                else:
+                    bot_h = max(2, total_h - top_h)
+                    if top_h >= total_h:
+                        top_h = (total_h // 4) * 2
+                        bot_h = total_h - top_h
+
+                top_vf, top_cpu, _, _ = get_block_filters(top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h)
+                bot_vf, bot_cpu, _, _ = get_block_filters(bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h)
+                stack_filter = "vstack=inputs=2[stacked]"
             
             cpu_pix_fmt = "p010le" if info["bit_depth"] == 10 else "nv12"
             cpu_chain = []
@@ -6680,7 +6934,7 @@ class VideoProcessorApp:
             video_fc_parts.extend([
                 f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]", 
                 f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
-                "[cpu_top][cpu_bot]vstack=inputs=2[stacked]",
+                f"[cpu_top][cpu_bot]{stack_filter}",
                 final_v_out
             ])
             filter_complex_parts.extend(video_fc_parts)
