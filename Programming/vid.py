@@ -2115,10 +2115,7 @@ class ScrollableFrame(ttk.Frame):
                 scrollregion=self.canvas.bbox("all")
             )
         )
-        self.canvas.bind(
-            "<Configure>",
-            lambda e: self.canvas.itemconfig(self._window_id, width=e.width)
-        )
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         self._window_id = self.canvas.create_window((0, 0), window=self.scrollable_window, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
@@ -2128,6 +2125,12 @@ class ScrollableFrame(ttk.Frame):
 
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
 
+    def _on_canvas_configure(self, event):
+        req_width = self.scrollable_window.winfo_reqwidth()
+        width = max(event.width, req_width)
+        self.canvas.itemconfig(self._window_id, width=width)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
     def _on_mousewheel(self, event):
         if self.winfo_ismapped():
             x, y = self.winfo_pointerxy()
@@ -2136,7 +2139,7 @@ class ScrollableFrame(ttk.Frame):
             except (KeyError, tk.TclError):
                 return
 
-            if widget_under_mouse and str(widget_under_mouse).startswith(str(self)):
+            if widget_under_mouse and (str(widget_under_mouse).startswith(str(self)) or str(widget_under_mouse).startswith(str(self.scrollable_window))):
                 if self.scrollbar.get() != (0.0, 1.0):
                     self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
@@ -2212,6 +2215,8 @@ class WorkflowPresetManager:
             "hybrid_bottom_mode": "crop",
             "hybrid_bottom_path": "",
             "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
+            "hybrid_top_suffix": "-top",
+            "hybrid_bot_suffix": "-bot",
             "fruc": DEFAULT_FRUC,
             "fruc_fps": DEFAULT_FRUC_FPS,
             "generate_log": False,
@@ -2469,7 +2474,15 @@ class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
         self.root = root
         self.root.title("Video Processing Tool (vid.py)")
-        self.root.geometry("1400x850")
+        try:
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            init_w = min(1400, max(1100, screen_w - 60))
+            init_h = min(850, max(650, screen_h - 90))
+            self.root.geometry(f"{init_w}x{init_h}")
+        except Exception:
+            self.root.geometry("1400x850")
+        self.root.minsize(1050, 600)
         self.output_mode = output_mode
         self.processing_jobs = []
         self.input_files = [] # New: Staging area for files
@@ -2642,6 +2655,10 @@ class VideoProcessorApp:
         self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
         self.hybrid_bottom_path_var = tk.StringVar(value="")
         self.hybrid_bottom_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
+        self.hybrid_top_suffix_var = tk.StringVar(value="-top")
+        self.hybrid_top_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_top_suffix'))
+        self.hybrid_bot_suffix_var = tk.StringVar(value="-bot")
+        self.hybrid_bot_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bot_suffix'))
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_font_size'))
@@ -2791,11 +2808,11 @@ class VideoProcessorApp:
         bottom_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
         button_frame = ttk.Frame(bottom_frame)
-        button_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=5)
+        button_frame.pack(side=tk.TOP, fill=tk.X, expand=True, padx=10, pady=(5, 2))
         
         # Progress Bar
         self.progress_bar = ttk.Progressbar(bottom_frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
-        self.progress_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=2)
+        self.progress_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(0, 2))
 
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
@@ -2848,16 +2865,7 @@ class VideoProcessorApp:
             self.load_preset_to_gui(self.current_preset_var.get())
 
     def setup_encoder_tab(self, parent):
-        scroll_canvas = tk.Canvas(parent, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=scroll_canvas.yview)
-        scroll_frame = ttk.Frame(scroll_canvas)
-
-        scroll_frame.bind("<Configure>", lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")))
-        scroll_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-        scroll_canvas.configure(yscrollcommand=scrollbar.set)
-
-        scroll_canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        scroll_frame = parent
 
         # Basic NVENC Settings
         basic_group = ttk.LabelFrame(scroll_frame, text="Basic NVENC Settings", padding=10)
@@ -3057,46 +3065,41 @@ class VideoProcessorApp:
 
         self._toggle_nvencc_color_mode_controls()
     def setup_presets_ui(self, parent):
-        preset_frame = ttk.LabelFrame(parent, text="Workflow Presets", padding=10)
-        preset_frame.pack(fill=tk.X, side=tk.TOP)
+        preset_pane = CollapsiblePane(parent, text="Workflow Presets", initial_state='expanded')
+        preset_pane.pack(fill=tk.X, side=tk.TOP, pady=(0, 2))
+        preset_container = preset_pane.container
         
         # Row 1: Selection and CRUD
-        row1 = ttk.Frame(preset_frame)
-        row1.pack(fill=tk.X, pady=(0, 5))
+        row1a = ttk.Frame(preset_container)
+        row1a.pack(fill=tk.X, pady=(0, 2))
         
-        ttk.Label(row1, text="Active Preset:").pack(side=tk.LEFT, padx=(0, 5))
-        self.preset_combo = ttk.Combobox(row1, textvariable=self.current_preset_var, values=self.preset_manager.get_preset_names(), state="readonly", width=30)
-        self.preset_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(row1a, text="Active Preset:").pack(side=tk.LEFT, padx=(0, 5))
+        self.preset_combo = ttk.Combobox(row1a, textvariable=self.current_preset_var, values=self.preset_manager.get_preset_names(), state="readonly", width=24)
+        self.preset_combo.pack(side=tk.LEFT, padx=(0, 5))
         self.preset_combo.bind("<<ComboboxSelected>>", lambda e: self.load_preset_to_gui(self.current_preset_var.get()))
         
-        ttk.Button(row1, text="New Preset", command=self.create_new_preset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row1, text="Save Changes", command=self.save_current_preset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row1, text="Save As New...", command=self.save_preset_as_new).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row1, text="Rename", command=self.rename_current_preset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row1, text="Delete", command=self.delete_current_preset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1a, text="New Preset", command=self.create_new_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1a, text="Save Changes", command=self.save_current_preset).pack(side=tk.LEFT, padx=2)
 
-        # Row 1.5: Suffix Override
-        row_suffix = ttk.Frame(preset_frame)
-        row_suffix.pack(fill=tk.X, pady=(2, 5))
-        ttk.Label(row_suffix, text="Suffix Override:").pack(side=tk.LEFT, padx=(5, 5))
-        suffix_entry = ttk.Entry(row_suffix, textvariable=self.output_suffix_override_var, width=30)
-        suffix_entry.pack(side=tk.LEFT, padx=5)
+        # Row 1b: Additional CRUD & Suffix Override
+        row1b = ttk.Frame(preset_container)
+        row1b.pack(fill=tk.X, pady=(2, 4))
+        ttk.Button(row1b, text="Save As New...", command=self.save_preset_as_new).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(row1b, text="Rename", command=self.rename_current_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1b, text="Delete", command=self.delete_current_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row1b, text="Suffix Override:").pack(side=tk.LEFT, padx=(10, 2))
+        suffix_entry = ttk.Entry(row1b, textvariable=self.output_suffix_override_var, width=16)
+        suffix_entry.pack(side=tk.LEFT, padx=2)
         ToolTip(suffix_entry, "Override filename suffix (e.g., 'MyCut'). If empty, the Preset Name is used.")
 
         # Row 2: Auto-Add Triggers (Redesigned)
-        row2 = ttk.LabelFrame(preset_frame, text="Auto-Add Triggers (Add to Job Queue)", padding=5)
-        row2.pack(fill=tk.X, pady=5)
+        row2 = ttk.LabelFrame(preset_container, text="Auto-Add Triggers (Add to Job Queue)", padding=5)
+        row2.pack(fill=tk.X, pady=2)
         
         # Trigger 1: Video File
         row2_1 = ttk.Frame(row2)
         row2_1.pack(fill=tk.X, pady=2)
-        ttk.Label(row2_1, text="Trigger on Video:").pack(side=tk.LEFT, padx=(5, 5))
-        
-        # Variables are initialized in __init__
-        
-        # Logic to ensure logic or allow both?
-        # If Always is checked, Fallback is redundant.
-        # Let's just allow them to be toggled freely, but prioritize logic in Save.
+        ttk.Label(row2_1, text="Trigger on Video:").pack(side=tk.LEFT, padx=(0, 5))
         
         cb_always = ttk.Checkbutton(row2_1, text="Always (Clean/Backup)", variable=self.trigger_video_always_var)
         cb_always.pack(side=tk.LEFT, padx=5)
@@ -3107,34 +3110,37 @@ class VideoProcessorApp:
         ToolTip(cb_fallback, "Auto-add this preset ONLY if no subtitles matches are found.")
 
         # Trigger 2: Subtitle File
-        row2_2 = ttk.Frame(row2)
-        row2_2.pack(fill=tk.X, pady=2)
+        row2_2a = ttk.Frame(row2)
+        row2_2a.pack(fill=tk.X, pady=2)
         
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row2_2, text="Trigger on Subtitle", variable=self.trigger_scan_subs_var).pack(side=tk.LEFT, padx=(5,5))
+        ttk.Checkbutton(row2_2a, text="Trigger on Subtitle", variable=self.trigger_scan_subs_var).pack(side=tk.LEFT, padx=(0, 5))
 
-        cb_autodetect = ttk.Checkbutton(row2_2, text="Auto-detect Subtitles", variable=self.trigger_autodetect_subs_var)
+        cb_autodetect = ttk.Checkbutton(row2_2a, text="Auto-detect Subtitles", variable=self.trigger_autodetect_subs_var)
         cb_autodetect.pack(side=tk.LEFT, padx=(10, 5))
         ToolTip(cb_autodetect, "Auto-pick a subtitle file/stream when adding jobs for this preset.")
+
+        row2_2b = ttk.Frame(row2)
+        row2_2b.pack(fill=tk.X, pady=2)
         
         self.trigger_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_include_suffix_var = tk.BooleanVar(value=False)
-        cb_restrict = ttk.Checkbutton(row2_2, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var)
-        cb_restrict.pack(side=tk.LEFT, padx=(10, 5))
+        cb_restrict = ttk.Checkbutton(row2_2b, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var)
+        cb_restrict.pack(side=tk.LEFT, padx=(0, 2))
         
-        cb_include = ttk.Checkbutton(row2_2, text="Include Suffix:", variable=self.trigger_include_suffix_var)
-        cb_include.pack(side=tk.LEFT, padx=(5, 5))
+        cb_include = ttk.Checkbutton(row2_2b, text="Include Suffix:", variable=self.trigger_include_suffix_var)
+        cb_include.pack(side=tk.LEFT, padx=(5, 2))
 
         self.trigger_suffix_var = tk.StringVar(value="")
-        entry_widget = ttk.Entry(row2_2, textvariable=self.trigger_suffix_var, width=8)
-        entry_widget.pack(side=tk.LEFT, padx=5)
+        entry_widget = ttk.Entry(row2_2b, textvariable=self.trigger_suffix_var, width=8)
+        entry_widget.pack(side=tk.LEFT, padx=2)
         ToolTip(entry_widget, "If Restrict Checked: Matches ONLY subtitles with this suffix (e.g. '-cn').\nIf Include Checked: Matches main subtitle AND subtitles with this suffix.\nSupports multiple separated by commas: '-top, -bot'\nIf Unchecked: Matches ALL subtitles.")
 
-        cb_exclude = ttk.Checkbutton(row2_2, text="Exclude Suffix:", variable=self.trigger_exclude_suffix_enable_var)
-        cb_exclude.pack(side=tk.LEFT, padx=(10, 5))
+        cb_exclude = ttk.Checkbutton(row2_2b, text="Exclude Suffix:", variable=self.trigger_exclude_suffix_enable_var)
+        cb_exclude.pack(side=tk.LEFT, padx=(10, 2))
 
-        entry_exclude_widget = ttk.Entry(row2_2, textvariable=self.trigger_exclude_suffix_var, width=12)
-        entry_exclude_widget.pack(side=tk.LEFT, padx=5)
+        entry_exclude_widget = ttk.Entry(row2_2b, textvariable=self.trigger_exclude_suffix_var, width=12)
+        entry_exclude_widget.pack(side=tk.LEFT, padx=2)
         ToolTip(entry_exclude_widget, "If Exclude Checked: Prevents this preset from triggering on or auto-detecting subtitles containing any of these suffixes/strings (e.g. '-top, -bot, -left, -right').\nSupports comma-separated values.")
 
         # Update Logic for UI states
@@ -3216,17 +3222,20 @@ class VideoProcessorApp:
         input_toolbar = ttk.Frame(input_frame)
         input_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         
-        ttk.Button(input_toolbar, text="Add to Jobs (Scan Triggers)", command=self.promote_input_files_auto).pack(side=tk.LEFT, padx=2)
-        ttk.Button(input_toolbar, text="Add to Jobs (Force Current Preset)", command=self.promote_input_files_manual).pack(side=tk.LEFT, padx=2)
+        tb_row1 = ttk.Frame(input_toolbar)
+        tb_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(tb_row1, text="Add to Jobs (Scan Triggers)", command=self.promote_input_files_auto).pack(side=tk.LEFT, padx=2)
+        ttk.Button(tb_row1, text="Add to Jobs (Force Current Preset)", command=self.promote_input_files_manual).pack(side=tk.LEFT, padx=2)
         
-        ttk.Label(input_toolbar, text="Filter:").pack(side=tk.LEFT, padx=(10, 2))
-        self.input_filter_entry = ttk.Entry(input_toolbar, textvariable=self.input_filter_var, width=15)
+        tb_row2 = ttk.Frame(input_toolbar)
+        tb_row2.pack(fill=tk.X)
+        ttk.Label(tb_row2, text="Filter:").pack(side=tk.LEFT, padx=(2, 2))
+        self.input_filter_entry = ttk.Entry(tb_row2, textvariable=self.input_filter_var, width=12)
         self.input_filter_entry.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Checkbutton(input_toolbar, text="Inv", variable=self.input_filter_inverse_var).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(tb_row2, text="Inv", variable=self.input_filter_inverse_var).pack(side=tk.LEFT, padx=2)
 
-        ttk.Button(input_toolbar, text="Remove Selected", command=self.remove_from_input_queue).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(input_toolbar, text="Clear Input", command=self.clear_input_queue).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(tb_row2, text="Clear Input", command=self.clear_input_queue).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(tb_row2, text="Remove Selected", command=self.remove_from_input_queue).pack(side=tk.RIGHT, padx=2)
 
         # --- Bottom Pane: Job Queue ---
         job_frame = ttk.LabelFrame(paned, text="Step 2: Processing Jobs", padding=5)
@@ -3331,14 +3340,24 @@ class VideoProcessorApp:
         top_aspect_frame = ttk.Frame(self.top_video_frame)
         top_aspect_frame.pack(fill=tk.X)
         ttk.Label(top_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(top_aspect_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(top_aspect_frame, text="9:16", variable=self.hybrid_top_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(top_aspect_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(top_aspect_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(top_aspect_frame, text="1:1", variable=self.hybrid_top_aspect_var, value="1:1", command=lambda: self._update_selected_jobs("hybrid_top_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="16:9", variable=self.hybrid_top_aspect_var, value="16:9", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="9:16", variable=self.hybrid_top_aspect_var, value="9:16", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(top_aspect_frame, text="4:5", variable=self.hybrid_top_aspect_var, value="4:5", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="4:3", variable=self.hybrid_top_aspect_var, value="4:3", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(top_aspect_frame, text="1:1", variable=self.hybrid_top_aspect_var, value="1:1", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT)
+        ttk.Radiobutton(top_aspect_frame, text="Original", variable=self.hybrid_top_aspect_var, value="original", command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT, padx=2)
         ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        ttk.Radiobutton(top_aspect_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT)
-        ttk.Radiobutton(top_aspect_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode")).pack(side=tk.LEFT, padx=5)
+        self.hybrid_top_crop_rb = ttk.Radiobutton(top_aspect_frame, text="Crop", variable=self.hybrid_top_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_top_mode"))
+        self.hybrid_top_crop_rb.pack(side=tk.LEFT)
+        self.hybrid_top_pad_rb = ttk.Radiobutton(top_aspect_frame, text="Pad", variable=self.hybrid_top_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_top_mode"))
+        self.hybrid_top_pad_rb.pack(side=tk.LEFT, padx=5)
+
+        top_suffix_frame = ttk.Frame(self.top_video_frame)
+        top_suffix_frame.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(top_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0,5))
+        self.hybrid_top_suffix_entry = ttk.Entry(top_suffix_frame, textvariable=self.hybrid_top_suffix_var, width=10)
+        self.hybrid_top_suffix_entry.pack(side=tk.LEFT)
+        ToolTip(self.hybrid_top_suffix_entry, "Suffix used for auto-pairing this video (e.g. -top, -left, -a). Include the delimiter.")
 
         # --- Bottom / Right Video Frame ---
         self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5)
@@ -3356,15 +3375,25 @@ class VideoProcessorApp:
         bot_aspect_frame = ttk.Frame(self.bottom_video_frame)
         bot_aspect_frame.pack(fill=tk.X)
         ttk.Label(bot_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(bot_aspect_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(bot_aspect_frame, text="9:16", variable=self.hybrid_bottom_aspect_var, value="9:16", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(bot_aspect_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
-        ttk.Radiobutton(bot_aspect_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT, padx=2)
-        ttk.Radiobutton(bot_aspect_frame, text="1:1", variable=self.hybrid_bottom_aspect_var, value="1:1", command=lambda: self._update_selected_jobs("hybrid_bottom_aspect")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="16:9", variable=self.hybrid_bottom_aspect_var, value="16:9", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="9:16", variable=self.hybrid_bottom_aspect_var, value="9:16", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(bot_aspect_frame, text="4:5", variable=self.hybrid_bottom_aspect_var, value="4:5", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="4:3", variable=self.hybrid_bottom_aspect_var, value="4:3", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(bot_aspect_frame, text="1:1", variable=self.hybrid_bottom_aspect_var, value="1:1", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT)
+        ttk.Radiobutton(bot_aspect_frame, text="Original", variable=self.hybrid_bottom_aspect_var, value="original", command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT, padx=2)
         ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15,5))
-        ttk.Radiobutton(bot_aspect_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT)
-        ttk.Radiobutton(bot_aspect_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode")).pack(side=tk.LEFT, padx=5)
-        aspect_handling_frame = ttk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X, pady=5)
+        self.hybrid_bot_crop_rb = ttk.Radiobutton(bot_aspect_frame, text="Crop", variable=self.hybrid_bottom_mode_var, value="crop", command=lambda: self._update_selected_jobs("hybrid_bottom_mode"))
+        self.hybrid_bot_crop_rb.pack(side=tk.LEFT)
+        self.hybrid_bot_pad_rb = ttk.Radiobutton(bot_aspect_frame, text="Pad", variable=self.hybrid_bottom_mode_var, value="pad", command=lambda: self._update_selected_jobs("hybrid_bottom_mode"))
+        self.hybrid_bot_pad_rb.pack(side=tk.LEFT, padx=5)
+
+        bot_suffix_frame = ttk.Frame(self.bottom_video_frame)
+        bot_suffix_frame.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(bot_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0,5))
+        self.hybrid_bot_suffix_entry = ttk.Entry(bot_suffix_frame, textvariable=self.hybrid_bot_suffix_var, width=10)
+        self.hybrid_bot_suffix_entry.pack(side=tk.LEFT)
+        ToolTip(self.hybrid_bot_suffix_entry, "Suffix used for auto-pairing the sibling video (e.g. -bot, -right, -b). Include the delimiter.")
+        aspect_handling_frame = ttk.Frame(geometry_group); aspect_handling_frame.pack(fill=tk.X, pady=(5, 2))
         ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0,5))
         self.aspect_crop_rb = ttk.Radiobutton(aspect_handling_frame, text="Crop (Fill)", variable=self.aspect_mode_var, value="crop", command=self._toggle_upscale_options)
         self.aspect_crop_rb.pack(side=tk.LEFT)
@@ -3377,51 +3406,56 @@ class VideoProcessorApp:
         ToolTip(self.pad_color_btn, "Padding Color (FFmpeg Only). Disabled if NVEncC handles padding.")
         self.aspect_stretch_rb = ttk.Radiobutton(aspect_handling_frame, text="Stretch", variable=self.aspect_mode_var, value="stretch", command=self._toggle_upscale_options)
         self.aspect_stretch_rb.pack(side=tk.LEFT)
-        self.aspect_blur_cb = ttk.Checkbutton(aspect_handling_frame, text="Blur (Bg)", variable=self.aspect_blur_var, command=self._toggle_upscale_options)
-        self.aspect_blur_cb.pack(side=tk.LEFT, padx=5)
-        self.aspect_pixelate_cb = ttk.Checkbutton(aspect_handling_frame, text="Pixelate (Bg)", variable=self.aspect_pixelate_var, command=self._toggle_upscale_options)
-        self.aspect_pixelate_cb.pack(side=tk.LEFT)
-        self.aspect_ambient_cb = ttk.Checkbutton(aspect_handling_frame, text="Ambient (Glow)", variable=self.aspect_ambient_var, command=self._toggle_upscale_options)
-        self.aspect_ambient_cb.pack(side=tk.LEFT, padx=5)
+
+        aspect_bg_frame = ttk.Frame(geometry_group); aspect_bg_frame.pack(fill=tk.X, pady=(2, 5))
+        ttk.Label(aspect_bg_frame, text="Background:").pack(side=tk.LEFT, padx=(0,5))
+        self.aspect_blur_cb = ttk.Checkbutton(aspect_bg_frame, text="Blur (Bg)", variable=self.aspect_blur_var, command=self._toggle_upscale_options)
+        self.aspect_blur_cb.pack(side=tk.LEFT)
+        self.aspect_pixelate_cb = ttk.Checkbutton(aspect_bg_frame, text="Pixelate (Bg)", variable=self.aspect_pixelate_var, command=self._toggle_upscale_options)
+        self.aspect_pixelate_cb.pack(side=tk.LEFT, padx=5)
+        self.aspect_ambient_cb = ttk.Checkbutton(aspect_bg_frame, text="Ambient (Glow)", variable=self.aspect_ambient_var, command=self._toggle_upscale_options)
+        self.aspect_ambient_cb.pack(side=tk.LEFT)
         
         aspect_params_frame = ttk.Frame(geometry_group); aspect_params_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(aspect_params_frame, text="Mult:").pack(side=tk.LEFT, padx=(0, 2))
-        self.pixelate_multiplier_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_multiplier_var, width=3)
+        ap_row1 = ttk.Frame(aspect_params_frame); ap_row1.pack(fill=tk.X, pady=1)
+        ttk.Label(ap_row1, text="Mult:").pack(side=tk.LEFT, padx=(0, 2))
+        self.pixelate_multiplier_entry = ttk.Entry(ap_row1, textvariable=self.pixelate_multiplier_var, width=3)
         self.pixelate_multiplier_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_multiplier_entry, "Pixelation factor. 16 is default.")
 
-        ttk.Label(aspect_params_frame, text="Dark:").pack(side=tk.LEFT, padx=(5, 2))
-        self.pixelate_brightness_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_brightness_var, width=4)
+        ttk.Label(ap_row1, text="Dark:").pack(side=tk.LEFT, padx=(8, 2))
+        self.pixelate_brightness_entry = ttk.Entry(ap_row1, textvariable=self.pixelate_brightness_var, width=4)
         self.pixelate_brightness_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_brightness_entry, "Darkness level. -0.4 is default. Lower is darker.")
 
-        ttk.Label(aspect_params_frame, text="Sat:").pack(side=tk.LEFT, padx=(5, 2))
-        self.pixelate_saturation_entry = ttk.Entry(aspect_params_frame, textvariable=self.pixelate_saturation_var, width=3)
+        ttk.Label(ap_row1, text="Sat:").pack(side=tk.LEFT, padx=(8, 2))
+        self.pixelate_saturation_entry = ttk.Entry(ap_row1, textvariable=self.pixelate_saturation_var, width=3)
         self.pixelate_saturation_entry.pack(side=tk.LEFT)
         ToolTip(self.pixelate_saturation_entry, "Saturation boost. 0.6 is default. 1.0 is original.")
 
-        ttk.Label(aspect_params_frame, text="Sigma:").pack(side=tk.LEFT, padx=(5, 2))
-        self.blur_sigma_entry = ttk.Entry(aspect_params_frame, textvariable=self.blur_sigma_var, width=3)
+        ttk.Label(ap_row1, text="Sigma:").pack(side=tk.LEFT, padx=(8, 2))
+        self.blur_sigma_entry = ttk.Entry(ap_row1, textvariable=self.blur_sigma_var, width=3)
         self.blur_sigma_entry.pack(side=tk.LEFT)
         ToolTip(self.blur_sigma_entry, "Blur strength. 30 is default. Higher = more blur.")
 
-        ttk.Label(aspect_params_frame, text="Steps:").pack(side=tk.LEFT, padx=(5, 2))
-        self.blur_steps_entry = ttk.Entry(aspect_params_frame, textvariable=self.blur_steps_var, width=2)
+        ap_row2 = ttk.Frame(aspect_params_frame); ap_row2.pack(fill=tk.X, pady=1)
+        ttk.Label(ap_row2, text="Steps:").pack(side=tk.LEFT, padx=(0, 2))
+        self.blur_steps_entry = ttk.Entry(ap_row2, textvariable=self.blur_steps_var, width=2)
         self.blur_steps_entry.pack(side=tk.LEFT)
         ToolTip(self.blur_steps_entry, "Blur quality. 1 is default. Higher = smoother (1-6).")
         
-        ttk.Label(aspect_params_frame, text="Spread:").pack(side=tk.LEFT, padx=(5, 2))
-        self.ambient_spread_entry = ttk.Entry(aspect_params_frame, textvariable=self.ambient_spread_var, width=3)
+        ttk.Label(ap_row2, text="Spread:").pack(side=tk.LEFT, padx=(8, 2))
+        self.ambient_spread_entry = ttk.Entry(ap_row2, textvariable=self.ambient_spread_var, width=3)
         self.ambient_spread_entry.pack(side=tk.LEFT)
         ToolTip(self.ambient_spread_entry, "Ambient glow spread (downscale factor). 2 is default. Higher = wider glow.")
 
-        ttk.Label(aspect_params_frame, text="X-Off:").pack(side=tk.LEFT, padx=(10, 2))
-        self.video_offset_x_entry = ttk.Entry(aspect_params_frame, textvariable=self.video_offset_x_var, width=4)
+        ttk.Label(ap_row2, text="X-Off:").pack(side=tk.LEFT, padx=(12, 2))
+        self.video_offset_x_entry = ttk.Entry(ap_row2, textvariable=self.video_offset_x_var, width=4)
         self.video_offset_x_entry.pack(side=tk.LEFT)
         ToolTip(self.video_offset_x_entry, "Horizontal video offset in pixels. Pos = Right, Neg = Left.")
 
-        ttk.Label(aspect_params_frame, text="Y-Off:").pack(side=tk.LEFT, padx=(5, 2))
-        self.video_offset_y_entry = ttk.Entry(aspect_params_frame, textvariable=self.video_offset_y_var, width=4)
+        ttk.Label(ap_row2, text="Y-Off:").pack(side=tk.LEFT, padx=(8, 2))
+        self.video_offset_y_entry = ttk.Entry(ap_row2, textvariable=self.video_offset_y_var, width=4)
         self.video_offset_y_entry.pack(side=tk.LEFT)
         ToolTip(self.video_offset_y_entry, "Vertical video offset in pixels. Pos = Down, Neg = Up.")
 
@@ -3443,46 +3477,52 @@ class VideoProcessorApp:
 
         # Super-Resolution Settings (NVEncC only)
         superres_frame = ttk.Frame(quality_group); superres_frame.pack(fill=tk.X, pady=(5,0))
-        ttk.Label(superres_frame, text="NVVFX SuperRes Mode:").pack(side=tk.LEFT, padx=(0,5))
-        self.superres_mode_combo = ttk.Combobox(superres_frame, textvariable=self.nvenc_superres_mode_var, values=["0", "1"], width=5, state="readonly")
+        sres_row1 = ttk.Frame(superres_frame); sres_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(sres_row1, text="NVVFX SuperRes Mode:").pack(side=tk.LEFT, padx=(0,5))
+        self.superres_mode_combo = ttk.Combobox(sres_row1, textvariable=self.nvenc_superres_mode_var, values=["0", "1"], width=5, state="readonly")
         self.superres_mode_combo.pack(side=tk.LEFT)
         ToolTip(self.superres_mode_combo, "NVEncC nvvfx-superres mode (0=conservative, 1=aggressive).")
 
-        ttk.Label(superres_frame, text="NGX VSR Quality:").pack(side=tk.LEFT, padx=(15,5))
-        self.ngx_vsr_quality_combo = ttk.Combobox(superres_frame, textvariable=self.nvenc_ngx_vsr_quality_var, values=["1", "2", "3", "4"], width=5, state="readonly")
+        ttk.Label(sres_row1, text="NGX VSR Quality:").pack(side=tk.LEFT, padx=(15,5))
+        self.ngx_vsr_quality_combo = ttk.Combobox(sres_row1, textvariable=self.nvenc_ngx_vsr_quality_var, values=["1", "2", "3", "4"], width=5, state="readonly")
         self.ngx_vsr_quality_combo.pack(side=tk.LEFT)
         ToolTip(self.ngx_vsr_quality_combo, "NVEncC ngx vsr-quality (1-4).")
 
-        self.nvvfx_denoise_check = ttk.Checkbutton(superres_frame, text="AI Video Denoising", variable=self.nvenc_nvvfx_denoise_var, command=lambda: self._update_selected_jobs("nvenc_nvvfx_denoise"))
-        self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(15, 0))
+        sres_row2 = ttk.Frame(superres_frame); sres_row2.pack(fill=tk.X, pady=(2, 0))
+        self.nvvfx_denoise_check = ttk.Checkbutton(sres_row2, text="AI Video Denoising", variable=self.nvenc_nvvfx_denoise_var, command=lambda: self._update_selected_jobs("nvenc_nvvfx_denoise"))
+        self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(0, 15))
         ToolTip(self.nvvfx_denoise_check, "Enable --vpp-nvvfx-denoise (NVEncC only).")
 
-        self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(superres_frame, text="FFmpeg Vulkan Denoise", variable=self.ffmpeg_denoise_vulkan_var, command=lambda: self._update_selected_jobs("ffmpeg_denoise_vulkan"))
-        self.ffmpeg_denoise_vulkan_check.pack(side=tk.LEFT, padx=(15, 0))
+        self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(sres_row2, text="FFmpeg Vulkan Denoise", variable=self.ffmpeg_denoise_vulkan_var, command=lambda: self._update_selected_jobs("ffmpeg_denoise_vulkan"))
+        self.ffmpeg_denoise_vulkan_check.pack(side=tk.LEFT)
         ToolTip(self.ffmpeg_denoise_vulkan_check, "Enable nlmeans_vulkan noise reduction (FFmpeg backend).")
 
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
-        ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
-        ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
-        ttk.Label(output_format_frame, text="Location:").pack(side=tk.LEFT, padx=(15,5))
-        rb_local = ttk.Radiobutton(output_format_frame, text="Local", variable=self.output_mode_var, value="local")
+        out_row1 = ttk.Frame(output_format_frame); out_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(out_row1, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(out_row1, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
+        ttk.Radiobutton(out_row1, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
+        ttk.Label(out_row1, text="Location:").pack(side=tk.LEFT, padx=(15,5))
+        rb_local = ttk.Radiobutton(out_row1, text="Local", variable=self.output_mode_var, value="local")
         rb_local.pack(side=tk.LEFT)
         ToolTip(rb_local, "The output files will be saved in the exact same folder as the original input video (os.path.dirname(job['video_path'])).")
-        rb_pooled = ttk.Radiobutton(output_format_frame, text="Pooled", variable=self.output_mode_var, value="pooled")
+        rb_pooled = ttk.Radiobutton(out_row1, text="Pooled", variable=self.output_mode_var, value="pooled")
         rb_pooled.pack(side=tk.LEFT, padx=5)
         ToolTip(rb_pooled, "The output files will all be saved in the script's current working directory (os.getcwd()), essentially pooling all outputs from different folders into one centralized place.")
-        ttk.Checkbutton(output_format_frame, text="Use Subfolders", variable=self.output_subfolders_var, 
-                        command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(15, 0))
-        ttk.Checkbutton(output_format_frame, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
-                        command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle")).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Checkbutton(output_format_frame, text="Group by Preset", variable=self.group_by_preset_var, 
-                        command=lambda: self._update_selected_jobs("group_by_preset")).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Checkbutton(output_format_frame, text="Group by Video", variable=self.group_by_video_var, 
-                        command=lambda: self._update_selected_jobs("group_by_video")).pack(side=tk.LEFT, padx=(10, 0))
+
+        out_row2 = ttk.Frame(output_format_frame); out_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Checkbutton(out_row2, text="Use Subfolders", variable=self.output_subfolders_var, 
+                        command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Checkbutton(out_row2, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
+                        command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle")).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Checkbutton(out_row2, text="Group by Preset", variable=self.group_by_preset_var, 
+                        command=lambda: self._update_selected_jobs("group_by_preset")).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Checkbutton(out_row2, text="Group by Video", variable=self.group_by_video_var, 
+                        command=lambda: self._update_selected_jobs("group_by_video")).pack(side=tk.LEFT, padx=(0, 8))
         
-        ttk.Label(output_format_frame, text="Override:").pack(side=tk.LEFT, padx=(10, 2))
-        override_entry = ttk.Entry(output_format_frame, textvariable=self.subfolder_override_var, width=12)
+        out_row3 = ttk.Frame(output_format_frame); out_row3.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(out_row3, text="Subfolder Override:").pack(side=tk.LEFT, padx=(0, 5))
+        override_entry = ttk.Entry(out_row3, textvariable=self.subfolder_override_var, width=20)
         override_entry.pack(side=tk.LEFT)
         ToolTip(override_entry, "Custom subfolder name to override Video/Preset names.")
         
@@ -3706,26 +3746,26 @@ class VideoProcessorApp:
         general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
         general_style_frame.pack(fill=tk.X, pady=5)
         font_frame = ttk.Frame(general_style_frame); font_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
-        self.title_font_combo = ttk.Combobox(font_frame, textvariable=self.title_font_var, width=25)
+        font_row1 = ttk.Frame(font_frame); font_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(font_row1, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
+        self.title_font_combo = ttk.Combobox(font_row1, textvariable=self.title_font_var, width=25)
         self.title_font_combo.pack(side=tk.LEFT, padx=5)
         self.title_font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("title_font"))
         # Populate fonts after the combo is created
         self.root.after(100, self._populate_title_fonts)
-        ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(font_frame, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(font_row1, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(font_row1, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
 
-        # --- ADD THESE LINES FOR TYPOGRAPHY SETTINGS ---
-        ttk.Label(font_frame, text="Kerning:").pack(side=tk.LEFT, padx=(15, 5))
-        kern_entry = ttk.Entry(font_frame, textvariable=self.title_spacing_var, width=4)
+        font_row2 = ttk.Frame(font_frame); font_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(font_row2, text="Kerning:").pack(side=tk.LEFT, padx=(0, 5))
+        kern_entry = ttk.Entry(font_row2, textvariable=self.title_spacing_var, width=4)
         kern_entry.pack(side=tk.LEFT)
         ToolTip(kern_entry, "Letter Spacing (pixels). Can be negative.")
 
-        ttk.Label(font_frame, text="Line Spacing:").pack(side=tk.LEFT, padx=(15, 5))
-        line_sp_entry = ttk.Entry(font_frame, textvariable=self.title_line_spacing_var, width=4)
+        ttk.Label(font_row2, text="Line Spacing:").pack(side=tk.LEFT, padx=(15, 5))
+        line_sp_entry = ttk.Entry(font_row2, textvariable=self.title_line_spacing_var, width=4)
         line_sp_entry.pack(side=tk.LEFT)
         ToolTip(line_sp_entry, "Extra vertical space between lines (pixels). Can be negative.")
-        # -----------------------------------------------
 
         style_frame = ttk.Frame(general_style_frame); style_frame.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(style_frame, text="Bold", variable=self.title_bold_var, command=lambda: self._update_selected_jobs("title_bold")).pack(side=tk.LEFT)
@@ -3733,16 +3773,20 @@ class VideoProcessorApp:
         ttk.Checkbutton(style_frame, text="Underline", variable=self.title_underline_var, command=lambda: self._update_selected_jobs("title_underline")).pack(side=tk.LEFT)
         
         align_frame = ttk.Frame(general_style_frame); align_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(align_frame, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Radiobutton(align_frame, text="Top", variable=self.title_alignment_var, value="top", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
-        ttk.Radiobutton(align_frame, text="Mid", variable=self.title_alignment_var, value="middle", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(align_frame, text="Bot", variable=self.title_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
-        ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(align_frame, textvariable=self.title_margin_v_var, width=5).pack(side=tk.LEFT)
-        ttk.Label(align_frame, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(align_frame, textvariable=self.title_margin_l_var, width=5).pack(side=tk.LEFT)
-        ttk.Label(align_frame, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(align_frame, textvariable=self.title_margin_r_var, width=5).pack(side=tk.LEFT)
+        align_row1 = ttk.Frame(align_frame); align_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(align_row1, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Radiobutton(align_row1, text="Top", variable=self.title_alignment_var, value="top", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
+        ttk.Radiobutton(align_row1, text="Mid", variable=self.title_alignment_var, value="middle", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(align_row1, text="Bot", variable=self.title_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
+
+        align_row2 = ttk.Frame(align_frame); align_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(align_row2, text="Margins:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(align_row2, text="V-Margin:").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Entry(align_row2, textvariable=self.title_margin_v_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(align_row2, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Entry(align_row2, textvariable=self.title_margin_l_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(align_row2, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Entry(align_row2, textvariable=self.title_margin_r_var, width=5).pack(side=tk.LEFT)
 
         # --- ADD THESE LINES FOR WRAP LIMIT ---
         format_frame = ttk.Frame(general_style_frame)
@@ -3888,31 +3932,34 @@ class VideoProcessorApp:
         ttk.Checkbutton(style_frame, text="Italic", variable=self.subtitle_italic_var, command=lambda: self._update_selected_jobs("subtitle_italic")).pack(side=tk.LEFT, padx=15)
         ttk.Checkbutton(style_frame, text="Underline", variable=self.subtitle_underline_var, command=lambda: self._update_selected_jobs("subtitle_underline")).pack(side=tk.LEFT)
         align_frame = ttk.Frame(general_style_frame); align_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(align_frame, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Radiobutton(align_frame, text="Top", variable=self.subtitle_alignment_var, value="top", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
-        ttk.Radiobutton(align_frame, text="Mid", variable=self.subtitle_alignment_var, value="middle", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(align_frame, text="Bot", variable=self.subtitle_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
-        self.seam_align_rb = ttk.Radiobutton(align_frame, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
+        align_sub_row1 = ttk.Frame(align_frame); align_sub_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(align_sub_row1, text="Align:").pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Radiobutton(align_sub_row1, text="Top", variable=self.subtitle_alignment_var, value="top", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
+        ttk.Radiobutton(align_sub_row1, text="Mid", variable=self.subtitle_alignment_var, value="middle", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(align_sub_row1, text="Bot", variable=self.subtitle_alignment_var, value="bottom", command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
+        self.seam_align_rb = ttk.Radiobutton(align_sub_row1, text="At Seam (Hybrid Only)", variable=self.subtitle_alignment_var, value="seam", command=lambda: self._update_selected_jobs("subtitle_alignment"))
         self.seam_align_rb.pack(side=tk.LEFT, padx=5)
         self.seam_align_rb.config(state="disabled")
         
-        self.seam_h_lbl = ttk.Label(align_frame, text="H-Offset:")
+        self.seam_h_lbl = ttk.Label(align_sub_row1, text="H-Offset:")
         self.seam_h_lbl.pack(side=tk.LEFT, padx=(5, 2))
-        self.seam_h_entry = ttk.Entry(align_frame, textvariable=self.subtitle_seam_h_offset_var, width=5)
+        self.seam_h_entry = ttk.Entry(align_sub_row1, textvariable=self.subtitle_seam_h_offset_var, width=5)
         self.seam_h_entry.pack(side=tk.LEFT)
-        self.seam_v_lbl = ttk.Label(align_frame, text="V-Offset:")
+        self.seam_v_lbl = ttk.Label(align_sub_row1, text="V-Offset:")
         self.seam_v_lbl.pack(side=tk.LEFT, padx=(5, 2))
-        self.seam_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_seam_v_offset_var, width=5)
+        self.seam_v_entry = ttk.Entry(align_sub_row1, textvariable=self.subtitle_seam_v_offset_var, width=5)
         self.seam_v_entry.pack(side=tk.LEFT)
 
-        ttk.Label(align_frame, text="V-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        margin_v_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_v_var, width=5)
+        align_sub_row2 = ttk.Frame(align_frame); align_sub_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(align_sub_row2, text="Margins:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(align_sub_row2, text="V-Margin:").pack(side=tk.LEFT, padx=(5, 2))
+        margin_v_entry = ttk.Entry(align_sub_row2, textvariable=self.subtitle_margin_v_var, width=5)
         margin_v_entry.pack(side=tk.LEFT)
-        ttk.Label(align_frame, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        margin_l_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_l_var, width=5)
+        ttk.Label(align_sub_row2, text="L-Margin:").pack(side=tk.LEFT, padx=(10, 2))
+        margin_l_entry = ttk.Entry(align_sub_row2, textvariable=self.subtitle_margin_l_var, width=5)
         margin_l_entry.pack(side=tk.LEFT)
-        ttk.Label(align_frame, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 5))
-        margin_r_entry = ttk.Entry(align_frame, textvariable=self.subtitle_margin_r_var, width=5)
+        ttk.Label(align_sub_row2, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 2))
+        margin_r_entry = ttk.Entry(align_sub_row2, textvariable=self.subtitle_margin_r_var, width=5)
         margin_r_entry.pack(side=tk.LEFT)
         reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
@@ -4804,6 +4851,7 @@ class VideoProcessorApp:
             "hybrid_bottom_aspect": self.hybrid_bottom_aspect_var.get(), "hybrid_bottom_mode": self.hybrid_bottom_mode_var.get(),
             "hybrid_bottom_path": self.hybrid_bottom_path_var.get(),
             "hybrid_layout": self.hybrid_layout_var.get(),
+            "hybrid_top_suffix": self.hybrid_top_suffix_var.get(), "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
             "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(), "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(), "subtitle_underline": self.subtitle_underline_var.get(),
@@ -5555,6 +5603,8 @@ class VideoProcessorApp:
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5")); self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
         self.hybrid_bottom_path_var.set(options.get("hybrid_bottom_path", ""))
+        self.hybrid_top_suffix_var.set(options.get("hybrid_top_suffix", "-top"))
+        self.hybrid_bot_suffix_var.set(options.get("hybrid_bot_suffix", "-bot"))
         self._update_hybrid_ui_labels()
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)); self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE)); self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD)); self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC)); self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
