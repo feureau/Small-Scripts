@@ -28,8 +28,9 @@ System Requirements & Dependencies
 Core Feature Sets
 -----------------
 
-1. **Video Processing (Hardware Accelerated)**:
-    *   **Encoders**: H.264, HEVC (H.265), and AV1 via NVIDIA NVENC.
+1. **Video Processing (Hardware & Software Accelerated)**:
+    *   **Encoders**: H.264, HEVC (H.265), and AV1. Hardware via NVIDIA NVENC, or
+        CPU software via libx264 / libx265 / libsvtav1 (selectable Encoder Engine).
     *   **Color Spaces**: Full SDR and HDR (BT.2020) support with automated tagging.
     *   **Scaling**: Smart upscaling (Nearest, Bilinear, Bicubic, Lanczos) with aspect 
         ratio handling (Crop/Fill, Pad/Fit, Stretch).
@@ -69,6 +70,14 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.17 - CPU Software Encoders (2026-09-08)
+    • FEATURE: Added Encoder Engine (Family) selection: NVIDIA NVENC vs CPU Software.
+    • FEATURE: CPU Software maps h264->libx264, hevc->libx265, av1->libsvtav1.
+    • FEATURE: Added CPU preset dropdowns (x264/x265: ultrafast..veryslow, SVT-AV1: 0-13).
+    • FEATURE: Added CPU CRF Override (0 = bitrate targeting, >0 = CRF mode).
+    • FEATURE: HDR10 bitstream SEI signaling via -x265-params and -svtav1-params.
+    • PIPELINE: Preserves CUVID decode + scale_cuda; downloads to host memory only before CPU encode.
+    • PIPELINE: CPU software family forces Backend to ffmpeg_only (NVEncC cannot run software encoders).
 v8.16 - Hybrid Side-by-Side, Combined Aspect & Subtitle Exclusion (2026-09-08)
     • FEATURE: Added side-by-side (`hstack`) layout for Hybrid and Hybrid Duo modes.
     • FEATURE: Added "Auto (Follow Inputs)" canvas aspect ratio for both Stacked and Side-by-Side.
@@ -244,6 +253,13 @@ DEFAULT_FFMPEG_THREADS = "0"                        # FFmpeg CPU threads. Defaul
 DEFAULT_FFMPEG_PRIORITY = "normal"                  # FFmpeg process priority. Windows only. Default: normal
 DEFAULT_SHARPENING_ALGO = "unsharp"                 # Sharpening algorithm. Default: cas, Options: cas, unsharp
 DEFAULT_SHARPENING_STRENGTH = "0.5"                 # Sharpening strength. Default: 0.5, Range: 0.0 to 1.0
+
+# --- CPU Software Encoder Config Group ---
+DEFAULT_ENCODER_FAMILY = "nvenc"                    # Encoder family. Options: nvenc, cpu_software
+DEFAULT_CPU_X264_PRESET = "medium"                  # libx264 preset. Options: ultrafast..veryslow
+DEFAULT_CPU_X265_PRESET = "medium"                  # libx265 preset. Options: ultrafast..veryslow
+DEFAULT_CPU_SVTAV1_PRESET = "7"                     # libsvtav1 preset. Options: 0 to 13 (6-8 recommended)
+DEFAULT_CPU_CRF = "0"                               # CPU CRF. 0 = Bitrate-targeted; >0 = CRF mode
 
 # -------------------------- Output Configuration --------------------------
 DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per video. Default: False
@@ -505,14 +521,20 @@ def check_cuda_availability():
         return False
 
 def check_ffmpeg_capabilities():
-    capabilities = {'cuda': False, 'nvenc': False, 'filters': False}
+    capabilities = {'cuda': False, 'nvenc': False, 'filters': False, 'cpu_codecs': {}}
     try:
         cmd = [FFMPEG_CMD, "-hwaccels"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         capabilities['cuda'] = "cuda" in result.stdout.lower()
         cmd = [FFMPEG_CMD, "-encoders"]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        capabilities['nvenc'] = any(x in result.stdout.lower() for x in ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'])
+        stdout_lower = result.stdout.lower()
+        capabilities['nvenc'] = any(x in stdout_lower for x in ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'])
+        capabilities['cpu_codecs'] = {
+            'libx264': 'libx264' in stdout_lower,
+            'libx265': 'libx265' in stdout_lower,
+            'libsvtav1': 'libsvtav1' in stdout_lower,
+        }
         cmd = [FFMPEG_CMD, "-filters"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         capabilities['filters'] = all(x in result.stdout.lower() for x in ['loudnorm', 'dynaudnorm', 'scale_cuda', 'lut3d'])
@@ -2075,6 +2097,11 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('title_bg_radius', ''),
         job_options.get('title_bg_pad_x', ''),
         job_options.get('title_bg_pad_y', ''),
+        job_options.get('encoder_family', ''),
+        job_options.get('cpu_x264_preset', ''),
+        job_options.get('cpu_x265_preset', ''),
+        job_options.get('cpu_svtav1_preset', ''),
+        job_options.get('cpu_crf', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
@@ -2298,6 +2325,11 @@ class WorkflowPresetManager:
             "nvencc_strict_no_color_tagging": DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING,
             "ffmpeg_threads": DEFAULT_FFMPEG_THREADS,
             "ffmpeg_priority": DEFAULT_FFMPEG_PRIORITY,
+            "encoder_family": DEFAULT_ENCODER_FAMILY,
+            "cpu_x264_preset": DEFAULT_CPU_X264_PRESET,
+            "cpu_x265_preset": DEFAULT_CPU_X265_PRESET,
+            "cpu_svtav1_preset": DEFAULT_CPU_SVTAV1_PRESET,
+            "cpu_crf": DEFAULT_CPU_CRF,
             "override_bitrate": False,
             "manual_bitrate": "0",
             "output_suffix_override": "",
@@ -2642,6 +2674,22 @@ class VideoProcessorApp:
         self.ffmpeg_priority_var = tk.StringVar(value=DEFAULT_FFMPEG_PRIORITY)
         self.ffmpeg_priority_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_priority'))
 
+        # Encoder Family & CPU Software Encoder variables
+        self.encoder_family_var = tk.StringVar(value=DEFAULT_ENCODER_FAMILY)
+        self.encoder_family_var.trace_add('write', lambda *args: [
+            self._update_selected_jobs('encoder_family'),
+            self._toggle_encoder_family_ui(),
+            self._apply_backend_constraints()
+        ])
+        self.cpu_x264_preset_var = tk.StringVar(value=DEFAULT_CPU_X264_PRESET)
+        self.cpu_x264_preset_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_x264_preset'))
+        self.cpu_x265_preset_var = tk.StringVar(value=DEFAULT_CPU_X265_PRESET)
+        self.cpu_x265_preset_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_x265_preset'))
+        self.cpu_svtav1_preset_var = tk.StringVar(value=DEFAULT_CPU_SVTAV1_PRESET)
+        self.cpu_svtav1_preset_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_svtav1_preset'))
+        self.cpu_crf_var = tk.StringVar(value=DEFAULT_CPU_CRF)
+        self.cpu_crf_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_crf'))
+
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
@@ -2867,21 +2915,54 @@ class VideoProcessorApp:
     def setup_encoder_tab(self, parent):
         scroll_frame = parent
 
+        # --- Encoder Engine / Family ---
+        family_group = ttk.LabelFrame(scroll_frame, text="Encoder Engine", padding=10)
+        family_group.pack(fill=tk.X, pady=5, padx=5)
+
+        ttk.Radiobutton(family_group, text="NVIDIA NVENC (Hardware)", variable=self.encoder_family_var,
+                        value="nvenc").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(family_group, text="CPU Software (libx264 / libx265 / libsvtav1)", variable=self.encoder_family_var,
+                        value="cpu_software").pack(side=tk.LEFT, padx=15)
+
+        # --- CPU Software Settings Group ---
+        self.cpu_settings_group = ttk.LabelFrame(scroll_frame, text="CPU Software Settings", padding=10)
+        self.cpu_settings_group.pack(fill=tk.X, pady=5, padx=5)
+
+        ttk.Label(self.cpu_settings_group, text="x264 Preset:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        x264_presets = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+        self.cpu_x264_combo = ttk.Combobox(self.cpu_settings_group, textvariable=self.cpu_x264_preset_var, values=x264_presets, width=12, state="readonly")
+        self.cpu_x264_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(self.cpu_settings_group, text="x265 Preset:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.cpu_x265_combo = ttk.Combobox(self.cpu_settings_group, textvariable=self.cpu_x265_preset_var, values=x264_presets, width=12, state="readonly")
+        self.cpu_x265_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(self.cpu_settings_group, text="SVT-AV1 Preset:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        svt_presets = [str(i) for i in range(0, 14)]
+        self.cpu_svt_combo = ttk.Combobox(self.cpu_settings_group, textvariable=self.cpu_svtav1_preset_var, values=svt_presets, width=12, state="readonly")
+        self.cpu_svt_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(self.cpu_svt_combo, "SVT-AV1 preset (0-13). 4=Very slow, 6-7=Balanced high quality, 8-10=Fast.")
+
+        ttk.Label(self.cpu_settings_group, text="CRF Override:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.cpu_crf_entry = ttk.Entry(self.cpu_settings_group, textvariable=self.cpu_crf_var, width=6)
+        self.cpu_crf_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(self.cpu_crf_entry, "Set to 0 to use Bitrate targeting. Set to 1-51 (e.g. 18-23) to use Constant Rate Factor instead.")
+
         # Basic NVENC Settings
         basic_group = ttk.LabelFrame(scroll_frame, text="Basic NVENC Settings", padding=10)
         basic_group.pack(fill=tk.X, pady=5, padx=5)
 
         # Backend
         ttk.Label(basic_group, text="Backend:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        backend_combo = ttk.Combobox(
+        self.backend_combo = ttk.Combobox(
             basic_group,
             textvariable=self.encoder_backend_var,
             values=["ffmpeg_only", "nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"],
             width=26,
             state="readonly"
         )
-        backend_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        ToolTip(backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
+        self.backend_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        ToolTip(self.backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
 
         # Render by Chapters
         cb_chapters = ttk.Checkbutton(basic_group, text="Render by Chapters (Split by metadata markers)", variable=self.render_by_chapters_var, command=lambda: [self._update_audio_options_ui(), self._update_selected_jobs('render_by_chapters')])
@@ -3064,6 +3145,7 @@ class VideoProcessorApp:
         ToolTip(strict_color_tag_cb, "When enabled, omit --colorprim/--transfer/--colormatrix and keep only output depth.")
 
         self._toggle_nvencc_color_mode_controls()
+        self._toggle_encoder_family_ui()
     def setup_presets_ui(self, parent):
         preset_pane = CollapsiblePane(parent, text="Workflow Presets", initial_state='expanded')
         preset_pane.pack(fill=tk.X, side=tk.TOP, pady=(0, 2))
@@ -4604,6 +4686,21 @@ class VideoProcessorApp:
         for child in widget.winfo_children():
             self._set_widget_state_recursive(child, state)
 
+    def _toggle_encoder_family_ui(self):
+        is_cpu = (self.encoder_family_var.get() == "cpu_software")
+        if is_cpu:
+            # Force backend to ffmpeg_only
+            self.encoder_backend_var.set("ffmpeg_only")
+            if hasattr(self, 'cpu_settings_group'):
+                self._set_widget_state_recursive(self.cpu_settings_group, "normal")
+            if hasattr(self, 'backend_combo'):
+                self.backend_combo.config(state="disabled")
+        else:
+            if hasattr(self, 'cpu_settings_group'):
+                self._set_widget_state_recursive(self.cpu_settings_group, "disabled")
+            if hasattr(self, 'backend_combo'):
+                self.backend_combo.config(state="readonly")
+
     def _apply_backend_constraints(self):
         backend = self.encoder_backend_var.get()
         is_nvencc_only = backend == "nvencc_only"
@@ -4896,6 +4993,11 @@ class VideoProcessorApp:
             "nvencc_strict_no_color_tagging": self.nvencc_strict_no_color_tagging_var.get(),
             "ffmpeg_threads": self.ffmpeg_threads_var.get(),
             "ffmpeg_priority": self.ffmpeg_priority_var.get(),
+            "encoder_family": self.encoder_family_var.get(),
+            "cpu_x264_preset": self.cpu_x264_preset_var.get(),
+            "cpu_x265_preset": self.cpu_x265_preset_var.get(),
+            "cpu_svtav1_preset": self.cpu_svtav1_preset_var.get(),
+            "cpu_crf": self.cpu_crf_var.get(),
             "output_suffix_override": self.output_suffix_override_var.get(),
             # Title Burn options
             "title_burn_enabled": self.title_burn_var.get(),
@@ -5651,6 +5753,12 @@ class VideoProcessorApp:
         self.nvencc_strict_no_color_tagging_var.set(options.get("nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
         self.ffmpeg_threads_var.set(options.get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
         self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
+        self.encoder_family_var.set(options.get("encoder_family", DEFAULT_ENCODER_FAMILY))
+        self.cpu_x264_preset_var.set(options.get("cpu_x264_preset", DEFAULT_CPU_X264_PRESET))
+        self.cpu_x265_preset_var.set(options.get("cpu_x265_preset", DEFAULT_CPU_X265_PRESET))
+        self.cpu_svtav1_preset_var.set(options.get("cpu_svtav1_preset", DEFAULT_CPU_SVTAV1_PRESET))
+        self.cpu_crf_var.set(options.get("cpu_crf", DEFAULT_CPU_CRF))
+        self._toggle_encoder_family_ui()
 
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
         self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
@@ -6159,17 +6267,17 @@ class VideoProcessorApp:
                         eff_layout = self._resolve_hybrid_layout(options)
                         if eff_layout == "side_by_side":
                             try:
-                                num_left, den_left = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                                num_left, den_left = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                                 left_w = (int(sub_target_h * num_left / den_left) // 2) * 2
                                 options["calculated_pos"] = (left_w, sub_target_h // 2)
-                            except (ValueError, AttributeError, ZeroDivisionError):
+                            except Exception:
                                 print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                         else:
                             try:
-                                num_top, den_top = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                                num_top, den_top = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                                 top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
                                 options["calculated_pos"] = (sub_target_w // 2, top_h)
-                            except (ValueError, AttributeError, ZeroDivisionError):
+                            except Exception:
                                 print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
                     
                     sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
@@ -6367,6 +6475,22 @@ class VideoProcessorApp:
 
         return bitrate_kbps, max_duration, input_duration
 
+    def _resolve_aspect_ratio(self, aspect_val, video_info, default_ratio="16:9"):
+        """Resolves 'original' or custom aspect strings into (num, den)."""
+        if str(aspect_val).lower() == "original" and video_info:
+            w = video_info.get("width", 16)
+            h = video_info.get("height", 9)
+            return w, h
+        try:
+            num, den = map(int, str(aspect_val).split(':'))
+            return num, den
+        except Exception:
+            try:
+                num, den = map(int, default_ratio.split(':'))
+                return num, den
+            except Exception:
+                return 16, 9
+
     def compute_target_resolution_for_options(self, options, info, orientation):
         orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
@@ -6385,13 +6509,13 @@ class VideoProcessorApp:
                         target_h = height_map.get(res_key, 1080)
                     
                     try:
-                        num_l, den_l = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                        num_l, den_l = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                         w_left = int(target_h * num_l / den_l)
                     except Exception:
                         w_left = int(target_h * 16 / 9)
 
                     try:
-                        num_r, den_r = map(int, options.get('hybrid_bottom_aspect', '16:9').split(':'))
+                        num_r, den_r = self._resolve_aspect_ratio(options.get('hybrid_bottom_aspect', '16:9'), info, '16:9')
                         w_right = int(target_h * num_r / den_r)
                     except Exception:
                         w_right = int(target_h * 16 / 9)
@@ -6408,13 +6532,13 @@ class VideoProcessorApp:
                         target_w = width_map.get(res_key, 1080)
 
                     try:
-                        num_t, den_t = map(int, options.get('hybrid_top_aspect', '16:9').split(':'))
+                        num_t, den_t = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                         h_top = int(target_w * den_t / num_t)
                     except Exception:
                         h_top = int(target_w * 9 / 16)
 
                     try:
-                        num_b, den_b = map(int, options.get('hybrid_bottom_aspect', '4:5').split(':'))
+                        num_b, den_b = self._resolve_aspect_ratio(options.get('hybrid_bottom_aspect', '4:5'), info, '4:5')
                         h_bot = int(target_w * den_b / num_b)
                     except Exception:
                         h_bot = int(target_w * 5 / 4)
@@ -6837,6 +6961,8 @@ class VideoProcessorApp:
             cmd.extend(["-t", str(seek_duration)])
 
         filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        is_cpu_encode = (options.get("encoder_family") == "cpu_software")
+        target_cpu_pix_fmt = "yuv420p10le" if (is_hdr_output or info["bit_depth"] == 10) else "yuv420p"
         # For codecs without CUVID support (e.g. ProRes), frames are software-decoded to CPU.
         # CUDA filters (scale_cuda, overlay_cuda, etc.) need GPU frames, so we convert
         # the pixel format and upload to CUDA at the start of the filter chain.
@@ -6891,18 +7017,14 @@ class VideoProcessorApp:
                 # Video 1 is Left, Video 2 is Right. Both share total_h.
                 left_aspect = options.get('hybrid_top_aspect')
                 right_aspect = options.get('hybrid_bottom_aspect')
-                try:
-                    num_l, den_l = map(int, left_aspect.split(':'))
-                    left_w = (int(total_h * num_l / den_l) // 2) * 2
-                except Exception:
-                    left_w = target_w // 2
-                
+
+                info_right = info_bot if orientation == "hybrid-duo (dual source)" else info
+                num_l, den_l = self._resolve_aspect_ratio(left_aspect, info, '16:9')
+                left_w = (int(total_h * num_l / den_l) // 2) * 2
+
                 if str(options.get("merged_aspect")).lower() == "auto":
-                    try:
-                        num_r, den_r = map(int, right_aspect.split(':'))
-                        right_w = (int(total_h * num_r / den_r) // 2) * 2
-                    except Exception:
-                        right_w = target_w // 2
+                    num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_right, '16:9')
+                    right_w = (int(total_h * num_r / den_r) // 2) * 2
                     target_w = left_w + right_w
                 else:
                     right_w = max(2, target_w - left_w)
@@ -6917,18 +7039,14 @@ class VideoProcessorApp:
                 # Video 1 is Top, Video 2 is Bottom. Both share target_w.
                 top_aspect = options.get('hybrid_top_aspect')
                 bot_aspect = options.get('hybrid_bottom_aspect')
-                try:
-                    num_t, den_t = map(int, top_aspect.split(':'))
-                    top_h = (int(target_w * den_t / num_t) // 2) * 2
-                except Exception:
-                    top_h = total_h // 2
-                
+
+                info_bottom = info_bot if orientation == "hybrid-duo (dual source)" else info
+                num_t, den_t = self._resolve_aspect_ratio(top_aspect, info, '16:9')
+                top_h = (int(target_w * den_t / num_t) // 2) * 2
+
                 if str(options.get("merged_aspect")).lower() == "auto":
-                    try:
-                        num_b, den_b = map(int, bot_aspect.split(':'))
-                        bot_h = (int(target_w * den_b / num_b) // 2) * 2
-                    except Exception:
-                        bot_h = total_h // 2
+                    num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_bottom, '4:5')
+                    bot_h = (int(target_w * den_b / num_b) // 2) * 2
                     total_h = top_h + bot_h
                 else:
                     bot_h = max(2, total_h - top_h)
@@ -6960,11 +7078,15 @@ class VideoProcessorApp:
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
                 cpu_chain.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{total_h}")
-            if not is_hdr_output: cpu_chain.append("format=nv12")
-            
-            # For "preprocess" backend, the output encoder is ffv1 (software), so we must NOT upload back to hardware.
-            # Otherwise we'll get a format mismatch error.
-            if encoder_backend == "preprocess":
+            if is_cpu_encode:
+                # Deliver host frames directly to the CPU encoder
+                cpu_chain.append(f"format={target_cpu_pix_fmt}")
+            elif not is_hdr_output:
+                cpu_chain.append("format=nv12")
+
+            # For "preprocess" backend or CPU software encode, the output encoder is
+            # software, so we must NOT upload back to hardware.
+            if is_cpu_encode or encoder_backend == "preprocess":
                 final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]" if cpu_chain else "[stacked][v_out]"
             else:
                 final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
@@ -7145,8 +7267,23 @@ class VideoProcessorApp:
             if cpu_filters:
                 # One single trip to CPU for all the heavy lifting
                 processing_chain = [f"hwdownload,format={'p010le' if info['bit_depth'] == 10 else 'nv12'}", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
-                if not is_hdr_output: processing_chain.append("format=nv12")
-                vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
+                if is_cpu_encode:
+                    # CPU encode requires frames to leave FFmpeg's filtergraph on host memory
+                    processing_chain.append(f"format={target_cpu_pix_fmt}")
+                    vf_filters.append(",".join(processing_chain))
+                else:
+                    # NVENC hardware encode: keep hwupload_cuda at the end
+                    if not is_hdr_output: processing_chain.append("format=nv12")
+                    vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
+            elif is_cpu_encode:
+                # No CPU filters requested, but the CPU encoder still needs host frames.
+                # If any GPU filters were applied (vf_filters non-empty) or the video
+                # stayed on CUDA, download to system memory before encoding.
+                vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
+            if is_cpu_encode and not vf_filters:
+                # Fallback: no filters at all, but a CPU encoder was selected. Force
+                # a download from CUDA so the software encoder receives host frames.
+                vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
             if vf_filters:
                 filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
                 video_out_tag = "[v_out]"
@@ -7198,42 +7335,124 @@ class VideoProcessorApp:
             cmd.extend(["-f", "matroska", output_file])
             return cmd
         
-        # Base encoder options
-        nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
-        nv_tune = options.get("nvenc_tune", DEFAULT_NVENC_TUNE)
-        nv_lookahead = options.get("nvenc_rc_lookahead", DEFAULT_NVENC_RC_LOOKAHEAD)
-        nv_multipass = options.get("nvenc_multipass", DEFAULT_NVENC_MULTIPASS)
-        nv_spatial_aq = options.get("nvenc_spatial_aq", DEFAULT_NVENC_SPATIAL_AQ)
-        nv_temporal_aq = options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ)
-        nv_bframes = options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES)
-        nv_b_ref_mode = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
-
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
-        encoder_map = {"h264": "h264_nvenc", "hevc": "hevc_nvenc", "av1": "av1_nvenc"}
-        encoder_name = encoder_map.get(selected_codec, "h264_nvenc")
 
-        encoder_opts = ["-c:v", encoder_name, "-preset", nv_preset, "-tune", nv_tune]
+        if is_cpu_encode:
+            # -------------------------------------------------------------
+            # CPU Software Encoders (libx264, libx265, libsvtav1)
+            # -------------------------------------------------------------
+            try:
+                crf_val = float(options.get("cpu_crf", "0"))
+            except ValueError:
+                crf_val = 0.0
 
-        if selected_codec == "h264":
-            nv_profile = options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR)
-            encoder_opts.extend(["-profile:v", nv_profile])
-        elif selected_codec == "hevc":
-            if is_hdr_output:
-                nv_profile = options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR)
+            if selected_codec == "h264":
+                encoder_opts = [
+                    "-c:v", "libx264",
+                    "-preset", options.get("cpu_x264_preset", DEFAULT_CPU_X264_PRESET),
+                    "-profile:v", "high",
+                    "-pix_fmt", "yuv420p"
+                ]
+                if crf_val > 0:
+                    encoder_opts.extend(["-crf", str(int(crf_val))])
+                else:
+                    encoder_opts.extend([
+                        "-b:v", f"{bitrate_kbps}k",
+                        "-maxrate", f"{bitrate_kbps * 2}k",
+                        "-bufsize", f"{bitrate_kbps * 2}k"
+                    ])
+
+            elif selected_codec == "hevc":
+                pix_fmt = "yuv420p10le" if is_hdr_output else "yuv420p"
+                encoder_opts = [
+                    "-c:v", "libx265",
+                    "-preset", options.get("cpu_x265_preset", DEFAULT_CPU_X265_PRESET),
+                    "-pix_fmt", pix_fmt
+                ]
+                if is_hdr_output:
+                    x265_hdr_params = (
+                        "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:"
+                        "range=limited:hdr10=1:repeat-headers=1"
+                    )
+                    encoder_opts.extend(["-x265-params", x265_hdr_params])
+
+                if crf_val > 0:
+                    encoder_opts.extend(["-crf", str(int(crf_val))])
+                else:
+                    encoder_opts.extend([
+                        "-b:v", f"{bitrate_kbps}k",
+                        "-maxrate", f"{bitrate_kbps * 2}k",
+                        "-bufsize", f"{bitrate_kbps * 2}k"
+                    ])
+
+            elif selected_codec == "av1":
+                # libsvtav1 is optimized for 10-bit; using yuv420p10le prevents banding even for SDR
+                pix_fmt = "yuv420p10le"
+                encoder_opts = [
+                    "-c:v", "libsvtav1",
+                    "-preset", str(options.get("cpu_svtav1_preset", DEFAULT_CPU_SVTAV1_PRESET)),
+                    "-pix_fmt", pix_fmt
+                ]
+                if is_hdr_output:
+                    # SVT-AV1 bitstream signaling: 9 = BT.2020, 16 = SMPTE 2084 PQ
+                    svt_hdr_params = "color-primaries=9:transfer-characteristics=16:matrix-coefficients=9:color-range=0"
+                    encoder_opts.extend(["-svtav1-params", svt_hdr_params])
+
+                if crf_val > 0:
+                    encoder_opts.extend(["-crf", str(int(crf_val))])
+                else:
+                    encoder_opts.extend([
+                        "-b:v", f"{bitrate_kbps}k",
+                        "-maxrate", f"{bitrate_kbps * 2}k",
+                        "-bufsize", f"{bitrate_kbps * 2}k"
+                    ])
             else:
-                nv_profile = "main"
-            encoder_opts.extend(["-profile:v", nv_profile])
+                raise VideoProcessingError(f"Unsupported codec '{selected_codec}' for CPU software encoding")
 
-        encoder_opts.extend([
-            "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
-            "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
-            "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead
-        ])
+            # Standard container-level color metadata tags
+            if is_hdr_output:
+                encoder_opts.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+            else:
+                encoder_opts.extend(["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
 
-        if is_hdr_output:
-            encoder_opts.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
         else:
-            encoder_opts.extend(["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
+            # -------------------------------------------------------------
+            # Hardware Encoders: NVIDIA NVENC
+            # -------------------------------------------------------------
+            nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
+            nv_tune = options.get("nvenc_tune", DEFAULT_NVENC_TUNE)
+            nv_lookahead = options.get("nvenc_rc_lookahead", DEFAULT_NVENC_RC_LOOKAHEAD)
+            nv_multipass = options.get("nvenc_multipass", DEFAULT_NVENC_MULTIPASS)
+            nv_spatial_aq = options.get("nvenc_spatial_aq", DEFAULT_NVENC_SPATIAL_AQ)
+            nv_temporal_aq = options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ)
+            nv_bframes = options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES)
+            nv_b_ref_mode = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
+
+            encoder_map = {"h264": "h264_nvenc", "hevc": "hevc_nvenc", "av1": "av1_nvenc"}
+            encoder_name = encoder_map.get(selected_codec, "h264_nvenc")
+
+            encoder_opts = ["-c:v", encoder_name, "-preset", nv_preset, "-tune", nv_tune]
+
+            if selected_codec == "h264":
+                nv_profile = options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR)
+                encoder_opts.extend(["-profile:v", nv_profile])
+            elif selected_codec == "hevc":
+                if is_hdr_output:
+                    nv_profile = options.get("nvenc_profile_hdr", DEFAULT_NVENC_PROFILE_HDR)
+                else:
+                    nv_profile = "main"
+                encoder_opts.extend(["-profile:v", nv_profile])
+
+            encoder_opts.extend([
+                "-b:v", f"{bitrate_kbps}k", "-maxrate", f"{bitrate_kbps*2}k", "-bufsize", f"{bitrate_kbps*2}k",
+                "-g", str(gop_len), "-bf", nv_bframes, "-b_ref_mode", nv_b_ref_mode,
+                "-multipass", nv_multipass, "-spatial-aq", nv_spatial_aq, "-temporal-aq", nv_temporal_aq, "-rc-lookahead", nv_lookahead
+            ])
+
+            if is_hdr_output:
+                encoder_opts.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+            else:
+                encoder_opts.extend(["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"])
 
         # Force rotation strip and aspect ratio for landscape output if we had a vertical source
         if eff_w and eff_h:
@@ -7255,6 +7474,13 @@ class VideoProcessorApp:
         selected_codec = self.video_codec_var.get()
         if self.output_format_var.get() == "hdr" and selected_codec == "h264":
             issues.append("HDR output requires HEVC or AV1. H.264 cannot carry HDR.")
+        
+        if self.encoder_family_var.get() == "cpu_software":
+            codec = self.video_codec_var.get()
+            caps = check_ffmpeg_capabilities().get('cpu_codecs', {})
+            req_encoder = {"h264": "libx264", "hevc": "libx265", "av1": "libsvtav1"}.get(codec)
+            if req_encoder and not caps.get(req_encoder, False):
+                issues.append(f"Software encoder '{req_encoder}' is not supported by your current FFmpeg build.")
         
         if selected_codec == "h264" and self.resolution_var.get() == "4320p":
             proceed = messagebox.askyesno(
