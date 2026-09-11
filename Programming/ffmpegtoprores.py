@@ -228,10 +228,8 @@ def parse_arguments():
              "  4444xq   - ProRes 4444 XQ (Profile 5)"
     )
     parser.add_argument(
-        "-a", "--audio", choices=["aac", "pcm"], default="aac",
-        help="Audio format to use. Default: aac\n"
-             "  aac - Compressed AAC at 640kbps\n"
-             "  pcm - Uncompressed 24-bit PCM (Industry standard for ProRes)"
+        "-b", "--bitrate", default="1536k",
+        help="Total audio bitrate for the AAC encoder (e.g., 640k, 1536k). Default: 1536k"
     )
     parser.add_argument(
         "--slow", action="store_true",
@@ -276,13 +274,28 @@ def find_video_files_recursive(base_dir, pattern):
         ]
         
         for fname in filenames:
+            full_path = os.path.join(dirpath, fname)
+            
+            # First check exact file path match (for literal file paths with special chars like ｜)
+            if pattern.lower() == full_path.lower():
+                return [full_path]  # Found exact match
+            
+            # Fallback: case-insensitive comparison to handle Unicode encoding issues
+            if pattern.casefold() in full_path.casefold().lower() or full_path.casefold().lower() in pattern.casefold():
+                return [full_path]  # Found by substring match (handles mangled Unicode)
+            
+            # Otherwise treat as glob pattern(s) or default extension filter
             if use_default:
                 if os.path.splitext(fname)[1].lower() in {f".{ext}" for ext in skip_exts}:
-                    found.append(os.path.join(dirpath, fname))
+                    found.append(full_path)
             else:
                 if fnmatch.fnmatch(fname, pattern):
-                    found.append(os.path.join(dirpath, fname))
-
+                    found.append(full_path)
+    
+    # If not using default (i.e., user provided a custom pattern but no matches), return empty
+    if use_default and not found:
+        return []
+    
     return found
 
 def main():
@@ -316,29 +329,25 @@ def main():
             video_encoder = "prores_aw"
             speed_mode = "Fast (GPU Decode + prores_aw)"
 
-    # Audio Logic
-    if args.audio == "aac":
-        if channels > 8:
-            print(f"Error: Requested layout '{desired_layout}' implies {channels} channels, but AAC supports at most 8 channels.")
-            sys.exit(1)
-        # Windows uses aac_mf; macOS/Linux fall back to native aac
-        audio_encoder = "aac_mf" if sys.platform == "win32" else "aac"
-        audio_bitrate = "640k"
-        audio_args = [
-            "-map", "0:a?",
-            "-c:a", audio_encoder,
-            "-b:a", audio_bitrate
-        ]
-    else:
-        audio_encoder = "pcm_s24le"
-        audio_args = [
-            "-map", "0:a?",
-            "-c:a", audio_encoder
-        ]
+    # Audio Logic - Match ffmpegtomp4.py behavior exactly
+    if channels > 8:
+        print(f"Error: Requested layout '{desired_layout}' implies {channels} channels, but AAC supports at most 8 channels.")
+        sys.exit(1)
+    
+    # Windows uses aac_mf; macOS/Linux fall back to native aac (like tomp4.py)
+    audio_encoder = "aac_mf" if sys.platform == "win32" else "aac"
+    audio_bitrate = args.bitrate
+    
+    audio_args = [
+        "-map", "0:a?",
+        "-c:a", audio_encoder,
+        "-b:a", audio_bitrate
+    ]
+
 
     print(f"Target Video Codec: Apple ProRes ({args.profile.upper()})")
     print(f"Speed Profile     : {speed_mode}")
-    print(f"Desired Audio     : {desired_layout} => {channels} channel(s) ({audio_encoder.upper()})")
+    print(f"Desired Audio     : {desired_layout} => {channels} channel(s) ({audio_encoder.upper()} @ {audio_bitrate})")
     if args.autocrop:
         print(f"Crop Setting      : Auto-detect (Remove pillarbox/letterbox)")
     elif args.crop_res:

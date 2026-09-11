@@ -320,6 +320,7 @@ DEFAULT_SUBTITLE_SEAM_V_OFFSET = "0"                # Vertical offset for Seam a
 DEFAULT_REFORMAT_SUBTITLES = True                   # Reformat to single wrapped line. Default: True
 DEFAULT_WRAP_LIMIT = "42"                           # Characters per line before wrapping. Default: 42, Range: 20 to 100
 DEFAULT_SUBTITLE_MAX_LINES = "0"                    # Max lines for a subtitle block after wrapping. 0 = unlimited.
+DEFAULT_MULTILINE_WRAP = False                      # Preserve original line breaks when reformatting (supplemental option)
 DEFAULT_SUBTITLE_REPEAT_MIN_RUN = "12"              # Min repeat length to collapse (e.g., "whyyyy..."). Default: 12
 DEFAULT_SUBTITLE_REPEAT_RATIO = "0.75"              # Skip line if single char dominates ratio. Default: 0.75
 
@@ -1184,19 +1185,73 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start_ass = start_time.replace(',', '.')[:-1]
         end_ass = end_time.replace(',', '.')[:-1]
         if reformat_subs:
-            single_line_text = ' '.join(clean_text.strip().split())
-            single_line_text = sanitize_subtitle_line(single_line_text, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
-            if not single_line_text:
-                continue
-            wrapped_lines = smart_wrap_text(single_line_text, limit=final_limit)
-            if max_lines > 0 and len(wrapped_lines) > max_lines:
-                wrapped_lines = wrapped_lines[:max_lines]
-                last = wrapped_lines[-1].rstrip()
-                if len(last) + len(truncate_suffix) > final_limit:
-                    last = last[:max(0, final_limit - len(truncate_suffix))]
-                wrapped_lines[-1] = last + truncate_suffix
-            text_ass = '\\N'.join(wrapped_lines)
-        else:
+            # Check if multi-line wrap mode is enabled (supplemental option)
+            multiline_wrap = options.get("preserve_multiline_subs", DEFAULT_MULTILINE_WRAP)
+            
+            if multiline_wrap or len(clean_text.splitlines()) > 1:
+                # MULTI-LINE MODE: Preserve line breaks, wrap each line separately
+                
+                # STEP 1: Clean inconsistent newlines (collapse multiple \n to single), remove empty lines
+                raw_lines = [line.strip() for line in clean_text.splitlines()]
+                raw_lines = [line for line in raw_lines if line]  # Remove empty/blank lines from inconsistent SRT
+                
+                # STEP 2: Apply per-line sanitization before wrapping
+                sanitized_lines = [
+                    sanitize_subtitle_line(line, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+                    for line in raw_lines
+                ]
+                sanitized_lines = [line for line in sanitized_lines if line]  # Skip blank after sanitize
+                
+                if not sanitized_lines:
+                    text_ass = ""
+                    continue
+
+                # STEP 3: Apply per-line max_lines cap if set
+                if max_lines > 0 and len(sanitized_lines) > max_lines:
+                    sanitized_lines = sanitized_lines[:max_lines]
+                
+                # STEP 4: Wrap each line individually respecting wrap_limit
+                wrapped_per_block = []
+                for idx, line in enumerate(sanitized_lines):
+                    wrapped = smart_wrap_text(line, limit=final_limit)
+                    
+                    if not wrapped or len(wrapped) == 1 and len(wrapped[0].strip()) <= 2:
+                        # Skip nearly-empty lines but maintain position alignment
+                        wrapped_per_block.append("")
+                    else:
+                        wrapped_per_block.extend(wrapped)
+                
+                # STEP 5: Join blocks maintaining structure (each original line becomes one block)
+                if len(sanitized_lines) > 0:
+                    text_ass = '\\n'.join('\\N'.join(block) for block in [wrapped_per_block])
+                else:
+                    continue
+            else:
+                # SINGLE-LINE MODE (legacy behavior, unchanged): Flatten all lines into one paragraph
+                single_line_text = ' '.join(clean_text.strip().split())
+                single_line_text = sanitize_subtitle_line(single_line_text, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+                if not single_line_text:
+                    text_ass = ""
+                    continue
+                wrapped_lines = smart_wrap_text(single_line_text, limit=final_limit)
+                if max_lines > 0 and len(wrapped_lines) > max_lines:
+                    wrapped_lines = wrapped_lines[:max_lines]
+                    last = wrapped_lines[-1].rstrip()
+                    if len(last) + len(truncate_suffix) > final_limit:
+                        last = last[:max(0, final_limit - len(truncate_suffix))]
+                    wrapped_lines[-1] = last + truncate_suffix
+                text_ass = '\\N'.join(wrapped_lines)
+            
+            # DEBUG LOGGING for multi-line mode
+            if multiline_wrap and len(raw_lines) > 1:
+                print(f"[MULTI-WRAP] Original={len(raw_lines)} lines | Wrapped={len(text_ass.split(chr(92)+'n'))} breaks | Limit={final_limit}")
+                for i, line in enumerate(sanitized_lines[:3], 1):
+                    wrapped = smart_wrap_text(line, limit=final_limit) if sanitized_lines else []
+                    total_chars = sum(len(seg) for seg in wrapped) if wrapped else 0
+                    print(f"  Line {i}: orig={len(line):4d} chars → wrapped={total_chars:3d} chars across {len(wrapped)} segments")
+
+        elif not reformat_subs and len(clean_text.splitlines()) > 1:
+            # PASSTHROUGH MODE fallback: When reformat disabled but text has multiple lines, use first line with wrapping
             raw_lines = [line.strip() for line in clean_text.splitlines()]
             cleaned_lines = [
                 sanitize_subtitle_line(line, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
@@ -1204,6 +1259,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             ]
             cleaned_lines = [line for line in cleaned_lines if line]
             if not cleaned_lines:
+                text_ass = ""
                 continue
             if max_lines > 0 and len(cleaned_lines) > max_lines:
                 cleaned_lines = cleaned_lines[:max_lines]
@@ -1211,7 +1267,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if len(last) + len(truncate_suffix) > final_limit:
                     last = last[:max(0, final_limit - len(truncate_suffix))]
                 cleaned_lines[-1] = last + truncate_suffix
-            text_ass = '\\N'.join(cleaned_lines)
+            
+            # Wrap first non-empty line only (legacy passthrough behavior for multi-line input)
+            if cleaned_lines and max_lines <= 0 or max_lines >= len(cleaned_lines):
+                text_ass = '\\N'.join(smart_wrap_text(cleaned_lines[0], limit=final_limit))
+
+        elif not reformat_subs:
+            # EMPTY INPUT passthrough - no subtitles in source
+            text_ass = ""
+
+        else:  # reformat_subs=True but single-line (not multi-wrap, only 1 line)
+            # FALLBACK: Basic wrapping for enabled formatting with simple text
+            cleaned_text = clean_text.strip()
+            if not cleaned_text:
+                text_ass = ""
+                continue
+            
+            sanitized_single = sanitize_subtitle_line(cleaned_text, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+            if not sanitized_single:
+                text_ass = ""
+                continue
+                
+            wrapped_lines = smart_wrap_text(sanitized_single, limit=final_limit)
+            
+            # Handle max_lines cap
+            if max_lines > 0 and len(wrapped_lines) > max_lines:
+                wrapped_lines = wrapped_lines[:max_lines]
+                last = wrapped_lines[-1].rstrip()
+                if len(last) + len(truncate_suffix) > final_limit:
+                    last = last[:max(0, final_limit - len(truncate_suffix))]
+                wrapped_lines[-1] = last + truncate_suffix
+            
+            text_ass = '\\N'.join(wrapped_lines)
+
+        raw_lines = [line.strip() for line in clean_text.splitlines()]
 
         tags = (
             f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"
@@ -2306,6 +2395,7 @@ class WorkflowPresetManager:
             "reformat_subtitles": DEFAULT_REFORMAT_SUBTITLES,
             "wrap_limit": DEFAULT_WRAP_LIMIT,
             "subtitle_max_lines": DEFAULT_SUBTITLE_MAX_LINES,
+            "preserve_multiline_subs": DEFAULT_MULTILINE_WRAP,
             "nvenc_preset": DEFAULT_NVENC_PRESET,
             "nvenc_tune": DEFAULT_NVENC_TUNE,
             "nvenc_profile_sdr": DEFAULT_NVENC_PROFILE_SDR,
@@ -2741,6 +2831,9 @@ class VideoProcessorApp:
         self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
+        self.wrap_limit_entry = None  # Will hold reference to wrap limit entry widget
+        self.multiline_wrap_var = tk.BooleanVar(value=False)  # Keep subtitle line breaks when wrapping (supplemental)
+        self.multiline_wrap_var.trace_add('write', lambda *args: self._update_selected_jobs('preserve_multiline_subs'))
         self.subtitle_max_lines_var = tk.StringVar(value=DEFAULT_SUBTITLE_MAX_LINES)
         self.subtitle_max_lines_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_max_lines'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
@@ -4045,10 +4138,15 @@ class VideoProcessorApp:
         margin_r_entry.pack(side=tk.LEFT)
         reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
-        ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles")).pack(side=tk.LEFT)
+        
+        # Add checkboxes for line formatting options
+        reformat_checkbox = ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles") and self.toggle_wrap_limit_entry()).pack(side=tk.LEFT)
+        multiline_wrap_checkbox = ttk.Checkbutton(reformat_frame, text="Keep subtitle line breaks when wrapping", variable=self.multiline_wrap_var, command=lambda: self.toggle_wrap_limit_entry()).pack(side=tk.LEFT)
+        
+        # Wrap at label and entry - state toggles based on multi-line wrap checkbox
         ttk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
-        wrap_limit_entry = ttk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
-        wrap_limit_entry.pack(side=tk.LEFT)
+        self.wrap_limit_entry = ttk.Entry(reformat_frame, textvariable=self.wrap_limit_var, width=5)
+        self.wrap_limit_entry.pack(side=tk.LEFT)
         ttk.Label(reformat_frame, text="chars").pack(side=tk.LEFT, padx=(2,0))
         ttk.Label(reformat_frame, text="Max lines:").pack(side=tk.LEFT, padx=(12, 5))
         ttk.Entry(reformat_frame, textvariable=self.subtitle_max_lines_var, width=5).pack(side=tk.LEFT)
@@ -4134,6 +4232,13 @@ class VideoProcessorApp:
             color_var.set(hex_color)
             swatch_label.config(bg=hex_color)
             self._update_selected_jobs(key_to_update)
+
+    def toggle_wrap_limit_entry(self):
+        """Enable/disable wrap_limit entry based on reformat and multi-line options"""
+        if self.reformat_subtitles_var.get() or self.multiline_wrap_var.get():
+            self.wrap_limit_entry.config(state="normal")
+        else:
+            self.wrap_limit_entry.config(state="disabled")
 
     def browse_lut_file(self):
         file_path = filedialog.askopenfilename(title="Select LUT File", filetypes=[("LUT files", "*.cube;*.3dl;*.dat"), ("All files", "*.*")])
@@ -4965,6 +5070,7 @@ class VideoProcessorApp:
             "shadow_blur": self.shadow_blur_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
+            "preserve_multiline_subs": self.multiline_wrap_var.get(),
             "output_to_subfolders": self.output_subfolders_var.get(),
             "output_subfolder_by_subtitle": self.output_subfolder_by_subtitle_var.get(),
             "group_by_preset": self.group_by_preset_var.get(),
@@ -5723,6 +5829,7 @@ class VideoProcessorApp:
         self.reformat_subtitles_var.set(options.get("reformat_subtitles", DEFAULT_REFORMAT_SUBTITLES))
         self.wrap_limit_var.set(options.get("wrap_limit", DEFAULT_WRAP_LIMIT))
         self.subtitle_max_lines_var.set(options.get("subtitle_max_lines", DEFAULT_SUBTITLE_MAX_LINES))
+        self.multiline_wrap_var.set(options.get("preserve_multiline_subs", DEFAULT_MULTILINE_WRAP))
         self.audio_mono_var.set(options.get("audio_mono", DEFAULT_AUDIO_MONO))
         self.audio_stereo_downmix_var.set(options.get("audio_stereo_downmix", DEFAULT_AUDIO_STEREO_DOWNMIX))
         self.audio_stereo_sofalizer_var.set(options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))

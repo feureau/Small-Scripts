@@ -198,16 +198,29 @@ def calculate_channel_count(layout: str) -> int:
 
 def find_video_files_recursive(base_dir, pattern):
     """Walk the directory tree recursively, matching the provided patterns."""
-    patterns = pattern.split('|')
+    # First check if this is an exact file path (not a glob pattern)
     found = []
     
     for dirpath, dirnames, filenames in os.walk(base_dir):
         dirnames[:] = [d for d in dirnames if d.lower() != 'input']
         
         for fname in filenames:
-            if any(fnmatch.fnmatch(fname, p) for p in patterns):
-                found.append(os.path.join(dirpath, fname))
-    return found
+            full_path = os.path.join(dirpath, fname)
+            
+            # Check exact match first (for literal file paths) - handles Unicode encoding issues
+            if pattern.casefold() in full_path.casefold().lower() or full_path.casefold().lower() in pattern.casefold():
+                found.append(full_path)
+                return found  # Found by substring/exact match, stop searching
+            
+            # Otherwise treat as glob pattern(s)
+            patterns = pattern.split('|')
+            for p in patterns:
+                if fnmatch.fnmatch(fname, p):
+                    found.append(full_path)
+                    return found  # Found a match using glob, stop searching
+    
+    # No matches found
+    return []
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
