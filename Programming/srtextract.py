@@ -72,7 +72,8 @@
 #    - WHY: This list is the core of the 'hybrid' mode logic. FFmpeg can successfully convert
 #      these formats to the universal .srt format. By defining them here, we can easily
 #      distinguish them from image-based formats (like PGS, DVD_SUB) which cannot be
-#      converted to text and must be handled differently.
+#      converted to text and must be handled differently. Updated to include s_aribsub / aribsub
+#      for better coverage of MKV archives containing S_ARIBSUB streams used in Japanese TV broadcasts.
 #
 #  ---
 #  4.2. Helper Function: `_run_command_and_decode(command_args)`
@@ -208,6 +209,8 @@ KNOWN_TEXT_SUBTITLE_CODECS = [
     'subviewer',
     'microdvd',
     'eia_608', 'cea608',
+    # ARIB Subtitle formats (Japanese TV standard)
+    'arib_caption', 's_aribsub', 'aribsub', 'hdmv_pgs_subtitle',
 ]
 
 
