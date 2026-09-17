@@ -70,6 +70,9 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.18 - Dynamic Preset Dropdown Sizing (2026-09-17)
+    • UI: Active Preset dropdown dynamically resizes to fit all preset title widths, preventing text cutoff.
+    • UI: Dynamic width calculation measuring font rendering and character lengths upon initialization, postcommand, and preset CRUD operations.
 v8.17 - CPU Software Encoders (2026-09-08)
     • FEATURE: Added Encoder Engine (Family) selection: NVIDIA NVENC vs CPU Software.
     • FEATURE: CPU Software maps h264->libx264, hevc->libx265, av1->libsvtav1.
@@ -3239,6 +3242,39 @@ class VideoProcessorApp:
 
         self._toggle_nvencc_color_mode_controls()
         self._toggle_encoder_family_ui()
+
+    def _adjust_preset_combo_width(self):
+        """Dynamically adjust the active preset dropdown width to fit all preset titles."""
+        if not hasattr(self, 'preset_combo') or not self.preset_combo:
+            return
+        names = list(self.preset_combo['values'] or [])
+        if not names and hasattr(self, 'preset_manager'):
+            names = self.preset_manager.get_preset_names()
+            self.preset_combo['values'] = names
+        if not names:
+            self.preset_combo.config(width=24)
+            return
+
+        max_len = max(len(str(n)) for n in names)
+        try:
+            combo_font = self.preset_combo.cget("font")
+            f = font.Font(font=combo_font) if combo_font else font.nametofont("TkDefaultFont")
+            max_px = max(f.measure(str(n)) for n in names)
+            char_w = f.measure('0') or 7
+            font_based_width = int(math.ceil(max_px / char_w)) + 3
+        except Exception:
+            font_based_width = max_len + 3
+
+        new_width = max(font_based_width, max_len + 2, 24)
+        if self.preset_combo.cget('width') != new_width:
+            self.preset_combo.config(width=new_width)
+
+    def _update_preset_combo_list(self):
+        """Update preset combobox values and dynamically adjust width."""
+        if hasattr(self, 'preset_manager') and hasattr(self, 'preset_combo'):
+            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self._adjust_preset_combo_width()
+
     def setup_presets_ui(self, parent):
         preset_pane = CollapsiblePane(parent, text="Workflow Presets", initial_state='expanded')
         preset_pane.pack(fill=tk.X, side=tk.TOP, pady=(0, 2))
@@ -3249,9 +3285,16 @@ class VideoProcessorApp:
         row1a.pack(fill=tk.X, pady=(0, 2))
         
         ttk.Label(row1a, text="Active Preset:").pack(side=tk.LEFT, padx=(0, 5))
-        self.preset_combo = ttk.Combobox(row1a, textvariable=self.current_preset_var, values=self.preset_manager.get_preset_names(), state="readonly", width=24)
+        self.preset_combo = ttk.Combobox(
+            row1a, 
+            textvariable=self.current_preset_var, 
+            values=self.preset_manager.get_preset_names(), 
+            state="readonly",
+            postcommand=self._adjust_preset_combo_width
+        )
         self.preset_combo.pack(side=tk.LEFT, padx=(0, 5))
         self.preset_combo.bind("<<ComboboxSelected>>", lambda e: self.load_preset_to_gui(self.current_preset_var.get()))
+        self._adjust_preset_combo_width()
         
         ttk.Button(row1a, text="New Preset", command=self.create_new_preset).pack(side=tk.LEFT, padx=2)
         ttk.Button(row1a, text="Save Changes", command=self.save_current_preset).pack(side=tk.LEFT, padx=2)
@@ -5285,7 +5328,7 @@ class VideoProcessorApp:
                 if not messagebox.askyesno("Overwrite?", f"Preset '{new_name}' already exists. Overwrite?"):
                     return
             self._save_preset_internal(new_name)
-            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self._update_preset_combo_list()
             self.current_preset_var.set(new_name)
             self.load_preset_to_gui(new_name)
 
@@ -5340,7 +5383,7 @@ class VideoProcessorApp:
         self.preset_manager.save_preset(new_name, defaults['options'], defaults['triggers'])
         
         # Update UI
-        self.preset_combo['values'] = self.preset_manager.get_preset_names()
+        self._update_preset_combo_list()
         self.current_preset_var.set(new_name)
         self.load_preset_to_gui(new_name)
         messagebox.showinfo("Success", f"Created new preset '{new_name}' from defaults.")
@@ -5357,7 +5400,7 @@ class VideoProcessorApp:
             return
             
         if self.preset_manager.rename_preset(old_name, new_name):
-            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self._update_preset_combo_list()
             self.current_preset_var.set(new_name)
             messagebox.showinfo("Success", f"Renamed '{old_name}' to '{new_name}'.")
         else:
@@ -5368,7 +5411,7 @@ class VideoProcessorApp:
         if not name: return
         if messagebox.askyesno("Delete Preset", f"Are you sure you want to delete '{name}'?"):
             self.preset_manager.delete_preset(name)
-            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            self._update_preset_combo_list()
             
             # Select another if available
             remaining = self.preset_manager.get_preset_names()
