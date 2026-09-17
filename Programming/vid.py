@@ -70,6 +70,9 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.20 - Group by Resolution Subfolder Option (2026-09-17)
+    • UI: Added 'Group by Resolution' option in Output > Directory Structure & Subfolders.
+    • PIPELINE: Supports dynamic resolution-based subfolder routing for set buttons (720p, 1080p, 2160p, 4320p) and resolves actual rendered dimensions for 'Original' resolution.
 v8.19 - Dedicated Output Tab & Settings Reorganization (2026-09-17)
     • UI: Added dedicated "Output" tab in Settings Notebook for destination and file routing.
     • UI: Relocated subfolder options (Use Subfolders, Subtitle Folder, Group by Preset/Video, Override) and Location (Local/Pooled) from "Video > Format & Quality" to "Output".
@@ -270,10 +273,22 @@ DEFAULT_CPU_SVTAV1_PRESET = "7"                     # libsvtav1 preset. Options:
 DEFAULT_CPU_CRF = "0"                               # CPU CRF. 0 = Bitrate-targeted; >0 = CRF mode
 
 # -------------------------- Output Configuration --------------------------
-DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Output to subfolders per video. Default: False
+SUBFOLDER_MODE_DISPLAY_MAP = {
+    "none": "None (Default: Output)",
+    "resolution": "Resolution (e.g., 1080p)",
+    "format_layout": "Format & Layout (e.g., 1080p_SDR_Vertical_9x16)",
+    "preset": "Preset Name",
+    "video": "Video Name"
+}
+SUBFOLDER_MODE_VALUE_MAP = {v: k for k, v in SUBFOLDER_MODE_DISPLAY_MAP.items()}
+SUBFOLDER_MODE_LABELS = list(SUBFOLDER_MODE_DISPLAY_MAP.values())
+
+DEFAULT_SUBFOLDER_MODE = "none"
+DEFAULT_OUTPUT_TO_SUBFOLDERS = False                # Legacy backward-compat: Output to subfolders per video. Default: False
 DEFAULT_SUBFOLDER_BY_SUBTITLE = False               # Output subtitle tag as subfolder. Default: False
 DEFAULT_GROUP_BY_PRESET = False                     # Group output into preset subfolders. Default: False
 DEFAULT_GROUP_BY_VIDEO = False                      # Group output into video subfolders. Default: False
+DEFAULT_GROUP_BY_RESOLUTION = False                 # Legacy backward-compat: Group output into resolution subfolders. Default: False
 DEFAULT_SUBFOLDER_OVERRIDE = ""                     # Custom override for subfolder name
 DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"           # Name of pooled output directory. Default: Output
 
@@ -2350,10 +2365,12 @@ class WorkflowPresetManager:
             "use_sharpening": DEFAULT_USE_SHARPENING,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
             "sharpening_strength": DEFAULT_SHARPENING_STRENGTH,
+            "subfolder_mode": DEFAULT_SUBFOLDER_MODE,
             "output_to_subfolders": DEFAULT_OUTPUT_TO_SUBFOLDERS,
             "output_subfolder_by_subtitle": DEFAULT_SUBFOLDER_BY_SUBTITLE,
             "group_by_preset": DEFAULT_GROUP_BY_PRESET,
             "group_by_video": DEFAULT_GROUP_BY_VIDEO,
+            "group_by_resolution": DEFAULT_GROUP_BY_RESOLUTION,
             "subfolder_override": DEFAULT_SUBFOLDER_OVERRIDE,
             "normalize_audio": DEFAULT_NORMALIZE_AUDIO,
             "use_dynaudnorm": DEFAULT_USE_DYNAUDNORM,
@@ -2652,10 +2669,12 @@ class VideoProcessorApp:
         self.nvenc_nvvfx_denoise_var = tk.BooleanVar(value=DEFAULT_NVENC_NVVFX_DENOISE)
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
+        self.subfolder_mode_var = tk.StringVar(value=SUBFOLDER_MODE_DISPLAY_MAP.get(DEFAULT_SUBFOLDER_MODE, "None (Default: Output)"))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
         self.output_subfolder_by_subtitle_var = tk.BooleanVar(value=DEFAULT_SUBFOLDER_BY_SUBTITLE)
         self.group_by_preset_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_PRESET)
         self.group_by_video_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_VIDEO)
+        self.group_by_resolution_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_RESOLUTION)
         self.subfolder_override_var = tk.StringVar(value=DEFAULT_SUBFOLDER_OVERRIDE)
         self.subfolder_override_var.trace_add('write', lambda *args: self._update_selected_jobs('subfolder_override'))
         self.render_by_chapters_var = tk.BooleanVar(value=DEFAULT_RENDER_BY_CHAPTERS)
@@ -3267,32 +3286,44 @@ class VideoProcessorApp:
         sf_row1 = ttk.Frame(subfolder_group)
         sf_row1.pack(fill=tk.X, pady=(0, 4))
         
-        cb_sub = ttk.Checkbutton(sf_row1, text="Use Subfolders", variable=self.output_subfolders_var, 
-                                 command=lambda: self._update_selected_jobs("output_to_subfolders"))
-        cb_sub.pack(side=tk.LEFT, padx=(0, 15))
-        ToolTip(cb_sub, "Create dynamic subfolders based on resolution, format, and orientation (e.g., 1080p_SDR/).")
-        
+        ttk.Label(sf_row1, text="Primary Folder:").pack(side=tk.LEFT, padx=(0, 5))
+        self.subfolder_mode_combo = ttk.Combobox(
+            sf_row1,
+            textvariable=self.subfolder_mode_var,
+            values=SUBFOLDER_MODE_LABELS,
+            state="readonly",
+            width=38
+        )
+        self.subfolder_mode_combo.pack(side=tk.LEFT, padx=(0, 15))
+        self.subfolder_mode_combo.bind("<<ComboboxSelected>>", self._on_subfolder_mode_selected)
+        ToolTip(self.subfolder_mode_combo, "Choose primary subfolder naming strategy: Resolution (clean), Format & Layout (detailed spec), Preset, Video, or None (Output/).")
+
         cb_sub_subs = ttk.Checkbutton(sf_row1, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
                                       command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle"))
         cb_sub_subs.pack(side=tk.LEFT, padx=(0, 15))
-        ToolTip(cb_sub_subs, "Append subtitle language/tag as an inner subfolder (e.g., 1080p_SDR/English/).")
+        ToolTip(cb_sub_subs, "Append subtitle language/tag as an inner subfolder (e.g., 1080p/English/).")
 
-        cb_preset = ttk.Checkbutton(sf_row1, text="Group by Preset", variable=self.group_by_preset_var, 
-                                    command=lambda: self._update_selected_jobs("group_by_preset"))
-        cb_preset.pack(side=tk.LEFT, padx=(0, 15))
-        ToolTip(cb_preset, "Organize outputs into subfolders named after the active preset.")
+        self.cb_group_video = ttk.Checkbutton(sf_row1, text="Also Group by Video", variable=self.group_by_video_var, 
+                                              command=lambda: self._update_selected_jobs("group_by_video"))
+        self.cb_group_video.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.cb_group_video, "Append source video name as an inner subfolder (e.g., 1080p/<VideoName>/).")
 
-        cb_video = ttk.Checkbutton(sf_row1, text="Group by Video", variable=self.group_by_video_var, 
-                                   command=lambda: self._update_selected_jobs("group_by_video"))
-        cb_video.pack(side=tk.LEFT)
-        ToolTip(cb_video, "Organize outputs into subfolders named after each source video file.")
+        self.cb_group_preset = ttk.Checkbutton(sf_row1, text="Also Group by Preset", variable=self.group_by_preset_var, 
+                                               command=lambda: self._update_selected_jobs("group_by_preset"))
+        self.cb_group_preset.pack(side=tk.LEFT)
+        ToolTip(self.cb_group_preset, "Append active preset name as an inner subfolder (e.g., 1080p/<PresetName>/).")
 
         sf_row2 = ttk.Frame(subfolder_group)
         sf_row2.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(sf_row2, text="Subfolder Override:").pack(side=tk.LEFT, padx=(0, 5))
         override_entry = ttk.Entry(sf_row2, textvariable=self.subfolder_override_var, width=28)
         override_entry.pack(side=tk.LEFT)
-        ToolTip(override_entry, "Custom subfolder name to override automatic Video/Preset subfolder names.")
+        ToolTip(override_entry, "Custom subfolder name to override automatic folder naming.")
+
+        ttk.Label(sf_row2, text="Suffix Override:").pack(side=tk.LEFT, padx=(15, 2))
+        suffix_entry = ttk.Entry(sf_row2, textvariable=self.output_suffix_override_var, width=16)
+        suffix_entry.pack(side=tk.LEFT, padx=2)
+        ToolTip(suffix_entry, "Override filename suffix (e.g., 'MyCut'). If empty, the Preset Name is used.")
 
         # 3. Chapter Splitting & Segment Export Frame
         split_group = ttk.LabelFrame(parent, text="Chapter Splitting & Segment Export", padding=10)
@@ -3309,6 +3340,18 @@ class VideoProcessorApp:
                                         command=lambda: self._update_selected_jobs('split_subtitles_by_chapter'))
         cb_split_subs.pack(anchor="w", padx=20, pady=(2, 0))
         ToolTip(cb_split_subs, "Splits the mapped subtitle file per chapter and saves it as a separate .srt alongside the video segment.")
+
+    def _on_subfolder_mode_selected(self, event=None):
+        self._update_subfolder_modifier_states()
+        self._update_selected_jobs("subfolder_mode", "output_to_subfolders", "group_by_resolution")
+
+    def _update_subfolder_modifier_states(self):
+        disp = self.subfolder_mode_var.get()
+        mode = SUBFOLDER_MODE_VALUE_MAP.get(disp, "none")
+        if hasattr(self, 'cb_group_video'):
+            self.cb_group_video.config(state="disabled" if mode == "video" else "normal")
+        if hasattr(self, 'cb_group_preset'):
+            self.cb_group_preset.config(state="disabled" if mode == "preset" else "normal")
 
     def _adjust_preset_combo_width(self):
         """Dynamically adjust the active preset dropdown width to fit all preset titles."""
@@ -3372,10 +3415,7 @@ class VideoProcessorApp:
         ttk.Button(row1b, text="Save As New...", command=self.save_preset_as_new).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(row1b, text="Rename", command=self.rename_current_preset).pack(side=tk.LEFT, padx=2)
         ttk.Button(row1b, text="Delete", command=self.delete_current_preset).pack(side=tk.LEFT, padx=2)
-        ttk.Label(row1b, text="Suffix Override:").pack(side=tk.LEFT, padx=(10, 2))
-        suffix_entry = ttk.Entry(row1b, textvariable=self.output_suffix_override_var, width=16)
-        suffix_entry.pack(side=tk.LEFT, padx=2)
-        ToolTip(suffix_entry, "Override filename suffix (e.g., 'MyCut'). If empty, the Preset Name is used.")
+
 
         # Row 2: Auto-Add Triggers (Redesigned)
         row2 = ttk.LabelFrame(preset_container, text="Auto-Add Triggers (Add to Job Queue)", padding=5)
@@ -5157,7 +5197,9 @@ class VideoProcessorApp:
             "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
             "preserve_multiline_subs": self.multiline_wrap_var.get(),
-            "output_to_subfolders": self.output_subfolders_var.get(),
+            "subfolder_mode": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none"),
+            "output_to_subfolders": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none") == "format_layout",
+            "group_by_resolution": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none") == "resolution",
             "output_subfolder_by_subtitle": self.output_subfolder_by_subtitle_var.get(),
             "group_by_preset": self.group_by_preset_var.get(),
             "group_by_video": self.group_by_video_var.get(),
@@ -5833,11 +5875,21 @@ class VideoProcessorApp:
         self.nvenc_nvvfx_denoise_var.set(options.get("nvenc_nvvfx_denoise", DEFAULT_NVENC_NVVFX_DENOISE))
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
-        self.output_subfolders_var.set(options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS))
+        mode = options.get("subfolder_mode")
+        if not mode:
+            if options.get("group_by_resolution"): mode = "resolution"
+            elif options.get("output_to_subfolders"): mode = "format_layout"
+            elif options.get("group_by_preset") and not options.get("group_by_video"): mode = "preset"
+            elif options.get("group_by_video") and not options.get("group_by_preset"): mode = "video"
+            else: mode = "none"
+        self.subfolder_mode_var.set(SUBFOLDER_MODE_DISPLAY_MAP.get(mode, SUBFOLDER_MODE_DISPLAY_MAP["none"]))
+        self.output_subfolders_var.set(mode == "format_layout")
+        self.group_by_resolution_var.set(mode == "resolution")
         self.output_subfolder_by_subtitle_var.set(options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE))
         self.group_by_preset_var.set(options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET))
         self.group_by_video_var.set(options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO))
         self.subfolder_override_var.set(options.get("subfolder_override", DEFAULT_SUBFOLDER_OVERRIDE))
+        self._update_subfolder_modifier_states()
         self.render_by_chapters_var.set(options.get("render_by_chapters", DEFAULT_RENDER_BY_CHAPTERS))
         self.split_subtitles_by_chapter_var.set(options.get("split_subtitles_by_chapter", DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER))
         raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
@@ -6247,6 +6299,20 @@ class VideoProcessorApp:
             
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
 
+    def _get_resolution_subfolder_name(self, options, job, orientation):
+        res_key = options.get('resolution', DEFAULT_RESOLUTION)
+        if str(res_key).lower() == "original":
+            try:
+                info = get_video_info(job['video_path'])
+                target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
+                if target_w and target_h:
+                    p_size = min(target_w, target_h)
+                    return f"{p_size}p"
+            except Exception as e:
+                print(f"[WARN] Could not compute target resolution for '{job.get('display_name')}': {e}")
+            return "original"
+        return str(res_key)
+
     def build_ffmpeg_command_and_run(self, job, orientation):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         options = copy.deepcopy(job['options'])
@@ -6275,12 +6341,21 @@ class VideoProcessorApp:
         
         if override:
             sub_paths.append(re.sub(r'[\\/*?:"<>|]', "", override).strip())
-        elif not options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS) and \
-           not options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO) and \
-           not options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
-            sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
         else:
-            if options.get("output_to_subfolders", DEFAULT_OUTPUT_TO_SUBFOLDERS):
+            mode = options.get("subfolder_mode")
+            if not mode:
+                if options.get("group_by_resolution"): mode = "resolution"
+                elif options.get("output_to_subfolders"): mode = "format_layout"
+                elif options.get("group_by_preset") and not options.get("group_by_video"): mode = "preset"
+                elif options.get("group_by_video") and not options.get("group_by_preset"): mode = "video"
+                else: mode = "none"
+
+            if mode == "resolution":
+                res_folder = self._get_resolution_subfolder_name(options, job, orientation)
+                safe_res = re.sub(r'[\\/*?:"<>|]', "", res_folder).strip()
+                if safe_res:
+                    sub_paths.append(safe_res)
+            elif mode == "format_layout":
                 folder_name = f"{options.get('resolution', DEFAULT_RESOLUTION)}_{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}"
                 if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
                     eff_layout = self._resolve_hybrid_layout(options)
@@ -6290,25 +6365,35 @@ class VideoProcessorApp:
                 else:
                     h_aspect = options.get('horizontal_aspect').replace(':', 'x')
                     if h_aspect != "16x9": folder_name += f"_Horizontal_{h_aspect}"
-                
-                if options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE):
-                    tag = job.get('display_tag', "Subtitles")
-                    safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-                    sub_paths.append(os.path.join(folder_name, safe_subtitle_folder_name))
-                else:
-                    sub_paths.append(folder_name)
-            else:
-                sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
+                sub_paths.append(folder_name)
+            elif mode == "preset":
+                preset_name = job.get('preset_name', "Default")
+                safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
+                sub_paths.append(safe_preset)
+            elif mode == "video":
+                original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+                safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
+                sub_paths.append(safe_video_name)
+            else: # "none"
+                if not options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO) and not options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
+                    sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
 
-            if options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
+            # Secondary modifiers
+            if mode != "preset" and options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
                 preset_name = job.get('preset_name', "Default")
                 safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
                 sub_paths.append(safe_preset)
 
-            if options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO):
+            if mode != "video" and options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO):
                 original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
                 safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
                 sub_paths.append(safe_video_name)
+
+            if options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE):
+                tag = job.get('display_tag', "Subtitles")
+                safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
+                if safe_subtitle_folder_name:
+                    sub_paths.append(safe_subtitle_folder_name)
 
         final_sub_path = os.path.join(*sub_paths) if sub_paths else DEFAULT_SINGLE_OUTPUT_DIR_NAME
         
