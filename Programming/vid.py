@@ -70,6 +70,11 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.19 - Dedicated Output Tab & Settings Reorganization (2026-09-17)
+    • UI: Added dedicated "Output" tab in Settings Notebook for destination and file routing.
+    • UI: Relocated subfolder options (Use Subfolders, Subtitle Folder, Group by Preset/Video, Override) and Location (Local/Pooled) from "Video > Format & Quality" to "Output".
+    • UI: Relocated chapter segment rendering and subtitle chunk splitting from "Encoder > Basic NVENC Settings" to "Output > Chapter Splitting & Segment Export".
+    • UI: Renamed Video tab "Output & Geometry" section to "Geometry & Layout" for clarity.
 v8.18 - Dynamic Preset Dropdown Sizing (2026-09-17)
     • UI: Active Preset dropdown dynamically resizes to fit all preset title widths, preventing text cutoff.
     • UI: Dynamic width calculation measuring font rendering and character lengths upon initialization, postcommand, and preset CRUD operations.
@@ -2969,6 +2974,7 @@ class VideoProcessorApp:
         self.title_tab = ScrollableFrame(settings_notebook, padding=10)
         self.subtitle_tab = ScrollableFrame(settings_notebook, padding=10)
         self.encoder_tab = ScrollableFrame(settings_notebook, padding=10)
+        self.output_tab = ScrollableFrame(settings_notebook, padding=10)
 
         settings_notebook.add(self.video_tab, text="Video")
         settings_notebook.add(self.audio_tab, text="Audio")
@@ -2976,6 +2982,7 @@ class VideoProcessorApp:
         settings_notebook.add(self.title_tab, text="Title")
         settings_notebook.add(self.subtitle_tab, text="Subtitles")
         settings_notebook.add(self.encoder_tab, text="Encoder")
+        settings_notebook.add(self.output_tab, text="Output")
 
         self.setup_video_tab(self.video_tab.scrollable_window)
         self.setup_audio_tab(self.audio_tab.scrollable_window)
@@ -2983,6 +2990,7 @@ class VideoProcessorApp:
         self.setup_title_tab(self.title_tab.scrollable_window)
         self.setup_subtitle_tab(self.subtitle_tab.scrollable_window)
         self.setup_encoder_tab(self.encoder_tab.scrollable_window)
+        self.setup_output_tab(self.output_tab.scrollable_window)
     
         # Add Apply Buttons below settings
         apply_frame = ttk.Frame(right_pane_frame)
@@ -3060,48 +3068,38 @@ class VideoProcessorApp:
         self.backend_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(self.backend_combo, "ffmpeg_only = all FFmpeg. nvencc_with_ffmpeg = preprocess + NVEncC encode. nvencc_only = NVEncC only. nvencc_video_with_ffmpeg_audio = NVEncC video + FFmpeg audio.")
 
-        # Render by Chapters
-        cb_chapters = ttk.Checkbutton(basic_group, text="Render by Chapters (Split by metadata markers)", variable=self.render_by_chapters_var, command=lambda: [self._update_audio_options_ui(), self._update_selected_jobs('render_by_chapters')])
-        cb_chapters.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
-        ToolTip(cb_chapters, "Detects chapter markers in the input file and renders each as a separate file named after its title.")
-
-        # Split Subtitles by Chapter
-        cb_split_subs = ttk.Checkbutton(basic_group, text="Export Subtitle chunks per split", variable=self.split_subtitles_by_chapter_var, command=lambda: self._update_selected_jobs('split_subtitles_by_chapter'))
-        cb_split_subs.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=20, pady=2)
-        ToolTip(cb_split_subs, "Splits the mapped subtitle file per chapter and saves it as a separate .srt alongside the video segment.")
-
         # Preset
-        ttk.Label(basic_group, text="Preset:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Preset:").grid(row=1, column=0, sticky=tk.W, pady=2)
         preset_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_preset_var, values=[f"p{i}" for i in range(1, 8)], width=10, state="readonly")
-        preset_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        preset_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
 
         # Tune
-        ttk.Label(basic_group, text="Tune:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Tune:").grid(row=2, column=0, sticky=tk.W, pady=2)
         tune_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_tune_var, values=["hq", "ll", "ull", "lossless"], width=10, state="readonly")
-        tune_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        tune_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
 
         # Codec
-        ttk.Label(basic_group, text="Codec:").grid(row=5, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Codec:").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.video_codec_combo = ttk.Combobox(basic_group, textvariable=self.video_codec_var, values=["h264", "hevc", "av1"], width=10, state="readonly")
-        self.video_codec_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+        self.video_codec_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(self.video_codec_combo, "Output codec. HDR requires HEVC or AV1.")
 
         # Profile SDR
-        ttk.Label(basic_group, text="Profile (SDR):").grid(row=6, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (SDR):").grid(row=4, column=0, sticky=tk.W, pady=2)
         profile_sdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_sdr_var, values=["high", "main", "baseline"], width=10, state="readonly")
-        profile_sdr_combo.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_sdr_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_sdr_combo, "NVENC Profile for SDR output.")
 
         # Profile HDR
-        ttk.Label(basic_group, text="Profile (HDR):").grid(row=7, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Profile (HDR):").grid(row=5, column=0, sticky=tk.W, pady=2)
         profile_hdr_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_profile_hdr_var, values=["main10"], width=10, state="readonly")
-        profile_hdr_combo.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
+        profile_hdr_combo.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(profile_hdr_combo, "NVENC Profile for HDR output (must be main10).")
 
         # Decode Mode (NVEncC)
-        ttk.Label(basic_group, text="Decode Mode:").grid(row=8, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="Decode Mode:").grid(row=6, column=0, sticky=tk.W, pady=2)
         decode_mode_combo = ttk.Combobox(
             basic_group,
             textvariable=self.nvencc_decode_mode_var,
@@ -3109,17 +3107,17 @@ class VideoProcessorApp:
             width=10,
             state="readonly"
         )
-        decode_mode_combo.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
+        decode_mode_combo.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(decode_mode_combo, "NVEncC input reader: auto (current logic), avhw (force hardware decode), avsw (force software decode).")
 
         # FFmpeg CPU Threads
-        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=9, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Threads:").grid(row=7, column=0, sticky=tk.W, pady=2)
         ffmpeg_threads_entry = ttk.Entry(basic_group, textvariable=self.ffmpeg_threads_var, width=10)
-        ffmpeg_threads_entry.grid(row=9, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_threads_entry.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_threads_entry, "FFmpeg `-threads` value. Use 0 for auto, or a positive integer.")
 
         # FFmpeg Process Priority
-        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=10, column=0, sticky=tk.W, pady=2)
+        ttk.Label(basic_group, text="FFmpeg Priority:").grid(row=8, column=0, sticky=tk.W, pady=2)
         ffmpeg_priority_combo = ttk.Combobox(
             basic_group,
             textvariable=self.ffmpeg_priority_var,
@@ -3127,7 +3125,7 @@ class VideoProcessorApp:
             width=14,
             state="readonly"
         )
-        ffmpeg_priority_combo.grid(row=10, column=1, sticky=tk.W, padx=5, pady=2)
+        ffmpeg_priority_combo.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_priority_combo, "FFmpeg process priority (Windows). Non-Windows systems ignore this setting.")
 
         # GOP & B-Frames
@@ -3242,6 +3240,75 @@ class VideoProcessorApp:
 
         self._toggle_nvencc_color_mode_controls()
         self._toggle_encoder_family_ui()
+
+    def setup_output_tab(self, parent):
+        # 1. Output Destination Frame
+        dest_group = ttk.LabelFrame(parent, text="Destination Location", padding=10)
+        dest_group.pack(fill=tk.X, pady=(0, 5))
+        
+        loc_row = ttk.Frame(dest_group)
+        loc_row.pack(fill=tk.X)
+        ttk.Label(loc_row, text="Location:").pack(side=tk.LEFT, padx=(0, 10))
+        
+        rb_local = ttk.Radiobutton(loc_row, text="Local", variable=self.output_mode_var, value="local",
+                                   command=lambda: self._update_selected_jobs("output_mode"))
+        rb_local.pack(side=tk.LEFT)
+        ToolTip(rb_local, "The output files will be saved in the exact same folder as the original input video (os.path.dirname(job['video_path'])).")
+        
+        rb_pooled = ttk.Radiobutton(loc_row, text="Pooled", variable=self.output_mode_var, value="pooled",
+                                    command=lambda: self._update_selected_jobs("output_mode"))
+        rb_pooled.pack(side=tk.LEFT, padx=(15, 0))
+        ToolTip(rb_pooled, "The output files will all be saved in the script's current working directory (os.getcwd()), essentially pooling all outputs from different folders into one centralized place.")
+
+        # 2. Directory Structure & Subfolders Frame
+        subfolder_group = ttk.LabelFrame(parent, text="Directory Structure & Subfolders", padding=10)
+        subfolder_group.pack(fill=tk.X, pady=5)
+        
+        sf_row1 = ttk.Frame(subfolder_group)
+        sf_row1.pack(fill=tk.X, pady=(0, 4))
+        
+        cb_sub = ttk.Checkbutton(sf_row1, text="Use Subfolders", variable=self.output_subfolders_var, 
+                                 command=lambda: self._update_selected_jobs("output_to_subfolders"))
+        cb_sub.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(cb_sub, "Create dynamic subfolders based on resolution, format, and orientation (e.g., 1080p_SDR/).")
+        
+        cb_sub_subs = ttk.Checkbutton(sf_row1, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
+                                      command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle"))
+        cb_sub_subs.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(cb_sub_subs, "Append subtitle language/tag as an inner subfolder (e.g., 1080p_SDR/English/).")
+
+        cb_preset = ttk.Checkbutton(sf_row1, text="Group by Preset", variable=self.group_by_preset_var, 
+                                    command=lambda: self._update_selected_jobs("group_by_preset"))
+        cb_preset.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(cb_preset, "Organize outputs into subfolders named after the active preset.")
+
+        cb_video = ttk.Checkbutton(sf_row1, text="Group by Video", variable=self.group_by_video_var, 
+                                   command=lambda: self._update_selected_jobs("group_by_video"))
+        cb_video.pack(side=tk.LEFT)
+        ToolTip(cb_video, "Organize outputs into subfolders named after each source video file.")
+
+        sf_row2 = ttk.Frame(subfolder_group)
+        sf_row2.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(sf_row2, text="Subfolder Override:").pack(side=tk.LEFT, padx=(0, 5))
+        override_entry = ttk.Entry(sf_row2, textvariable=self.subfolder_override_var, width=28)
+        override_entry.pack(side=tk.LEFT)
+        ToolTip(override_entry, "Custom subfolder name to override automatic Video/Preset subfolder names.")
+
+        # 3. Chapter Splitting & Segment Export Frame
+        split_group = ttk.LabelFrame(parent, text="Chapter Splitting & Segment Export", padding=10)
+        split_group.pack(fill=tk.X, pady=5)
+
+        cb_chapters = ttk.Checkbutton(split_group, text="Render by Chapters (Split by metadata markers)", 
+                                      variable=self.render_by_chapters_var, 
+                                      command=lambda: [self._update_audio_options_ui(), self._update_selected_jobs('render_by_chapters')])
+        cb_chapters.pack(anchor="w", pady=(0, 2))
+        ToolTip(cb_chapters, "Detects chapter markers in the input file and renders each as a separate file named after its title.")
+
+        cb_split_subs = ttk.Checkbutton(split_group, text="Export Subtitle chunks per split", 
+                                        variable=self.split_subtitles_by_chapter_var, 
+                                        command=lambda: self._update_selected_jobs('split_subtitles_by_chapter'))
+        cb_split_subs.pack(anchor="w", padx=20, pady=(2, 0))
+        ToolTip(cb_split_subs, "Splits the mapped subtitle file per chapter and saves it as a separate .srt alongside the video segment.")
 
     def _adjust_preset_combo_width(self):
         """Dynamically adjust the active preset dropdown width to fit all preset titles."""
@@ -3503,7 +3570,7 @@ class VideoProcessorApp:
         ttk.Button(file_buttons_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
 
     def setup_video_tab(self, parent):
-        geometry_group = ttk.LabelFrame(parent, text="Output & Geometry", padding=10)
+        geometry_group = ttk.LabelFrame(parent, text="Geometry & Layout", padding=10)
         geometry_group.pack(fill=tk.X, pady=(0, 5))
         orientation_frame = ttk.Frame(geometry_group); orientation_frame.pack(fill=tk.X)
         ttk.Label(orientation_frame, text="Orientation:").pack(side=tk.LEFT, padx=(0,5))
@@ -3716,33 +3783,9 @@ class VideoProcessorApp:
         ToolTip(self.ffmpeg_denoise_vulkan_check, "Enable nlmeans_vulkan noise reduction (FFmpeg backend).")
 
         output_format_frame = ttk.Frame(quality_group); output_format_frame.pack(fill=tk.X, pady=(5,0))
-        out_row1 = ttk.Frame(output_format_frame); out_row1.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(out_row1, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
-        ttk.Radiobutton(out_row1, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
-        ttk.Radiobutton(out_row1, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
-        ttk.Label(out_row1, text="Location:").pack(side=tk.LEFT, padx=(15,5))
-        rb_local = ttk.Radiobutton(out_row1, text="Local", variable=self.output_mode_var, value="local")
-        rb_local.pack(side=tk.LEFT)
-        ToolTip(rb_local, "The output files will be saved in the exact same folder as the original input video (os.path.dirname(job['video_path'])).")
-        rb_pooled = ttk.Radiobutton(out_row1, text="Pooled", variable=self.output_mode_var, value="pooled")
-        rb_pooled.pack(side=tk.LEFT, padx=5)
-        ToolTip(rb_pooled, "The output files will all be saved in the script's current working directory (os.getcwd()), essentially pooling all outputs from different folders into one centralized place.")
-
-        out_row2 = ttk.Frame(output_format_frame); out_row2.pack(fill=tk.X, pady=(2, 0))
-        ttk.Checkbutton(out_row2, text="Use Subfolders", variable=self.output_subfolders_var, 
-                        command=lambda: self._update_selected_jobs("output_to_subfolders")).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Checkbutton(out_row2, text="Include Subtitle Folder", variable=self.output_subfolder_by_subtitle_var, 
-                        command=lambda: self._update_selected_jobs("output_subfolder_by_subtitle")).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Checkbutton(out_row2, text="Group by Preset", variable=self.group_by_preset_var, 
-                        command=lambda: self._update_selected_jobs("group_by_preset")).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Checkbutton(out_row2, text="Group by Video", variable=self.group_by_video_var, 
-                        command=lambda: self._update_selected_jobs("group_by_video")).pack(side=tk.LEFT, padx=(0, 8))
-        
-        out_row3 = ttk.Frame(output_format_frame); out_row3.pack(fill=tk.X, pady=(2, 0))
-        ttk.Label(out_row3, text="Subfolder Override:").pack(side=tk.LEFT, padx=(0, 5))
-        override_entry = ttk.Entry(out_row3, textvariable=self.subfolder_override_var, width=20)
-        override_entry.pack(side=tk.LEFT)
-        ToolTip(override_entry, "Custom subfolder name to override Video/Preset names.")
+        ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Radiobutton(output_format_frame, text="SDR", variable=self.output_format_var, value="sdr", command=self._on_output_format_change).pack(side=tk.LEFT)
+        ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr", command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
         
         lut_frame = ttk.Frame(quality_group); lut_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0,5))
