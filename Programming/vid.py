@@ -5278,7 +5278,8 @@ class VideoProcessorApp:
         self._save_preset_internal(name)
 
     def save_preset_as_new(self):
-        new_name = simpledialog.askstring("New Preset", "Enter name for new preset:")
+        curr_name = self.current_preset_var.get() or ""
+        new_name = simpledialog.askstring("New Preset", "Enter name for new preset:", initialvalue=curr_name)
         if new_name:
             if new_name in self.preset_manager.get_preset_names():
                 if not messagebox.askyesno("Overwrite?", f"Preset '{new_name}' already exists. Overwrite?"):

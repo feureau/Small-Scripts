@@ -693,7 +693,8 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
             messagebox.showinfo("Success", f"Created new preset '{name}' from defaults.")
 
     def save_preset_as():
-        name = simpledialog.askstring("Save Preset As", "Enter name for new preset:")
+        curr_name = current_preset_name.get() if 'current_preset_name' in globals() or 'current_preset_name' in locals() else ""
+        name = simpledialog.askstring("Save Preset As", "Enter name for new preset:", initialvalue=curr_name)
         if name:
             if name in presets_dict:
                  if not messagebox.askyesno("Overwrite", f"Preset '{name}' already exists. Overwrite?"):
@@ -707,7 +708,7 @@ def launch_gui(file_list, crop_params, audio_streams, default_qvbr, is_source_sd
             messagebox.showwarning("Warning", "Please select a preset to rename.")
             return
         
-        new_name = simpledialog.askstring("Rename Preset", f"Enter new name for '{old_name}':")
+        new_name = simpledialog.askstring("Rename Preset", f"Enter new name for '{old_name}':", initialvalue=old_name)
         if new_name:
             if new_name in presets_dict:
                 messagebox.showerror("Error", f"Preset '{new_name}' already exists.")

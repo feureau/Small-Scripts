@@ -1934,7 +1934,7 @@
         "stop_queue_on_model_unavailable": true,
         "add_filename_to_prompt": false,
         "use_previous_output_ref": false,
-        "context_text": "",
+        "context_text": "Kehangatan warna keemasan, menyambut sukacita Mid-Autumn.\nDesain klasik dengan sentuhan modern\u2014melalui jendelanya, Anda bisa langsung melihat kelezatan yang menanti.\n\nBukan sekadar kemasan, di dalamnya tersimpan mooncake yang dikerjakan dengan tangan dalam jumlah terbatas.\nMenggunakan bahan impor premium dari Hong Kong, dengan telur bebek asin premium yang utuh, gurih, dan berminyak sempurna.\nDipadukan pasta lotus pilihan yang manisnya pas, tidak membuat enek, dan kulit pastry yang tipis renyah.\n\nKualitas tanpa kompromi, untuk berbagi kebahagiaan di momen spesial.\nStok terbatas. Amankan pesanan Anda sekarang melalui WhatsApp.",
         "context_preset_name": "Default",
         "load_context_from_file": false,
         "context_file_mode": "static",
