@@ -208,7 +208,8 @@ PASSTHROUGH_NORMALIZE_BITRATE_K = 192               # Bitrate when passthrough w
 # Video & General
 # NOTE: Set these to empty strings or valid paths on your machine.
 DEFAULT_LUT_PATH = ""                               # Path to 3D LUT file for HDR to SDR conversion. Default: "" (none)
-DEFAULT_SOFA_PATH = r"E:\Small-Scripts\SOFALIZER\D1_48K_24bit_256tap_FIR_SOFA.sofa"  # Path to SOFA file for binaural audio (Sofalizer). Default: E:\\Small-Scripts\\SOFALIZER\\D1_48K_24bit_256tap_FIR_SOFA.sofa
+DEFAULT_SOFA_PATH = r"C:\Users\Feureau\AppData\Roaming\mpv\D1_48K_24bit_256tap_FIR_SOFA.sofa"  # Path to SOFA file for binaural audio (Sofalizer). Default: C:\Users\Feureau\AppData\Roaming\mpv\D1_48K_24bit_256tap_FIR_SOFA.sofa
+DEFAULT_SOFA_SPEAKERS = "FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218"  # Speaker directions for Sofalizer (HRTF angles). Default: FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218
 
 DEFAULT_RESOLUTION = "2160p"                        # Output resolution. Default: 2160p (4k)
 DEFAULT_UPSCALE_ALGO = "bicubic"                    # Upscaling algorithm. Default: bicubic, Options: nearest, bilinear, bicubic, lanczos, spline36 (NVEncC)
@@ -2148,6 +2149,7 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('measure_loudness', False)),
         str(job_options.get('normalize_audio', False)),
         job_options.get('sofa_file', ''),
+        job_options.get('sofa_speakers', ''),
         job_options.get('subtitle_alignment', ''),
         job_options.get('hybrid_top_aspect', ''),
         job_options.get('hybrid_top_path', ''),
@@ -2395,6 +2397,7 @@ class WorkflowPresetManager:
             "audio_surround_51": DEFAULT_AUDIO_SURROUND_51,
             "audio_passthrough": DEFAULT_AUDIO_PASSTHROUGH,
             "sofa_file": DEFAULT_SOFA_PATH,
+            "sofa_speakers": DEFAULT_SOFA_SPEAKERS,
             "lut_file": DEFAULT_LUT_PATH,
             "subtitle_font": DEFAULT_SUBTITLE_FONT,
             "subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,
@@ -2808,6 +2811,16 @@ class VideoProcessorApp:
         self.cpu_crf_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_crf'))
 
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
+        # Individual speaker angle vars for Sofalizer spatial layout
+        self._sofa_speaker_defaults = self._parse_sofa_speakers(DEFAULT_SOFA_SPEAKERS)
+        self.sofa_spk_fl_var = tk.StringVar(value=self._sofa_speaker_defaults.get("FL", "26"))
+        self.sofa_spk_fc_var = tk.StringVar(value=self._sofa_speaker_defaults.get("FC", "0"))
+        self.sofa_spk_fr_var = tk.StringVar(value=self._sofa_speaker_defaults.get("FR", "334"))
+        self.sofa_spk_sl_var = tk.StringVar(value=self._sofa_speaker_defaults.get("SL", "100"))
+        self.sofa_spk_sr_var = tk.StringVar(value=self._sofa_speaker_defaults.get("SR", "260"))
+        self.sofa_spk_bl_var = tk.StringVar(value=self._sofa_speaker_defaults.get("BL", "142"))
+        self.sofa_spk_lfe_var = tk.StringVar(value=self._sofa_speaker_defaults.get("LFE", "0"))
+        self.sofa_spk_br_var = tk.StringVar(value=self._sofa_speaker_defaults.get("BR", "218"))
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
@@ -3979,6 +3992,43 @@ class VideoProcessorApp:
         self.sofa_browse_btn = ttk.Button(sofa_frame, text="...", command=self.browse_sofa_file, width=4)
         self.sofa_browse_btn.pack(side=tk.LEFT)
 
+        # --- Speaker direction grid (spatial layout) ---
+        sofa_speakers_outer = ttk.LabelFrame(tracks_group, text="Speaker Directions (HRTF Angles)")
+        sofa_speakers_outer.pack(fill=tk.X, padx=(20, 0), pady=(2, 4))
+
+        spk_grid = ttk.Frame(sofa_speakers_outer)
+        spk_grid.pack(padx=5, pady=5)
+        # Configure columns for even spacing (5 columns: label+entry pairs and center)
+        for c in range(5):
+            spk_grid.columnconfigure(c, weight=1)
+
+        entry_w = 5  # width of angle entry boxes
+        self.sofa_spk_entries = {}  # store references for enable/disable
+
+        def _make_spk(parent, row, col, label, var, sticky="w"):
+            f = ttk.Frame(parent)
+            f.grid(row=row, column=col, padx=3, pady=1, sticky=sticky)
+            ttk.Label(f, text=label, width=4).pack(side=tk.LEFT)
+            e = ttk.Entry(f, textvariable=var, width=entry_w, justify="center")
+            e.pack(side=tk.LEFT)
+            self.sofa_spk_entries[label] = e
+            return e
+
+        # Row 0: FL  --  FC  --  FR
+        _make_spk(spk_grid, 0, 0, "FL", self.sofa_spk_fl_var, "w")
+        _make_spk(spk_grid, 0, 2, "FC", self.sofa_spk_fc_var, "ew")
+        _make_spk(spk_grid, 0, 4, "FR", self.sofa_spk_fr_var, "e")
+
+        # Row 1: SL  --  [listener icon]  --  SR
+        _make_spk(spk_grid, 1, 0, "SL", self.sofa_spk_sl_var, "w")
+        ttk.Label(spk_grid, text="\U0001F3A7", font=("Segoe UI Emoji", 14)).grid(row=1, column=2, padx=3, pady=1)
+        _make_spk(spk_grid, 1, 4, "SR", self.sofa_spk_sr_var, "e")
+
+        # Row 2: BL  --  LFE  --  BR
+        _make_spk(spk_grid, 2, 0, "BL", self.sofa_spk_bl_var, "w")
+        _make_spk(spk_grid, 2, 2, "LFE", self.sofa_spk_lfe_var, "ew")
+        _make_spk(spk_grid, 2, 4, "BR", self.sofa_spk_br_var, "e")
+
         self.audio_cb_surround = ttk.Checkbutton(tracks_group, text="5.1 Surround", variable=self.audio_surround_51_var, command=self._update_audio_options_ui)
         self.audio_cb_surround.pack(anchor="w", pady=(5,0))
 
@@ -4377,6 +4427,33 @@ class VideoProcessorApp:
         if file_path:
             self.sofa_file_var.set(file_path)
             self._update_selected_jobs("sofa_file")
+
+    @staticmethod
+    def _parse_sofa_speakers(speakers_str):
+        """Parse 'FL 26|FR 334|FC 0|...' into {'FL': '26', 'FR': '334', 'FC': '0', ...}"""
+        result = {}
+        if not speakers_str:
+            return result
+        for part in speakers_str.split("|"):
+            part = part.strip()
+            if " " in part:
+                name, angle = part.rsplit(" ", 1)
+                result[name.strip()] = angle.strip()
+        return result
+
+    def _build_sofa_speakers_string(self):
+        """Build 'FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218' from individual vars."""
+        parts = [
+            f"FL {self.sofa_spk_fl_var.get()}",
+            f"FR {self.sofa_spk_fr_var.get()}",
+            f"FC {self.sofa_spk_fc_var.get()}",
+            f"SL {self.sofa_spk_sl_var.get()}",
+            f"SR {self.sofa_spk_sr_var.get()}",
+            f"LFE {self.sofa_spk_lfe_var.get()}",
+            f"BL {self.sofa_spk_bl_var.get()}",
+            f"BR {self.sofa_spk_br_var.get()}",
+        ]
+        return "|".join(parts)
 
     def browse_subtitle_file(self):
         file_path = filedialog.askopenfilename(
@@ -5093,10 +5170,12 @@ class VideoProcessorApp:
         sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
         self.sofa_entry.config(state=sofa_state)
         self.sofa_browse_btn.config(state=sofa_state)
+        for e in self.sofa_spk_entries.values():
+            e.config(state=sofa_state)
 
         self._update_selected_jobs(
             "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer",
-            "audio_surround_51", "audio_passthrough", "sofa_file"
+            "audio_surround_51", "audio_passthrough", "sofa_file", "sofa_speakers"
         )
 
     def update_status(self, message):
@@ -5173,6 +5252,7 @@ class VideoProcessorApp:
             "audio_stereo_sofalizer": self.audio_stereo_sofalizer_var.get(), "audio_surround_51": self.audio_surround_51_var.get(),
             "audio_passthrough": self.audio_passthrough_var.get(),
             "sofa_file": self.sofa_file_var.get(),
+            "sofa_speakers": self._build_sofa_speakers_string(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(), "hybrid_top_mode": self.hybrid_top_mode_var.get(),
             "hybrid_top_path": self.hybrid_top_path_var.get(),
@@ -5945,6 +6025,10 @@ class VideoProcessorApp:
         self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
         self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
+        spk = self._parse_sofa_speakers(options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS))
+        self.sofa_spk_fl_var.set(spk.get("FL", "26")); self.sofa_spk_fc_var.set(spk.get("FC", "0")); self.sofa_spk_fr_var.set(spk.get("FR", "334"))
+        self.sofa_spk_sl_var.set(spk.get("SL", "100")); self.sofa_spk_sr_var.set(spk.get("SR", "260"))
+        self.sofa_spk_bl_var.set(spk.get("BL", "142")); self.sofa_spk_lfe_var.set(spk.get("LFE", "0")); self.sofa_spk_br_var.set(spk.get("BR", "218"))
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
@@ -6234,7 +6318,10 @@ class VideoProcessorApp:
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers=FL 26|FR 334|FC 0|SL 100|SR 260|LFE 0|BL 142|BR 218{proc_tag}")
+                speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
+                if not speakers:
+                    speakers = DEFAULT_SOFA_SPEAKERS
+                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers={speakers}{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
                      fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,channelmap=channel_layout=5.1(side){proc_tag}")
