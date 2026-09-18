@@ -70,6 +70,24 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.22 - Robustness & Thread-Safety Fixes (2026-09-18)
+    • FIX: Test Render no longer crashes from str/float division in progress parsing.
+    • FIX: safe_ffmpeg_execution coerces duration to float defensively; also resets
+           the tracked CURRENT_FFMPEG_PROCESS on all exception paths to avoid orphans.
+    • FIX: _process_single_render_segment numerically validates seek_duration.
+    • FIX: create_temporary_ass_file no longer risks an unbound text_ass NameError
+           in the multi-line passthrough branch.
+    • FIX: hibernate_when_done is snapshotted on the main thread and passed to the
+           worker, avoiding an illegal Tk variable read from a background thread.
+    • FIX: _apply_backend_constraints now caches/restores aspect_mode, aspect_blur,
+           aspect_pixelate, aspect_ambient, fruc and fruc_fps when switching out of
+           NVEncC video-only backends (mirrors the existing audio cache pattern).
+v8.21 - Sofalizer Filter Fixes & Path Persistence (2026-09-18)
+    • FIX: Corrected SOFA file path filter escaping by removing conflicting quotes around unquoted-escaped path.
+    • FIX: Fixed FFmpeg option parser crash by changing 'normalize=enabled' to 'normalize=1'.
+    • FIX: Quoted 'speakers' parameter to prevent filtergraph token splitting on spaces and pipes.
+    • FIX: Prevented empty preset values from wiping out DEFAULT_SOFA_PATH on startup and preset switch.
+    • UI: Added trace_add listeners to SOFA path and all 8 spatial speaker angle inputs for live job syncing.
 v8.20 - Group by Resolution Subfolder Option (2026-09-17)
     • UI: Added 'Group by Resolution' option in Output > Directory Structure & Subfolders.
     • PIPELINE: Supports dynamic resolution-based subfolder routing for set buttons (720p, 1080p, 2160p, 4320p) and resolves actual rendered dimensions for 'Original' resolution.
@@ -664,6 +682,16 @@ def get_file_duration(file_path):
 def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_callback=None, priority="normal", cwd=None):
     global CURRENT_FFMPEG_PROCESS
     try:
+        # --- FIX v8.22: Coerce duration defensively so a string from a caller
+        # (e.g., legacy preset JSON or test_render) cannot crash progress math. ---
+        if duration is not None:
+            try:
+                duration = float(duration)
+                if duration <= 0:
+                    duration = None
+            except (TypeError, ValueError):
+                duration = None
+
         popen_kwargs = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
@@ -753,10 +781,14 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
             )
         return return_code
     except VideoProcessingError:
+        # --- FIX v8.22: Never leave a dangling process reference on error paths. ---
+        CURRENT_FFMPEG_PROCESS = None
         raise
     except FileNotFoundError:
+        CURRENT_FFMPEG_PROCESS = None
         raise VideoProcessingError("FFmpeg not found. Please ensure FFmpeg is installed and in PATH")
     except Exception as e:
+        CURRENT_FFMPEG_PROCESS = None
         raise VideoProcessingError(f"Unexpected error during {operation}: {e}")
 
 def get_char_width(char):
@@ -1282,8 +1314,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 for line in raw_lines
             ]
             cleaned_lines = [line for line in cleaned_lines if line]
+            # --- FIX v8.22: Always seed text_ass so the later append never sees an unbound name. ---
+            text_ass = ""
             if not cleaned_lines:
-                text_ass = ""
                 continue
             if max_lines > 0 and len(cleaned_lines) > max_lines:
                 cleaned_lines = cleaned_lines[:max_lines]
@@ -1293,7 +1326,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 cleaned_lines[-1] = last + truncate_suffix
             
             # Wrap first non-empty line only (legacy passthrough behavior for multi-line input)
-            if cleaned_lines and max_lines <= 0 or max_lines >= len(cleaned_lines):
+            if cleaned_lines and (max_lines <= 0 or max_lines >= len(cleaned_lines)):
                 text_ass = '\\N'.join(smart_wrap_text(cleaned_lines[0], limit=final_limit))
 
         elif not reformat_subs:
@@ -2520,11 +2553,16 @@ class WorkflowPresetManager:
         preset = self.presets.get(name)
         if not preset: return None
         
-        # Deepcopy and merge with MASTER_OPTIONS, strictly ignoring None values
+        # Deepcopy and merge with MASTER_OPTIONS, strictly ignoring None and empty path overrides
         full_options = copy.deepcopy(self.MASTER_OPTIONS)
         preset_opts = preset.get('options', {})
         for k, v in preset_opts.items():
             if v is not None:
+                # Do not let an empty sofa_file from an old preset wipe out DEFAULT_SOFA_PATH
+                if k == "sofa_file" and not str(v).strip():
+                    continue
+                if k == "sofa_speakers" and not str(v).strip():
+                    continue
                 full_options[k] = v
         
         return {
@@ -2639,6 +2677,9 @@ class VideoProcessorApp:
         self.filtered_input_indices = [] # New: Indices for filtering
         self.preset_manager = WorkflowPresetManager()
         self._is_loading_job_to_gui = False
+        self._cached_audio_state = None  # Cache audio options when entering nvencc_only
+        # --- FIX v8.22: Cache video-only (aspect/fruc) options when entering NVEncC video-only backends. ---
+        self._cached_aspect_state = None
 
         # --- Initialize all tk Variables ---
         self.current_preset_var = tk.StringVar(value=self.preset_manager.get_preset_names()[0] if self.preset_manager.get_preset_names() else "")
@@ -2811,6 +2852,8 @@ class VideoProcessorApp:
         self.cpu_crf_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_crf'))
 
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
+        self.sofa_file_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_file'))
+        
         # Individual speaker angle vars for Sofalizer spatial layout
         self._sofa_speaker_defaults = self._parse_sofa_speakers(DEFAULT_SOFA_SPEAKERS)
         self.sofa_spk_fl_var = tk.StringVar(value=self._sofa_speaker_defaults.get("FL", "26"))
@@ -2821,6 +2864,14 @@ class VideoProcessorApp:
         self.sofa_spk_bl_var = tk.StringVar(value=self._sofa_speaker_defaults.get("BL", "142"))
         self.sofa_spk_lfe_var = tk.StringVar(value=self._sofa_speaker_defaults.get("LFE", "0"))
         self.sofa_spk_br_var = tk.StringVar(value=self._sofa_speaker_defaults.get("BR", "218"))
+
+        # Bind traces so changing any angle box saves sofa_speakers to selected jobs:
+        for spk_var in [
+            self.sofa_spk_fl_var, self.sofa_spk_fc_var, self.sofa_spk_fr_var,
+            self.sofa_spk_sl_var, self.sofa_spk_sr_var, self.sofa_spk_bl_var,
+            self.sofa_spk_lfe_var, self.sofa_spk_br_var
+        ]:
+            spk_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_speakers'))
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
@@ -3972,6 +4023,21 @@ class VideoProcessorApp:
         self.measure_loudness_checkbox.pack(anchor="w", pady=(5, 0))
 
     def setup_audio_tab(self, parent):
+        # --- In-Place Notice Banner (No Popup) ---
+        self.audio_notice_frame = ttk.Frame(parent)
+        self.audio_notice_frame.pack(fill=tk.X, pady=(0, 8))
+
+        self.audio_notice_label = ttk.Label(
+            self.audio_notice_frame,
+            text="",
+            foreground="#c0392b",  # High-visibility warning color
+            font=("Arial", 9, "bold"),
+            wraplength=650,
+            justify=tk.LEFT
+        )
+        self.audio_notice_label.pack(fill=tk.X, padx=5, pady=2)
+        self.audio_notice_frame.pack_forget()  # Hidden by default
+
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
         tracks_group.pack(fill=tk.X, pady=5)
 
@@ -4316,7 +4382,7 @@ class VideoProcessorApp:
         reformat_frame.pack(fill=tk.X, pady=5)
         
         # Add checkboxes for line formatting options
-        reformat_checkbox = ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: self._update_selected_jobs("reformat_subtitles") and self.toggle_wrap_limit_entry()).pack(side=tk.LEFT)
+        reformat_checkbox = ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line", variable=self.reformat_subtitles_var, command=lambda: [self._update_selected_jobs("reformat_subtitles"), self.toggle_wrap_limit_entry()]).pack(side=tk.LEFT)
         multiline_wrap_checkbox = ttk.Checkbutton(reformat_frame, text="Keep subtitle line breaks when wrapping", variable=self.multiline_wrap_var, command=lambda: self.toggle_wrap_limit_entry()).pack(side=tk.LEFT)
         
         # Wrap at label and entry - state toggles based on multi-line wrap checkbox
@@ -5020,6 +5086,18 @@ class VideoProcessorApp:
         # NVEncC-only or NVEncC video + FFmpeg audio: disable unsupported FFmpeg video-only features.
         # Subtitle burning is supported via NVEncC vpp-subburn.
         if is_nvencc_video_backend:
+            # --- FIX v8.22: Cache the user's video-only options the FIRST time we enter
+            # a NVEncC video-only backend so we can restore them when they leave. ---
+            if self._cached_aspect_state is None:
+                self._cached_aspect_state = {
+                    "aspect_mode": self.aspect_mode_var.get(),
+                    "aspect_blur": self.aspect_blur_var.get(),
+                    "aspect_pixelate": self.aspect_pixelate_var.get(),
+                    "aspect_ambient": self.aspect_ambient_var.get(),
+                    "fruc": self.fruc_var.get(),
+                    "fruc_fps": self.fruc_fps_var.get(),
+                }
+
             # We NO LONGER disable Hybrid Stacked here, because if requested with NVEncC, 
             # we will dynamically route it to nvencc_with_ffmpeg during process_file.
             if self.aspect_mode_var.get() in ["blur", "pixelate", "ambient"]:
@@ -5030,29 +5108,56 @@ class VideoProcessorApp:
                 self.aspect_ambient_var.set(False)
             self.fruc_var.set(False)
             if is_nvencc_only:
+                # Cache user's audio settings before locking to passthrough
+                if self._cached_audio_state is None and not self.audio_passthrough_var.get():
+                    self._cached_audio_state = {
+                        "mono": self.audio_mono_var.get(),
+                        "stereo": self.audio_stereo_downmix_var.get(),
+                        "sofa": self.audio_stereo_sofalizer_var.get(),
+                        "surround": self.audio_surround_51_var.get(),
+                        "norm": self.normalize_audio_var.get(),
+                        "dyn": self.use_dynaudnorm_var.get(),
+                        "lw": self.use_loudness_war_var.get(),
+                    }
+
+                # Force settings in nvencc_only - rest delegated to _update_audio_options_ui
                 self.normalize_audio_var.set(False)
                 self.use_dynaudnorm_var.set(False)
                 self.use_loudness_war_var.set(False)
-                self.measure_loudness_var.set(False)
                 self.audio_mono_var.set(False)
                 self.audio_stereo_downmix_var.set(False)
                 self.audio_stereo_sofalizer_var.set(False)
                 self.audio_surround_51_var.set(False)
                 self.audio_passthrough_var.set(True)
-            self._update_selected_jobs(
-                "orientation", "aspect_mode", "aspect_blur", "aspect_pixelate", "aspect_ambient",
-                "fruc"
-            )
-            if is_nvencc_only:
-                self._update_selected_jobs(
-                    "normalize_audio", "use_dynaudnorm", "use_loudness_war", "measure_loudness",
-                    "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer", "audio_surround_51", "audio_passthrough"
-                )
+
             # Do not mutate every queued job here. Backend constraints should affect
             # current GUI state and selected jobs only, so mixed queues preserve
             # per-job options (e.g., Hybrid FFmpeg jobs alongside NVEncC jobs).
 
-        # Disable/enable widgets
+        # --- FIX v8.22: Restore cached aspect/fruc options when leaving NVEncC-video backends. ---
+        if not is_nvencc_video_backend and self._cached_aspect_state is not None:
+            cached_v = self._cached_aspect_state
+            self.aspect_mode_var.set(cached_v.get("aspect_mode", self.aspect_mode_var.get()))
+            self.aspect_blur_var.set(cached_v.get("aspect_blur", False))
+            self.aspect_pixelate_var.set(cached_v.get("aspect_pixelate", False))
+            self.aspect_ambient_var.set(cached_v.get("aspect_ambient", False))
+            self.fruc_var.set(cached_v.get("fruc", False))
+            self.fruc_fps_var.set(cached_v.get("fruc_fps", self.fruc_fps_var.get()))
+            self._cached_aspect_state = None
+
+        # Restore cached audio settings when leaving nvencc_only or when in ffmpeg_only/nvencc_with_ffmpeg
+        if not is_nvencc_only and self._cached_audio_state is not None:
+            self.audio_passthrough_var.set(False)
+            self.audio_mono_var.set(self._cached_audio_state.get("mono", False))
+            self.audio_stereo_downmix_var.set(self._cached_audio_state.get("stereo", False))
+            self.audio_stereo_sofalizer_var.set(self._cached_audio_state.get("sofa", False))
+            self.audio_surround_51_var.set(self._cached_audio_state.get("surround", False))
+            self.normalize_audio_var.set(self._cached_audio_state.get("norm", False))
+            self.use_dynaudnorm_var.set(self._cached_audio_state.get("dyn", False))
+            self.use_loudness_war_var.set(self._cached_audio_state.get("lw", False))
+            self._cached_audio_state = None  # Clear cache after restoring
+
+        # Update Audio and Loudness controls
         if hasattr(self, "burn_subtitles_cb"):
             self.burn_subtitles_cb.config(state="normal")
         if hasattr(self, "title_burn_cb"):
@@ -5082,15 +5187,28 @@ class VideoProcessorApp:
         for tab in [getattr(self, "audio_tab", None), getattr(self, "loudness_tab", None),
                     getattr(self, "subtitle_tab", None), getattr(self, "title_tab", None)]:
             if tab:
-                if is_nvencc_only:
+                if is_nvencc_video_audio:
+                    self._set_widget_state_recursive(tab, "normal")
+                elif is_nvencc_only:
                     if tab in [self.subtitle_tab, self.title_tab]:
                         self._set_widget_state_recursive(tab, "normal")
                     else:
                         self._set_widget_state_recursive(tab, "disabled")
-                elif is_nvencc_video_audio:
-                    self._set_widget_state_recursive(tab, "normal")
                 else:
                     self._set_widget_state_recursive(tab, "normal")
+
+        # --- Update In-Place Audio Notice Banner ---
+        if hasattr(self, "audio_notice_frame") and hasattr(self, "audio_notice_label"):
+            if is_nvencc_only:
+                self.audio_notice_label.config(
+                    text="⚠️ In 'nvencc_only' mode, basic audio (Passthrough, Mono, Stereo Downmix, 5.1 Surround) works natively via libavcodec.\n"
+                         "⚠️ Sofalizer (3D HRTF convolution) and Loudness Normalization are disabled. For those features, select 'nvencc_video_with_ffmpeg_audio'."
+                )
+                self.audio_notice_frame.pack(fill=tk.X, pady=(0, 8), before=self.audio_cb_mono.master)
+                # Keep notice text bold and readable
+                self.audio_notice_label.configure(state="normal")
+            else:
+                self.audio_notice_frame.pack_forget()
 
         # Audio and loudness controls are handled by _update_audio_options_ui and _toggle_audio_norm_options
         self._update_audio_options_ui()
@@ -5101,20 +5219,26 @@ class VideoProcessorApp:
         self._toggle_superres_options()
 
     def _toggle_audio_norm_options(self):
+        backend = self.encoder_backend_var.get()
+        is_nvencc_only = (backend == "nvencc_only")
         is_passthrough = self.audio_passthrough_var.get()
         
-        # If Passthrough is enabled, FORCE DISABLE all loudness controls
-        # regardless of their individual checkbox states.
-        
-        state_ln = "normal" if self.normalize_audio_var.get() and not is_passthrough else "disabled"
+        # If in nvencc_only OR Passthrough is enabled, disable all loudness controls
+        if is_nvencc_only or is_passthrough:
+            state_ln = "disabled"
+            state_dyn = "disabled"
+            state_lw = "disabled"
+        else:
+            state_ln = "normal" if self.normalize_audio_var.get() else "disabled"
+            state_dyn = "normal" if self.use_dynaudnorm_var.get() else "disabled"
+            state_lw = "normal" if self.use_loudness_war_var.get() else "disabled"
+
         for widget in [self.loudness_target_entry, self.loudness_range_entry, self.true_peak_entry]:
             widget.config(state=state_ln)
         
-        state_dyn = "normal" if self.use_dynaudnorm_var.get() and not is_passthrough else "disabled"
         for widget in [self.dyn_frame_len_entry, self.dyn_gauss_win_entry, self.dyn_peak_entry, self.dyn_max_gain_entry]:
             widget.config(state=state_dyn)
             
-        state_lw = "normal" if self.use_loudness_war_var.get() and not is_passthrough else "disabled"
         for widget in [self.comp_threshold_entry, self.comp_ratio_entry, self.comp_makeup_entry, 
                        self.comp_attack_entry, self.comp_release_entry, self.limit_limit_entry]:
             widget.config(state=state_lw)
@@ -5122,12 +5246,53 @@ class VideoProcessorApp:
         self._update_selected_jobs("normalize_audio", "use_dynaudnorm", "use_loudness_war")
 
     def _update_audio_options_ui(self):
+        backend = self.encoder_backend_var.get()
+        is_nvencc_only = (backend == "nvencc_only")
+
+        # --- CASE 1: nvencc_only (Audio Filtering & Sofalizer Unsupported) ---
+        if is_nvencc_only:
+            # Sofalizer is unsupported by NVEncC; Loudness also unsupported
+            self.audio_stereo_sofalizer_var.set(False)
+
+            # Strictly grey out Sofalizer and its sub-widgets
+            self.audio_cb_sofa.config(state="disabled")
+            self.sofa_entry.config(state="disabled")
+            self.sofa_browse_btn.config(state="disabled")
+            for e in self.sofa_spk_entries.values():
+                e.config(state="disabled")
+
+            # Strictly grey out Loudness tab controls (unsupported by NVEncC)
+            if hasattr(self, 'loudness_war_checkbox'): self.loudness_war_checkbox.config(state="disabled")
+            if hasattr(self, 'dyn_norm_checkbox'): self.dyn_norm_checkbox.config(state="disabled")
+            if hasattr(self, 'audio_norm_checkbox'): self.audio_norm_checkbox.config(state="disabled")
+            if hasattr(self, 'measure_loudness_checkbox'): self.measure_loudness_checkbox.config(state="disabled")
+            self._toggle_audio_norm_options()
+
+            # Handle applicable NVEncC tracks: Passthrough, Mono, Stereo, 5.1
+            is_passthrough = self.audio_passthrough_var.get()
+            proc_state = "normal" if not any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(), self.audio_surround_51_var.get()]) else "disabled"
+
+            for cb in [self.audio_cb_mono, self.audio_cb_stereo, self.audio_cb_surround]:
+                cb.config(state=proc_state)
+
+            any_proc = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(), self.audio_surround_51_var.get()])
+            self.audio_cb_passthrough.config(state="normal" if not any_proc else "disabled")
+
+            self._update_selected_jobs(
+                "audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer",
+                "audio_surround_51", "audio_passthrough"
+            )
+            return
+
+        # --- CASE 2: Supported Backends (ffmpeg_only, nvencc_with_ffmpeg, nvencc_video_with_ffmpeg_audio) ---
+        
         # Force disable passthrough if chapter splitting is enabled
         if hasattr(self, 'render_by_chapters_var') and hasattr(self, 'audio_cb_passthrough'):
             if self.render_by_chapters_var.get():
                 if self.audio_passthrough_var.get():
                     self.audio_passthrough_var.set(False)
-                    if not any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(), self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()]):
+                    if not any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(), 
+                                self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()]):
                         self.audio_stereo_downmix_var.set(True)
                 self.audio_cb_passthrough.config(state="disabled")
             else:
@@ -5165,7 +5330,8 @@ class VideoProcessorApp:
         any_proc_selected = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
                                  self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
 
-        self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
+        if hasattr(self, 'render_by_chapters_var') and not self.render_by_chapters_var.get():
+            self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
 
         sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
         self.sofa_entry.config(state=sofa_state)
@@ -5365,7 +5531,6 @@ class VideoProcessorApp:
         # 2. Load Triggers
         triggers = preset['triggers']
         
-        # Handle New Schema vs Old Schema (Migration logic)
         # Handle New Schema vs Old Schema (Migration logic)
         vid_trig = triggers.get('video_trigger')
         
@@ -6024,11 +6189,19 @@ class VideoProcessorApp:
         self.measure_loudness_var.set(options.get("measure_loudness", DEFAULT_MEASURE_LOUDNESS))
         self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO)); self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)); self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK)); 
-        self.sofa_file_var.set(options.get("sofa_file", DEFAULT_SOFA_PATH))
-        spk = self._parse_sofa_speakers(options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS))
-        self.sofa_spk_fl_var.set(spk.get("FL", "26")); self.sofa_spk_fc_var.set(spk.get("FC", "0")); self.sofa_spk_fr_var.set(spk.get("FR", "334"))
-        self.sofa_spk_sl_var.set(spk.get("SL", "100")); self.sofa_spk_sr_var.set(spk.get("SR", "260"))
-        self.sofa_spk_bl_var.set(spk.get("BL", "142")); self.sofa_spk_lfe_var.set(spk.get("LFE", "0")); self.sofa_spk_br_var.set(spk.get("BR", "218"))
+        # Change options.get("sofa_file", DEFAULT_SOFA_PATH) to use boolean fallback:
+        self.sofa_file_var.set(options.get("sofa_file") or DEFAULT_SOFA_PATH)
+        
+        spk_str = options.get("sofa_speakers") or DEFAULT_SOFA_SPEAKERS
+        spk = self._parse_sofa_speakers(spk_str)
+        self.sofa_spk_fl_var.set(spk.get("FL", "26"))
+        self.sofa_spk_fc_var.set(spk.get("FC", "0"))
+        self.sofa_spk_fr_var.set(spk.get("FR", "334"))
+        self.sofa_spk_sl_var.set(spk.get("SL", "100"))
+        self.sofa_spk_sr_var.set(spk.get("SR", "260"))
+        self.sofa_spk_bl_var.set(spk.get("BL", "142"))
+        self.sofa_spk_lfe_var.set(spk.get("LFE", "0"))
+        self.sofa_spk_br_var.set(spk.get("BR", "218"))
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9")); self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
@@ -6321,7 +6494,12 @@ class VideoProcessorApp:
                 speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
                 if not speakers:
                     speakers = DEFAULT_SOFA_SPEAKERS
-                fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa='{safe_sofa}':normalize=enabled:speakers={speakers}{proc_tag}")
+                
+                # NOTE: sofa={safe_sofa} is UNQUOTED because escape_ffmpeg_filter_path()
+                # already escapes colons and spaces. speakers='{speakers}' IS QUOTED because it contains spaces and pipes.
+                fc_parts.append(
+                    f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'{proc_tag}"
+                )
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
                      fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,channelmap=channel_layout=5.1(side){proc_tag}")
@@ -6687,10 +6865,20 @@ class VideoProcessorApp:
                 else:
                     print("[WARN] Title burn enabled but no title text found (check JSON suffix or use override).")
             
-            duration = options.get("seek_duration")
+            # --- FIX v8.22: Numerically validate duration (defensive against string values). ---
+            duration = None
+            raw_seek = options.get("seek_duration")
+            if raw_seek is not None:
+                try:
+                    duration = float(raw_seek)
+                except (TypeError, ValueError):
+                    duration = None
             if duration is None:
                 duration = get_file_duration(job['video_path'])
-                max_dur = float(options.get('max_duration', 0))
+                try:
+                    max_dur = float(options.get('max_duration', 0))
+                except (TypeError, ValueError):
+                    max_dur = 0.0
                 if max_dur > 0: duration = min(duration, max_dur)
 
             # --- Two-Pass Loudnorm: Run first-pass analysis if loudnorm is enabled ---
@@ -7168,10 +7356,19 @@ class VideoProcessorApp:
             log_path = os.path.join(os.path.dirname(output_file), f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
             cmd.extend(["--log", log_path, "--log-level", "info"])
 
+        # NVEncC native audio routing (requires options dict)
         if audio_source_path:
             cmd.extend(["--audio-source", audio_source_path])
         else:
-            cmd.extend(["--audio-copy"])
+            # Pure NVEncC audio stream configuration
+            if options and options.get("audio_mono"):
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":mono", "--audio-bitrate", str(MONO_BITRATE_K)])
+            elif options and options.get("audio_stereo_downmix"):
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":stereo", "--audio-bitrate", str(STEREO_BITRATE_K)])
+            elif options and options.get("audio_surround_51"):
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":5.1", "--audio-bitrate", str(SURROUND_BITRATE_K)])
+            else:
+                cmd.extend(["--audio-copy"])
 
         if subtitle_burn_path:
             # Use relative path to avoid "poisoned" parent directory names
@@ -7902,8 +8099,10 @@ class VideoProcessorApp:
             
         # Override to 5 seconds
         for job in jobs_to_test:
-            job['options']['seek_duration'] = "5"
-            job['options']['seek_start'] = "0"
+            # --- FIX v8.22: Use numeric types, matching the chapter-split path
+            # (which assigns floats). Strings here would crash progress math. ---
+            job['options']['seek_duration'] = 5.0
+            job['options']['seek_start'] = 0.0
             job['display_name'] = f"[TEST 5s] {job['display_name']}"
             job['options']['output_suffix_override'] = "_test"
             
@@ -7913,9 +8112,12 @@ class VideoProcessorApp:
         self.start_button.config(state="disabled")
         if hasattr(self, 'test_button'):
             self.test_button.config(state="disabled")
+
+        # --- FIX v8.22: Snapshot hibernate flag on main thread before spawning worker. ---
+        hibernate_flag = bool(self.hibernate_when_done_var.get())
             
         # Start Thread
-        threading.Thread(target=self._process_files_thread, args=(jobs_to_test,), daemon=True).start()
+        threading.Thread(target=self._process_files_thread, args=(jobs_to_test, hibernate_flag), daemon=True).start()
 
     def start_processing(self):
         if not self.processing_jobs: messagebox.showwarning("No Jobs", "Please add files to the queue."); return
@@ -7938,8 +8140,11 @@ class VideoProcessorApp:
         if hasattr(self, 'test_button'):
             self.test_button.config(state="disabled")
         
+        # --- FIX v8.22: Snapshot hibernate flag on the main thread (Tk vars are not thread-safe). ---
+        hibernate_flag = bool(self.hibernate_when_done_var.get())
+
         # Start Thread
-        threading.Thread(target=self._process_files_thread, daemon=True).start()
+        threading.Thread(target=self._process_files_thread, args=(None, hibernate_flag), daemon=True).start()
 
     def _process_files_console(self, jobs):
         """Process jobs in console without GUI (called after root.destroy)."""
@@ -7971,7 +8176,7 @@ class VideoProcessorApp:
             subprocess.run(["shutdown", "/h"], shell=True)
         sys.exit(0)
 
-    def _process_files_thread(self, jobs_to_process=None):
+    def _process_files_thread(self, jobs_to_process=None, hibernate_when_done=False):
         if jobs_to_process is None:
             jobs_to_process = self.processing_jobs
             
@@ -8005,8 +8210,8 @@ class VideoProcessorApp:
         if hasattr(self, 'test_button'):
             self.root.after(0, lambda: self.test_button.config(state="normal"))
         
-        # Check if hibernate was requested
-        if self.hibernate_when_done_var.get():
+        # --- FIX v8.22: Use the snapshot passed from the main thread (no Tk reads here). ---
+        if hibernate_when_done:
             print("\n[INFO] Hibernate requested. Hibernating system...")
             subprocess.run(["shutdown", "/h"], shell=True)
 
@@ -8182,11 +8387,3 @@ if __name__ == "__main__":
     app = VideoProcessorApp(root, sorted(list(set(initial_files))), args.output_mode)
 
     root.mainloop()
-
-
-
-
-
-
-
-
