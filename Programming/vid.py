@@ -40,220 +40,64 @@ Core Feature Sets
         ratio handling (Crop/Fill, Pad/Fit, Stretch).
     *   **Sharpening**: Integrated CAS (Contrast Adaptive Sharpen) and
         matrix-based `unsharp` filters. Enabled by default for all jobs.
-    *   **Motion**: FRUC (Frame Rate Up-Conversion) via `minterpolate` for
-        smooth 60+ FPS output.
-    *   **Hybrid (Stacked) Mode**: Specialized layout for creating vertical
-        content from horizontal sources (e.g., facecam over gameplay).
-    *   **YouTube Compliance**: faststart moov, no edit lists, auto deinterlace,
-        HDR10 SEI signaling.
+    *   **Motion**: FRUC (Frame Rate Up-Conversion) via `minterpolate`.
+    *   **Hybrid (Stacked) Mode**: Specialized layout for vertical from horizontal.
+    *   **YouTube Compliance**: faststart moov, no edit lists, auto deinterlace.
 
 2. **Audio Mastering & "Loudness War" Tools**:
-    *   **Compression**: Multi-parameter `acompressor` for signal density.
-    *   **Limiting**: Hard-knee `alimiter` to prevent clipping at 0dB.
-    *   **Normalization**: Chained Dynamic Normalization (`dynaudnorm`) +
-        EBU R128 (`loudnorm`) for perfectly leveled signals.
-    *   **Measurement**: Post-processing analysis that exports JSON reports
-        with YouTube target comparisons (-14 LUFS).
-    *   **Binaural Mixing**: HRTF-based "Sofalizer" for immersive headphone
-        audio from surround sources.
-    *   **Delivery Targets**: Intent-based audio routing (Custom / YouTube:
-        Stereo / YouTube: Stereo + 5.1 / YouTube: Stereo + Eclipsa / Archival)
-        with auto-adaptation to source channel count.
+    *   **Compression / Limiting / Normalization**: acompressor, alimiter,
+        dynaudnorm, EBU R128 loudnorm.
+    *   **Per-Track Loudness Scope (v8.25)**: choose which output track families
+        receive the loudness chain (Mono / Stereo / 5.1 / Eclipsa).
+    *   **Measurement**: Post-processing JSON reports with YouTube target comparison.
+    *   **Binaural Mixing**: HRTF-based "Sofalizer" for immersive headphone audio.
+    *   **Delivery Targets (v8.24)**: Intent-based audio routing with
+        auto-adaptation to source channel count.
 
 3. **Subtitle Styling & Burning**:
-    *   **Sources**: Automatic discovery of external `.srt` or embedded streams.
-    *   **Styling**: Powered by `libass`. Customizable fonts, sizes, colors,
-        alpha, outlines, and drop shadows via the GUI.
-    *   **Smart Alignment**: Positions subtitles relative to video content or
-        at the "Seam" in Hybrid layouts.
+    *   **Sources**: External `.srt` or embedded streams.
+    *   **Styling**: libass with custom fonts, colors, alpha, outlines, shadows.
+    *   **Smart Alignment**: Content-relative or Hybrid "Seam".
 
 Workflow Logic
 --------------
-*   **Job Hashing**: Uses MD5 hashes of processing options to avoid redundant
-    encodes and manage unique file naming.
-*   **Threaded Processing**: Offloads FFmpeg execution to background threads
-    to keep the GUI responsive.
-*   **Graceful Exit**: Signal handling for Ctrl+C to kill FFmpeg processes
-    and purge temporary files immediately.
+*   **Job Hashing**: MD5 of processing options for dedup + unique naming.
+*   **Threaded Processing**: FFmpeg runs in background threads.
+*   **Graceful Exit**: SIGINT/SIGTERM kills FFmpeg and purges temps.
 
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.25 - Per-Track Loudness Scope + Eclipsa Topology Fix (2026-09-19)
+    • FEATURE: "Apply Loudness Processing To" group at the top of the Loudness
+      tab. Four independent scope checkboxes:
+          Mono tracks
+          Stereo tracks (Standard Downmix + Sofalizer)
+          5.1 Surround bed
+          Eclipsa / IAMF streams
+      Unchecked families pass through unaffected. Defaults are all-on so
+      existing presets and workflows are unaffected.
+    • FIX: Eclipsa/IAMF loudness topology. Previously the loudness chain was
+      applied independently to each of the 5 IAMF streams (front, back, top,
+      center, LFE). Because acompressor/loudnorm are dynamic per-stream, this
+      destroyed the surround image — each pair got its own gain curve. Now the
+      chain is applied ONCE to the full 5.1.2 bed before splitting into IAMF
+      streams, preserving spatial coherence.
+    • UX: `_auto_loudness_chain` now takes a `track_kind` argument and returns
+      an empty chain when the family is scoped out.
 v8.24 - Delivery Targets, Auto-Detect Audio, 15-Speaker Grid (2026-09-19)
-    • FEATURE: Delivery Target dropdown on Audio tab. Intent-based routing:
-        - Custom (Manual Tracks)     : existing checkbox behavior (default)
-        - YouTube: Stereo            : adaptive stereo only
-        - YouTube: Stereo + 5.1      : adaptive stereo + 5.1 for surround sources
-        - YouTube: Stereo + Eclipsa  : adaptive stereo + IAMF/Eclipsa (opt-in)
-        - Archival (Passthrough)     : -c:a copy, warns on non-YT codecs
+    • FEATURE: Delivery Target dropdown on Audio tab:
+          Custom / YouTube: Stereo / YouTube: Stereo + 5.1 /
+          YouTube: Stereo + Eclipsa / Archival
     • FEATURE: Auto-detect source channel count. Mono→stereo dupe,
-        stereo→re-encode, >=6ch→Sofalizer binaural (stereo targets) or
-        Sofalizer stereo + 5.1 bed (surround targets).
-    • FEATURE: Speaker grid expanded from 8 to 15 fields. New canonical
-        azimuths: FL, FR, FC, SL, SR, BL, BC, BR, LFE, TFL, TFC, TFR, TBL,
-        TBC, TBR. Sofalizer emits all 15 every time; unused entries ignored.
-    • FEATURE: Eclipsa/IAMF pipeline (Base profile, 5-layer element, binaural
-        headphone rendering, mix presentation). Requires ffmpeg_only backend.
-    • FEATURE: Archival passthrough warns in console if source audio codec is
-        not YouTube-compatible (aac/opus/libopus/eac3/flac).
-    • COMPAT: Old presets default to Custom target; 8-speaker strings load
-        safely (missing names fall back to canonical defaults).
-    • NOTE: YouTube Studio upload of Eclipsa multi-stream is unreliable. Use
-        API uploads if surround tracks matter. Web UI may silently drop them.
+      stereo→re-encode, >=6ch→Sofalizer binaural or + 5.1 bed.
+    • FEATURE: Speaker grid expanded from 8 to 15 fields.
+    • FEATURE: Archival passthrough warns on non-YT codecs.
+    • COMPAT: Old presets default to Custom target.
 v8.23.2 - CUDA Graph Working Format Fix (2026-09-19)
     • FIX: Ambient/Pixelate/Blur background paths no longer crash on 10-bit
-           sources. The CUDA graph working format is now chosen from the
-           OUTPUT (HDR -> p010le, SDR -> nv12) instead of the source bit
-           depth. p010le was being forced through pad_cuda, which only
-           accepts nv12/yuv420p, producing:
-               [Parsed_pad_cuda] Unsupported input format.
-    • FIX: Single cuda_work_fmt constant replaces eight independent
-           "p010le if info['bit_depth'] == 10 else 'nv12'" expressions in
-           construct_ffmpeg_command(), eliminating the divergence between
-           the CUDA filter chain and the encoder's actual pixel format.
-    • NOTE: HDR->SDR tone-mapping (LUT in SDR mode) will now see 8-bit
-           input in the CUDA graph. This matches what the encoder writes
-           anyway; revisit if banding is ever observed.
-v8.23.1 - Chroma & Color Space Bug Fixes (2026-09-19)
-    • FIX: Chroma dropdown now stores internal codes ("420"/"422"/"444") while
-           displaying friendly labels ("4:2:0"/"4:2:2"/"4:4:4"). Previously the
-           variable held display strings, silently forcing 4:2:0 everywhere.
-    • FIX: HEVC 4:2:2 / 4:4:4 now correctly produce yuv422p10le / yuv444p10le
-           (these profiles require 10-bit).
-    • FIX: NVEncC "auto" color tag mode no longer has a stray `or True` that
-           defeated the SDR/HDR detection guard.
-    • FIX: validate_processing_settings normalizes the chroma value before
-           performing 4:2:2/4:4:4 + HDR / Hybrid checks.
-    • FIX: Guard against Hybrid + CPU scaling (chroma != 4:2:0), which would
-           have produced an invalid scale_cuda filtergraph.
-    • FIX: Removed unused aspect_mode local in _toggle_upscale_options.
-v8.23 - Chroma Subsampling, Color Space Presets & YouTube Compliance (2026-09-18)
-    • FEATURE: Chroma Subsampling dropdown (4:2:0, 4:2:2, 4:4:4). Hardware-safe:
-               NVENC, NVEncC and SVT-AV1 are locked to 4:2:0. 4:2:2/4:4:4 available
-               only via CPU software libx264/libx265.
-    • FEATURE: Color Space presets for SDR (BT.709, BT.601 NTSC, BT.601 PAL, sRGB,
-               BT.2020 SDR) and HDR (BT.2020 PQ / HDR10, BT.2020 HLG).
-    • FEATURE: HDR10 mastering metadata fields (ST 2086 + MaxCLL/MaxFALL) with
-               Sony BVM-X300 defaults matching YouTube's fallback.
-    • FEATURE: -color_range explicitly tagged (previously missing).
-    • FEATURE: GPU → CPU scaler fallback path when chroma != 4:2:0
-               (scale_cuda is 4:2:0-only).
-    • FEATURE: Interlaced source detection (ffprobe field_order) + auto yadif.
-    • COMPLIANCE: -movflags +faststart+negative_cts_offsets on MP4 output.
-    • COMPLIANCE: HDR10 SEI signaling via -x265-params / -svtav1-params.
-    • VALIDATION: sRGB + HDR rejected; 4:2:2/4:4:4 + HDR + H.264 rejected;
-                  4:2:2/4:4:4 + Hybrid rejected.
-v8.22 - Robustness & Thread-Safety Fixes (2026-09-18)
-    • FIX: Test Render no longer crashes from str/float division in progress parsing.
-    • FIX: safe_ffmpeg_execution coerces duration to float defensively; also resets
-           the tracked CURRENT_FFMPEG_PROCESS on all exception paths to avoid orphans.
-    • FIX: _process_single_render_segment numerically validates seek_duration.
-    • FIX: create_temporary_ass_file no longer risks an unbound text_ass NameError
-           in the multi-line passthrough branch.
-    • FIX: hibernate_when_done is snapshotted on the main thread and passed to the
-           worker, avoiding an illegal Tk variable read from a background thread.
-    • FIX: _apply_backend_constraints now caches/restores aspect_mode, aspect_blur,
-           aspect_pixelate, aspect_ambient, fruc and fruc_fps when switching out of
-           NVEncC video-only backends (mirrors the existing audio cache pattern).
-v8.21 - Sofalizer Filter Fixes & Path Persistence (2026-09-18)
-    • FIX: Corrected SOFA file path filter escaping by removing conflicting quotes around unquoted-escaped path.
-    • FIX: Fixed FFmpeg option parser crash by changing 'normalize=enabled' to 'normalize=1'.
-    • FIX: Quoted 'speakers' parameter to prevent filtergraph token splitting on spaces and pipes.
-    • FIX: Prevented empty preset values from wiping out DEFAULT_SOFA_PATH on startup and preset switch.
-    • UI: Added trace_add listeners to SOFA path and all 8 spatial speaker angle inputs for live job syncing.
-v8.20 - Group by Resolution Subfolder Option (2026-09-17)
-    • UI: Added 'Group by Resolution' option in Output > Directory Structure & Subfolders.
-    • PIPELINE: Supports dynamic resolution-based subfolder routing for set buttons (720p, 1080p, 2160p, 4320p) and resolves actual rendered dimensions for 'Original' resolution.
-v8.19 - Dedicated Output Tab & Settings Reorganization (2026-09-17)
-    • UI: Added dedicated "Output" tab in Settings Notebook for destination and file routing.
-    • UI: Relocated subfolder options (Use Subfolders, Subtitle Folder, Group by Preset/Video, Override) and Location (Local/Pooled) from "Video > Format & Quality" to "Output".
-    • UI: Relocated chapter segment rendering and subtitle chunk splitting from "Encoder > Basic NVENC Settings" to "Output > Chapter Splitting & Segment Export".
-    • UI: Renamed Video tab "Output & Geometry" section to "Geometry & Layout" for clarity.
-v8.18 - Dynamic Preset Dropdown Sizing (2026-09-17)
-    • UI: Active Preset dropdown dynamically resizes to fit all preset title widths, preventing text cutoff.
-    • UI: Dynamic width calculation measuring font rendering and character lengths upon initialization, postcommand, and preset CRUD operations.
-v8.17 - CPU Software Encoders (2026-09-08)
-    • FEATURE: Added Encoder Engine (Family) selection: NVIDIA NVENC vs CPU Software.
-    • FEATURE: CPU Software maps h264->libx264, hevc->libx265, av1->libsvtav1.
-    • FEATURE: Added CPU preset dropdowns (x264/x265: ultrafast..veryslow, SVT-AV1: 0-13).
-    • FEATURE: Added CPU CRF Override (0 = bitrate targeting, >0 = CRF mode).
-    • FEATURE: HDR10 bitstream SEI signaling via -x265-params and -svtav1-params.
-    • PIPELINE: Preserves CUVID decode + scale_cuda; downloads to host memory only before CPU encode.
-    • PIPELINE: CPU software family forces Backend to ffmpeg_only (NVEncC cannot run software encoders).
-v8.16 - Hybrid Side-by-Side, Combined Aspect & Subtitle Exclusion (2026-09-08)
-    • FEATURE: Added side-by-side (`hstack`) layout for Hybrid and Hybrid Duo modes.
-    • FEATURE: Added "Auto (Follow Inputs)" canvas aspect ratio for both Stacked and Side-by-Side.
-    • FEATURE: Added Layout selector (`Auto`, `Stacked`, `Side-by-Side`) with dynamic UI labels (Top/Bottom vs Left/Right).
-    • FEATURE: Added sibling auto-pairing for `-left` and `-right` files in Hybrid Duo mode.
-    • FEATURE: Added `9:16` and `1:1` aspect ratio options for hybrid video inputs.
-    • FEATURE: Added "Exclude Suffix" preset trigger to exclude subtitles matching specific suffixes.
-v8.15 - Title Background Shapes & Styling (2026-08-21)
-    • FEATURE: Added TikTok/Instagram-style rounded-corner background shapes for Title overlays.
-    • FEATURE: Supports both "Per-Line Pill" (wraps each line individually) and "Single Box" modes.
-    • FEATURE: Configurable background fill color, opacity (alpha), corner radius, and X/Y padding.
-    • PIPELINE: Rendered as native ASS vector Bézier paths on Layer 0 for flawless FFmpeg & NVEncC support.
-v8.14 - Subtitle Matching Fixes (2026-08-01)
-    • FIX: Removed over-aggressive prefix truncation that caused unrelated videos to steal subtitles (e.g., `Video - full` matching `Video - short.srt`).
-    • FIX: Added ownership checks to ensure shorter video names don't claim subtitles belonging to longer video names in the same folder.
-    • FEATURE: Hybrid video sub-detection now correctly searches for the base video name's subtitles in addition to `-top` or `-bot` specific subtitles.
-v8.9 - Codec Selection & Validation (2026-02-05)
-    • FEATURE: Added explicit codec dropdown (H.264/HEVC/AV1) in the Encoder tab.
-    • FEATURE: Codec list is linked to SDR/HDR output format (HDR requires HEVC/AV1).
-    • UX: Warns before H.264 + 4320p encodes, with an option to continue anyway.
-v8.10 - NVEncC Backend Option (2026-02-07)
-    • FEATURE: Added Encoder Backend selection:
-        - ffmpeg_only
-        - nvencc_with_ffmpeg (FFmpeg preprocess + NVEncC encode)
-        - nvencc_only (NVEncC only, FFmpeg-only features disabled)
-        - nvencc_video_with_ffmpeg_audio (NVEncC video + FFmpeg audio prepass)
-    • FEATURE: NVEncC-only Upscale options: NVVFX SuperRes + NGX VSR with per-algo settings.
-    • NOTE: Output container remains MP4.
-v8.11 - FFmpeg CPU Controls (2026-02-12)
-    • FEATURE: Added FFmpeg CPU thread control (`-threads`) in Encoder tab.
-    • FEATURE: Added FFmpeg process priority control for Windows (Idle to Realtime).
-    • UX: New options are saved in presets and applied per job.
-v8.12 - NVEncC Aspect Handling (2026-02-20)
-    • FIX: Re-enabled Aspect Handling options (Crop/Pad/Stretch) for `nvencc_only`
-           and `nvencc_video_with_ffmpeg_audio`.
-    • FEATURE: NVEncC path now maps aspect mode to `--output-res` behavior:
-           Crop -> `preserve_aspect_ratio=increase`, Pad/Fit -> `decrease`.
-    • UX: `Blur` and `Pixelate` remain disabled on NVEncC-only video paths.
-v8.13 - Merged Horizontal/Vertical Mode (2026-02-20)
-    • UX: Merged Horizontal + Vertical into a single orientation mode.
-    • FEATURE: Output orientation is derived from the selected aspect ratio.
-    • UX: Horizontal and vertical aspect presets are shown together in merged mode.
-v8.8 - Subtitle & Workflow Improvements (2025-12-29)
-    • FEATURE: "Smart CJK Wrapping": Subtitles now treat straight/wide characters
-               differently (Width 1 vs 2), fixing premature wrapping for English
-               and late wrapping for Chinese/Japanese.
-    • FEATURE: "Dynamic Wrap Limit": Auto-calculates safe line length based on
-               Video Resolution and Font Size to prevent text runoff.
-    • FIX: Dynamic Subtitle Resolution: Now sets correct PlayResX/Y for Vertical/4K/Hybrid
-           formats, preventing subtitles from being cut off or scaling wrongly.
-    • UI: Added "Select Matches Preset" button to queue for batch selection.
-    • UI: Added "Suffix Override" to Preset UI.
-    • UI: Moved Loudness/Normalization controls to dedicated "Loudness" tab.
-v8.7 - Upscaling Algorithm Expansion (2025-12-26)
-    • UI: Replaced upscale algorithm radio buttons with dropdown (Combobox).
-    • FEATURE: Added "Nearest" algorithm option for fastest upscaling.
-    • FEATURE: Exposed all 4 scale_cuda algorithms: nearest, bilinear, bicubic, lanczos.
-    • UX: Added tooltip explaining quality/speed tradeoffs for each algorithm.
-v8.6 - Sharpening & Docs Update (2025-12-26)
-    • FEATURE: Integrated video sharpening with `cas` and `unsharp` filters.
-    • FEATURE: Enabled sharpening by default (Algorithm: `cas`, Strength: `0.5`).
-    • UI: Added Sharpening controls to the Color & Quality section.
-    • DOCS: Expanded comprehensive documentation header and maintenance policy.
-v8.5 - Loudness War & Measurement Update (2025-12-26)
-    • FEATURE: "Loudness War" section with compressor and limiter.
-    • FEATURE: Enhanced Loudness Measurement system with JSON export.
-    • FEATURE: "Brickwall" normalization settings for maximum signal density.
-v8.0 - Audio Normalization Update (2025-12-26)
-    • FEATURE: Added chained audio normalization (Dynamic + EBU R128).
-    • FEATURE: Enabled Dynamic Normalization by default.
-v7.8 - Stability & Threading Update (2025-12-20)
-    • FEATURE: Added Threading and Progress Bar.
-    • FEATURE: Graceful Exit (Ctrl+C) handling.
-    • BUGFIX: Hybrid jobs "Seam" alignment logic parity.
+           sources. Working format now chosen from the OUTPUT (HDR→p010le,
+           SDR→nv12) instead of source bit depth.
 """
 import os
 import subprocess
@@ -291,11 +135,9 @@ SURROUND_BITRATE_K = 512
 PASSTHROUGH_NORMALIZE_BITRATE_K = 192
 IAMF_STREAM_BITRATE_K = 128
 
-# Video & General
 DEFAULT_LUT_PATH = ""
 DEFAULT_SOFA_PATH = r"C:\Users\Feureau\AppData\Roaming\mpv\D1_48K_24bit_256tap_FIR_SOFA.sofa"
 
-# === v8.24: 15-speaker grid, canonical FFmpeg azimuths ===
 DEFAULT_SOFA_SPEAKER_AZIMUTHS = {
     "FL": "30",  "FR": "330", "FC": "0",
     "SL": "90",  "SR": "270",
@@ -312,7 +154,6 @@ DEFAULT_SOFA_SPEAKERS = "|".join(
     f"{n} {DEFAULT_SOFA_SPEAKER_AZIMUTHS[n]}" for n in SOFA_SPEAKER_ORDER
 )
 
-# === v8.24: Delivery targets ===
 DELIVERY_TARGET_CUSTOM            = "Custom (Manual Tracks)"
 DELIVERY_TARGET_YT_STEREO         = "YouTube: Stereo"
 DELIVERY_TARGET_YT_STEREO_51      = "YouTube: Stereo + 5.1"
@@ -335,7 +176,6 @@ DELIVERY_TARGET_LOOKUP = {
 DELIVERY_TARGET_REVERSE = {v: k for k, v in DELIVERY_TARGET_LOOKUP.items()}
 DEFAULT_DELIVERY_TARGET = "custom"
 
-# Codecs YouTube accepts without re-transcoding on upload
 YT_COMPATIBLE_CODECS = {"aac", "opus", "libopus", "eac3", "flac"}
 
 DEFAULT_RESOLUTION = "2160p"
@@ -489,6 +329,12 @@ DEFAULT_AUDIO_STEREO_SOFALIZER = False
 DEFAULT_AUDIO_SURROUND_51 = False
 DEFAULT_AUDIO_PASSTHROUGH = True
 
+# === v8.25: per-track loudness scope ===
+DEFAULT_LOUDNESS_APPLY_MONO = True
+DEFAULT_LOUDNESS_APPLY_STEREO = True
+DEFAULT_LOUDNESS_APPLY_SURROUND_51 = True
+DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
+
 DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
 DEFAULT_SUBTITLE_FONT_SIZE = "32"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
@@ -545,7 +391,6 @@ DEFAULT_TITLE_SHADOW_ALPHA = 128
 DEFAULT_TITLE_SHADOW_OFFSET_X = "2"
 DEFAULT_TITLE_SHADOW_OFFSET_Y = "3"
 DEFAULT_TITLE_SHADOW_BLUR = "4"
-
 DEFAULT_TITLE_SPACING = "0"
 DEFAULT_TITLE_LINE_SPACING = "0"
 DEFAULT_TITLE_WRAP_LIMIT = "0"
@@ -713,8 +558,8 @@ def check_ffmpeg_capabilities():
             'libsvtav1': 'libsvtav1' in stdout_lower,
         }
         result = subprocess.run([FFMPEG_CMD, "-filters"], capture_output=True, text=True)
-        capabilities['filters'] = all(x in result.stdout.lower() for x in ['loudnorm', 'dynaudnorm', 'scale_cuda', 'lut3d'])
-        # === v8.24: probe for iamf muxer (needed by Eclipsa target) ===
+        capabilities['filters'] = all(x in result.stdout.lower() for x in
+                                      ['loudnorm', 'dynaudnorm', 'scale_cuda', 'lut3d'])
         result = subprocess.run([FFMPEG_CMD, "-muxers"], capture_output=True, text=True)
         mux_stdout = (result.stdout or "").lower()
         capabilities['iamf'] = (" iamf" in mux_stdout) or ("\niamf" in mux_stdout)
@@ -777,17 +622,14 @@ def escape_ffmpeg_filter_path(path, base_dir=None):
     if not path:
         return ""
     p = get_safe_filter_path(path, base_dir)
-    p = p.replace(':', '\\\\:')
-    p = p.replace(' ', '\\\\ ')
-    p = p.replace(',', '\\\\,')
-    p = p.replace("'", r"\\\'")
-    p = p.replace('[', '\\\\[').replace(']', '\\\\]')
+    p = p.replace(':', '\\\\:').replace(' ', '\\\\ ').replace(',', '\\\\,')
+    p = p.replace("'", r"\\\'").replace('[', '\\\\[').replace(']', '\\\\]')
     return p
 
 
 def get_file_duration(file_path):
-    cmd = [FFPROBE_CMD, "-v", "error", "-show_entries", "format=duration", "-of",
-           "default=noprint_wrappers=1:nokey=1", file_path]
+    cmd = [FFPROBE_CMD, "-v", "error", "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", file_path]
     try:
         result = safe_ffprobe(cmd, "duration check")
         return float(result.stdout.strip())
@@ -849,7 +691,8 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
                         current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
                         percent = min(100, (current_seconds / duration) * 100)
                         progress_callback(percent)
-                is_progress_like = any(tok in line for tok in ("frame=", "fps=", "time=", "speed=", "bitrate="))
+                is_progress_like = any(tok in line for tok in
+                                       ("frame=", "fps=", "time=", "speed=", "bitrate="))
                 if is_progress_like:
                     pad = " " * max(0, last_progress_len - len(line))
                     sys.stdout.write("\r" + line + pad)
@@ -950,7 +793,8 @@ def find_title_json_file(video_path, subtitle_path, json_suffix, remove_hashtags
                 data = json.load(f)
             raw_title = data.get('title', '')
             if raw_title:
-                return json_path, sanitize_title(raw_title, remove_hashtags=remove_hashtags, keep_emoji=keep_emoji)
+                return json_path, sanitize_title(raw_title, remove_hashtags=remove_hashtags,
+                                                 keep_emoji=keep_emoji)
         except Exception as e:
             debug_print(f"Failed to parse JSON title file {json_path}: {e}")
             continue
@@ -969,18 +813,21 @@ def smart_wrap_text(text, limit):
         is_space = char == ' '
         if is_space:
             if current_token:
-                tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+                tokens.append({'text': current_token,
+                               'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
                 current_token = ""
             tokens.append({'text': ' ', 'width': 1, 'type': 'space'})
         elif is_cjk:
             if current_token:
-                tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+                tokens.append({'text': current_token,
+                               'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
                 current_token = ""
             tokens.append({'text': char, 'width': 2, 'type': 'cjk'})
         else:
             current_token += char
     if current_token:
-        tokens.append({'text': current_token, 'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
+        tokens.append({'text': current_token,
+                       'width': sum(get_char_width(c) for c in current_token), 'type': 'word'})
 
     lines = []
     current_line_tokens = []
@@ -1040,7 +887,8 @@ def smart_wrap_text(text, limit):
         else:
             strong_break_found_idx = -1
             if current_line_width > limit * 0.7:
-                lookback_range = range(len(current_line_tokens) - 1, max(-1, len(current_line_tokens) - 10), -1)
+                lookback_range = range(len(current_line_tokens) - 1,
+                                       max(-1, len(current_line_tokens) - 10), -1)
                 for idx in lookback_range:
                     t_text = current_line_tokens[idx]['text']
                     if t_text and t_text[-1] in ".,;:!?":
@@ -1145,7 +993,8 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         final_limit = user_wrap_limit
     else:
         fn_lower = font_name.lower()
-        is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+        is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra',
+                                               'extrabold', 'extra bold', 'impact'))
         is_bold = options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD)
         if is_heavy:
             width_mult = 0.85
@@ -1215,7 +1064,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 raw_lines = [line.strip() for line in clean_text.splitlines()]
                 raw_lines = [line for line in raw_lines if line]
                 sanitized_lines = [
-                    sanitize_subtitle_line(line, repeat_min_run, repeat_ratio, truncate_suffix=truncate_suffix)
+                    sanitize_subtitle_line(line, repeat_min_run, repeat_ratio,
+                                           truncate_suffix=truncate_suffix)
                     for line in raw_lines
                 ]
                 sanitized_lines = [line for line in sanitized_lines if line]
@@ -1307,7 +1157,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         elif align_mode == "middle":
             cy = (play_res_y / 2.0) + m_v_offset
             pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
-        dialogue_lines.append(f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
+        dialogue_lines.append(
+            f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
     full_ass_content = header + "\n".join(dialogue_lines)
     filename = f"vid_temp_sub_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(get_temp_work_dir(), filename)
@@ -1450,7 +1301,8 @@ def _measure_text_gdi(lines, font_name, font_size_px, is_bold=False, is_italic=F
         gdi32.CreateFontW.restype = wintypes.HFONT
         gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
         gdi32.SelectObject.restype = wintypes.HGDIOBJ
-        gdi32.GetTextExtentPoint32W.argtypes = [wintypes.HDC, wintypes.LPCWSTR, wintypes.INT, ctypes.POINTER(wintypes.SIZE)]
+        gdi32.GetTextExtentPoint32W.argtypes = [wintypes.HDC, wintypes.LPCWSTR,
+                                                wintypes.INT, ctypes.POINTER(wintypes.SIZE)]
         gdi32.GetTextExtentPoint32W.restype = wintypes.BOOL
         gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
         gdi32.DeleteObject.restype = wintypes.BOOL
@@ -1469,7 +1321,8 @@ def _measure_text_gdi(lines, font_name, font_size_px, is_bold=False, is_italic=F
             weight = 700
         elif any(k in fn_lower for k in ('light', 'thin')):
             weight = 300
-        hfont = gdi32.CreateFontW(-int(font_size_px), 0, 0, 0, weight, 1 if is_italic else 0, 0, 0, 1, 0, 0, 5, 0, font_name)
+        hfont = gdi32.CreateFontW(-int(font_size_px), 0, 0, 0, weight,
+                                  1 if is_italic else 0, 0, 0, 1, 0, 0, 5, 0, font_name)
         if not hfont:
             user32.ReleaseDC(0, hdc)
             return None
@@ -1506,12 +1359,14 @@ def measure_text_lines(lines, font_name, font_size, is_bold=False, is_italic=Fal
         f = tkFont.Font(family=font_name, size=-font_size_px,
                         weight='bold' if is_bold else 'normal',
                         slant='italic' if is_italic else 'roman')
-        return [float(f.measure(line)) for line in lines], f.metrics().get('linespace', int(round(font_size_px * 1.25)))
+        return ([float(f.measure(line)) for line in lines],
+                f.metrics().get('linespace', int(round(font_size_px * 1.25))))
     except Exception:
         pass
     widths = []
     fn_lower = font_name.lower()
-    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra', 'extrabold', 'extra bold', 'impact'))
+    is_heavy = any(k in fn_lower for k in ('blk', 'black', 'heavy', 'ultra',
+                                           'extrabold', 'extra bold', 'impact'))
     weight_mult = 1.18 if is_heavy else (1.08 if is_bold else 1.0)
     for line in lines:
         w = 0.0
@@ -1626,9 +1481,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     try:
-        m_v_offset = float(margin_v)
-        m_l = float(margin_l)
-        m_r = float(margin_r)
+        m_v_offset = float(margin_v); m_l = float(margin_l); m_r = float(margin_r)
     except (ValueError, TypeError):
         m_v_offset, m_l, m_r = 50.0, 50.0, 50.0
     cx = (m_l + (play_res_x - m_r)) / 2.0
@@ -1673,7 +1526,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if not current_line and token == ' ':
                     continue
                 test_line = current_line + token
-                widths, _ = measure_text_lines([test_line], font_name, font_size, is_bold=is_bold, is_italic=is_italic)
+                widths, _ = measure_text_lines([test_line], font_name, font_size,
+                                               is_bold=is_bold, is_italic=is_italic)
                 test_width = widths[0] if widths else 0
                 if test_width > available_width and current_line:
                     wrapped_raw_lines.append(current_line.strip())
@@ -1714,8 +1568,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
         else:
             for line_w, line_cy in zip(eff_widths, line_cy_list):
-                path = generate_ass_rounded_rect(cx - (line_w/2.0) - pad_x, line_cy - (eff_line_h/2.0) - pad_y,
-                                                 cx + (line_w/2.0) + pad_x, line_cy + (eff_line_h/2.0) + pad_y, bg_radius)
+                path = generate_ass_rounded_rect(cx - (line_w/2.0) - pad_x,
+                                                 line_cy - (eff_line_h/2.0) - pad_y,
+                                                 cx + (line_w/2.0) + pad_x,
+                                                 line_cy + (eff_line_h/2.0) + pad_y, bg_radius)
                 dialogue_lines.append(
                     f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
     for line_str, line_cy in zip(raw_lines, line_cy_list):
@@ -1787,7 +1643,6 @@ def compute_original_target_resolution(res_key, info):
 
 
 def get_audio_stream_info(file_path):
-    # === v8.24: now includes codec_name (needed by Archival warning + Eclipsa) ===
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries",
            "stream=index,channels,channel_layout,codec_name", "-of", "json", file_path]
     try:
@@ -1882,10 +1737,13 @@ def split_srt_file(srt_file_path, output_path, chapter_start_sec, chapter_end_se
                     continue
                 new_start = max(0, start_sec - chapter_start_sec)
                 chapter_dur = end_limit - chapter_start_sec
-                new_end = min(end_sec - chapter_start_sec, chapter_dur) if chapter_dur != float('inf') else (end_sec - chapter_start_sec)
+                new_end = (min(end_sec - chapter_start_sec, chapter_dur)
+                           if chapter_dur != float('inf') else (end_sec - chapter_start_sec))
                 if new_start >= new_end:
                     continue
-                new_blocks.append(f"{idx}\n{format_srt_time(new_start)} --> {format_srt_time(new_end)}\n" + '\n'.join(lines[2:]))
+                new_blocks.append(
+                    f"{idx}\n{format_srt_time(new_start)} --> {format_srt_time(new_end)}\n"
+                    + '\n'.join(lines[2:]))
                 idx += 1
             except Exception as e:
                 debug_print(f"Skipping block due to parse error: {e}")
@@ -1956,6 +1814,11 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('comp_makeup', ''),
         job_options.get('limit_limit', ''),
         str(job_options.get('measure_loudness', False)),
+        # === v8.25 ===
+        str(job_options.get('loudness_apply_mono', True)),
+        str(job_options.get('loudness_apply_stereo', True)),
+        str(job_options.get('loudness_apply_surround_51', True)),
+        str(job_options.get('loudness_apply_eclipsa', True)),
         str(job_options.get('normalize_audio', False)),
         job_options.get('sofa_file', ''),
         job_options.get('sofa_speakers', ''),
@@ -1980,7 +1843,6 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('audio_stereo_sofalizer', False),
         job_options.get('audio_surround_51', False),
         job_options.get('audio_passthrough', False),
-        # === v8.24 ===
         job_options.get('audio_delivery_target', DEFAULT_DELIVERY_TARGET),
         str(job_options.get('use_sharpening', False)),
         job_options.get('sharpening_algo', ''),
@@ -2196,6 +2058,11 @@ class WorkflowPresetManager:
             "comp_makeup": DEFAULT_COMPRESSOR_MAKEUP,
             "limit_limit": DEFAULT_LIMITER_LIMIT,
             "measure_loudness": DEFAULT_MEASURE_LOUDNESS,
+            # === v8.25: per-track loudness scope ===
+            "loudness_apply_mono": DEFAULT_LOUDNESS_APPLY_MONO,
+            "loudness_apply_stereo": DEFAULT_LOUDNESS_APPLY_STEREO,
+            "loudness_apply_surround_51": DEFAULT_LOUDNESS_APPLY_SURROUND_51,
+            "loudness_apply_eclipsa": DEFAULT_LOUDNESS_APPLY_ECLIPSA,
             "loudness_target": DEFAULT_LOUDNESS_TARGET,
             "loudness_range": DEFAULT_LOUDNESS_RANGE,
             "true_peak": DEFAULT_TRUE_PEAK,
@@ -2204,7 +2071,7 @@ class WorkflowPresetManager:
             "audio_stereo_sofalizer": DEFAULT_AUDIO_STEREO_SOFALIZER,
             "audio_surround_51": DEFAULT_AUDIO_SURROUND_51,
             "audio_passthrough": DEFAULT_AUDIO_PASSTHROUGH,
-            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,   # === v8.24 ===
+            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
             "sofa_file": DEFAULT_SOFA_PATH,
             "sofa_speakers": DEFAULT_SOFA_SPEAKERS,
             "lut_file": DEFAULT_LUT_PATH,
@@ -2455,7 +2322,8 @@ class VideoProcessorApp:
         self.color_preset_hdr_var = tk.StringVar(value=DEFAULT_COLOR_PRESET_HDR)
         self.color_preset_hdr_var.trace_add('write', lambda *args: self._update_selected_jobs('color_preset_hdr'))
         self.hdr_master_display_var = tk.StringVar(value=DEFAULT_HDR_MASTER_DISPLAY)
-        self.hdr_master_display_var.trace_add('write', lambda *args: self._update_selected_jobs('hdr_master_display'))
+        self.hdr_master_display_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('hdr_master_display'))
         self.hdr_max_cll_var = tk.StringVar(value=DEFAULT_HDR_MAX_CLL)
         self.hdr_max_cll_var.trace_add('write', lambda *args: self._update_selected_jobs('hdr_max_cll'))
 
@@ -2467,10 +2335,12 @@ class VideoProcessorApp:
             self._apply_backend_constraints(),
             self._update_chroma_options()])
         self.nvenc_superres_mode_var = tk.StringVar(value=DEFAULT_NVENC_SUPERRES_MODE)
-        self.nvenc_superres_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_superres_mode'))
+        self.nvenc_superres_mode_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('nvenc_superres_mode'))
         self.nvenc_nvvfx_denoise_var = tk.BooleanVar(value=DEFAULT_NVENC_NVVFX_DENOISE)
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
-        self.nvenc_ngx_vsr_quality_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
+        self.nvenc_ngx_vsr_quality_var.trace_add('write',
+                                                 lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
         self.subfolder_mode_var = tk.StringVar(
             value=SUBFOLDER_MODE_DISPLAY_MAP.get(DEFAULT_SUBFOLDER_MODE, "None (Default: Output)"))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
@@ -2493,13 +2363,16 @@ class VideoProcessorApp:
         self.video_offset_y_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_Y)
         self.video_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_y'))
         self.pixelate_multiplier_var = tk.StringVar(value=DEFAULT_PIXELATE_MULTIPLIER)
-        self.pixelate_multiplier_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_multiplier'))
+        self.pixelate_multiplier_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('pixelate_multiplier'))
         self.ambient_spread_var = tk.StringVar(value=DEFAULT_AMBIENT_SPREAD)
         self.ambient_spread_var.trace_add('write', lambda *args: self._update_selected_jobs('ambient_spread'))
         self.pixelate_brightness_var = tk.StringVar(value=DEFAULT_PIXELATE_BRIGHTNESS)
-        self.pixelate_brightness_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_brightness'))
+        self.pixelate_brightness_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('pixelate_brightness'))
         self.pixelate_saturation_var = tk.StringVar(value=DEFAULT_PIXELATE_SATURATION)
-        self.pixelate_saturation_var.trace_add('write', lambda *args: self._update_selected_jobs('pixelate_saturation'))
+        self.pixelate_saturation_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('pixelate_saturation'))
         self.blur_sigma_var = tk.StringVar(value=DEFAULT_BLUR_SIGMA)
         self.blur_sigma_var.trace_add('write', lambda *args: self._update_selected_jobs('blur_sigma'))
         self.blur_steps_var = tk.StringVar(value=DEFAULT_BLUR_STEPS)
@@ -2552,40 +2425,63 @@ class VideoProcessorApp:
         self.limit_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('limit_limit'))
         self.measure_loudness_var = tk.BooleanVar(value=DEFAULT_MEASURE_LOUDNESS)
 
+        # === v8.25: per-track loudness scope ===
+        self.loudness_apply_mono_var = tk.BooleanVar(value=DEFAULT_LOUDNESS_APPLY_MONO)
+        self.loudness_apply_mono_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('loudness_apply_mono'))
+        self.loudness_apply_stereo_var = tk.BooleanVar(value=DEFAULT_LOUDNESS_APPLY_STEREO)
+        self.loudness_apply_stereo_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('loudness_apply_stereo'))
+        self.loudness_apply_surround_51_var = tk.BooleanVar(value=DEFAULT_LOUDNESS_APPLY_SURROUND_51)
+        self.loudness_apply_surround_51_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('loudness_apply_surround_51'))
+        self.loudness_apply_eclipsa_var = tk.BooleanVar(value=DEFAULT_LOUDNESS_APPLY_ECLIPSA)
+        self.loudness_apply_eclipsa_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('loudness_apply_eclipsa'))
+
         self.nvenc_preset_var = tk.StringVar(value=DEFAULT_NVENC_PRESET)
         self.nvenc_preset_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_preset'))
         self.nvenc_tune_var = tk.StringVar(value=DEFAULT_NVENC_TUNE)
         self.nvenc_tune_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_tune'))
         self.nvenc_profile_sdr_var = tk.StringVar(value=DEFAULT_NVENC_PROFILE_SDR)
-        self.nvenc_profile_sdr_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_profile_sdr'))
+        self.nvenc_profile_sdr_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('nvenc_profile_sdr'))
         self.nvenc_profile_hdr_var = tk.StringVar(value=DEFAULT_NVENC_PROFILE_HDR)
-        self.nvenc_profile_hdr_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_profile_hdr'))
+        self.nvenc_profile_hdr_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('nvenc_profile_hdr'))
         self.nvenc_rc_lookahead_var = tk.StringVar(value=DEFAULT_NVENC_RC_LOOKAHEAD)
-        self.nvenc_rc_lookahead_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_rc_lookahead'))
+        self.nvenc_rc_lookahead_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('nvenc_rc_lookahead'))
         self.nvenc_multipass_var = tk.StringVar(value=DEFAULT_NVENC_MULTIPASS)
         self.nvenc_multipass_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_multipass'))
         self.nvenc_spatial_aq_var = tk.StringVar(value=DEFAULT_NVENC_SPATIAL_AQ)
         self.nvenc_spatial_aq_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_spatial_aq'))
         self.nvenc_temporal_aq_var = tk.StringVar(value=DEFAULT_NVENC_TEMPORAL_AQ)
-        self.nvenc_temporal_aq_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_temporal_aq'))
+        self.nvenc_temporal_aq_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('nvenc_temporal_aq'))
         self.nvenc_bframes_var = tk.StringVar(value=DEFAULT_NVENC_BFRAMES)
         self.nvenc_bframes_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_bframes'))
         self.nvenc_b_ref_mode_var = tk.StringVar(value=DEFAULT_NVENC_B_REF_MODE)
         self.nvenc_b_ref_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_b_ref_mode'))
         self.nvencc_decode_mode_var = tk.StringVar(value=DEFAULT_NVENCC_DECODE_MODE)
-        self.nvencc_decode_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_decode_mode'))
+        self.nvencc_decode_mode_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('nvencc_decode_mode'))
         self.nvencc_color_tag_mode_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_TAG_MODE)
         self.nvencc_color_tag_mode_var.trace_add('write', lambda *args: [
             self._update_selected_jobs('nvencc_color_tag_mode'),
             self._toggle_nvencc_color_mode_controls()])
         self.nvencc_color_prim_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_PRIM)
-        self.nvencc_color_prim_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_prim'))
+        self.nvencc_color_prim_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('nvencc_color_prim'))
         self.nvencc_color_transfer_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_TRANSFER)
-        self.nvencc_color_transfer_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_transfer'))
+        self.nvencc_color_transfer_var.trace_add('write',
+                                                 lambda *args: self._update_selected_jobs('nvencc_color_transfer'))
         self.nvencc_color_matrix_var = tk.StringVar(value=DEFAULT_NVENCC_COLOR_MATRIX)
-        self.nvencc_color_matrix_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_color_matrix'))
+        self.nvencc_color_matrix_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('nvencc_color_matrix'))
         self.nvencc_output_depth_var = tk.StringVar(value=DEFAULT_NVENCC_OUTPUT_DEPTH)
-        self.nvencc_output_depth_var.trace_add('write', lambda *args: self._update_selected_jobs('nvencc_output_depth'))
+        self.nvencc_output_depth_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('nvencc_output_depth'))
         self.nvencc_strict_no_color_tagging_var = tk.BooleanVar(value=DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING)
         self.ffmpeg_threads_var = tk.StringVar(value=DEFAULT_FFMPEG_THREADS)
         self.ffmpeg_threads_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_threads'))
@@ -2607,7 +2503,6 @@ class VideoProcessorApp:
         self.cpu_crf_var = tk.StringVar(value=DEFAULT_CPU_CRF)
         self.cpu_crf_var.trace_add('write', lambda *args: self._update_selected_jobs('cpu_crf'))
 
-        # === v8.24: SOFA path + 15-speaker grid via dict + delivery target ===
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.sofa_file_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_file'))
         self._sofa_speaker_defaults = self._parse_sofa_speakers(DEFAULT_SOFA_SPEAKERS)
@@ -2618,7 +2513,6 @@ class VideoProcessorApp:
             v = tk.StringVar(value=default)
             self.sofa_spk_vars[name] = v
             v.trace_add('write', lambda *a: self._update_selected_jobs('sofa_speakers'))
-        # Backward-compat accessors (other code references these names)
         self.sofa_spk_fl_var  = self.sofa_spk_vars["FL"]
         self.sofa_spk_fc_var  = self.sofa_spk_vars["FC"]
         self.sofa_spk_fr_var  = self.sofa_spk_vars["FR"]
@@ -2652,14 +2546,17 @@ class VideoProcessorApp:
         self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
         self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
         self.hybrid_bottom_path_var = tk.StringVar(value="")
-        self.hybrid_bottom_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
+        self.hybrid_bottom_path_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
         self.hybrid_top_suffix_var = tk.StringVar(value="-top")
-        self.hybrid_top_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_top_suffix'))
+        self.hybrid_top_suffix_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('hybrid_top_suffix'))
         self.hybrid_bot_suffix_var = tk.StringVar(value="-bot")
         self.hybrid_bot_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bot_suffix'))
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
-        self.subtitle_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_font_size'))
+        self.subtitle_font_size_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('subtitle_font_size'))
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         self.subtitle_bold_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_BOLD)
         self.subtitle_italic_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_ITALIC)
@@ -2695,9 +2592,11 @@ class VideoProcessorApp:
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
         self.wrap_limit_entry = None
         self.multiline_wrap_var = tk.BooleanVar(value=False)
-        self.multiline_wrap_var.trace_add('write', lambda *args: self._update_selected_jobs('preserve_multiline_subs'))
+        self.multiline_wrap_var.trace_add('write',
+                                          lambda *args: self._update_selected_jobs('preserve_multiline_subs'))
         self.subtitle_max_lines_var = tk.StringVar(value=DEFAULT_SUBTITLE_MAX_LINES)
-        self.subtitle_max_lines_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_max_lines'))
+        self.subtitle_max_lines_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('subtitle_max_lines'))
         self.last_standard_alignment = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         self.subtitle_path_var = tk.StringVar(value="")
         self._suppress_subtitle_path_trace = False
@@ -2721,7 +2620,8 @@ class VideoProcessorApp:
         self.title_spacing_var = tk.StringVar(value=DEFAULT_TITLE_SPACING)
         self.title_spacing_var.trace_add('write', lambda *args: self._update_selected_jobs('title_spacing'))
         self.title_line_spacing_var = tk.StringVar(value=DEFAULT_TITLE_LINE_SPACING)
-        self.title_line_spacing_var.trace_add('write', lambda *args: self._update_selected_jobs('title_line_spacing'))
+        self.title_line_spacing_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('title_line_spacing'))
         self.title_wrap_limit_var = tk.StringVar(value=DEFAULT_TITLE_WRAP_LIMIT)
         self.title_wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('title_wrap_limit'))
         self.title_bold_var = tk.BooleanVar(value=DEFAULT_TITLE_BOLD)
@@ -2739,17 +2639,19 @@ class VideoProcessorApp:
         self.title_outline_color_var = tk.StringVar(value=DEFAULT_TITLE_OUTLINE_COLOR)
         self.title_outline_alpha_var = tk.IntVar(value=DEFAULT_TITLE_OUTLINE_ALPHA)
         self.title_outline_width_var = tk.StringVar(value=DEFAULT_TITLE_OUTLINE_WIDTH)
-        self.title_outline_width_var.trace_add('write', lambda *args: self._update_selected_jobs('title_outline_width'))
+        self.title_outline_width_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('title_outline_width'))
         self.title_shadow_color_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_COLOR)
         self.title_shadow_alpha_var = tk.IntVar(value=DEFAULT_TITLE_SHADOW_ALPHA)
         self.title_shadow_offset_x_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_OFFSET_X)
-        self.title_shadow_offset_x_var.trace_add('write',
-                                                 lambda *args: self._update_selected_jobs('title_shadow_offset_x'))
+        self.title_shadow_offset_x_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_shadow_offset_x'))
         self.title_shadow_offset_y_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_OFFSET_Y)
-        self.title_shadow_offset_y_var.trace_add('write',
-                                                 lambda *args: self._update_selected_jobs('title_shadow_offset_y'))
+        self.title_shadow_offset_y_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_shadow_offset_y'))
         self.title_shadow_blur_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_BLUR)
-        self.title_shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('title_shadow_blur'))
+        self.title_shadow_blur_var.trace_add('write',
+                                             lambda *args: self._update_selected_jobs('title_shadow_blur'))
         self.title_bg_enabled_var = tk.BooleanVar(value=DEFAULT_TITLE_BG_ENABLED)
         self.title_bg_mode_var = tk.StringVar(value=DEFAULT_TITLE_BG_MODE)
         self.title_bg_color_var = tk.StringVar(value=DEFAULT_TITLE_BG_COLOR)
@@ -2765,7 +2667,8 @@ class VideoProcessorApp:
         self.ffmpeg_denoise_vulkan_var = tk.BooleanVar(value=DEFAULT_FFMPEG_DENOISE_VULKAN)
         self.sharpening_algo_var = tk.StringVar(value=DEFAULT_SHARPENING_ALGO)
         self.sharpening_strength_var = tk.StringVar(value=DEFAULT_SHARPENING_STRENGTH)
-        self.sharpening_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('sharpening_strength'))
+        self.sharpening_strength_var.trace_add('write',
+                                               lambda *args: self._update_selected_jobs('sharpening_strength'))
 
         self.audio_mono_var = tk.BooleanVar(value=DEFAULT_AUDIO_MONO)
         self.audio_stereo_downmix_var = tk.BooleanVar(value=DEFAULT_AUDIO_STEREO_DOWNMIX)
@@ -2839,7 +2742,7 @@ class VideoProcessorApp:
         self._apply_backend_constraints()
         self._toggle_audio_norm_options()
         self._update_audio_options_ui()
-        self._on_delivery_target_changed()   # === v8.24 ===
+        self._on_delivery_target_changed()
         self._update_codec_options(show_message=False)
         self._update_bitrate_display()
         self._update_chroma_options()
@@ -2847,7 +2750,6 @@ class VideoProcessorApp:
         if self.current_preset_var.get():
             self.load_preset_to_gui(self.current_preset_var.get())
 
-    # ---------- v8.23.1: Chroma & Color helpers ----------
     def _on_chroma_var_changed(self, *args):
         self._sync_chroma_display()
         self._update_selected_jobs('chroma_subsampling')
@@ -2943,13 +2845,10 @@ class VideoProcessorApp:
         else:
             self.hdr_meta_frame.pack_forget()
 
-    # ---------- === v8.24: Delivery target change handler === ----------
     def _on_delivery_target_changed(self):
-        """Update UI state + hint text when the delivery target changes."""
         code = DELIVERY_TARGET_LOOKUP.get(self.audio_delivery_target_var.get(), "custom")
         hints = {
-            "custom":
-                "Manual track selection. Sofalizer requires a surround source.",
+            "custom": "Manual track selection. Sofalizer requires a surround source.",
             "youtube_stereo":
                 "Auto-adapts: mono→stereo dupe, stereo→re-encode, surround→Sofalizer binaural.",
             "youtube_stereo_51":
@@ -2984,7 +2883,7 @@ class VideoProcessorApp:
         for e in getattr(self, "sofa_spk_entries", {}).values():
             e.config(state=sofa_state)
 
-    # ---------- UI Setup ----------
+    # ---------- UI Setup: Encoder ----------
     def setup_encoder_tab(self, parent):
         scroll_frame = parent
         family_group = ttk.LabelFrame(scroll_frame, text="Encoder Engine", padding=10)
@@ -2997,7 +2896,8 @@ class VideoProcessorApp:
         self.cpu_settings_group = ttk.LabelFrame(scroll_frame, text="CPU Software Settings", padding=10)
         self.cpu_settings_group.pack(fill=tk.X, pady=5, padx=5)
         ttk.Label(self.cpu_settings_group, text="x264 Preset:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        x264_presets = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+        x264_presets = ["ultrafast", "superfast", "veryfast", "faster", "fast",
+                        "medium", "slow", "slower", "veryslow"]
         self.cpu_x264_combo = ttk.Combobox(self.cpu_settings_group, textvariable=self.cpu_x264_preset_var,
                                            values=x264_presets, width=12, state="readonly")
         self.cpu_x264_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
@@ -3075,7 +2975,6 @@ class VideoProcessorApp:
         ffmpeg_priority_combo.grid(row=9, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(ffmpeg_priority_combo,
                 "FFmpeg process priority (Windows). Non-Windows systems ignore this setting.")
-
         gop_group = ttk.LabelFrame(scroll_frame, text="GOP & B-Frames", padding=10)
         gop_group.pack(fill=tk.X, pady=5, padx=5)
         ttk.Label(gop_group, text="B-Frames:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -3104,7 +3003,6 @@ class VideoProcessorApp:
         temporal_combo = ttk.Combobox(rc_group, textvariable=self.nvenc_temporal_aq_var,
                                       values=["0", "1"], width=5, state="readonly")
         temporal_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
-
         color_group = ttk.LabelFrame(scroll_frame, text="NVEncC Color (Details)", padding=10)
         color_group.pack(fill=tk.X, pady=5, padx=5)
         ttk.Label(color_group, text="Color Tags:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -3152,7 +3050,6 @@ class VideoProcessorApp:
                                     value="pooled", command=lambda: self._update_selected_jobs("output_mode"))
         rb_pooled.pack(side=tk.LEFT, padx=(15, 0))
         ToolTip(rb_pooled, "Output saved in the script's working directory (pooled).")
-
         subfolder_group = ttk.LabelFrame(parent, text="Directory Structure & Subfolders", padding=10)
         subfolder_group.pack(fill=tk.X, pady=5)
         sf_row1 = ttk.Frame(subfolder_group)
@@ -3182,7 +3079,6 @@ class VideoProcessorApp:
         ttk.Label(sf_row2, text="Suffix Override:").pack(side=tk.LEFT, padx=(15, 2))
         suffix_entry = ttk.Entry(sf_row2, textvariable=self.output_suffix_override_var, width=16)
         suffix_entry.pack(side=tk.LEFT, padx=2)
-
         split_group = ttk.LabelFrame(parent, text="Chapter Splitting & Segment Export", padding=10)
         split_group.pack(fill=tk.X, pady=5)
         cb_chapters = ttk.Checkbutton(split_group, text="Render by Chapters (Split by metadata markers)",
@@ -3261,9 +3157,11 @@ class VideoProcessorApp:
         row2_1 = ttk.Frame(row2)
         row2_1.pack(fill=tk.X, pady=2)
         ttk.Label(row2_1, text="Trigger on Video:").pack(side=tk.LEFT, padx=(0, 5))
-        cb_always = ttk.Checkbutton(row2_1, text="Always (Clean/Backup)", variable=self.trigger_video_always_var)
+        cb_always = ttk.Checkbutton(row2_1, text="Always (Clean/Backup)",
+                                    variable=self.trigger_video_always_var)
         cb_always.pack(side=tk.LEFT, padx=5)
-        cb_fallback = ttk.Checkbutton(row2_1, text="Fallback (If No Subs)", variable=self.trigger_video_fallback_var)
+        cb_fallback = ttk.Checkbutton(row2_1, text="Fallback (If No Subs)",
+                                      variable=self.trigger_video_fallback_var)
         cb_fallback.pack(side=tk.LEFT, padx=5)
         row2_2a = ttk.Frame(row2)
         row2_2a.pack(fill=tk.X, pady=2)
@@ -3274,9 +3172,11 @@ class VideoProcessorApp:
         cb_autodetect.pack(side=tk.LEFT, padx=(10, 5))
         row2_2b = ttk.Frame(row2)
         row2_2b.pack(fill=tk.X, pady=2)
-        cb_restrict = ttk.Checkbutton(row2_2b, text="Restrict to Suffix:", variable=self.trigger_suffix_enable_var)
+        cb_restrict = ttk.Checkbutton(row2_2b, text="Restrict to Suffix:",
+                                      variable=self.trigger_suffix_enable_var)
         cb_restrict.pack(side=tk.LEFT, padx=(0, 2))
-        cb_include = ttk.Checkbutton(row2_2b, text="Include Suffix:", variable=self.trigger_include_suffix_var)
+        cb_include = ttk.Checkbutton(row2_2b, text="Include Suffix:",
+                                     variable=self.trigger_include_suffix_var)
         cb_include.pack(side=tk.LEFT, padx=(5, 2))
         entry_widget = ttk.Entry(row2_2b, textvariable=self.trigger_suffix_var, width=8)
         entry_widget.pack(side=tk.LEFT, padx=2)
@@ -3342,7 +3242,8 @@ class VideoProcessorApp:
         self.input_listbox.grid(row=0, column=0, sticky="nsew")
         self.input_scrollbar_v.config(command=self.input_listbox.yview)
         self.input_scrollbar_h.config(command=self.input_listbox.xview)
-        self.input_listbox.bind("<Button-1>", lambda e: self._handle_listbox_empty_click(e, self.input_listbox))
+        self.input_listbox.bind("<Button-1>",
+                                lambda e: self._handle_listbox_empty_click(e, self.input_listbox))
         input_toolbar = ttk.Frame(input_frame)
         input_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         tb_row1 = ttk.Frame(input_toolbar)
@@ -3356,7 +3257,8 @@ class VideoProcessorApp:
         ttk.Label(tb_row2, text="Filter:").pack(side=tk.LEFT, padx=(2, 2))
         self.input_filter_entry = ttk.Entry(tb_row2, textvariable=self.input_filter_var, width=12)
         self.input_filter_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Checkbutton(tb_row2, text="Inv", variable=self.input_filter_inverse_var).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(tb_row2, text="Inv",
+                        variable=self.input_filter_inverse_var).pack(side=tk.LEFT, padx=2)
         ttk.Button(tb_row2, text="Clear Input", command=self.clear_input_queue).pack(side=tk.RIGHT, padx=2)
         ttk.Button(tb_row2, text="Remove Selected",
                    command=self.remove_from_input_queue).pack(side=tk.RIGHT, padx=2)
@@ -3379,7 +3281,8 @@ class VideoProcessorApp:
         self.job_scrollbar_v.config(command=self.job_listbox.yview)
         self.job_scrollbar_h.config(command=self.job_listbox.xview)
         self.job_listbox.bind("<<ListboxSelect>>", self.on_job_select)
-        self.job_listbox.bind("<Button-1>", lambda e: self._handle_listbox_empty_click(e, self.job_listbox))
+        self.job_listbox.bind("<Button-1>",
+                              lambda e: self._handle_listbox_empty_click(e, self.job_listbox))
         job_toolbar = ttk.Frame(job_frame)
         job_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         ttk.Button(job_toolbar, text="Select All", command=self.select_all_jobs).pack(side=tk.LEFT, padx=2)
@@ -3395,8 +3298,10 @@ class VideoProcessorApp:
         ttk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT)
         ttk.Button(file_buttons_frame, text="Duplicate",
                    command=self.duplicate_selected_jobs).pack(side=tk.LEFT, padx=5)
-        ttk.Button(file_buttons_frame, text="Remove Sel.", command=self.remove_selected).pack(side=tk.LEFT)
-        ttk.Button(file_buttons_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(file_buttons_frame, text="Remove Sel.",
+                   command=self.remove_selected).pack(side=tk.LEFT)
+        ttk.Button(file_buttons_frame, text="Clear All",
+                   command=self.clear_all).pack(side=tk.LEFT, padx=5)
 
     def setup_video_tab(self, parent):
         geometry_group = ttk.LabelFrame(parent, text="Geometry & Layout", padding=10)
@@ -3423,7 +3328,6 @@ class VideoProcessorApp:
                                                          value="hybrid-duo (dual source)",
                                                          command=self._toggle_orientation_options)
         self.orientation_hybrid_duo_rb.pack(side=tk.LEFT, padx=(5, 0))
-
         self.aspect_ratio_frame = ttk.LabelFrame(geometry_group, text="Aspect Ratio", padding=10)
         self.aspect_ratio_frame.pack(fill=tk.X, pady=5)
         self.aspect_columns_frame = ttk.Frame(self.aspect_ratio_frame)
@@ -3447,7 +3351,6 @@ class VideoProcessorApp:
         ttk.Label(self.auto_rb_frame, text="Combined").pack(anchor="w")
         ttk.Radiobutton(self.auto_rb_frame, text="Auto (Follow Inputs)", variable=self.merged_aspect_var,
                         value="auto", command=lambda: self._on_merged_aspect_change("auto")).pack(anchor="w")
-
         self.hybrid_frame = ttk.Frame(geometry_group)
         self.hybrid_layout_frame = ttk.Frame(self.hybrid_frame)
         self.hybrid_layout_frame.pack(fill=tk.X, pady=(0, 5))
@@ -3457,7 +3360,8 @@ class VideoProcessorApp:
                                          self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT)
         ttk.Radiobutton(self.hybrid_layout_frame, text="Stacked (Top/Bottom)", variable=self.hybrid_layout_var,
                         value="stacked", command=lambda: (self._update_hybrid_ui_labels(),
-                                                          self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT, padx=5)
+                                                          self._update_selected_jobs("hybrid_layout"))).pack(
+            side=tk.LEFT, padx=5)
         ttk.Radiobutton(self.hybrid_layout_frame, text="Side-by-Side (Left/Right)",
                         variable=self.hybrid_layout_var, value="side_by_side",
                         command=lambda: (self._update_hybrid_ui_labels(),
@@ -3492,7 +3396,8 @@ class VideoProcessorApp:
         top_suffix_frame = ttk.Frame(self.top_video_frame)
         top_suffix_frame.pack(fill=tk.X, pady=(3, 0))
         ttk.Label(top_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
-        self.hybrid_top_suffix_entry = ttk.Entry(top_suffix_frame, textvariable=self.hybrid_top_suffix_var, width=10)
+        self.hybrid_top_suffix_entry = ttk.Entry(top_suffix_frame,
+                                                 textvariable=self.hybrid_top_suffix_var, width=10)
         self.hybrid_top_suffix_entry.pack(side=tk.LEFT)
         self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5)
         self.bottom_video_frame.pack(fill=tk.X, pady=5)
@@ -3524,9 +3429,9 @@ class VideoProcessorApp:
         bot_suffix_frame = ttk.Frame(self.bottom_video_frame)
         bot_suffix_frame.pack(fill=tk.X, pady=(3, 0))
         ttk.Label(bot_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
-        self.hybrid_bot_suffix_entry = ttk.Entry(bot_suffix_frame, textvariable=self.hybrid_bot_suffix_var, width=10)
+        self.hybrid_bot_suffix_entry = ttk.Entry(bot_suffix_frame,
+                                                 textvariable=self.hybrid_bot_suffix_var, width=10)
         self.hybrid_bot_suffix_entry.pack(side=tk.LEFT)
-
         aspect_handling_frame = ttk.Frame(geometry_group)
         aspect_handling_frame.pack(fill=tk.X, pady=(5, 2))
         ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0, 5))
@@ -3538,7 +3443,8 @@ class VideoProcessorApp:
                                              variable=self.aspect_mode_var, value="pad",
                                              command=self._toggle_upscale_options)
         self.aspect_pad_rb.pack(side=tk.LEFT, padx=(5, 2))
-        self.pad_color_swatch = tk.Label(aspect_handling_frame, width=2, relief="solid", bg=self.pad_color_var.get())
+        self.pad_color_swatch = tk.Label(aspect_handling_frame, width=2, relief="solid",
+                                         bg=self.pad_color_var.get())
         self.pad_color_swatch.pack(side=tk.LEFT)
         self.pad_color_btn = ttk.Button(aspect_handling_frame, text="..",
                                         command=lambda: self.choose_color(self.pad_color_var,
@@ -3594,7 +3500,6 @@ class VideoProcessorApp:
         ttk.Label(ap_row2, text="Y-Off:").pack(side=tk.LEFT, padx=(8, 2))
         self.video_offset_y_entry = ttk.Entry(ap_row2, textvariable=self.video_offset_y_var, width=4)
         self.video_offset_y_entry.pack(side=tk.LEFT)
-
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10)
         quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group)
@@ -3645,7 +3550,8 @@ class VideoProcessorApp:
         sres_row2.pack(fill=tk.X, pady=(2, 0))
         self.nvvfx_denoise_check = ttk.Checkbutton(sres_row2, text="AI Video Denoising",
                                                    variable=self.nvenc_nvvfx_denoise_var,
-                                                   command=lambda: self._update_selected_jobs("nvenc_nvvfx_denoise"))
+                                                   command=lambda: self._update_selected_jobs(
+                                                       "nvenc_nvvfx_denoise"))
         self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(0, 15))
         self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(sres_row2, text="FFmpeg Vulkan Denoise",
                                                            variable=self.ffmpeg_denoise_vulkan_var,
@@ -3729,7 +3635,8 @@ class VideoProcessorApp:
         self.sharpen_algo_combo.bind("<<ComboboxSelected>>",
                                      lambda e: self._update_selected_jobs("sharpening_algo"))
         ttk.Label(sharpen_group, text="Strength:").pack(side=tk.LEFT, padx=(10, 5))
-        self.sharpen_strength_entry = ttk.Entry(sharpen_group, textvariable=self.sharpening_strength_var, width=5)
+        self.sharpen_strength_entry = ttk.Entry(sharpen_group,
+                                                textvariable=self.sharpening_strength_var, width=5)
         self.sharpen_strength_entry.pack(side=tk.LEFT)
         self._toggle_upscale_options()
 
@@ -3737,13 +3644,44 @@ class VideoProcessorApp:
         self.hdr_master_display_var.set(DEFAULT_HDR_MASTER_DISPLAY)
         self.hdr_max_cll_var.set(DEFAULT_HDR_MAX_CLL)
 
+    # =========================================================================
+    # === v8.25: Loudness tab with per-track scope ===
+    # =========================================================================
     def setup_loudness_tab(self, parent):
+        # === Apply-to scope group ===
+        scope_group = ttk.LabelFrame(parent, text="Apply Loudness Processing To", padding=10)
+        scope_group.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Checkbutton(scope_group, text="Mono tracks",
+                        variable=self.loudness_apply_mono_var,
+                        command=lambda: self._update_selected_jobs("loudness_apply_mono")
+                        ).pack(anchor="w")
+        ttk.Checkbutton(scope_group, text="Stereo tracks (Standard Downmix + Sofalizer)",
+                        variable=self.loudness_apply_stereo_var,
+                        command=lambda: self._update_selected_jobs("loudness_apply_stereo")
+                        ).pack(anchor="w")
+        ttk.Checkbutton(scope_group, text="5.1 Surround bed",
+                        variable=self.loudness_apply_surround_51_var,
+                        command=lambda: self._update_selected_jobs("loudness_apply_surround_51")
+                        ).pack(anchor="w")
+        ttk.Checkbutton(scope_group, text="Eclipsa / IAMF streams",
+                        variable=self.loudness_apply_eclipsa_var,
+                        command=lambda: self._update_selected_jobs("loudness_apply_eclipsa")
+                        ).pack(anchor="w")
+        ToolTip(scope_group,
+                "Choose which output tracks receive the loudness chain "
+                "(Compression & Limiting, Dynamic Normalization, EBU R128).\n"
+                "Unchecked track types pass through unaffected.\n"
+                "Useful for normalizing only the stereo downmix while preserving "
+                "the surround bed's original dynamics.")
+
         loudness_group = ttk.LabelFrame(parent, text="Loudness & Normalization", padding=10)
         loudness_group.pack(fill=tk.X, pady=(0, 5))
-        self.loudness_war_checkbox = ttk.Checkbutton(loudness_group,
-                                                     text="Enable Compression & Limiting (acompressor + alimiter)",
-                                                     variable=self.use_loudness_war_var,
-                                                     command=self._toggle_audio_norm_options)
+        self.loudness_war_checkbox = ttk.Checkbutton(
+            loudness_group,
+            text="Enable Compression & Limiting (acompressor + alimiter)",
+            variable=self.use_loudness_war_var,
+            command=self._toggle_audio_norm_options)
         self.loudness_war_checkbox.pack(anchor="w")
         self.lw_frame = ttk.Frame(loudness_group)
         self.lw_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
@@ -3756,7 +3694,8 @@ class VideoProcessorApp:
         ttk.Label(self.lw_frame, text="Ratio:").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
         self.comp_ratio_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_ratio_var, width=8)
         self.comp_ratio_entry.grid(row=0, column=3, sticky="w", padx=5)
-        ttk.Label(self.lw_frame, text="Makeup Gain (dB):").grid(row=0, column=4, sticky="w", pady=2, padx=(10, 0))
+        ttk.Label(self.lw_frame, text="Makeup Gain (dB):").grid(row=0, column=4, sticky="w", pady=2,
+                                                                 padx=(10, 0))
         self.comp_makeup_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_makeup_var, width=8)
         self.comp_makeup_entry.grid(row=0, column=5, sticky="w", padx=5)
         ttk.Label(self.lw_frame, text="Attack (ms):").grid(row=1, column=0, sticky="w", pady=2)
@@ -3765,7 +3704,8 @@ class VideoProcessorApp:
         ttk.Label(self.lw_frame, text="Release (ms):").grid(row=1, column=2, sticky="w", pady=2, padx=(10, 0))
         self.comp_release_entry = ttk.Entry(self.lw_frame, textvariable=self.comp_release_var, width=8)
         self.comp_release_entry.grid(row=1, column=3, sticky="w", padx=5)
-        ttk.Label(self.lw_frame, text="Limit Peak (dB):").grid(row=1, column=4, sticky="w", pady=2, padx=(10, 0))
+        ttk.Label(self.lw_frame, text="Limit Peak (dB):").grid(row=1, column=4, sticky="w", pady=2,
+                                                                padx=(10, 0))
         self.limit_limit_entry = ttk.Entry(self.lw_frame, textvariable=self.limit_limit_var, width=8)
         self.limit_limit_entry.grid(row=1, column=5, sticky="w", padx=5)
         self.dyn_norm_checkbox = ttk.Checkbutton(loudness_group, text="Dynamic Normalization (dynaudnorm)",
@@ -3776,16 +3716,20 @@ class VideoProcessorApp:
         self.dyn_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
         self.dyn_norm_frame.columnconfigure(1, weight=1)
         ttk.Label(self.dyn_norm_frame, text="Frame Len (ms):").grid(row=0, column=0, sticky="w", pady=2)
-        self.dyn_frame_len_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_frame_len_var, width=8)
+        self.dyn_frame_len_entry = ttk.Entry(self.dyn_norm_frame,
+                                             textvariable=self.dyn_frame_len_var, width=8)
         self.dyn_frame_len_entry.grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(self.dyn_norm_frame, text="Filter Window:").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
-        self.dyn_gauss_win_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_gauss_win_var, width=8)
+        ttk.Label(self.dyn_norm_frame, text="Filter Window:").grid(row=0, column=2, sticky="w",
+                                                                    pady=2, padx=(10, 0))
+        self.dyn_gauss_win_entry = ttk.Entry(self.dyn_norm_frame,
+                                             textvariable=self.dyn_gauss_win_var, width=8)
         self.dyn_gauss_win_entry.grid(row=0, column=3, sticky="w", padx=5)
         ttk.Label(self.dyn_norm_frame, text="Target Peak:").grid(row=1, column=0, sticky="w", pady=2)
         self.dyn_peak_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_peak_var, width=8)
         self.dyn_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
         ttk.Label(self.dyn_norm_frame, text="Max Gain:").grid(row=1, column=2, sticky="w", pady=2, padx=(10, 0))
-        self.dyn_max_gain_entry = ttk.Entry(self.dyn_norm_frame, textvariable=self.dyn_max_gain_var, width=8)
+        self.dyn_max_gain_entry = ttk.Entry(self.dyn_norm_frame,
+                                            textvariable=self.dyn_max_gain_var, width=8)
         self.dyn_max_gain_entry.grid(row=1, column=3, sticky="w", padx=5)
         self.audio_norm_checkbox = ttk.Checkbutton(loudness_group, text="EBU R128 Normalization (loudnorm)",
                                                    variable=self.normalize_audio_var,
@@ -3794,22 +3738,30 @@ class VideoProcessorApp:
         self.audio_norm_frame = ttk.Frame(loudness_group)
         self.audio_norm_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 8))
         self.audio_norm_frame.columnconfigure(1, weight=1)
-        ttk.Label(self.audio_norm_frame, text="Loudness Target (LUFS):").grid(row=0, column=0, sticky="w", pady=2)
-        self.loudness_target_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_target_var, width=8)
+        ttk.Label(self.audio_norm_frame, text="Loudness Target (LUFS):").grid(row=0, column=0,
+                                                                              sticky="w", pady=2)
+        self.loudness_target_entry = ttk.Entry(self.audio_norm_frame,
+                                               textvariable=self.loudness_target_var, width=8)
         self.loudness_target_entry.grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(self.audio_norm_frame, text="Loudness Range (LRA):").grid(row=0, column=2, sticky="w", pady=2, padx=(10, 0))
-        self.loudness_range_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.loudness_range_var, width=8)
+        ttk.Label(self.audio_norm_frame, text="Loudness Range (LRA):").grid(row=0, column=2, sticky="w",
+                                                                            pady=2, padx=(10, 0))
+        self.loudness_range_entry = ttk.Entry(self.audio_norm_frame,
+                                              textvariable=self.loudness_range_var, width=8)
         self.loudness_range_entry.grid(row=0, column=3, sticky="w", padx=5)
         ttk.Label(self.audio_norm_frame, text="True Peak (dBTP):").grid(row=1, column=0, sticky="w", pady=2)
-        self.true_peak_entry = ttk.Entry(self.audio_norm_frame, textvariable=self.true_peak_var, width=8)
+        self.true_peak_entry = ttk.Entry(self.audio_norm_frame,
+                                         textvariable=self.true_peak_var, width=8)
         self.true_peak_entry.grid(row=1, column=1, sticky="w", padx=5)
-        self.measure_loudness_checkbox = ttk.Checkbutton(loudness_group,
-                                                         text="Measure Output Loudness (Save JSON metadata)",
-                                                         variable=self.measure_loudness_var,
-                                                         command=lambda: self._update_selected_jobs("measure_loudness"))
+        self.measure_loudness_checkbox = ttk.Checkbutton(
+            loudness_group,
+            text="Measure Output Loudness (Save JSON metadata)",
+            variable=self.measure_loudness_var,
+            command=lambda: self._update_selected_jobs("measure_loudness"))
         self.measure_loudness_checkbox.pack(anchor="w", pady=(5, 0))
 
-    # ---------- === v8.24: Audio tab with delivery target + 15-speaker grid === ----------
+    # =========================================================================
+    # === v8.24: Audio tab with delivery target + 15-speaker grid ===
+    # =========================================================================
     def setup_audio_tab(self, parent):
         self.audio_notice_frame = ttk.Frame(parent)
         self.audio_notice_frame.pack(fill=tk.X, pady=(0, 8))
@@ -3818,7 +3770,6 @@ class VideoProcessorApp:
         self.audio_notice_label.pack(fill=tk.X, padx=5, pady=2)
         self.audio_notice_frame.pack_forget()
 
-        # Delivery Target dropdown
         delivery_group = ttk.LabelFrame(parent, text="Delivery Target", padding=10)
         delivery_group.pack(fill=tk.X, pady=(0, 8))
         delivery_row = ttk.Frame(delivery_group)
@@ -3829,8 +3780,7 @@ class VideoProcessorApp:
             textvariable=self.audio_delivery_target_var,
             values=DELIVERY_TARGET_LABELS,
             state="readonly",
-            width=32,
-        )
+            width=32)
         self.delivery_target_combo.pack(side=tk.LEFT)
         ToolTip(self.delivery_target_combo,
                 "Custom = the manual track checkboxes below.\n"
@@ -3838,8 +3788,7 @@ class VideoProcessorApp:
                 "Archival copies the source audio bitstream verbatim.")
         self.delivery_hint_label = ttk.Label(
             delivery_group, text="", foreground="#555555",
-            font=("Arial", 9, "italic"), wraplength=650, justify=tk.LEFT,
-        )
+            font=("Arial", 9, "italic"), wraplength=650, justify=tk.LEFT)
         self.delivery_hint_label.pack(anchor="w", pady=(4, 0))
 
         tracks_group = ttk.LabelFrame(parent, text="Output Audio Tracks", padding=10)
@@ -3864,7 +3813,6 @@ class VideoProcessorApp:
         self.sofa_browse_btn = ttk.Button(sofa_frame, text="...", command=self.browse_sofa_file, width=4)
         self.sofa_browse_btn.pack(side=tk.LEFT)
 
-        # 6-row / 15-field speaker grid
         sofa_speakers_outer = ttk.LabelFrame(tracks_group, text="Speaker Directions (HRTF Angles)")
         sofa_speakers_outer.pack(fill=tk.X, padx=(20, 0), pady=(2, 4))
         spk_grid = ttk.Frame(sofa_speakers_outer)
@@ -3930,19 +3878,21 @@ class VideoProcessorApp:
         ttk.Checkbutton(sanitize_frame, text="Remove hashtags from extracted title",
                         variable=self.title_remove_hashtags_var,
                         command=lambda: self._update_selected_jobs("title_remove_hashtags")).pack(side=tk.LEFT)
-        ttk.Checkbutton(sanitize_frame, text="Enable emoji in title", variable=self.title_enable_emoji_var,
-                        command=lambda: self._update_selected_jobs("title_enable_emoji")).pack(side=tk.LEFT, padx=(15, 0))
+        ttk.Checkbutton(sanitize_frame, text="Enable emoji in title",
+                        variable=self.title_enable_emoji_var,
+                        command=lambda: self._update_selected_jobs("title_enable_emoji")
+                        ).pack(side=tk.LEFT, padx=(15, 0))
         ttk.Checkbutton(sanitize_frame, text="Auto-detect title from JSON",
                         variable=self.title_autodetect_var,
                         command=self._on_title_autodetect_toggle).pack(side=tk.LEFT, padx=(15, 0))
         override_frame = ttk.Frame(source_group)
         override_frame.pack(fill=tk.X, pady=2)
         ttk.Label(override_frame, text="Title:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(override_frame, textvariable=self.title_override_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Entry(override_frame, textvariable=self.title_override_var, width=50).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(override_frame, text="Detect",
                    command=lambda: self.detect_title_for_selected(force=True),
                    width=8).pack(side=tk.LEFT, padx=(5, 0))
-
         timing_group = ttk.LabelFrame(parent, text="Display Timing", padding=10)
         timing_group.pack(fill=tk.X, pady=5)
         timing_frame = ttk.Frame(timing_group)
@@ -3952,7 +3902,6 @@ class VideoProcessorApp:
         ttk.Label(timing_frame, text="End Time:").pack(side=tk.LEFT, padx=(15, 5))
         ttk.Entry(timing_frame, textvariable=self.title_end_time_var, width=12).pack(side=tk.LEFT)
         ttk.Label(timing_frame, text="(Format: HH:MM:SS.cc)").pack(side=tk.LEFT, padx=(15, 0))
-
         main_style_group = ttk.LabelFrame(parent, text="Title Styling", padding=10)
         main_style_group.pack(fill=tk.BOTH, expand=True)
         general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
@@ -3964,7 +3913,8 @@ class VideoProcessorApp:
         ttk.Label(font_row1, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
         self.title_font_combo = ttk.Combobox(font_row1, textvariable=self.title_font_var, width=25)
         self.title_font_combo.pack(side=tk.LEFT, padx=5)
-        self.title_font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("title_font"))
+        self.title_font_combo.bind("<<ComboboxSelected>>",
+                                   lambda e: self._update_selected_jobs("title_font"))
         self.root.after(100, self._populate_title_fonts)
         ttk.Label(font_row1, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(font_row1, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
@@ -4007,7 +3957,6 @@ class VideoProcessorApp:
         ttk.Label(format_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(0, 15))
         ttk.Entry(format_frame, textvariable=self.title_wrap_limit_var, width=5).pack(side=tk.LEFT)
         ttk.Label(format_frame, text="chars (0 = auto pixels)").pack(side=tk.LEFT, padx=(5, 0))
-
         fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
         fill_pane.pack(fill=tk.X, pady=2, padx=2)
         outline_pane = CollapsiblePane(main_style_group, "Outline Properties")
@@ -4025,64 +3974,79 @@ class VideoProcessorApp:
         ttk.Label(fill_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(fill_pane.container, from_=0, to=255, variable=self.title_fill_alpha_var,
                   orient=tk.HORIZONTAL,
-                  command=lambda v: self._update_selected_jobs("title_fill_alpha")).grid(row=0, column=4, sticky="ew")
+                  command=lambda v: self._update_selected_jobs("title_fill_alpha")
+                  ).grid(row=0, column=4, sticky="ew")
         outline_pane.container.columnconfigure(3, weight=1)
         ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.title_outline_swatch = tk.Label(outline_pane.container, text="    ",
                                              bg=self.title_outline_color_var.get(), relief="sunken")
         self.title_outline_swatch.grid(row=0, column=1)
         ttk.Button(outline_pane.container, text="..",
-                   command=lambda: self.choose_color(self.title_outline_color_var, self.title_outline_swatch,
-                                                     "title_outline_color"), width=3).grid(row=0, column=2, padx=5)
+                   command=lambda: self.choose_color(self.title_outline_color_var,
+                                                     self.title_outline_swatch, "title_outline_color"),
+                   width=3).grid(row=0, column=2, padx=5)
         ttk.Label(outline_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(outline_pane.container, from_=0, to=255, variable=self.title_outline_alpha_var,
                   orient=tk.HORIZONTAL,
-                  command=lambda v: self._update_selected_jobs("title_outline_alpha")).grid(row=0, column=4, sticky="ew")
-        ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
-        ttk.Entry(outline_pane.container, textvariable=self.title_outline_width_var, width=5).grid(row=1, column=1, pady=(5, 0))
+                  command=lambda v: self._update_selected_jobs("title_outline_alpha")
+                  ).grid(row=0, column=4, sticky="ew")
+        ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", padx=(0, 5),
+                                                               pady=(5, 0))
+        ttk.Entry(outline_pane.container, textvariable=self.title_outline_width_var, width=5
+                  ).grid(row=1, column=1, pady=(5, 0))
         shadow_pane.container.columnconfigure(3, weight=1)
         ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.title_shadow_swatch = tk.Label(shadow_pane.container, text="    ",
                                             bg=self.title_shadow_color_var.get(), relief="sunken")
         self.title_shadow_swatch.grid(row=0, column=1)
         ttk.Button(shadow_pane.container, text="..",
-                   command=lambda: self.choose_color(self.title_shadow_color_var, self.title_shadow_swatch,
-                                                     "title_shadow_color"), width=3).grid(row=0, column=2, padx=5)
+                   command=lambda: self.choose_color(self.title_shadow_color_var,
+                                                     self.title_shadow_swatch, "title_shadow_color"),
+                   width=3).grid(row=0, column=2, padx=5)
         ttk.Label(shadow_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(shadow_pane.container, from_=0, to=255, variable=self.title_shadow_alpha_var,
                   orient=tk.HORIZONTAL,
-                  command=lambda v: self._update_selected_jobs("title_shadow_alpha")).grid(row=0, column=4, sticky="ew")
-        ttk.Label(shadow_pane.container, text="Offset X:").grid(row=1, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_x_var, width=5).grid(row=1, column=1, pady=(5, 0))
-        ttk.Label(shadow_pane.container, text="Offset Y:").grid(row=1, column=2, sticky="w", padx=(10, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_y_var, width=5).grid(row=1, column=3, pady=(5, 0), sticky="w")
-        ttk.Label(shadow_pane.container, text="Blur:").grid(row=2, column=0, sticky="w", padx=(0, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_blur_var, width=5).grid(row=2, column=1, pady=(5, 0))
-
+                  command=lambda v: self._update_selected_jobs("title_shadow_alpha")
+                  ).grid(row=0, column=4, sticky="ew")
+        ttk.Label(shadow_pane.container, text="Offset X:").grid(row=1, column=0, sticky="w",
+                                                                 padx=(0, 5), pady=(5, 0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_x_var, width=5
+                  ).grid(row=1, column=1, pady=(5, 0))
+        ttk.Label(shadow_pane.container, text="Offset Y:").grid(row=1, column=2, sticky="w",
+                                                                 padx=(10, 5), pady=(5, 0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_y_var, width=5
+                  ).grid(row=1, column=3, pady=(5, 0), sticky="w")
+        ttk.Label(shadow_pane.container, text="Blur:").grid(row=2, column=0, sticky="w",
+                                                             padx=(0, 5), pady=(5, 0))
+        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_blur_var, width=5
+                  ).grid(row=2, column=1, pady=(5, 0))
         bg_pane = CollapsiblePane(main_style_group, "Background Properties")
         bg_pane.pack(fill=tk.X, pady=2, padx=2)
         bg_pane.container.columnconfigure(4, weight=1)
-        ttk.Checkbutton(bg_pane.container, text="Enable Background Shape", variable=self.title_bg_enabled_var,
-                        command=lambda: self._update_selected_jobs("title_bg_enabled")).grid(row=0, column=0,
-                                                                                              columnspan=2, sticky="w",
-                                                                                              padx=(0, 5), pady=(0, 5))
+        ttk.Checkbutton(bg_pane.container, text="Enable Background Shape",
+                        variable=self.title_bg_enabled_var,
+                        command=lambda: self._update_selected_jobs("title_bg_enabled")
+                        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=(0, 5), pady=(0, 5))
         mode_frame = ttk.Frame(bg_pane.container)
         mode_frame.grid(row=0, column=2, columnspan=3, sticky="w", padx=(10, 0), pady=(0, 5))
         ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Radiobutton(mode_frame, text="Per-Line Pill", variable=self.title_bg_mode_var, value="pill",
-                        command=lambda: self._update_selected_jobs("title_bg_mode")).pack(side=tk.LEFT, padx=(0, 5))
+                        command=lambda: self._update_selected_jobs("title_bg_mode")
+                        ).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Radiobutton(mode_frame, text="Single Box", variable=self.title_bg_mode_var, value="box",
                         command=lambda: self._update_selected_jobs("title_bg_mode")).pack(side=tk.LEFT)
         ttk.Label(bg_pane.container, text="Color:").grid(row=1, column=0, sticky="w", padx=(0, 5))
-        self.title_bg_swatch = tk.Label(bg_pane.container, text="    ", bg=self.title_bg_color_var.get(),
-                                        relief="sunken")
+        self.title_bg_swatch = tk.Label(bg_pane.container, text="    ",
+                                        bg=self.title_bg_color_var.get(), relief="sunken")
         self.title_bg_swatch.grid(row=1, column=1)
         ttk.Button(bg_pane.container, text="..",
                    command=lambda: self.choose_color(self.title_bg_color_var, self.title_bg_swatch,
                                                      "title_bg_color"), width=3).grid(row=1, column=2, padx=5)
         ttk.Label(bg_pane.container, text="Alpha:").grid(row=1, column=3, sticky="w", padx=(10, 5))
-        ttk.Scale(bg_pane.container, from_=0, to=255, variable=self.title_bg_alpha_var, orient=tk.HORIZONTAL,
-                  command=lambda v: self._update_selected_jobs("title_bg_alpha")).grid(row=1, column=4, sticky="ew")
+        ttk.Scale(bg_pane.container, from_=0, to=255, variable=self.title_bg_alpha_var,
+                  orient=tk.HORIZONTAL,
+                  command=lambda v: self._update_selected_jobs("title_bg_alpha")
+                  ).grid(row=1, column=4, sticky="ew")
         dim_frame = ttk.Frame(bg_pane.container)
         dim_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
         ttk.Label(dim_frame, text="Radius:").pack(side=tk.LEFT, padx=(0, 5))
@@ -4114,7 +4078,8 @@ class VideoProcessorApp:
         ttk.Label(source_row, text="Subtitle File:").pack(side=tk.LEFT, padx=(0, 5))
         self.subtitle_path_entry = ttk.Entry(source_row, textvariable=self.subtitle_path_var, width=60)
         self.subtitle_path_entry.pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
-        self.subtitle_browse_btn = ttk.Button(source_row, text="Browse", command=self.browse_subtitle_file, width=8)
+        self.subtitle_browse_btn = ttk.Button(source_row, text="Browse",
+                                              command=self.browse_subtitle_file, width=8)
         self.subtitle_browse_btn.pack(side=tk.LEFT, padx=(0, 5))
         self.subtitle_detect_btn = ttk.Button(source_row, text="Detect",
                                               command=self.detect_subtitle_for_selected, width=8)
@@ -4128,7 +4093,8 @@ class VideoProcessorApp:
         ttk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
         self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=25)
         self.font_combo.pack(side=tk.LEFT, padx=5)
-        self.font_combo.bind("<<ComboboxSelected>>", lambda e: self._update_selected_jobs("subtitle_font"))
+        self.font_combo.bind("<<ComboboxSelected>>",
+                             lambda e: self._update_selected_jobs("subtitle_font"))
         self.populate_fonts()
         ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         font_size_entry = ttk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
@@ -4138,7 +4104,8 @@ class VideoProcessorApp:
         ttk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var,
                         command=lambda: self._update_selected_jobs("subtitle_bold")).pack(side=tk.LEFT)
         ttk.Checkbutton(style_frame, text="Italic", variable=self.subtitle_italic_var,
-                        command=lambda: self._update_selected_jobs("subtitle_italic")).pack(side=tk.LEFT, padx=15)
+                        command=lambda: self._update_selected_jobs("subtitle_italic")
+                        ).pack(side=tk.LEFT, padx=15)
         ttk.Checkbutton(style_frame, text="Underline", variable=self.subtitle_underline_var,
                         command=lambda: self._update_selected_jobs("subtitle_underline")).pack(side=tk.LEFT)
         align_frame = ttk.Frame(general_style_frame)
@@ -4149,7 +4116,8 @@ class VideoProcessorApp:
         ttk.Radiobutton(align_sub_row1, text="Top", variable=self.subtitle_alignment_var, value="top",
                         command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
         ttk.Radiobutton(align_sub_row1, text="Mid", variable=self.subtitle_alignment_var, value="middle",
-                        command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT, padx=5)
+                        command=lambda: self._update_selected_jobs("subtitle_alignment")
+                        ).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(align_sub_row1, text="Bot", variable=self.subtitle_alignment_var, value="bottom",
                         command=lambda: self._update_selected_jobs("subtitle_alignment")).pack(side=tk.LEFT)
         self.seam_align_rb = ttk.Radiobutton(align_sub_row1, text="At Seam (Hybrid Only)",
@@ -4159,11 +4127,13 @@ class VideoProcessorApp:
         self.seam_align_rb.config(state="disabled")
         self.seam_h_lbl = ttk.Label(align_sub_row1, text="H-Offset:")
         self.seam_h_lbl.pack(side=tk.LEFT, padx=(5, 2))
-        self.seam_h_entry = ttk.Entry(align_sub_row1, textvariable=self.subtitle_seam_h_offset_var, width=5)
+        self.seam_h_entry = ttk.Entry(align_sub_row1,
+                                      textvariable=self.subtitle_seam_h_offset_var, width=5)
         self.seam_h_entry.pack(side=tk.LEFT)
         self.seam_v_lbl = ttk.Label(align_sub_row1, text="V-Offset:")
         self.seam_v_lbl.pack(side=tk.LEFT, padx=(5, 2))
-        self.seam_v_entry = ttk.Entry(align_sub_row1, textvariable=self.subtitle_seam_v_offset_var, width=5)
+        self.seam_v_entry = ttk.Entry(align_sub_row1,
+                                      textvariable=self.subtitle_seam_v_offset_var, width=5)
         self.seam_v_entry.pack(side=tk.LEFT)
         align_sub_row2 = ttk.Frame(align_frame)
         align_sub_row2.pack(fill=tk.X, pady=(2, 0))
@@ -4207,31 +4177,37 @@ class VideoProcessorApp:
         ttk.Button(fill_pane.container, text="..",
                    command=lambda: self.choose_color(self.fill_color_var, self.fill_swatch, "fill_color"),
                    width=3).grid(row=0, column=2, padx=5)
-        ttk.Scale(fill_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.fill_alpha_var,
-                  command=lambda val: self._update_selected_jobs("fill_alpha")).grid(row=0, column=3, sticky="ew")
+        ttk.Scale(fill_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
+                  variable=self.fill_alpha_var,
+                  command=lambda val: self._update_selected_jobs("fill_alpha")
+                  ).grid(row=0, column=3, sticky="ew")
         outline_pane.container.columnconfigure(3, weight=1)
         ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.outline_swatch = tk.Label(outline_pane.container, text="    ",
                                        bg=self.outline_color_var.get(), relief="sunken")
         self.outline_swatch.grid(row=0, column=1)
         ttk.Button(outline_pane.container, text="..",
-                   command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch, "outline_color"),
-                   width=3).grid(row=0, column=2, padx=5)
-        ttk.Scale(outline_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.outline_alpha_var,
-                  command=lambda val: self._update_selected_jobs("outline_alpha")).grid(row=0, column=3, sticky="ew")
+                   command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch,
+                                                     "outline_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Scale(outline_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
+                  variable=self.outline_alpha_var,
+                  command=lambda val: self._update_selected_jobs("outline_alpha")
+                  ).grid(row=0, column=3, sticky="ew")
         ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", pady=(5, 0))
         ttk.Entry(outline_pane.container, textvariable=self.outline_width_var, width=5).grid(
             row=1, column=1, columnspan=2, sticky="w", pady=(5, 0), padx=(0, 5))
         shadow_pane.container.columnconfigure(3, weight=1)
         ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.shadow_swatch = tk.Label(shadow_pane.container, text="    ", bg=self.shadow_color_var.get(),
-                                      relief="sunken")
+        self.shadow_swatch = tk.Label(shadow_pane.container, text="    ",
+                                      bg=self.shadow_color_var.get(), relief="sunken")
         self.shadow_swatch.grid(row=0, column=1)
         ttk.Button(shadow_pane.container, text="..",
-                   command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch, "shadow_color"),
-                   width=3).grid(row=0, column=2, padx=5)
-        ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL, variable=self.shadow_alpha_var,
-                  command=lambda val: self._update_selected_jobs("shadow_alpha")).grid(row=0, column=3, sticky="ew")
+                   command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch,
+                                                     "shadow_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
+                  variable=self.shadow_alpha_var,
+                  command=lambda val: self._update_selected_jobs("shadow_alpha")
+                  ).grid(row=0, column=3, sticky="ew")
         offset_frame = ttk.Frame(shadow_pane.container)
         offset_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
         ttk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
@@ -4259,11 +4235,13 @@ class VideoProcessorApp:
         self.generate_log_checkbox.pack(side=tk.LEFT, padx=(10, 0))
         self.close_gui_checkbox = ttk.Checkbutton(parent, text="Close GUI on Processing",
                                                   variable=self.close_gui_var,
-                                                  command=lambda: self._update_selected_jobs("close_gui_on_processing"))
+                                                  command=lambda: self._update_selected_jobs(
+                                                      "close_gui_on_processing"))
         self.close_gui_checkbox.pack(side=tk.LEFT, padx=(10, 0))
         self.hibernate_checkbox = ttk.Checkbutton(parent, text="Hibernate When Done",
                                                   variable=self.hibernate_when_done_var,
-                                                  command=lambda: self._update_selected_jobs("hibernate_when_done"))
+                                                  command=lambda: self._update_selected_jobs(
+                                                      "hibernate_when_done"))
         self.hibernate_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
     def populate_fonts(self):
@@ -4308,11 +4286,8 @@ class VideoProcessorApp:
             self.sofa_file_var.set(file_path)
             self._update_selected_jobs("sofa_file")
 
-    # ---------- === v8.24: sofa speaker string helpers === ----------
     @staticmethod
     def _parse_sofa_speakers(speakers_str):
-        """Parse 'FL 30|FR 330|...' into a dict. Handles both the legacy 8-speaker
-        format and the new 15-speaker format. Ignores malformed entries."""
         result = {}
         if not speakers_str:
             return result
@@ -4475,7 +4450,8 @@ class VideoProcessorApp:
                             if remainder and remainder[0] in [' ', '.', '-', '_']:
                                 belongs_to_other = False
                                 for other_vid in all_video_basenames:
-                                    if len(other_vid) > len(prefix) and sub_basename.lower().startswith(other_vid):
+                                    if len(other_vid) > len(prefix) and \
+                                            sub_basename.lower().startswith(other_vid):
                                         other_rem = sub_basename.lower()[len(other_vid):]
                                         if not other_rem or other_rem[0] in [' ', '.', '-', '_']:
                                             belongs_to_other = True
@@ -4487,15 +4463,17 @@ class VideoProcessorApp:
                                 break
                     if matched_prefix is not None:
                         full_path = os.path.join(dir_name, item)
-                        display_tag = "(Default)" if matched_suffix == "" else f"({matched_suffix.strip()})"
+                        display_tag = ("(Default)" if matched_suffix == ""
+                                       else f"({matched_suffix.strip()})")
                         prefix_len = len(matched_prefix)
-                        if matched_suffix not in best_subs_by_suffix or prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']:
+                        if (matched_suffix not in best_subs_by_suffix or
+                                prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']):
                             best_subs_by_suffix[matched_suffix] = {
                                 'path': full_path,
                                 'suffix': matched_suffix,
                                 'display_tag': display_tag,
                                 'basename': sub_basename,
-                                'prefix_len': prefix_len
+                                'prefix_len': prefix_len,
                             }
         except Exception:
             pass
@@ -4543,8 +4521,9 @@ class VideoProcessorApp:
                 bot_file = prefix + "-bot" + ext
             top_subs = self._detect_subtitles_for_video_single(top_file)
             bot_subs = self._detect_subtitles_for_video_single(bot_file)
-            base_subs = self._detect_subtitles_for_video_single(None, mock_dir=os.path.dirname(video_path),
-                                                                 mock_basename=os.path.basename(prefix))
+            base_subs = self._detect_subtitles_for_video_single(
+                None, mock_dir=os.path.dirname(video_path),
+                mock_basename=os.path.basename(prefix))
             combined = []
             seen = set()
             for sub in top_subs + bot_subs + base_subs:
@@ -4579,11 +4558,13 @@ class VideoProcessorApp:
                 self._apply_subtitle_to_job(index, preferred["path"], preferred["display_tag"])
                 updated += 1
         if updated == 0:
-            messagebox.showinfo("No Subtitles Found", "No matching subtitles were detected for the selected job(s).")
+            messagebox.showinfo("No Subtitles Found",
+                                "No matching subtitles were detected for the selected job(s).")
         else:
             if len(selected_indices) == 1:
                 self._suppress_subtitle_path_trace = True
-                self.subtitle_path_var.set(self.processing_jobs[selected_indices[0]].get("subtitle_path") or "")
+                self.subtitle_path_var.set(
+                    self.processing_jobs[selected_indices[0]].get("subtitle_path") or "")
                 self._suppress_subtitle_path_trace = False
             self.update_status(f"Detected subtitles for {updated} job(s).")
 
@@ -4608,7 +4589,8 @@ class VideoProcessorApp:
             self.manual_bitrate_var.set(str(bitrate))
 
     def _get_allowed_codecs(self):
-        return ["h264", "hevc", "av1"] if self.output_format_var.get() == "sdr" else ["hevc", "av1"]
+        return (["h264", "hevc", "av1"] if self.output_format_var.get() == "sdr"
+                else ["hevc", "av1"])
 
     def _update_codec_options(self, show_message=True):
         allowed = self._get_allowed_codecs()
@@ -4626,7 +4608,8 @@ class VideoProcessorApp:
     def _on_output_format_change(self):
         self._update_codec_options(show_message=True)
         self._update_color_preset_options()
-        self._update_selected_jobs("output_format", "video_codec", "color_preset_sdr", "color_preset_hdr")
+        self._update_selected_jobs("output_format", "video_codec",
+                                   "color_preset_sdr", "color_preset_hdr")
         self._update_bitrate_display()
 
     def _browse_hybrid_file(self, position):
@@ -4716,8 +4699,9 @@ class VideoProcessorApp:
                 delim = "_" if s.startswith("_") else "-"
                 paired_suffix = delim + ("left" if s in ["-right", "_right"] else "top")
                 pair_candidates = [paired_suffix,
-                                   ("_left" if paired_suffix == "-left" else "-left") if "left" in paired_suffix
-                                   else ("_top" if paired_suffix == "-top" else "-top")]
+                                   ("_left" if paired_suffix == "-left" else "-left")
+                                   if "left" in paired_suffix else
+                                   ("_top" if paired_suffix == "-top" else "-top")]
                 for st in pair_candidates:
                     candidate = prefix + st + ext
                     if os.path.exists(candidate):
@@ -4736,7 +4720,8 @@ class VideoProcessorApp:
 
     def _resolve_orientation(self, options, requested_orientation):
         if requested_orientation == "horizontal + vertical":
-            merged_aspect = options.get("merged_aspect", options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
+            merged_aspect = options.get("merged_aspect",
+                                        options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
             return self._aspect_to_orientation(merged_aspect, fallback="horizontal")
         return requested_orientation
 
@@ -4823,8 +4808,8 @@ class VideoProcessorApp:
                                              "normal" if enable_ffmpeg_features else "disabled")
 
     def _toggle_nvencc_color_mode_controls(self):
-        is_custom = getattr(self, "nvencc_color_tag_mode_var", None) and \
-                    self.nvencc_color_tag_mode_var.get() == "custom"
+        is_custom = (getattr(self, "nvencc_color_tag_mode_var", None) and
+                     self.nvencc_color_tag_mode_var.get() == "custom")
         state = "readonly" if is_custom else "disabled"
         for widget_name in ["nvencc_output_depth_combo", "nvencc_color_prim_combo",
                             "nvencc_color_transfer_combo", "nvencc_color_matrix_combo"]:
@@ -4858,10 +4843,10 @@ class VideoProcessorApp:
         backend = self.encoder_backend_var.get()
         is_nvencc_only = backend == "nvencc_only"
         is_nvencc_video_audio = backend == "nvencc_video_with_ffmpeg_audio"
-        is_ffmpeg_only = backend == "ffmpeg_only"
         is_nvencc_video_backend = is_nvencc_only or is_nvencc_video_audio
         use_nvencc_resize = is_nvencc_video_backend or (
-            backend == "nvencc_with_ffmpeg" and self.upscale_algo_var.get() in ["nvvfx-superres", "ngx-vsr"])
+            backend == "nvencc_with_ffmpeg" and
+            self.upscale_algo_var.get() in ["nvvfx-superres", "ngx-vsr"])
         if is_nvencc_video_backend:
             if self._cached_aspect_state is None:
                 self._cached_aspect_state = {
@@ -4874,7 +4859,8 @@ class VideoProcessorApp:
                 }
             if self.aspect_mode_var.get() in ["blur", "pixelate", "ambient"]:
                 self.aspect_mode_var.set("pad")
-            if self.aspect_blur_var.get() or self.aspect_pixelate_var.get() or self.aspect_ambient_var.get():
+            if (self.aspect_blur_var.get() or self.aspect_pixelate_var.get() or
+                    self.aspect_ambient_var.get()):
                 self.aspect_blur_var.set(False)
                 self.aspect_pixelate_var.set(False)
                 self.aspect_ambient_var.set(False)
@@ -4882,10 +4868,12 @@ class VideoProcessorApp:
             if is_nvencc_only:
                 if self._cached_audio_state is None and not self.audio_passthrough_var.get():
                     self._cached_audio_state = {
-                        "mono": self.audio_mono_var.get(), "stereo": self.audio_stereo_downmix_var.get(),
+                        "mono": self.audio_mono_var.get(),
+                        "stereo": self.audio_stereo_downmix_var.get(),
                         "sofa": self.audio_stereo_sofalizer_var.get(),
                         "surround": self.audio_surround_51_var.get(),
-                        "norm": self.normalize_audio_var.get(), "dyn": self.use_dynaudnorm_var.get(),
+                        "norm": self.normalize_audio_var.get(),
+                        "dyn": self.use_dynaudnorm_var.get(),
                         "lw": self.use_loudness_war_var.get(),
                     }
                 self.normalize_audio_var.set(False)
@@ -4950,8 +4938,10 @@ class VideoProcessorApp:
         if hasattr(self, "audio_notice_frame") and hasattr(self, "audio_notice_label"):
             if is_nvencc_only:
                 self.audio_notice_label.config(
-                    text="⚠️ In 'nvencc_only' mode, basic audio (Passthrough, Mono, Stereo Downmix, 5.1 Surround) works natively via libavcodec.\n"
-                         "⚠️ Sofalizer (3D HRTF convolution) and Loudness Normalization are disabled. For those features, select 'nvencc_video_with_ffmpeg_audio'.")
+                    text="⚠️ In 'nvencc_only' mode, basic audio (Passthrough, Mono, Stereo Downmix, "
+                         "5.1 Surround) works natively via libavcodec.\n"
+                         "⚠️ Sofalizer (3D HRTF convolution) and Loudness Normalization are disabled. "
+                         "For those features, select 'nvencc_video_with_ffmpeg_audio'.")
                 self.audio_notice_frame.pack(fill=tk.X, pady=(0, 8), before=self.audio_cb_mono.master)
                 self.audio_notice_label.configure(state="normal")
             else:
@@ -4983,7 +4973,6 @@ class VideoProcessorApp:
         self._update_selected_jobs("normalize_audio", "use_dynaudnorm", "use_loudness_war")
 
     def _update_audio_options_ui(self):
-        # === v8.24: early-return for auto targets ===
         target_code = DELIVERY_TARGET_LOOKUP.get(self.audio_delivery_target_var.get(), "custom")
         if target_code != "custom":
             archival = (target_code == "archival")
@@ -4995,7 +4984,6 @@ class VideoProcessorApp:
             for e in getattr(self, "sofa_spk_entries", {}).values():
                 e.config(state=sofa_state)
             return
-
         backend = self.encoder_backend_var.get()
         is_nvencc_only = (backend == "nvencc_only")
         if is_nvencc_only:
@@ -5014,10 +5002,9 @@ class VideoProcessorApp:
             if hasattr(self, 'measure_loudness_checkbox'):
                 self.measure_loudness_checkbox.config(state="disabled")
             self._toggle_audio_norm_options()
-            is_passthrough = self.audio_passthrough_var.get()
-            proc_state = "normal" if not any([self.audio_mono_var.get(),
-                                              self.audio_stereo_downmix_var.get(),
-                                              self.audio_surround_51_var.get()]) else "disabled"
+            proc_state = "normal" if not any([
+                self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
+                self.audio_surround_51_var.get()]) else "disabled"
             for cb in [self.audio_cb_mono, self.audio_cb_stereo, self.audio_cb_surround]:
                 cb.config(state=proc_state)
             any_proc = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
@@ -5031,7 +5018,8 @@ class VideoProcessorApp:
                 if self.audio_passthrough_var.get():
                     self.audio_passthrough_var.set(False)
                     if not any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
-                                self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()]):
+                                self.audio_stereo_sofalizer_var.get(),
+                                self.audio_surround_51_var.get()]):
                         self.audio_stereo_downmix_var.set(True)
                 self.audio_cb_passthrough.config(state="disabled")
             else:
@@ -5065,8 +5053,9 @@ class VideoProcessorApp:
         self._toggle_audio_norm_options()
         for cb in [self.audio_cb_mono, self.audio_cb_stereo, self.audio_cb_sofa, self.audio_cb_surround]:
             cb.config(state=proc_state)
-        any_proc_selected = any([self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
-                                 self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
+        any_proc_selected = any([
+            self.audio_mono_var.get(), self.audio_stereo_downmix_var.get(),
+            self.audio_stereo_sofalizer_var.get(), self.audio_surround_51_var.get()])
         if hasattr(self, 'render_by_chapters_var') and not self.render_by_chapters_var.get():
             self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
         sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
@@ -5127,7 +5116,8 @@ class VideoProcessorApp:
             "horizontal_aspect": self.horizontal_aspect_var.get(),
             "vertical_aspect": self.vertical_aspect_var.get(),
             "merged_aspect": self.merged_aspect_var.get(),
-            "burn_subtitles": self.burn_subtitles_var.get(), "override_bitrate": self.override_bitrate_var.get(),
+            "burn_subtitles": self.burn_subtitles_var.get(),
+            "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(),
             "max_size_mb": self.max_size_mb_var.get(), "max_duration": self.max_duration_var.get(),
             "use_dynaudnorm": self.use_dynaudnorm_var.get(),
@@ -5138,16 +5128,23 @@ class VideoProcessorApp:
             "comp_attack": self.comp_attack_var.get(), "comp_release": self.comp_release_var.get(),
             "comp_makeup": self.comp_makeup_var.get(), "limit_limit": self.limit_limit_var.get(),
             "measure_loudness": self.measure_loudness_var.get(),
+            # === v8.25 ===
+            "loudness_apply_mono": self.loudness_apply_mono_var.get(),
+            "loudness_apply_stereo": self.loudness_apply_stereo_var.get(),
+            "loudness_apply_surround_51": self.loudness_apply_surround_51_var.get(),
+            "loudness_apply_eclipsa": self.loudness_apply_eclipsa_var.get(),
             "normalize_audio": self.normalize_audio_var.get(),
             "loudness_target": self.loudness_target_var.get(), "loudness_range": self.loudness_range_var.get(),
             "true_peak": self.true_peak_var.get(),
-            "audio_mono": self.audio_mono_var.get(), "audio_stereo_downmix": self.audio_stereo_downmix_var.get(),
+            "audio_mono": self.audio_mono_var.get(),
+            "audio_stereo_downmix": self.audio_stereo_downmix_var.get(),
             "audio_stereo_sofalizer": self.audio_stereo_sofalizer_var.get(),
             "audio_surround_51": self.audio_surround_51_var.get(),
             "audio_passthrough": self.audio_passthrough_var.get(),
             "audio_delivery_target": DELIVERY_TARGET_LOOKUP.get(
-                self.audio_delivery_target_var.get(), DEFAULT_DELIVERY_TARGET),   # === v8.24 ===
-            "sofa_file": self.sofa_file_var.get(), "sofa_speakers": self._build_sofa_speakers_string(),
+                self.audio_delivery_target_var.get(), DEFAULT_DELIVERY_TARGET),
+            "sofa_file": self.sofa_file_var.get(),
+            "sofa_speakers": self._build_sofa_speakers_string(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(),
             "hybrid_top_mode": self.hybrid_top_mode_var.get(),
@@ -5158,7 +5155,8 @@ class VideoProcessorApp:
             "hybrid_layout": self.hybrid_layout_var.get(),
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
-            "subtitle_font": self.subtitle_font_var.get(), "subtitle_font_size": self.subtitle_font_size_var.get(),
+            "subtitle_font": self.subtitle_font_var.get(),
+            "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(),
             "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(),
@@ -5172,14 +5170,18 @@ class VideoProcessorApp:
             "outline_color": self.outline_color_var.get(), "outline_alpha": self.outline_alpha_var.get(),
             "outline_width": self.outline_width_var.get(),
             "shadow_color": self.shadow_color_var.get(), "shadow_alpha": self.shadow_alpha_var.get(),
-            "shadow_offset_x": self.shadow_offset_x_var.get(), "shadow_offset_y": self.shadow_offset_y_var.get(),
+            "shadow_offset_x": self.shadow_offset_x_var.get(),
+            "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
-            "reformat_subtitles": self.reformat_subtitles_var.get(), "wrap_limit": self.wrap_limit_var.get(),
+            "reformat_subtitles": self.reformat_subtitles_var.get(),
+            "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
             "preserve_multiline_subs": self.multiline_wrap_var.get(),
             "subfolder_mode": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none"),
-            "output_to_subfolders": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none") == "format_layout",
-            "group_by_resolution": SUBFOLDER_MODE_VALUE_MAP.get(self.subfolder_mode_var.get(), "none") == "resolution",
+            "output_to_subfolders": SUBFOLDER_MODE_VALUE_MAP.get(
+                self.subfolder_mode_var.get(), "none") == "format_layout",
+            "group_by_resolution": SUBFOLDER_MODE_VALUE_MAP.get(
+                self.subfolder_mode_var.get(), "none") == "resolution",
             "output_subfolder_by_subtitle": self.output_subfolder_by_subtitle_var.get(),
             "group_by_preset": self.group_by_preset_var.get(),
             "group_by_video": self.group_by_video_var.get(),
@@ -5364,7 +5366,8 @@ class VideoProcessorApp:
         new_name = simpledialog.askstring("New Preset", "Enter name for new preset:", initialvalue=curr_name)
         if new_name:
             if new_name in self.preset_manager.get_preset_names():
-                if not messagebox.askyesno("Overwrite?", f"Preset '{new_name}' already exists. Overwrite?"):
+                if not messagebox.askyesno("Overwrite?",
+                                           f"Preset '{new_name}' already exists. Overwrite?"):
                     return
             self._save_preset_internal(new_name)
             self._update_preset_combo_list()
@@ -5381,9 +5384,11 @@ class VideoProcessorApp:
         on_no_sub = False
         on_clean_copy = False
         if mode in ("Always (Clean + Backup)", "Always (Clean/Backup)"):
-            on_no_sub = True; on_clean_copy = True
+            on_no_sub = True
+            on_clean_copy = True
         elif mode in ("Only if No Subtitles (Fallback)", "Fallback (If No Subs)"):
-            on_no_sub = True; on_clean_copy = False
+            on_no_sub = True
+            on_clean_copy = False
         triggers = {
             "video_trigger": mode, "on_no_sub": on_no_sub, "on_clean_copy_if_subs": on_clean_copy,
             "on_scan_subs": self.trigger_scan_subs_var.get(),
@@ -5395,7 +5400,7 @@ class VideoProcessorApp:
                             "include" if getattr(self, 'trigger_include_suffix_var',
                                                  tk.BooleanVar(value=False)).get() else "all"),
             "exclude_suffix_filter": self.trigger_exclude_suffix_var.get().strip()
-            if self.trigger_exclude_suffix_enable_var.get() else None
+            if self.trigger_exclude_suffix_enable_var.get() else None,
         }
         self.preset_manager.save_preset(name, options, triggers)
         messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
@@ -5418,7 +5423,8 @@ class VideoProcessorApp:
         old_name = self.current_preset_var.get()
         if not old_name:
             return
-        new_name = simpledialog.askstring("Rename Preset", f"Enter new name for '{old_name}':", initialvalue=old_name)
+        new_name = simpledialog.askstring("Rename Preset",
+                                          f"Enter new name for '{old_name}':", initialvalue=old_name)
         if not new_name or new_name == old_name:
             return
         if new_name in self.preset_manager.get_preset_names():
@@ -5474,7 +5480,8 @@ class VideoProcessorApp:
         for p_name in self.preset_manager.get_preset_names():
             p = self.preset_manager.get_preset(p_name)
             s_filter = p['triggers'].get('suffix_filter')
-            s_mode = p['triggers'].get('suffix_mode', 'restrict' if s_filter is not None else 'all')
+            s_mode = p['triggers'].get('suffix_mode',
+                                       'restrict' if s_filter is not None else 'all')
             if s_filter and (s_mode == 'restrict' or s_mode == 'include'):
                 for s in s_filter.split(','):
                     specific_suffix_filters.add(s.strip())
@@ -5488,8 +5495,10 @@ class VideoProcessorApp:
                 triggers = preset['triggers']
                 video_trigger = triggers.get("video_trigger")
                 is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
-                if is_hybrid_duo and not (video_basename.endswith("-top") or video_basename.endswith("_top") or
-                                          video_basename.endswith("-left") or video_basename.endswith("_left")):
+                if is_hybrid_duo and not (video_basename.endswith("-top") or
+                                          video_basename.endswith("_top") or
+                                          video_basename.endswith("-left") or
+                                          video_basename.endswith("_left")):
                     continue
                 if not video_trigger:
                     t_no_sub = triggers.get('on_no_sub', False)
@@ -5501,19 +5510,24 @@ class VideoProcessorApp:
                     else:
                         video_trigger = "Never"
                 exclude_suffix = triggers.get('exclude_suffix_filter')
-                exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()] if exclude_suffix else None
-                preset_detected_subs = [s for s in detected_subs
-                                        if not self._matches_suffix_pattern(s, exclude_patterns)] if exclude_patterns else detected_subs
+                exclude_patterns = ([s.strip() for s in exclude_suffix.split(',') if s.strip()]
+                                    if exclude_suffix else None)
+                preset_detected_subs = ([s for s in detected_subs
+                                         if not self._matches_suffix_pattern(s, exclude_patterns)]
+                                        if exclude_patterns else detected_subs)
                 has_preset_subs = len(preset_detected_subs) > 0
                 if video_trigger == "Always (Clean/Backup)":
-                    self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+                    self._create_job_entry(video_path, None, preset['options'],
+                                           preset_name, "[No Subtitles]")
                     files_processed_count += 1
                 elif video_trigger == "Fallback (If No Subs)" and not has_preset_subs:
-                    self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+                    self._create_job_entry(video_path, None, preset['options'],
+                                           preset_name, "[No Subtitles]")
                     files_processed_count += 1
                 if has_preset_subs and triggers.get('on_scan_subs'):
                     filter_suffix = triggers.get('suffix_filter')
-                    filter_mode = triggers.get('suffix_mode', 'restrict' if filter_suffix is not None else 'all')
+                    filter_mode = triggers.get('suffix_mode',
+                                               'restrict' if filter_suffix is not None else 'all')
                     for sub in preset_detected_subs:
                         match = False
                         if filter_mode == 'all' or (filter_mode == 'restrict' and filter_suffix is None):
@@ -5591,7 +5605,8 @@ class VideoProcessorApp:
                 self._create_job_entry(video_path, preferred_sub["path"], preset['options'],
                                        preset_name, preferred_sub["display_tag"])
             else:
-                self._create_job_entry(video_path, None, preset['options'], preset_name, "[No Subtitles]")
+                self._create_job_entry(video_path, None, preset['options'],
+                                       preset_name, "[No Subtitles]")
         self.update_status(f"Added {len(selected_indices)} jobs manually.")
 
     def remove_from_input_queue(self):
@@ -5630,7 +5645,8 @@ class VideoProcessorApp:
                 if existing_path_resolved == resolved_top:
                     existing_job_hash = get_job_hash(existing_job.get("options"))
                     if existing_job_hash == new_job_hash:
-                        print(f"[INFO] Skipping duplicate Hybrid Duo file for: {os.path.basename(video_path)}")
+                        print(f"[INFO] Skipping duplicate Hybrid Duo file for: "
+                              f"{os.path.basename(video_path)}")
                         return
             video_path = resolved_top
             if not options.get("hybrid_top_path"):
@@ -5677,7 +5693,7 @@ class VideoProcessorApp:
             "subtitle_path": subtitle_path,
             "options": copy.deepcopy(options),
             "preset_name": preset_name,
-            "display_tag": display_tag
+            "display_tag": display_tag,
         }
         self._autofill_title_for_job(new_job, force=False)
         new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
@@ -5719,7 +5735,8 @@ class VideoProcessorApp:
                 self.trigger_scan_subs_var.set(triggers.get('on_scan_subs', False))
                 self.trigger_autodetect_subs_var.set(triggers.get('auto_detect_subs', False))
                 suffix_val = triggers.get('suffix_filter')
-                suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
+                suffix_mode = triggers.get('suffix_mode',
+                                           'restrict' if suffix_val is not None else 'all')
                 if suffix_val is not None or suffix_mode != 'all':
                     if suffix_mode == 'include':
                         self.trigger_include_suffix_var.set(True)
@@ -5857,23 +5874,28 @@ class VideoProcessorApp:
         self.comp_makeup_var.set(options.get("comp_makeup", DEFAULT_COMPRESSOR_MAKEUP))
         self.limit_limit_var.set(options.get("limit_limit", DEFAULT_LIMITER_LIMIT))
         self.measure_loudness_var.set(options.get("measure_loudness", DEFAULT_MEASURE_LOUDNESS))
+        # === v8.25 ===
+        self.loudness_apply_mono_var.set(
+            options.get("loudness_apply_mono", DEFAULT_LOUDNESS_APPLY_MONO))
+        self.loudness_apply_stereo_var.set(
+            options.get("loudness_apply_stereo", DEFAULT_LOUDNESS_APPLY_STEREO))
+        self.loudness_apply_surround_51_var.set(
+            options.get("loudness_apply_surround_51", DEFAULT_LOUDNESS_APPLY_SURROUND_51))
+        self.loudness_apply_eclipsa_var.set(
+            options.get("loudness_apply_eclipsa", DEFAULT_LOUDNESS_APPLY_ECLIPSA))
         self.normalize_audio_var.set(options.get("normalize_audio", DEFAULT_NORMALIZE_AUDIO))
         self.loudness_target_var.set(options.get("loudness_target", DEFAULT_LOUDNESS_TARGET))
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE))
         self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK))
         self.sofa_file_var.set(options.get("sofa_file") or DEFAULT_SOFA_PATH)
-
-        # === v8.24: restore 15 speakers + delivery target ===
         spk_str = options.get("sofa_speakers") or DEFAULT_SOFA_SPEAKERS
         spk = self._parse_sofa_speakers(spk_str)
         for name in SOFA_SPEAKER_ORDER:
             default = self._sofa_speaker_defaults.get(name, DEFAULT_SOFA_SPEAKER_AZIMUTHS[name])
             self.sofa_spk_vars[name].set(spk.get(name, default))
-
         target_code = options.get("audio_delivery_target", DEFAULT_DELIVERY_TARGET)
         self.audio_delivery_target_var.set(
             DELIVERY_TARGET_REVERSE.get(target_code, DELIVERY_TARGET_CUSTOM))
-
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9"))
         self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
@@ -5893,8 +5915,10 @@ class VideoProcessorApp:
         self.subtitle_margin_v_var.set(options.get("subtitle_margin_v", DEFAULT_SUBTITLE_MARGIN_V))
         self.subtitle_margin_l_var.set(options.get("subtitle_margin_l", DEFAULT_SUBTITLE_MARGIN_L))
         self.subtitle_margin_r_var.set(options.get("subtitle_margin_r", DEFAULT_SUBTITLE_MARGIN_R))
-        self.subtitle_seam_h_offset_var.set(options.get("subtitle_seam_h_offset", DEFAULT_SUBTITLE_SEAM_H_OFFSET))
-        self.subtitle_seam_v_offset_var.set(options.get("subtitle_seam_v_offset", DEFAULT_SUBTITLE_SEAM_V_OFFSET))
+        self.subtitle_seam_h_offset_var.set(
+            options.get("subtitle_seam_h_offset", DEFAULT_SUBTITLE_SEAM_H_OFFSET))
+        self.subtitle_seam_v_offset_var.set(
+            options.get("subtitle_seam_v_offset", DEFAULT_SUBTITLE_SEAM_V_OFFSET))
         self.fill_color_var.set(options.get("fill_color", DEFAULT_FILL_COLOR))
         self.fill_alpha_var.set(options.get("fill_alpha", DEFAULT_FILL_ALPHA))
         self.outline_color_var.set(options.get("outline_color", DEFAULT_OUTLINE_COLOR))
@@ -5912,7 +5936,8 @@ class VideoProcessorApp:
         self.multiline_wrap_var.set(options.get("preserve_multiline_subs", DEFAULT_MULTILINE_WRAP))
         self.audio_mono_var.set(options.get("audio_mono", DEFAULT_AUDIO_MONO))
         self.audio_stereo_downmix_var.set(options.get("audio_stereo_downmix", DEFAULT_AUDIO_STEREO_DOWNMIX))
-        self.audio_stereo_sofalizer_var.set(options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))
+        self.audio_stereo_sofalizer_var.set(
+            options.get("audio_stereo_sofalizer", DEFAULT_AUDIO_STEREO_SOFALIZER))
         self.audio_surround_51_var.set(options.get("audio_surround_51", DEFAULT_AUDIO_SURROUND_51))
         self.audio_passthrough_var.set(options.get("audio_passthrough", DEFAULT_AUDIO_PASSTHROUGH))
         self.use_sharpening_var.set(options.get("use_sharpening", DEFAULT_USE_SHARPENING))
@@ -5931,15 +5956,18 @@ class VideoProcessorApp:
         self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
         self.nvencc_decode_mode_var.set(options.get("nvencc_decode_mode", DEFAULT_NVENCC_DECODE_MODE))
-        self.nvencc_color_tag_mode_var.set(options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE))
+        self.nvencc_color_tag_mode_var.set(
+            options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE))
         self.nvencc_color_prim_var.set(options.get("nvencc_color_prim", DEFAULT_NVENCC_COLOR_PRIM))
-        self.nvencc_color_transfer_var.set(options.get("nvencc_color_transfer", DEFAULT_NVENCC_COLOR_TRANSFER))
+        self.nvencc_color_transfer_var.set(
+            options.get("nvencc_color_transfer", DEFAULT_NVENCC_COLOR_TRANSFER))
         self.nvencc_color_matrix_var.set(options.get("nvencc_color_matrix", DEFAULT_NVENCC_COLOR_MATRIX))
         self.nvencc_output_depth_var.set(options.get("nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH))
         self.nvencc_strict_no_color_tagging_var.set(
             options.get("nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
         self.ffmpeg_threads_var.set(options.get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
-        self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
+        self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(
+            options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
         self.encoder_family_var.set(options.get("encoder_family", DEFAULT_ENCODER_FAMILY))
         self.cpu_x264_preset_var.set(options.get("cpu_x264_preset", DEFAULT_CPU_X264_PRESET))
         self.cpu_x265_preset_var.set(options.get("cpu_x265_preset", DEFAULT_CPU_X265_PRESET))
@@ -5954,7 +5982,8 @@ class VideoProcessorApp:
         self._toggle_superres_options()
         self.title_burn_var.set(options.get("title_burn_enabled", DEFAULT_TITLE_BURN_ENABLED))
         self.title_json_suffix_var.set(options.get("title_json_suffix", DEFAULT_TITLE_JSON_SUFFIX))
-        self.title_remove_hashtags_var.set(options.get("title_remove_hashtags", DEFAULT_TITLE_REMOVE_HASHTAGS))
+        self.title_remove_hashtags_var.set(
+            options.get("title_remove_hashtags", DEFAULT_TITLE_REMOVE_HASHTAGS))
         self.title_enable_emoji_var.set(options.get("title_enable_emoji", DEFAULT_TITLE_ENABLE_EMOJI))
         self.title_autodetect_var.set(options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT))
         self.title_override_var.set(options.get("title_override_text", DEFAULT_TITLE_OVERRIDE_TEXT))
@@ -5979,8 +6008,10 @@ class VideoProcessorApp:
         self.title_outline_width_var.set(options.get("title_outline_width", DEFAULT_TITLE_OUTLINE_WIDTH))
         self.title_shadow_color_var.set(options.get("title_shadow_color", DEFAULT_TITLE_SHADOW_COLOR))
         self.title_shadow_alpha_var.set(options.get("title_shadow_alpha", DEFAULT_TITLE_SHADOW_ALPHA))
-        self.title_shadow_offset_x_var.set(options.get("title_shadow_offset_x", DEFAULT_TITLE_SHADOW_OFFSET_X))
-        self.title_shadow_offset_y_var.set(options.get("title_shadow_offset_y", DEFAULT_TITLE_SHADOW_OFFSET_Y))
+        self.title_shadow_offset_x_var.set(
+            options.get("title_shadow_offset_x", DEFAULT_TITLE_SHADOW_OFFSET_X))
+        self.title_shadow_offset_y_var.set(
+            options.get("title_shadow_offset_y", DEFAULT_TITLE_SHADOW_OFFSET_Y))
         self.title_shadow_blur_var.set(options.get("title_shadow_blur", DEFAULT_TITLE_SHADOW_BLUR))
         self.title_bg_enabled_var.set(options.get("title_bg_enabled", DEFAULT_TITLE_BG_ENABLED))
         self.title_bg_mode_var.set(options.get("title_bg_mode", DEFAULT_TITLE_BG_MODE))
@@ -6074,7 +6105,8 @@ class VideoProcessorApp:
                       f"Offset={measured['target_offset']}")
                 return measured
             else:
-                print("[WARN] Loudnorm first-pass: Could not parse measurement JSON. Falling back to single-pass.")
+                print("[WARN] Loudnorm first-pass: Could not parse measurement JSON. "
+                      "Falling back to single-pass.")
                 return None
         except subprocess.TimeoutExpired:
             print("[WARN] Loudnorm first-pass timed out (>10min). Falling back to single-pass.")
@@ -6085,33 +6117,27 @@ class VideoProcessorApp:
 
     # =========================================================================
     # === v8.24: Audio dispatcher + auto targets ===
+    # === v8.25: _auto_loudness_chain takes a track_kind argument ===
     # =========================================================================
     def build_audio_segment(self, file_path, options, base_dir=None, loudnorm_stats=None):
-        """Dispatch on delivery target. Returns (audio_args, stream_group_args)."""
         target = options.get("audio_delivery_target", DEFAULT_DELIVERY_TARGET)
-
         if target == "custom":
             return self._build_custom_audio_segment(file_path, options, base_dir, loudnorm_stats), []
-
         if target == "archival":
             return self._build_archival_audio(file_path, options), []
-
         streams = get_audio_stream_info(file_path)
         if not streams:
             print("[WARN] No audio streams found; disabling audio.")
             return ["-an"], []
-
         primary = max(streams, key=lambda s: int(s.get("channels", 0)))
         src_idx = int(primary.get("index", 0))
         src_channels = int(primary.get("channels", 0))
         print(f"[INFO] Audio target '{target}': source has {src_channels} channels.")
         is_surround = src_channels >= 6
-
         if target == "youtube_stereo":
             use_sofalizer = is_surround
             return self._build_stereo_track(file_path, options, src_idx, src_channels,
                                             base_dir, loudnorm_stats, use_sofalizer), []
-
         if target == "youtube_stereo_51":
             if is_surround:
                 return self._build_stereo_plus_51(file_path, options, src_idx, src_channels,
@@ -6119,7 +6145,6 @@ class VideoProcessorApp:
             print(f"[INFO] Source is {src_channels}ch — YT Stereo + 5.1 degrades to stereo only.")
             return self._build_stereo_track(file_path, options, src_idx, src_channels,
                                             base_dir, loudnorm_stats, use_sofalizer=False), []
-
         if target == "youtube_stereo_eclipsa":
             if is_surround:
                 return self._build_stereo_plus_eclipsa(file_path, options, src_idx, src_channels,
@@ -6127,12 +6152,10 @@ class VideoProcessorApp:
             print(f"[INFO] Source is {src_channels}ch — YT Stereo + Eclipsa degrades to stereo only.")
             return self._build_stereo_track(file_path, options, src_idx, src_channels,
                                             base_dir, loudnorm_stats, use_sofalizer=False), []
-
         print(f"[WARN] Unknown delivery target '{target}'; using custom.")
         return self._build_custom_audio_segment(file_path, options, base_dir, loudnorm_stats), []
 
     def _build_archival_audio(self, file_path, options):
-        """Passthrough, warn if the source codec won't play on YouTube."""
         streams = get_audio_stream_info(file_path)
         for s in streams:
             codec = (s.get("codec_name") or "").lower()
@@ -6143,9 +6166,13 @@ class VideoProcessorApp:
                       f"Consider a YouTube target if upload is the goal.")
         return ["-map", "0:a?", "-c:a", "copy"]
 
-    def _auto_loudness_chain(self, options, loudnorm_stats=None):
-        """Return a list of loudness filter strings (no commas) for auto targets.
-        Uses single-pass loudnorm only — pass-2 is available in Custom mode."""
+    # === v8.25: track_kind parameter ===
+    def _auto_loudness_chain(self, options, track_kind, loudnorm_stats=None):
+        """Build the loudness chain for a single output track family.
+        track_kind: 'mono' | 'stereo' | 'surround_51' | 'eclipsa'
+        Returns [] if the user has scoped this track family out."""
+        if not options.get(f"loudness_apply_{track_kind}", True):
+            return []
         chain = []
         if options.get("use_loudness_war", False):
             chain.append(
@@ -6170,19 +6197,18 @@ class VideoProcessorApp:
         return chain
 
     def _surround_tag_filter(self, src_idx, src_channels, out_label):
-        """Tag an unknown-layout surround source with a real FFmpeg layout."""
         if src_channels >= 8:
             layout = "5.1.2"
             mapping = "0|1|2|3|4|5|6|7"
         else:
             layout = "5.1(side)"
             mapping = "0|1|2|3|4|5"
-        return f"[0:{src_idx}]asetpts=PTS-STARTPTS,channelmap={mapping}:{layout}[{out_label.strip('[]')}]"
+        return (f"[0:{src_idx}]asetpts=PTS-STARTPTS,"
+                f"channelmap={mapping}:{layout}[{out_label.strip('[]')}]")
 
     def _build_stereo_track(self, file_path, options, src_idx, src_channels,
                             base_dir, loudnorm_stats, use_sofalizer):
         fc_parts = []
-
         if src_channels == 1:
             fc_parts.append(
                 f"[0:{src_idx}]asetpts=PTS-STARTPTS,"
@@ -6200,7 +6226,8 @@ class VideoProcessorApp:
                     raise VideoProcessingError(
                         f"Sofalizer required for surround source, but SOFA file not found: {sofa_path}")
                 safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-                speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip() or DEFAULT_SOFA_SPEAKERS
+                speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
+                            or DEFAULT_SOFA_SPEAKERS)
                 fc_parts.append(self._surround_tag_filter(src_idx, src_channels, "a_tagged"))
                 fc_parts.append(
                     f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'[a_proc]"
@@ -6210,14 +6237,12 @@ class VideoProcessorApp:
                     f"[0:{src_idx}]asetpts=PTS-STARTPTS,"
                     f"aformat=channel_layouts=stereo[a_proc]"
                 )
-
-        loudness_chain = self._auto_loudness_chain(options, loudnorm_stats)
+        loudness_chain = self._auto_loudness_chain(options, "stereo", loudnorm_stats)
         if loudness_chain:
             fc_parts.append(f"[a_proc]{','.join(loudness_chain)}[a_ln]")
             proc_tag = "[a_ln]"
         else:
             proc_tag = "[a_proc]"
-
         fc_parts.append(f"{proc_tag}aresample={AUDIO_SAMPLE_RATE}[a_final]")
         return (
             ["-filter_complex", ";".join(fc_parts),
@@ -6234,14 +6259,17 @@ class VideoProcessorApp:
             raise VideoProcessingError(
                 f"Sofalizer required for 'YouTube: Stereo + 5.1', but SOFA file not found: {sofa_path}")
         safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-        speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip() or DEFAULT_SOFA_SPEAKERS
+        speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
+                    or DEFAULT_SOFA_SPEAKERS)
 
-        loudness_chain = self._auto_loudness_chain(options, loudnorm_stats)
-        ln_str = ("," + ",".join(loudness_chain)) if loudness_chain else ""
+        # === v8.25: separate chains per family ===
+        stereo_chain = self._auto_loudness_chain(options, "stereo", loudnorm_stats)
+        surround_chain = self._auto_loudness_chain(options, "surround_51", loudnorm_stats)
+        ln_stereo = ("," + ",".join(stereo_chain)) if stereo_chain else ""
+        ln_surround = ("," + ",".join(surround_chain)) if surround_chain else ""
 
         fc = []
         fc.append(f"[0:{src_idx}]asetpts=PTS-STARTPTS,asplit=2[a_sofa_src][a_51_src]")
-
         if src_channels >= 8:
             sofa_layout, sofa_map = "5.1.2", "0|1|2|3|4|5|6|7"
         else:
@@ -6249,13 +6277,12 @@ class VideoProcessorApp:
         fc.append(f"[a_sofa_src]channelmap={sofa_map}:{sofa_layout}[a_tagged]")
         fc.append(
             f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'"
-            f"{ln_str},aresample={AUDIO_SAMPLE_RATE}[stereo_final]"
+            f"{ln_stereo},aresample={AUDIO_SAMPLE_RATE}[stereo_final]"
         )
         fc.append(
             f"[a_51_src]channelmap=0|1|2|3|4|5:5.1(side)"
-            f"{ln_str},aresample={AUDIO_SAMPLE_RATE}[surround_final]"
+            f"{ln_surround},aresample={AUDIO_SAMPLE_RATE}[surround_final]"
         )
-
         return (
             ["-filter_complex", ";".join(fc),
              "-map", "[stereo_final]",
@@ -6269,42 +6296,69 @@ class VideoProcessorApp:
             []
         )
 
+    # === v8.25: Eclipsa topology fix — apply chain ONCE to the full bed ===
     def _build_stereo_plus_eclipsa(self, file_path, options, src_idx, src_channels,
                                     base_dir, loudnorm_stats):
-        """Sofalizer stereo (default) + 5 IAMF streams as a 5.1.2 audio element
-        with binaural headphone rendering."""
+        """Sofalizer stereo (default) + 5 IAMF streams laid out as a 5.1.2 audio element
+        with binaural headphone rendering.
+
+        v8.25 FIX: the loudness chain is applied ONCE to the full 5.1.2 bed BEFORE
+        splitting into IAMF streams. Applying the chain per-stream (as v8.24 did)
+        destroyed the surround image because acompressor/loudnorm are dynamic."""
         sofa_path = options.get("sofa_file", "").strip()
         if not sofa_path or not os.path.exists(sofa_path):
             raise VideoProcessingError(
                 f"Sofalizer required for 'YouTube: Stereo + Eclipsa', but SOFA file not found: {sofa_path}")
         safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-        speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip() or DEFAULT_SOFA_SPEAKERS
+        speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
+                    or DEFAULT_SOFA_SPEAKERS)
 
         has_heights = (src_channels >= 8)
-        loudness_chain = self._auto_loudness_chain(options, loudnorm_stats)
-        ln_str = ("," + ",".join(loudness_chain)) if loudness_chain else ""
+
+        # === v8.25: separate chains per family ===
+        eclipsa_chain = self._auto_loudness_chain(options, "eclipsa", loudnorm_stats)
+        stereo_chain = self._auto_loudness_chain(options, "stereo", loudnorm_stats)
+        ln_eclipsa = ("," + ",".join(eclipsa_chain)) if eclipsa_chain else ""
+        ln_stereo = ("," + ",".join(stereo_chain)) if stereo_chain else ""
 
         fc = []
-        fc.append(f"[0:{src_idx}]asetpts=PTS-STARTPTS,asplit=6"
-                  f"[s_sofa][s_front][s_back][s_top][s_center][s_lfe]")
-        fc.append(f"[s_front]channelmap=0|1:stereo{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_front]")
-        fc.append(f"[s_back]channelmap=4|5:stereo{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_back]")
-        if has_heights:
-            fc.append(f"[s_top]channelmap=6|7:stereo{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_top]")
-        else:
-            # No heights in source — feed the front pair as a benign top layer
-            fc.append(f"[s_top]channelmap=0|1:stereo{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_top]")
-        fc.append(f"[s_center]channelmap=2:mono{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_center]")
-        fc.append(f"[s_lfe]channelmap=3:mono{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_lfe]")
+        # Step 1: split source. One leg goes through the loudness chain (bed),
+        # the other goes straight into sofalizer (which has its own chain).
+        fc.append(f"[0:{src_idx}]asetpts=PTS-STARTPTS,asplit=2[src_bed_in][src_sofa_in]")
 
+        # Step 2: bed → tag 5.1.2 (or 5.1 if no heights) → apply loudness chain
+        # ONCE → asplit=5 into the IAMF streams.
+        if has_heights:
+            bed_layout, bed_map = "5.1.2", "0|1|2|3|4|5|6|7"
+        else:
+            bed_layout, bed_map = "5.1(side)", "0|1|2|3|4|5"
+        fc.append(
+            f"[src_bed_in]channelmap={bed_map}:{bed_layout}"
+            f"{ln_eclipsa}[bed_processed]"
+        )
+        fc.append(
+            f"[bed_processed]asplit=5[s_front][s_back][s_top][s_center][s_lfe]"
+        )
+
+        # Step 3: per-IAMF-stream channel extraction. NOTE: no loudness chain here.
+        fc.append(f"[s_front]channelmap=0|1:stereo,aresample={AUDIO_SAMPLE_RATE}[a_front]")
+        fc.append(f"[s_back]channelmap=4|5:stereo,aresample={AUDIO_SAMPLE_RATE}[a_back]")
+        if has_heights:
+            fc.append(f"[s_top]channelmap=6|7:stereo,aresample={AUDIO_SAMPLE_RATE}[a_top]")
+        else:
+            fc.append(f"[s_top]channelmap=0|1:stereo,aresample={AUDIO_SAMPLE_RATE}[a_top]")
+        fc.append(f"[s_center]channelmap=2:mono,aresample={AUDIO_SAMPLE_RATE}[a_center]")
+        fc.append(f"[s_lfe]channelmap=3:mono,aresample={AUDIO_SAMPLE_RATE}[a_lfe]")
+
+        # Step 4: Sofalizer binaural stereo (own chain).
         if has_heights:
             sofa_layout, sofa_map = "5.1.2", "0|1|2|3|4|5|6|7"
         else:
             sofa_layout, sofa_map = "5.1(side)", "0|1|2|3|4|5"
-        fc.append(f"[s_sofa]channelmap={sofa_map}:{sofa_layout}[a_tagged]")
+        fc.append(f"[src_sofa_in]channelmap={sofa_map}:{sofa_layout}[a_tagged]")
         fc.append(
             f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'"
-            f"{ln_str},aresample={AUDIO_SAMPLE_RATE}[a_stereo]"
+            f"{ln_stereo},aresample={AUDIO_SAMPLE_RATE}[a_stereo]"
         )
 
         # Output stream order after video (st=0):
@@ -6327,12 +6381,10 @@ class VideoProcessorApp:
             "-c:a:4", "libopus", "-b:a:4", f"{IAMF_STREAM_BITRATE_K}k",
             "-c:a:5", "libopus", "-b:a:5", f"{IAMF_STREAM_BITRATE_K}k",
         ]
-
         if has_heights:
             layers = "layer=ch_layout=stereo,layer=ch_layout=5.1(side),layer=ch_layout=5.1.2"
         else:
             layers = "layer=ch_layout=stereo,layer=ch_layout=5.1(side)"
-
         stream_groups = [
             "-stream_group",
             f"type=iamf_audio_element:id=1:st=2:st=3:st=4:st=5:st=6:"
@@ -6351,7 +6403,6 @@ class VideoProcessorApp:
         return audio_args, stream_groups
 
     def _build_custom_audio_segment(self, file_path, options, base_dir=None, loudnorm_stats=None):
-        # === v8.23.2 body, verbatim ===
         if options.get("audio_passthrough"):
             return ["-map", "0:a?", "-c:a", "copy"]
         audio_streams = get_audio_stream_info(file_path)
@@ -6359,10 +6410,10 @@ class VideoProcessorApp:
             return ["-an"]
         stereo_streams = [s for s in audio_streams if int(s.get("channels", 0)) == 2]
         surround_streams = [s for s in audio_streams if int(s.get("channels", 0)) >= 6]
-        src_for_mono = stereo_streams[0] if stereo_streams else (
-            surround_streams[0] if surround_streams else audio_streams[0])
-        src_for_hq = surround_streams[0] if surround_streams else (
-            stereo_streams[0] if stereo_streams else audio_streams[0])
+        src_for_mono = (stereo_streams[0] if stereo_streams else
+                        (surround_streams[0] if surround_streams else audio_streams[0]))
+        src_for_hq = (surround_streams[0] if surround_streams else
+                      (stereo_streams[0] if stereo_streams else audio_streams[0]))
         tracks_config = []
         if options.get("audio_mono"):
             tracks_config.append({"type": "mono", "source_index": src_for_mono['index'],
@@ -6375,7 +6426,8 @@ class VideoProcessorApp:
                 tracks_config.append({"type": "stereo_sofalizer", "source_index": src_for_hq['index'],
                                       "source_channels": int(src_for_hq.get("channels", 0))})
             else:
-                print(f"[WARN] Sofalizer skipped: Best source for {os.path.basename(file_path)} is not 5.1/Surround.")
+                print(f"[WARN] Sofalizer skipped: Best source for {os.path.basename(file_path)} "
+                      f"is not 5.1/Surround.")
         if options.get("audio_surround_51"):
             tracks_config.append({"type": "surround_51", "source_index": src_for_hq['index'],
                                   "source_channels": int(src_for_hq.get("channels", 0))})
@@ -6398,6 +6450,16 @@ class VideoProcessorApp:
             src_idx = track['source_index']
             input_tag = specific_pads[src_idx].pop(0)
             proc_tag = f"[{track_type}_proc]"
+            # === v8.25: map track_type to scope key ===
+            _scope_key = {
+                "mono": "mono",
+                "stereo_downmix": "stereo",
+                "stereo_sofalizer": "stereo",
+                "surround_51": "surround_51",
+            }.get(track_type)
+            _apply_loudness = (
+                options.get(f"loudness_apply_{_scope_key}", True) if _scope_key else True
+            )
             if track_type == "mono":
                 fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=mono{proc_tag}")
             elif track_type == "stereo_downmix":
@@ -6411,28 +6473,33 @@ class VideoProcessorApp:
                 if not speakers:
                     speakers = DEFAULT_SOFA_SPEAKERS
                 fc_parts.append(
-                    f"{input_tag}asetpts=PTS-STARTPTS,sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'{proc_tag}")
+                    f"{input_tag}asetpts=PTS-STARTPTS,"
+                    f"sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
-                    fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,channelmap=channel_layout=5.1(side){proc_tag}")
+                    fc_parts.append(
+                        f"{input_tag}asetpts=PTS-STARTPTS,"
+                        f"channelmap=channel_layout=5.1(side){proc_tag}")
                 else:
-                    fc_parts.append(f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=5.1{proc_tag}")
-            if options.get("use_loudness_war", False):
+                    fc_parts.append(
+                        f"{input_tag}asetpts=PTS-STARTPTS,aformat=channel_layouts=5.1{proc_tag}")
+            # === v8.25: guard the three chain blocks with _apply_loudness ===
+            if _apply_loudness and options.get("use_loudness_war", False):
                 t = options.get("comp_threshold"); r = options.get("comp_ratio")
                 a = options.get("comp_attack"); re = options.get("comp_release")
                 m = options.get("comp_makeup"); l = options.get("limit_limit")
                 lw_tag = f"[{track_type}_lw]"
                 fc_parts.append(
-                    f"{proc_tag}acompressor=threshold={t}dB:ratio={r}:attack={a}:release={re}:makeup={m},"
-                    f"alimiter=limit={l}dB{lw_tag}")
+                    f"{proc_tag}acompressor=threshold={t}dB:ratio={r}:attack={a}"
+                    f":release={re}:makeup={m},alimiter=limit={l}dB{lw_tag}")
                 proc_tag = lw_tag
-            if options.get("use_dynaudnorm", False):
+            if _apply_loudness and options.get("use_dynaudnorm", False):
                 f = options.get("dyn_frame_len"); g = options.get("dyn_gauss_win")
                 p = options.get("dyn_peak"); m = options.get("dyn_max_gain")
                 dyn_tag = f"[{track_type}_dyn]"
                 fc_parts.append(f"{proc_tag}dynaudnorm=f={f}:g={g}:p={p}:m={m}{dyn_tag}")
                 proc_tag = dyn_tag
-            if options.get("normalize_audio", False):
+            if _apply_loudness and options.get("normalize_audio", False):
                 lt = options.get("loudness_target"); tp = options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
                 if loudnorm_stats:
@@ -6479,7 +6546,8 @@ class VideoProcessorApp:
                     p_size = min(target_w, target_h)
                     return f"{p_size}p"
             except Exception as e:
-                print(f"[WARN] Could not compute target resolution for '{job.get('display_name')}': {e}")
+                print(f"[WARN] Could not compute target resolution for "
+                      f"'{job.get('display_name')}': {e}")
             return "original"
         return str(res_key)
 
@@ -6528,7 +6596,8 @@ class VideoProcessorApp:
                                f"{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}")
                 if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
                     eff_layout = self._resolve_hybrid_layout(options)
-                    folder_name += "_Hybrid_SideBySide" if eff_layout == "side_by_side" else "_Hybrid_Stacked"
+                    folder_name += ("_Hybrid_SideBySide" if eff_layout == "side_by_side"
+                                    else "_Hybrid_Stacked")
                 elif orientation == "vertical":
                     folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
                 elif orientation == "original":
@@ -6598,9 +6667,9 @@ class VideoProcessorApp:
             chapters = [{'index': 0, 'start_time': 0, 'end_time': None, 'title': None}]
         total_chapters = len(chapters) if options.get("render_by_chapters") else 1
         temp_extracted_srt = None
-        do_subtitle_split = options.get("render_by_chapters") and \
-                            options.get("split_subtitles_by_chapter") and \
-                            job.get('subtitle_path')
+        do_subtitle_split = (options.get("render_by_chapters") and
+                             options.get("split_subtitles_by_chapter") and
+                             job.get('subtitle_path'))
         if do_subtitle_split:
             sub = job['subtitle_path']
             if sub.startswith("embedded:"):
@@ -6624,8 +6693,10 @@ class VideoProcessorApp:
                     ch_options["seek_duration"] = chapter['end_time'] - chapter['start_time']
                 if ch_options.get("audio_passthrough"):
                     ch_options["audio_passthrough"] = False
-                    if not any([ch_options.get("audio_mono"), ch_options.get("audio_stereo_downmix"),
-                                ch_options.get("audio_stereo_sofalizer"), ch_options.get("audio_surround_51")]):
+                    if not any([ch_options.get("audio_mono"),
+                                ch_options.get("audio_stereo_downmix"),
+                                ch_options.get("audio_stereo_sofalizer"),
+                                ch_options.get("audio_surround_51")]):
                         ch_options["audio_stereo_downmix"] = True
                 if do_subtitle_split and temp_extracted_srt and os.path.exists(temp_extracted_srt):
                     print(f"       -> Splitting subtitle chunk...")
@@ -6667,12 +6738,13 @@ class VideoProcessorApp:
                 subtitle_source_file = None
                 if sub_identifier.startswith("embedded:"):
                     stream_index = int(sub_identifier.split(':')[1])
-                    temp_extracted_srt_path = extract_embedded_subtitle(job['video_path'], stream_index,
-                                                                         temp_dir=output_dir)
+                    temp_extracted_srt_path = extract_embedded_subtitle(
+                        job['video_path'], stream_index, temp_dir=output_dir)
                     if temp_extracted_srt_path:
                         subtitle_source_file = temp_extracted_srt_path
                     else:
-                        print(f"[WARN] Could not extract embedded subtitle for '{job['display_name']}'.")
+                        print(f"[WARN] Could not extract embedded subtitle for "
+                              f"'{job['display_name']}'.")
                 elif os.path.exists(sub_identifier):
                     subtitle_source_file = sub_identifier
                 if subtitle_source_file:
@@ -6686,7 +6758,8 @@ class VideoProcessorApp:
                                 left_w = (int(sub_target_h * num_left / den_left) // 2) * 2
                                 options["calculated_pos"] = (left_w, sub_target_h // 2)
                             except Exception:
-                                print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
+                                print(f"[WARN] Failed to parse hybrid aspect ratios for "
+                                      f"seam alignment in '{job['display_name']}'")
                         else:
                             try:
                                 num_top, den_top = self._resolve_aspect_ratio(
@@ -6694,7 +6767,8 @@ class VideoProcessorApp:
                                 top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
                                 options["calculated_pos"] = (sub_target_w // 2, top_h)
                             except Exception:
-                                print(f"[WARN] Failed to parse hybrid aspect ratios for seam alignment in '{job['display_name']}'")
+                                print(f"[WARN] Failed to parse hybrid aspect ratios for "
+                                      f"seam alignment in '{job['display_name']}'")
                     sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
                     if sub_ext in [".ass", ".ssa"]:
                         ass_burn_path = create_temporary_ass_passthrough_file(subtitle_source_file)
@@ -6712,17 +6786,21 @@ class VideoProcessorApp:
                     _, title_text = find_title_json_file(
                         job['video_path'], job.get('subtitle_path'),
                         options.get('title_json_suffix', ''),
-                        remove_hashtags=options.get('title_remove_hashtags', DEFAULT_TITLE_REMOVE_HASHTAGS),
-                        keep_emoji=options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI))
+                        remove_hashtags=options.get('title_remove_hashtags',
+                                                    DEFAULT_TITLE_REMOVE_HASHTAGS),
+                        keep_emoji=options.get('title_enable_emoji',
+                                               DEFAULT_TITLE_ENABLE_EMOJI))
                 else:
-                    title_text = sanitize_title(title_text, remove_hashtags=False,
-                                                keep_emoji=options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI))
+                    title_text = sanitize_title(
+                        title_text, remove_hashtags=False,
+                        keep_emoji=options.get('title_enable_emoji',
+                                               DEFAULT_TITLE_ENABLE_EMOJI))
                 if title_text:
                     title_ass_path = create_title_ass_file(title_text, options,
                                                            target_res=(sub_target_w, sub_target_h))
                     if title_ass_path:
-                        print(f"[INFO] Title burn: '{title_text[:50]}...'" if len(title_text) > 50
-                              else f"[INFO] Title burn: '{title_text}'")
+                        print(f"[INFO] Title burn: '{title_text[:50]}...'"
+                              if len(title_text) > 50 else f"[INFO] Title burn: '{title_text}'")
                     else:
                         print("[WARN] Failed to create title ASS file.")
                 else:
@@ -6744,56 +6822,68 @@ class VideoProcessorApp:
                     duration = min(duration, max_dur)
             loudnorm_stats = None
             if options.get("normalize_audio", False) and not options.get("audio_passthrough"):
-                loudnorm_stats = self.measure_loudnorm_first_pass(job['video_path'], options, base_dir=base_dir)
+                loudnorm_stats = self.measure_loudnorm_first_pass(job['video_path'], options,
+                                                                  base_dir=base_dir)
                 if loudnorm_stats:
                     options["_loudnorm_stats"] = loudnorm_stats
             seek_start = options.get("seek_start")
             seek_duration = options.get("seek_duration")
             if encoder_backend == "nvencc_with_ffmpeg":
-                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_", dir=output_dir)
+                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_",
+                                                    dir=output_dir)
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
                 register_temp_file(temp_preproc)
-                pre_cmd = self.construct_ffmpeg_command(job, temp_preproc, orientation, ass_burn_path, options,
-                                                        title_ass_path, encoder_backend="preprocess", base_dir=base_dir)
+                pre_cmd = self.construct_ffmpeg_command(job, temp_preproc, orientation, ass_burn_path,
+                                                        options, title_ass_path,
+                                                        encoder_backend="preprocess", base_dir=base_dir)
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
                 nvencc_options = copy.deepcopy(options)
                 nvencc_options.pop("seek_start", None)
                 nvencc_options.pop("seek_duration", None)
-                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, nvencc_options, orientation,
-                                                           info=get_video_info(temp_preproc), base_dir=base_dir)
-                if self.run_nvencc_command(nvencc_cmd, duration=duration,
-                                           progress_callback=self.update_progress, cwd=base_dir) != 0:
-                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
-            elif encoder_backend == "nvencc_only":
-                nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation,
-                                                           subtitle_burn_path=nvencc_subburn_path, info=info,
+                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, nvencc_options,
+                                                           orientation,
+                                                           info=get_video_info(temp_preproc),
                                                            base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
-                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+                    raise VideoProcessingError(
+                        f"Error encoding {job['video_path']} with NVEncC")
+            elif encoder_backend == "nvencc_only":
+                nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options,
+                                                           orientation,
+                                                           subtitle_burn_path=nvencc_subburn_path,
+                                                           info=info, base_dir=base_dir)
+                if self.run_nvencc_command(nvencc_cmd, duration=duration,
+                                           progress_callback=self.update_progress, cwd=base_dir) != 0:
+                    raise VideoProcessingError(
+                        f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
-                fd, temp_audio = tempfile.mkstemp(suffix=".mka", prefix="vid_temp_audio_", dir=output_dir)
+                fd, temp_audio = tempfile.mkstemp(suffix=".mka", prefix="vid_temp_audio_",
+                                                  dir=output_dir)
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_audio
                 register_temp_file(temp_audio)
-                audio_cmd = self.construct_ffmpeg_audio_prepass(job['video_path'], temp_audio, options,
-                                                                seek_start=seek_start, seek_duration=seek_duration)
+                audio_cmd = self.construct_ffmpeg_audio_prepass(
+                    job['video_path'], temp_audio, options,
+                    seek_start=seek_start, seek_duration=seek_duration)
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options, orientation,
+                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options,
+                                                           orientation,
                                                            audio_source_path=temp_audio,
-                                                           subtitle_burn_path=nvencc_subburn_path, info=info,
-                                                           base_dir=base_dir)
+                                                           subtitle_burn_path=nvencc_subburn_path,
+                                                           info=info, base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
-                    raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+                    raise VideoProcessingError(
+                        f"Error encoding {job['video_path']} with NVEncC")
             else:
-                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path, options,
-                                                    title_ass_path, base_dir=base_dir)
+                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path,
+                                                    options, title_ass_path, base_dir=base_dir)
                 if self.run_ffmpeg_command(cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']}")
             print(f"File finalized => {output_file}")
@@ -6816,9 +6906,10 @@ class VideoProcessorApp:
             CURRENT_JOB_TEMP_DIR = None
 
     def compute_target_bitrate_kbps(self, options, info, file_path):
-        bitrate_kbps = int(options.get("manual_bitrate")) if options.get("override_bitrate") else get_bitrate(
-            options.get('resolution'), info["framerate"], options.get("output_format") == "hdr",
-            source_height=info["height"], source_width=info["width"])
+        bitrate_kbps = (int(options.get("manual_bitrate")) if options.get("override_bitrate")
+                        else get_bitrate(options.get('resolution'), info["framerate"],
+                                         options.get("output_format") == "hdr",
+                                         source_height=info["height"], source_width=info["width"]))
         max_size_mb = float(options.get('max_size_mb', 0))
         max_duration = float(options.get('max_duration', 0))
         input_duration = get_file_duration(file_path)
@@ -6838,7 +6929,6 @@ class VideoProcessorApp:
                 audio_deduction_kbps += SURROUND_BITRATE_K
             if options.get("audio_passthrough"):
                 audio_deduction_kbps += 384
-            # === v8.24: auto-target audio budget ===
             target_code = options.get("audio_delivery_target", DEFAULT_DELIVERY_TARGET)
             if target_code == "youtube_stereo":
                 audio_deduction_kbps += STEREO_BITRATE_K
@@ -6890,12 +6980,14 @@ class VideoProcessorApp:
                     else:
                         target_h = height_map.get(res_key, 1080)
                     try:
-                        num_l, den_l = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
+                        num_l, den_l = self._resolve_aspect_ratio(
+                            options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                         w_left = int(target_h * num_l / den_l)
                     except Exception:
                         w_left = int(target_h * 16 / 9)
                     try:
-                        num_r, den_r = self._resolve_aspect_ratio(options.get('hybrid_bottom_aspect', '16:9'), info, '16:9')
+                        num_r, den_r = self._resolve_aspect_ratio(
+                            options.get('hybrid_bottom_aspect', '16:9'), info, '16:9')
                         w_right = int(target_h * num_r / den_r)
                     except Exception:
                         w_right = int(target_h * 16 / 9)
@@ -6908,12 +7000,14 @@ class VideoProcessorApp:
                     else:
                         target_w = width_map.get(res_key, 1080)
                     try:
-                        num_t, den_t = self._resolve_aspect_ratio(options.get('hybrid_top_aspect', '16:9'), info, '16:9')
+                        num_t, den_t = self._resolve_aspect_ratio(
+                            options.get('hybrid_top_aspect', '16:9'), info, '16:9')
                         h_top = int(target_w * den_t / num_t)
                     except Exception:
                         h_top = int(target_w * 9 / 16)
                     try:
-                        num_b, den_b = self._resolve_aspect_ratio(options.get('hybrid_bottom_aspect', '4:5'), info, '4:5')
+                        num_b, den_b = self._resolve_aspect_ratio(
+                            options.get('hybrid_bottom_aspect', '4:5'), info, '4:5')
                         h_bot = int(target_w * den_b / num_b)
                     except Exception:
                         h_bot = int(target_w * 5 / 4)
@@ -6931,7 +7025,8 @@ class VideoProcessorApp:
                 num, den = map(int, aspect_str.split(':'))
                 target_h = int(target_w * den / num)
             except Exception:
-                target_h = int(target_w * 16 / 9) if canvas_orient == "vertical" else int(target_w * 9 / 16)
+                target_h = (int(target_w * 16 / 9) if canvas_orient == "vertical"
+                            else int(target_w * 9 / 16))
             return (target_w // 2) * 2, (target_h // 2) * 2
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
@@ -6983,13 +7078,14 @@ class VideoProcessorApp:
             return "main422-10"
         return "main10" if is_hdr else "main"
 
-    def construct_nvencc_command(self, input_file, output_file, options, orientation, audio_source_path=None,
-                                 subtitle_burn_path=None, info=None, base_dir=None):
+    def construct_nvencc_command(self, input_file, output_file, options, orientation,
+                                 audio_source_path=None, subtitle_burn_path=None,
+                                 info=None, base_dir=None):
         if info is None:
             info = get_video_info(input_file)
         is_hdr_output = options.get("output_format") == "hdr"
-        color_preset_key = options.get("color_preset_hdr") if is_hdr_output else \
-            options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR)
+        color_preset_key = (options.get("color_preset_hdr") if is_hdr_output else
+                            options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
         bitrate_kbps, _, _ = self.compute_target_bitrate_kbps(options, info, input_file)
         target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
@@ -7005,16 +7101,20 @@ class VideoProcessorApp:
                             break
                 return crop_dim
             try:
-                src_ar = float(src_w) / float(src_h); dst_ar = float(dst_w) / float(dst_h)
+                src_ar = float(src_w) / float(src_h)
+                dst_ar = float(dst_w) / float(dst_h)
             except Exception:
                 return None
             if abs(src_ar - dst_ar) < 1e-6:
                 return None
             if src_ar > dst_ar:
-                crop_h = src_h; crop_w = int(round(crop_h * dst_ar))
+                crop_h = src_h
+                crop_w = int(round(crop_h * dst_ar))
             else:
-                crop_w = src_w; crop_h = int(round(crop_w / dst_ar))
-            crop_w = _align_crop_dim(src_w, crop_w); crop_h = _align_crop_dim(src_h, crop_h)
+                crop_w = src_w
+                crop_h = int(round(crop_w / dst_ar))
+            crop_w = _align_crop_dim(src_w, crop_w)
+            crop_h = _align_crop_dim(src_h, crop_h)
             left = max(0, (src_w - crop_w) // 2)
             right = max(0, src_w - crop_w - left)
             top = max(0, (src_h - crop_h) // 2)
@@ -7027,15 +7127,20 @@ class VideoProcessorApp:
 
         def _compute_pad(src_w, src_h, dst_w, dst_h, ox=0, oy=0):
             try:
-                src_ar = float(src_w) / float(src_h); dst_ar = float(dst_w) / float(dst_h)
+                src_ar = float(src_w) / float(src_h)
+                dst_ar = float(dst_w) / float(dst_h)
             except Exception:
                 return None
             if abs(src_ar - dst_ar) < 1e-6:
                 return None
             if src_ar > dst_ar:
-                fit_w = dst_w; fit_h = int(round(dst_w / src_ar)); fit_h = (fit_h // 2) * 2
+                fit_w = dst_w
+                fit_h = int(round(dst_w / src_ar))
+                fit_h = (fit_h // 2) * 2
             else:
-                fit_h = dst_h; fit_w = int(round(dst_h * src_ar)); fit_w = (fit_w // 2) * 2
+                fit_h = dst_h
+                fit_w = int(round(dst_h * src_ar))
+                fit_w = (fit_w // 2) * 2
             base_pl = (max(0, (dst_w - fit_w) // 2) // 2) * 2
             base_pt = (max(0, (dst_h - fit_h) // 2) // 2) * 2
             pad_left = (max(0, min(dst_w - fit_w, base_pl + ox)) // 2) * 2
@@ -7047,7 +7152,8 @@ class VideoProcessorApp:
             return pad_left, pad_top, pad_right, pad_bottom, fit_w, fit_h
 
         precrop = None
-        use_precrop = (aspect_mode == "crop" and (info["width"] != target_w or info["height"] != target_h))
+        use_precrop = (aspect_mode == "crop" and
+                       (info["width"] != target_w or info["height"] != target_h))
         if use_precrop:
             precrop = _compute_center_crop(info["width"], info["height"], target_w, target_h)
         cuvid_codecs = {"h264", "hevc", "av1", "vp9", "mpeg1", "mpeg2", "vc1", "vp8", "mjpeg"}
@@ -7091,17 +7197,23 @@ class VideoProcessorApp:
         if bref in ["disabled", "each", "middle", "auto"]:
             cmd.extend(["--bref-mode", bref])
         color_tag_mode = str(options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE)).lower()
-        strict_no_color_tagging = bool(options.get("nvencc_strict_no_color_tagging",
-                                                   DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
+        strict_no_color_tagging = bool(options.get(
+            "nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
         if color_tag_mode == "custom":
-            resolved_depth = str(options.get("nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH)).strip().lower()
+            resolved_depth = str(options.get(
+                "nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH)).strip().lower()
             if resolved_depth == "auto":
                 resolved_depth = "10" if is_hdr_output else "8"
             if resolved_depth not in ["8", "10"]:
                 resolved_depth = "10" if is_hdr_output else "8"
-            color_prim = str(options.get("nvencc_color_prim", DEFAULT_NVENCC_COLOR_PRIM)).strip() or DEFAULT_NVENCC_COLOR_PRIM
-            color_transfer = str(options.get("nvencc_color_transfer", DEFAULT_NVENCC_COLOR_TRANSFER)).strip() or DEFAULT_NVENCC_COLOR_TRANSFER
-            color_matrix = str(options.get("nvencc_color_matrix", DEFAULT_NVENCC_COLOR_MATRIX)).strip() or DEFAULT_NVENCC_COLOR_MATRIX
+            color_prim = (str(options.get("nvencc_color_prim", DEFAULT_NVENCC_COLOR_PRIM)).strip()
+                          or DEFAULT_NVENCC_COLOR_PRIM)
+            color_transfer = (str(options.get("nvencc_color_transfer",
+                                              DEFAULT_NVENCC_COLOR_TRANSFER)).strip()
+                              or DEFAULT_NVENCC_COLOR_TRANSFER)
+            color_matrix = (str(options.get("nvencc_color_matrix",
+                                            DEFAULT_NVENCC_COLOR_MATRIX)).strip()
+                            or DEFAULT_NVENCC_COLOR_MATRIX)
             auto_apply_color_tags = True
         else:
             resolved_depth = "10" if is_hdr_output else "8"
@@ -7111,7 +7223,8 @@ class VideoProcessorApp:
             auto_apply_color_tags = True
         cmd.extend(["--output-depth", resolved_depth])
         if not strict_no_color_tagging and auto_apply_color_tags:
-            cmd.extend(["--colorprim", color_prim, "--transfer", color_transfer, "--colormatrix", color_matrix])
+            cmd.extend(["--colorprim", color_prim, "--transfer", color_transfer,
+                        "--colormatrix", color_matrix])
         upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
         resize_algo = None
         if upscale_algo == "nvvfx-superres":
@@ -7152,11 +7265,14 @@ class VideoProcessorApp:
             cmd.extend(["--audio-source", audio_source_path])
         else:
             if options and options.get("audio_mono"):
-                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":mono", "--audio-bitrate", str(MONO_BITRATE_K)])
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":mono",
+                            "--audio-bitrate", str(MONO_BITRATE_K)])
             elif options and options.get("audio_stereo_downmix"):
-                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":stereo", "--audio-bitrate", str(STEREO_BITRATE_K)])
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":stereo",
+                            "--audio-bitrate", str(STEREO_BITRATE_K)])
             elif options and options.get("audio_surround_51"):
-                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":5.1", "--audio-bitrate", str(SURROUND_BITRATE_K)])
+                cmd.extend(["--audio-codec", "aac", "--audio-stream", ":5.1",
+                            "--audio-bitrate", str(SURROUND_BITRATE_K)])
             else:
                 cmd.extend(["--audio-copy"])
         if subtitle_burn_path:
@@ -7221,7 +7337,8 @@ class VideoProcessorApp:
             sys.stdout.write("\n")
         return ret_code
 
-    def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options, seek_start=None, seek_duration=None):
+    def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options,
+                                         seek_start=None, seek_duration=None):
         cmd = [FFMPEG_CMD, "-y"]
         if seek_start is not None:
             cmd.extend(["-ss", str(seek_start)])
@@ -7229,7 +7346,6 @@ class VideoProcessorApp:
         if seek_duration is not None:
             cmd.extend(["-t", str(seek_duration)])
         cmd.extend(["-vn", "-sn", "-dn"])
-        # === v8.24: unpack tuple ===
         audio_cmd_parts, stream_groups = self.build_audio_segment(
             input_file, options, loudnorm_stats=options.get("_loudnorm_stats"))
         cmd.extend(audio_cmd_parts)
@@ -7238,8 +7354,9 @@ class VideoProcessorApp:
         cmd.append(output_audio)
         return cmd
 
-    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None, options=None,
-                                 title_ass_path=None, encoder_backend="ffmpeg", base_dir=None):
+    def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None,
+                                 options=None, title_ass_path=None, encoder_backend="ffmpeg",
+                                 base_dir=None):
         options = options or job['options']
         file_path = job['video_path']
         if orientation == "hybrid-duo (dual source)":
@@ -7248,8 +7365,10 @@ class VideoProcessorApp:
                 file_path = explicit_top
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
-        decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid", "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
-        decoder = decoder_map.get(info["codec_name"], info["codec_name"]) if decoder_available else info["codec_name"]
+        decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid",
+                       "av1": "av1_cuvid", "vp9": "vp9_cuvid"}
+        decoder = (decoder_map.get(info["codec_name"], info["codec_name"])
+                   if decoder_available else info["codec_name"])
         use_cuda_decoder = "_cuvid" in decoder
         seek_start = options.get("seek_start")
         seek_duration = options.get("seek_duration")
@@ -7290,8 +7409,8 @@ class VideoProcessorApp:
                             f"Hybrid-Duo requires a {label} video. Could not find: {bot_path}")
             info_bot = get_video_info(bot_path)
             decoder_available_bot, _ = check_decoder_availability(info_bot["codec_name"])
-            decoder_bot = decoder_map.get(info_bot["codec_name"],
-                                          info_bot["codec_name"]) if decoder_available_bot else info_bot["codec_name"]
+            decoder_bot = (decoder_map.get(info_bot["codec_name"], info_bot["codec_name"])
+                           if decoder_available_bot else info_bot["codec_name"])
             use_cuda_decoder_bot = "_cuvid" in decoder_bot
             if seek_start is not None:
                 cmd.extend(["-ss", str(seek_start)])
@@ -7303,8 +7422,8 @@ class VideoProcessorApp:
         is_cpu_encode = (options.get("encoder_family") == "cpu_software")
         chroma = _normalize_chroma_code(options.get("chroma_subsampling", "420"))
         cuda_work_fmt = "p010le" if is_hdr_output else "nv12"
-        color_preset_key = options.get("color_preset_hdr") if is_hdr_output else \
-            options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR)
+        color_preset_key = (options.get("color_preset_hdr") if is_hdr_output
+                            else options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
         use_cpu_scaling = (chroma != "420")
         if is_hdr_output or info["bit_depth"] == 10:
@@ -7335,16 +7454,19 @@ class VideoProcessorApp:
         cuda_video_in_bot = None
         if orientation == "hybrid-duo (dual source)":
             if not use_cuda_decoder_bot:
-                filter_complex_parts.append(f"[1:v]format={cuda_work_fmt},hwupload_cuda[v_cuda_in_bot]")
+                filter_complex_parts.append(
+                    f"[1:v]format={cuda_work_fmt},hwupload_cuda[v_cuda_in_bot]")
                 cuda_video_in_bot = "[v_cuda_in_bot]"
             else:
                 cuda_video_in_bot = "[1:v]"
         upscale_algo = options.get("upscale_algo")
-        use_nvencc_resize = encoder_backend == "preprocess" and upscale_algo in ["nvvfx-superres", "ngx-vsr"]
-        ffmpeg_upscale_algo = upscale_algo if upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos"] else DEFAULT_UPSCALE_ALGO
+        use_nvencc_resize = (encoder_backend == "preprocess" and
+                             upscale_algo in ["nvvfx-superres", "ngx-vsr"])
+        ffmpeg_upscale_algo = (upscale_algo if upscale_algo in
+                               ["nearest", "bilinear", "bicubic", "lanczos"]
+                               else DEFAULT_UPSCALE_ALGO)
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
-        # === v8.24: unpack tuple ===
         audio_cmd_parts, audio_stream_groups = self.build_audio_segment(
             file_path, options, base_dir=base_dir,
             loudnorm_stats=options.get("_loudnorm_stats"))
@@ -7371,7 +7493,8 @@ class VideoProcessorApp:
                     return scale, "", block_w, block_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
                 pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
-                cpu = f"pad={block_w}:{block_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}" if mode == 'pad' else f"crop={block_w}:{block_h}"
+                cpu = (f"pad={block_w}:{block_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}"
+                       if mode == 'pad' else f"crop={block_w}:{block_h}")
                 return vf, cpu, block_w, block_h
 
             safe_algo = ffmpeg_upscale_algo
@@ -7392,10 +7515,10 @@ class VideoProcessorApp:
                     if left_w >= target_w:
                         left_w = (target_w // 4) * 2
                         right_w = target_w - left_w
-                top_vf, top_cpu, _, _ = get_block_filters(left_aspect, options.get('hybrid_top_mode'), safe_algo,
-                                                          left_w, total_h)
-                bot_vf, bot_cpu, _, _ = get_block_filters(right_aspect, options.get('hybrid_bottom_mode'), safe_algo,
-                                                           right_w, total_h)
+                top_vf, top_cpu, _, _ = get_block_filters(
+                    left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h)
+                bot_vf, bot_cpu, _, _ = get_block_filters(
+                    right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h)
                 stack_filter = "hstack=inputs=2[stacked]"
             else:
                 top_aspect = options.get('hybrid_top_aspect')
@@ -7412,10 +7535,10 @@ class VideoProcessorApp:
                     if top_h >= total_h:
                         top_h = (total_h // 4) * 2
                         bot_h = total_h - top_h
-                top_vf, top_cpu, _, _ = get_block_filters(top_aspect, options.get('hybrid_top_mode'), safe_algo,
-                                                          target_w, top_h)
-                bot_vf, bot_cpu, _, _ = get_block_filters(bot_aspect, options.get('hybrid_bottom_mode'), safe_algo,
-                                                           target_w, bot_h)
+                top_vf, top_cpu, _, _ = get_block_filters(
+                    top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h)
+                bot_vf, bot_cpu, _, _ = get_block_filters(
+                    bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h)
                 stack_filter = "vstack=inputs=2[stacked]"
             cpu_pix_fmt = cuda_work_fmt
             cpu_chain = []
@@ -7447,9 +7570,11 @@ class VideoProcessorApp:
             elif not is_hdr_output:
                 cpu_chain.append("format=nv12")
             if is_cpu_encode or encoder_backend == "preprocess":
-                final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]" if cpu_chain else "[stacked][v_out]"
+                final_v_out = (f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]"
+                               if cpu_chain else "[stacked][v_out]")
             else:
-                final_v_out = f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]" if cpu_chain else "[stacked]hwupload_cuda[v_out]"
+                final_v_out = (f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]"
+                               if cpu_chain else "[stacked]hwupload_cuda[v_out]")
             if orientation == "hybrid-duo (dual source)":
                 video_fc_parts = [f"{cuda_video_in_top}{top_vf}[v_top_out]",
                                   f"{cuda_video_in_bot}{bot_vf}[v_bot_out]"]
@@ -7458,8 +7583,10 @@ class VideoProcessorApp:
                                   f"[v_top_in]{top_vf}[v_top_out]",
                                   f"[v_bot_in]{bot_vf}[v_bot_out]"]
             video_fc_parts.extend([
-                f"[v_top_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]",
-                f"[v_bot_out]hwdownload,format={cpu_pix_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
+                f"[v_top_out]hwdownload,format={cpu_pix_fmt},"
+                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]",
+                f"[v_bot_out]hwdownload,format={cpu_pix_fmt},"
+                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
                 f"[cpu_top][cpu_bot]{stack_filter}", final_v_out])
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
@@ -7476,9 +7603,12 @@ class VideoProcessorApp:
                     if not target_w or not target_h:
                         raise VideoProcessingError(f"Invalid resolution '{res_key}' for original mode.")
                     if use_cpu_scaling:
-                        vf_filters.append(f"scale=w={target_w}:h={target_h}:flags={self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)}")
+                        vf_filters.append(
+                            f"scale=w={target_w}:h={target_h}:"
+                            f"flags={self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)}")
                     elif not (use_nvencc_resize and options.get("aspect_mode") == "stretch"):
-                        vf_filters.append(f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
+                        vf_filters.append(
+                            f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
                     else:
                         target_w, target_h = info["width"], info["height"]
             else:
@@ -7499,11 +7629,13 @@ class VideoProcessorApp:
                 oy = options.get("video_offset_y", "0")
                 target_w = width_map.get(res_key)
                 if target_w is None:
-                    raise VideoProcessingError(f"Invalid resolution '{res_key}' for {orientation} mode.")
+                    raise VideoProcessingError(
+                        f"Invalid resolution '{res_key}' for {orientation} mode.")
                 try:
                     num, den = map(int, aspect_str.split(':'))
                 except (ValueError, AttributeError):
-                    raise VideoProcessingError(f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
+                    raise VideoProcessingError(
+                        f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
                 target_h = int(target_w * den / num)
                 target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
                 safe_algo = ffmpeg_upscale_algo
@@ -7517,7 +7649,8 @@ class VideoProcessorApp:
                         pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
                         vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
                         vf_filters.append(
-                            f"pad={target_w}:{target_h}:({target_w}-iw)/2+{ox}:({target_h}-ih)/2+{oy}:{pad_color}")
+                            f"pad={target_w}:{target_h}:({target_w}-iw)/2+{ox}:"
+                            f"({target_h}-ih)/2+{oy}:{pad_color}")
                     elif aspect_mode == 'crop':
                         vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                         vf_filters.append(f"crop={target_w}:{target_h}")
@@ -7548,11 +7681,15 @@ class VideoProcessorApp:
                             bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
                             sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
                             fc_parts.append(
-                                f"{bg_current}scale_cuda=w={target_w // m}:h={target_h // m}:interp_algo={safe_algo}:format={target_fmt},")
+                                f"{bg_current}scale_cuda=w={target_w // m}:h={target_h // m}:"
+                                f"interp_algo={safe_algo}:format={target_fmt},")
                             fc_parts.append(
-                                f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,eq=brightness={bright}:saturation={sat},hwupload_cuda,")
+                                f"hwdownload,format={target_fmt},"
+                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+                                f"eq=brightness={bright}:saturation={sat},hwupload_cuda,")
                             fc_parts.append(
-                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:format={target_fmt}[v_bg_pixelated];")
+                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:"
+                                f"format={target_fmt}[v_bg_pixelated];")
                             bg_current = "[v_bg_pixelated]"
                         if apply_blur:
                             sigma = options.get("blur_sigma", DEFAULT_BLUR_SIGMA)
@@ -7560,14 +7697,18 @@ class VideoProcessorApp:
                             bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
                             sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
                             fc_parts.append(
-                                f"{bg_current}scale_cuda=w={target_w // 2}:h={target_h // 2}:interp_algo={safe_algo}:format={target_fmt},")
+                                f"{bg_current}scale_cuda=w={target_w // 2}:h={target_h // 2}:"
+                                f"interp_algo={safe_algo}:format={target_fmt},")
                             fc_parts.append(
-                                f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps}")
+                                f"hwdownload,format={target_fmt},"
+                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+                                f"gblur=sigma={sigma}:steps={steps}")
                             if not apply_pixelate:
                                 fc_parts.append(f",eq=brightness={bright}:saturation={sat}")
                             fc_parts.append(f",format={target_fmt},hwupload_cuda,")
                             fc_parts.append(
-                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_bg_blurred];")
+                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                f"format={target_fmt}[v_bg_blurred];")
                             bg_current = "[v_bg_blurred]"
                         if apply_ambient:
                             sigma = options.get("blur_sigma", "25")
@@ -7580,30 +7721,47 @@ class VideoProcessorApp:
                                 spread = 2
                             fc_parts.append(f"{v_fg_in_tag}split=2[v_fg_for_ambient][v_fg_in_real];")
                             fc_parts.append(
-                                f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt},")
+                                f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:"
+                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"format={target_fmt},")
                             fc_parts.append(
-                                f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,")
+                                f"pad_cuda={target_w}:{target_h}:"
+                                f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,")
                             fc_parts.append(
-                                f"scale_cuda=w={target_w // spread}:h={target_h // spread}:interp_algo=bilinear:format={target_fmt},")
+                                f"scale_cuda=w={target_w // spread}:h={target_h // spread}:"
+                                f"interp_algo=bilinear:format={target_fmt},")
                             fc_parts.append(
-                                f"hwdownload,format={target_fmt},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,gblur=sigma={sigma}:steps={steps},eq=saturation={sat},format={target_fmt},hwupload_cuda,")
+                                f"hwdownload,format={target_fmt},"
+                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+                                f"gblur=sigma={sigma}:steps={steps},eq=saturation={sat},"
+                                f"format={target_fmt},hwupload_cuda,")
                             fc_parts.append(
-                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:format={target_fmt}[v_ambient_layer];")
+                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                f"format={target_fmt}[v_ambient_layer];")
                             if apply_pixelate or apply_blur:
                                 fc_parts.append(f"{bg_current}hwdownload,format={target_fmt}[v_bg_sys];")
-                                fc_parts.append(f"[v_ambient_layer]hwdownload,format={target_fmt}[v_ambient_sys];")
                                 fc_parts.append(
-                                    f"[v_bg_sys][v_ambient_sys]blend=c0_mode=screen:c1_mode=average:c2_mode=average,format={target_fmt},hwupload_cuda[v_composited_bg];")
+                                    f"[v_ambient_layer]hwdownload,format={target_fmt}[v_ambient_sys];")
+                                fc_parts.append(
+                                    f"[v_bg_sys][v_ambient_sys]blend=c0_mode=screen:"
+                                    f"c1_mode=average:c2_mode=average,format={target_fmt},"
+                                    f"hwupload_cuda[v_composited_bg];")
                                 bg_current = "[v_composited_bg]"
                             else:
                                 bg_current = "[v_ambient_layer]"
                             fc_parts.append(
-                                f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
+                                f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:"
+                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"format={target_fmt}[v_fg_scaled];")
                         else:
                             fc_parts.append(
-                                f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}:force_original_aspect_ratio=decrease:format={target_fmt}[v_fg_scaled];")
+                                f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:"
+                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"format={target_fmt}[v_fg_scaled];")
                         fc_parts.append(
-                            f"{bg_current}[v_fg_scaled]overlay_cuda=x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),setsar=1[v_bg_combined]")
+                            f"{bg_current}[v_fg_scaled]overlay_cuda="
+                            f"x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),"
+                            f"setsar=1[v_bg_combined]")
                         filter_complex_parts.append("".join(fc_parts))
                         video_in_tag = "[v_bg_combined]"
                     else:
@@ -7612,7 +7770,9 @@ class VideoProcessorApp:
                             pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
                             vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
                             vf_filters.append(
-                                f"pad_cuda={target_w}:{target_h}:floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):{pad_color}")
+                                f"pad_cuda={target_w}:{target_h}:"
+                                f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):"
+                                f"{pad_color}")
                         elif aspect_mode == 'crop':
                             vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                             cpu_filters.append(f"crop={target_w}:{target_h}")
@@ -7643,13 +7803,15 @@ class VideoProcessorApp:
                 cpu_filters.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{target_h}")
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
-                cpu_filters.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
+                cpu_filters.append(
+                    f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
             if use_cpu_scaling:
                 vf_filters.extend(cpu_filters)
                 vf_filters.append(f"format={target_cpu_pix_fmt}")
             elif cpu_filters:
                 processing_chain = [f"hwdownload,format={cuda_work_fmt}",
-                                    "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + cpu_filters
+                                    "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + \
+                                   cpu_filters
                 if is_cpu_encode:
                     processing_chain.append(f"format={target_cpu_pix_fmt}")
                     vf_filters.append(",".join(processing_chain))
@@ -7666,13 +7828,16 @@ class VideoProcessorApp:
                 video_out_tag = "[v_out]"
             elif video_in_tag != cuda_video_in:
                 video_out_tag = video_in_tag
-        eff_w, eff_h = (target_w, target_h) if ('target_w' in locals() and 'target_h' in locals()) else (None, None)
+        eff_w, eff_h = ((target_w, target_h)
+                        if ('target_w' in locals() and 'target_h' in locals()) else (None, None))
         if filter_complex_parts or audio_fc_str:
-            full_fc = ";".join(filter(None, filter_complex_parts + ([audio_fc_str] if audio_fc_str else [])))
+            full_fc = ";".join(filter(None, filter_complex_parts +
+                                      ([audio_fc_str] if audio_fc_str else [])))
             cmd.extend(["-filter_complex", full_fc])
         cmd.extend(["-map", video_out_tag])
         cmd.extend(audio_cmd_parts)
-        bitrate_kbps, max_duration, input_duration = self.compute_target_bitrate_kbps(options, info, file_path)
+        bitrate_kbps, max_duration, input_duration = self.compute_target_bitrate_kbps(
+            options, info, file_path)
         if max_duration > 0 and input_duration > max_duration and seek_duration is None:
             cmd.insert(len(cmd) - 2, "-t")
             cmd.insert(len(cmd) - 2, str(max_duration))
@@ -7723,13 +7888,15 @@ class VideoProcessorApp:
                     md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
                     cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
                     x265_hdr_params = (
-                        f"colorprim={color_info['primaries']}:transfer={color_info['trc']}:colormatrix={color_info['matrix']}:"
+                        f"colorprim={color_info['primaries']}:transfer={color_info['trc']}:"
+                        f"colormatrix={color_info['matrix']}:"
                         f"range={'limited' if color_info['range'] == 'tv' else 'full'}:"
                         f"hdr10=1:repeat-headers=1:master-display={md}:max-cll={cll}")
                     encoder_opts.extend(["-x265-params", x265_hdr_params])
                 elif chroma != "420":
                     x265_params = (
-                        f"colorprim={color_info['primaries']}:transfer={color_info['trc']}:colormatrix={color_info['matrix']}:"
+                        f"colorprim={color_info['primaries']}:transfer={color_info['trc']}:"
+                        f"colormatrix={color_info['matrix']}:"
                         f"range={'limited' if color_info['range'] == 'tv' else 'full'}")
                     encoder_opts.extend(["-x265-params", x265_params])
                 if crf_val > 0:
@@ -7741,20 +7908,23 @@ class VideoProcessorApp:
             elif selected_codec == "av1":
                 pix_fmt = "yuv420p10le"
                 encoder_opts = ["-c:v", "libsvtav1",
-                                "-preset", str(options.get("cpu_svtav1_preset", DEFAULT_CPU_SVTAV1_PRESET)),
+                                "-preset", str(options.get("cpu_svtav1_preset",
+                                                            DEFAULT_CPU_SVTAV1_PRESET)),
                                 "-pix_fmt", pix_fmt]
                 if is_hdr_output:
                     md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
                     cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
                     svt_hdr_params = (
-                        f"color-primaries={color_info['svt_prim']}:transfer-characteristics={color_info['svt_trc']}:"
+                        f"color-primaries={color_info['svt_prim']}:"
+                        f"transfer-characteristics={color_info['svt_trc']}:"
                         f"matrix-coefficients={color_info['svt_matrix']}:"
                         f"color-range={'0' if color_info['range'] == 'tv' else '1'}:"
                         f"mastering-display={md}:content-light={cll}")
                     encoder_opts.extend(["-svtav1-params", svt_hdr_params])
                 else:
                     svt_params = (
-                        f"color-primaries={color_info['svt_prim']}:transfer-characteristics={color_info['svt_trc']}:"
+                        f"color-primaries={color_info['svt_prim']}:"
+                        f"transfer-characteristics={color_info['svt_trc']}:"
                         f"matrix-coefficients={color_info['svt_matrix']}:"
                         f"color-range={'0' if color_info['range'] == 'tv' else '1'}")
                     encoder_opts.extend(["-svtav1-params", svt_params])
@@ -7765,7 +7935,8 @@ class VideoProcessorApp:
                                          "-maxrate", f"{bitrate_kbps * 2}k",
                                          "-bufsize", f"{bitrate_kbps * 2}k"])
             else:
-                raise VideoProcessingError(f"Unsupported codec '{selected_codec}' for CPU software encoding")
+                raise VideoProcessingError(
+                    f"Unsupported codec '{selected_codec}' for CPU software encoding")
             encoder_opts.extend(["-color_primaries", color_info["primaries"],
                                  "-color_trc", color_info["trc"],
                                  "-colorspace", color_info["matrix"],
@@ -7808,7 +7979,6 @@ class VideoProcessorApp:
         if eff_w and eff_h:
             encoder_opts.extend(["-metadata:s:v", "rotate=0", "-aspect", f"{eff_w}:{eff_h}"])
         cmd.extend(encoder_opts)
-        # === v8.24: emit stream_groups right before -movflags ===
         if audio_stream_groups:
             cmd.extend(audio_stream_groups)
         cmd.extend(["-movflags", "+faststart+negative_cts_offsets", "-f", "mp4", output_file])
@@ -7833,13 +8003,16 @@ class VideoProcessorApp:
             caps = check_ffmpeg_capabilities().get('cpu_codecs', {})
             req_encoder = {"h264": "libx264", "hevc": "libx265", "av1": "libsvtav1"}.get(codec)
             if req_encoder and not caps.get(req_encoder, False):
-                issues.append(f"Software encoder '{req_encoder}' is not supported by your current FFmpeg build.")
+                issues.append(
+                    f"Software encoder '{req_encoder}' is not supported by your current FFmpeg build.")
         chroma = self._get_effective_chroma()
-        if chroma in ("422", "444") and self.output_format_var.get() == "hdr" and selected_codec == "h264":
+        if chroma in ("422", "444") and self.output_format_var.get() == "hdr" and \
+                selected_codec == "h264":
             issues.append("H.264 with 4:2:2/4:4:4 cannot carry HDR signaling. Choose HEVC or 4:2:0.")
         if chroma in ("422", "444") and self.orientation_var.get() in ("hybrid (stacked)",
                                                                        "hybrid-duo (dual source)"):
-            issues.append("4:2:2/4:4:4 chroma is not supported in Hybrid modes (GPU stacking is 4:2:0-only).")
+            issues.append(
+                "4:2:2/4:4:4 chroma is not supported in Hybrid modes (GPU stacking is 4:2:0-only).")
         active_key = self._get_active_color_preset_key()
         active = COLOR_PRESET_LOOKUP.get(active_key, {})
         if active.get("mode") == "hdr" and self.output_format_var.get() != "hdr":
@@ -7848,12 +8021,14 @@ class VideoProcessorApp:
             issues.append("Selected Color Preset is SDR-only but Output Format is HDR.")
         if active_key == "srgb" and self.output_format_var.get() == "hdr":
             issues.append("sRGB has no HDR variant. Choose BT.2020 PQ or HLG for HDR output.")
-        if active_key in ("bt601_ntsc", "bt601_pal") and self.resolution_var.get() in ("1080p", "2160p", "4320p"):
+        if active_key in ("bt601_ntsc", "bt601_pal") and self.resolution_var.get() in \
+                ("1080p", "2160p", "4320p"):
             warnings.append("BT.601 is intended for SD content. Use BT.709 for HD/UHD.")
         if selected_codec == "h264" and self.resolution_var.get() == "4320p":
-            proceed = messagebox.askyesno("H.264 + 4320p Warning",
-                                          "H.264 with 4320p output is likely to fail on most NVENC GPUs.\n"
-                                          "Do you want to continue anyway?")
+            proceed = messagebox.askyesno(
+                "H.264 + 4320p Warning",
+                "H.264 with 4320p output is likely to fail on most NVENC GPUs.\n"
+                "Do you want to continue anyway?")
             if not proceed:
                 return False
         try:
@@ -7868,11 +8043,10 @@ class VideoProcessorApp:
             issues.append("FFmpeg threads must be an integer (0 = auto).")
         raw_priority = str(self.ffmpeg_priority_var.get()).strip().lower()
         if normalize_ffmpeg_priority(raw_priority) != raw_priority:
-            issues.append("FFmpeg priority must be one of: idle, below_normal, normal, above_normal, high, realtime.")
-
-        # === v8.24: delivery-target validation ===
+            issues.append(
+                "FFmpeg priority must be one of: idle, below_normal, normal, above_normal, "
+                "high, realtime.")
         target_code = DELIVERY_TARGET_LOOKUP.get(self.audio_delivery_target_var.get(), "custom")
-
         if target_code == "youtube_stereo_eclipsa":
             if self.encoder_backend_var.get() != "ffmpeg_only":
                 issues.append(
@@ -7889,7 +8063,6 @@ class VideoProcessorApp:
                     f"Target '{self.audio_delivery_target_var.get()}' uses Sofalizer when the "
                     "source has surround audio. No SOFA file is set — jobs with stereo/mono "
                     "sources will still work, but surround sources will fail per-job.")
-
         if target_code == "custom":
             if self.audio_stereo_sofalizer_var.get() and not self.audio_passthrough_var.get():
                 sofa_path = self.sofa_file_var.get()
@@ -7903,13 +8076,15 @@ class VideoProcessorApp:
                                          self.audio_stereo_sofalizer_var.get(),
                                          self.audio_surround_51_var.get()])
                 if not any_proc_selected:
-                    issues.append("No audio processing tracks are selected. Choose at least one or select Passthrough.")
-
+                    issues.append(
+                        "No audio processing tracks are selected. Choose at least one or "
+                        "select Passthrough.")
         if warnings and not issues:
             messagebox.showwarning("Warnings", "\n".join(f"• {w}" for w in warnings))
         if issues:
             messagebox.showerror("Configuration Issues",
-                                 "Please fix the following issues:\n" + "\n".join(f"• {issue}" for issue in issues))
+                                 "Please fix the following issues:\n" +
+                                 "\n".join(f"• {issue}" for issue in issues))
             return False
         return True
 
@@ -7955,14 +8130,16 @@ class VideoProcessorApp:
         if hasattr(self, 'test_button'):
             self.test_button.config(state="disabled")
         hibernate_flag = bool(self.hibernate_when_done_var.get())
-        threading.Thread(target=self._process_files_thread, args=(None, hibernate_flag), daemon=True).start()
+        threading.Thread(target=self._process_files_thread,
+                         args=(None, hibernate_flag), daemon=True).start()
 
     def _process_files_console(self, jobs):
         print("\n" + "=" * 80 + "\n--- Starting processing batch (Console Mode) ---")
         successful, failed = 0, 0
         total_jobs = len(jobs)
         for i, job in enumerate(jobs):
-            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-" * 80)
+            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
+                  f"{job['display_name']}\n" + "-" * 80)
             try:
                 orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
                 resolution = job['options'].get("resolution", "Unknown")
@@ -7993,7 +8170,8 @@ class VideoProcessorApp:
             self.root.after(0, lambda m=f"Processing {i + 1}/{total_jobs}: {job['display_name']}":
                             self.update_status(m))
             self.root.after(0, lambda: self.progress_bar.config(value=0))
-            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: {job['display_name']}\n" + "-" * 80)
+            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
+                  f"{job['display_name']}\n" + "-" * 80)
             try:
                 orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
                 resolution = job['options'].get("resolution", "Unknown")
@@ -8020,8 +8198,10 @@ class VideoProcessorApp:
     def run_ffmpeg_command(self, cmd, duration=None, options=None, cwd=None):
         prepared_cmd = list(cmd)
         insert_flags = []
-        ffmpeg_threads = normalize_ffmpeg_threads((options or {}).get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
-        ffmpeg_priority = normalize_ffmpeg_priority((options or {}).get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY))
+        ffmpeg_threads = normalize_ffmpeg_threads(
+            (options or {}).get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
+        ffmpeg_priority = normalize_ffmpeg_priority(
+            (options or {}).get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY))
         if "-threads" not in prepared_cmd:
             insert_flags.extend(["-threads", str(ffmpeg_threads)])
         if "-loglevel" not in prepared_cmd:
@@ -8035,8 +8215,8 @@ class VideoProcessorApp:
         print("Running FFmpeg command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in prepared_cmd))
         print(f"[INFO] FFmpeg CPU settings: threads={ffmpeg_threads}, priority={ffmpeg_priority}")
-        return safe_ffmpeg_execution(prepared_cmd, "video encoding", duration, self.update_progress,
-                                     priority=ffmpeg_priority, cwd=cwd)
+        return safe_ffmpeg_execution(prepared_cmd, "video encoding", duration,
+                                     self.update_progress, priority=ffmpeg_priority, cwd=cwd)
 
     def verify_output_file(self, file_path, options=None):
         print(f"--- Verifying output: {os.path.basename(file_path)} ---")
@@ -8052,11 +8232,13 @@ class VideoProcessorApp:
             cmd_audio = [FFPROBE_CMD, "-v", "error", "-select_streams", "a", "-show_entries",
                          "stream=index,channels,channel_layout,codec_name:stream_tags=title",
                          "-of", "json", file_path]
-            audio_info = json.loads(safe_ffprobe(cmd_audio, "output audio verification").stdout).get("streams", [])
+            audio_info = json.loads(
+                safe_ffprobe(cmd_audio, "output audio verification").stdout).get("streams", [])
             for s in audio_info:
                 title = s.get('tags', {}).get('title', 'N/A')
                 print(f"[AUDIO VER] Stream #{s.get('index')}: '{title}' "
-                      f"({s.get('codec_name')}, {s.get('channels')} channels, '{s.get('channel_layout')}')")
+                      f"({s.get('codec_name')}, {s.get('channels')} channels, "
+                      f"'{s.get('channel_layout')}')")
         except Exception as e:
             print(f"[ERROR] Verification failed: {e}")
 
@@ -8081,14 +8263,16 @@ class VideoProcessorApp:
                     "actual_true_peak_db": f"{measured_tp:.2f}",
                     "actual_loudness_range_lra": f"{measured_lra:.2f}",
                     "youtube_target_lufs": f"{yt_target:.1f}",
-                    "status_vs_youtube": f"{abs(diff):.2f}dB {'louder' if diff > 0 else 'quieter'} than YouTube standard",
-                    "raw_ffmpeg_output": raw_data
+                    "status_vs_youtube": (f"{abs(diff):.2f}dB "
+                                          f"{'louder' if diff > 0 else 'quieter'} than YouTube standard"),
+                    "raw_ffmpeg_output": raw_data,
                 }
                 json_path = f"{file_path}.loudness.json"
                 with open(json_path, 'w', encoding='utf-8') as f:
                     json.dump(enhanced_data, f, indent=4)
                 print(f"[SUCCESS] Enhanced loudness report saved to: {os.path.basename(json_path)}")
-                print(f"          Integrated: {measured_i:.2f} LUFS | Status: {enhanced_data['status_vs_youtube']}")
+                print(f"          Integrated: {measured_i:.2f} LUFS | "
+                      f"Status: {enhanced_data['status_vs_youtube']}")
             else:
                 print("[WARN] Could not find JSON loudness data in FFmpeg output.")
         except Exception as e:
