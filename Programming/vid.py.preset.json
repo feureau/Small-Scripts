@@ -4929,12 +4929,17 @@
             "title_bg_alpha": 0,
             "title_bg_radius": "16",
             "title_bg_pad_x": "20",
-            "title_bg_pad_y": "10"
+            "title_bg_pad_y": "10",
+            "chroma_subsampling": "420",
+            "color_preset_sdr": "bt709",
+            "color_preset_hdr": "bt2020_pq",
+            "hdr_master_display": "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)",
+            "hdr_max_cll": "1000,400"
         },
         "triggers": {
-            "video_trigger": "Never",
-            "on_no_sub": false,
-            "on_clean_copy_if_subs": false,
+            "video_trigger": "Always (Clean/Backup)",
+            "on_no_sub": true,
+            "on_clean_copy_if_subs": true,
             "on_scan_subs": false,
             "auto_detect_subs": false,
             "suffix_filter": null,
