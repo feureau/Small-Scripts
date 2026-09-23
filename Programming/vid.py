@@ -68,6 +68,30 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.26 - SDR to HDR (NVENC TrueHDR) + Hybrid DV composite analysis (2026-09-24)
+    • FEATURE: "Convert SDR to HDR (NVENC AI)" checkbox. Uses the RTX Video SDK
+      via NVEncC --vpp-ngx-truehdr to expand SDR into HDR10 PQ. Requires an
+      NVEncC backend. HLG output is blocked (TrueHDR produces PQ only).
+    • FEATURE: SDR→HDR working-resolution dropdown ("source" or "1080p").
+    • FIX: Hybrid DV correctness. The Dolby Vision RPU is now generated from
+      the composited frame (after FFmpeg stacking), not the source file. L1/L2
+      metadata now describes the actual pixels that play back.
+    • FIX: FFmpeg preprocessor intermediate now carries color tags sourced
+      from the active color preset. Previously untagged.
+    • FIX: FFmpeg preprocessor intermediate switched from MKV to MP4 for
+      cm_analyze compatibility.
+    • FIX: Hybrid-duo color-transfer mismatch now detected at job creation.
+    • FIX: FRUC is blocked when DV output is combined with hybrid layouts
+      (frame count vs RPU mismatch).
+    • FIX: DV XML/RPU filename now derived from the job basename rather than
+      the temp intermediate.
+    • VALIDATION: HLG sources are blocked for DV output. ffmpeg_only + hybrid
+      + DV is blocked (no intermediate).
+    • KNOWN LIMITATIONS: L5 offsets are always written as 0,0,0,0 for hybrid
+      DV (correct only for crop/stretch hybrid presets). Subtitle burn-in
+      happens before DV analysis; bright subtitles may register as L1 outliers.
+    • DOCUMENTED: Disk space and analysis duration for SDR→HDR and hybrid DV
+      intermediates. Hybrid-duo audio comes from the top file only.
 v8.25 - Per-Track Loudness Scope + Eclipsa Topology Fix (2026-09-19)
     • FEATURE: "Apply Loudness Processing To" group at the top of the Loudness
       tab. Four independent scope checkboxes:
@@ -180,12 +204,30 @@ DEFAULT_DELIVERY_TARGET = "custom"
 
 YT_COMPATIBLE_CODECS = {"aac", "opus", "libopus", "eac3", "flac"}
 
+TRIGGER_SOURCE_HDR_FILTER_ANY = "Any Source"
+TRIGGER_SOURCE_HDR_FILTER_SDR = "SDR Only"
+TRIGGER_SOURCE_HDR_FILTER_HDR = "HDR Only"
+TRIGGER_SOURCE_HDR_FILTERS = [
+    TRIGGER_SOURCE_HDR_FILTER_ANY,
+    TRIGGER_SOURCE_HDR_FILTER_SDR,
+    TRIGGER_SOURCE_HDR_FILTER_HDR,
+]
+TRIGGER_SOURCE_HDR_FILTER_LOOKUP = {
+    TRIGGER_SOURCE_HDR_FILTER_ANY: "any",
+    TRIGGER_SOURCE_HDR_FILTER_SDR: "sdr_only",
+    TRIGGER_SOURCE_HDR_FILTER_HDR: "hdr_only",
+}
+TRIGGER_SOURCE_HDR_FILTER_REVERSE = {v: k for k, v in TRIGGER_SOURCE_HDR_FILTER_LOOKUP.items()}
+DEFAULT_TRIGGER_SOURCE_HDR_FILTER = "any"
+
 DEFAULT_RESOLUTION = "2160p"
 DEFAULT_UPSCALE_ALGO = "bicubic"
 DEFAULT_OUTPUT_FORMAT = "sdr"
 DEFAULT_DOVI_MASTERING_ID = "21"
 DEFAULT_DOVI_ANALYSIS_TUNING = "-1"
 DEFAULT_DOVI_KEEP_XML = True
+DEFAULT_SDR_TO_HDR = False
+DEFAULT_SDR_TO_HDR_WORKING_RES = "source"
 DEFAULT_VIDEO_CODEC = "h264"
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"
 DEFAULT_NVENC_SUPERRES_MODE = "1"
@@ -1943,6 +1985,8 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('dovi_mastering_id', ''),
         job_options.get('dovi_analysis_tuning', ''),
         str(job_options.get('dovi_keep_xml', True)),
+        str(job_options.get('sdr_to_hdr', False)),
+        job_options.get('sdr_to_hdr_working_res', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
@@ -1954,23 +1998,38 @@ class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
-        self.widget.bind("<Enter>", self.enter)
-        self.widget.bind("<Leave>", self.leave)
         self.tip_window = None
+        self.widget.bind("<Enter>", self.enter, add="+")
+        self.widget.bind("<Leave>", self.leave, add="+")
+        self.widget.bind("<ButtonPress>", self.leave, add="+")
+        self.widget.bind("<Destroy>", self.leave, add="+")
 
     def enter(self, event=None):
-        x, y, _, _ = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
-        self.tip_window = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        tk.Label(tw, text=self.text, justify=tk.LEFT, background="#ffffe0",
-                 relief=tk.SOLID, borderwidth=1, font=("Arial", 10)).pack()
+        self._destroy_tip()
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        except tk.TclError:
+            return
+        try:
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tk.Label(tw, text=self.text, justify=tk.LEFT, background="#ffffe0",
+                     relief=tk.SOLID, borderwidth=1, font=("Arial", 10),
+                     wraplength=420).pack()
+        except tk.TclError:
+            self.tip_window = None
 
     def leave(self, event=None):
-        if self.tip_window:
-            self.tip_window.destroy()
+        self._destroy_tip()
+
+    def _destroy_tip(self):
+        if self.tip_window is not None:
+            try:
+                self.tip_window.destroy()
+            except tk.TclError:
+                pass
             self.tip_window = None
 
 
@@ -2220,6 +2279,8 @@ class WorkflowPresetManager:
             "dovi_mastering_id": DEFAULT_DOVI_MASTERING_ID,
             "dovi_analysis_tuning": DEFAULT_DOVI_ANALYSIS_TUNING,
             "dovi_keep_xml": DEFAULT_DOVI_KEEP_XML,
+            "sdr_to_hdr": DEFAULT_SDR_TO_HDR,
+            "sdr_to_hdr_working_res": DEFAULT_SDR_TO_HDR_WORKING_RES,
         }
         self.load_presets()
 
@@ -2350,6 +2411,7 @@ class VideoProcessorApp:
         self.trigger_suffix_var = tk.StringVar(value="")
         self.trigger_exclude_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_exclude_suffix_var = tk.StringVar(value="")
+        self.trigger_source_hdr_filter_var = tk.StringVar(value=TRIGGER_SOURCE_HDR_FILTER_ANY)
         self.output_suffix_override_var = tk.StringVar(value="")
         self.output_suffix_override_var.trace_add("write",
                                                   lambda *args: self._update_selected_jobs("output_suffix_override"))
@@ -2598,6 +2660,12 @@ class VideoProcessorApp:
         self.dovi_keep_xml_var.trace_add(
             'write', lambda *a: self._update_selected_jobs('dovi_keep_xml'))
         self._dovi_combo_populated = False
+        self.sdr_to_hdr_var = tk.BooleanVar(value=DEFAULT_SDR_TO_HDR)
+        self.sdr_to_hdr_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('sdr_to_hdr'))
+        self.sdr_to_hdr_res_var = tk.StringVar(value=DEFAULT_SDR_TO_HDR_WORKING_RES)
+        self.sdr_to_hdr_res_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('sdr_to_hdr_working_res'))
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
         self.hybrid_layout_var.trace_add('write', lambda *args: (
@@ -2868,12 +2936,17 @@ class VideoProcessorApp:
     def _update_color_preset_options(self):
         if not hasattr(self, "color_preset_combo"):
             return
+        _s2h_on = hasattr(self, "sdr_to_hdr_var") and self.sdr_to_hdr_var.get()
         if self.output_format_var.get() == "dolby_vision":
-            values = [
-                COLOR_PRESET_LOOKUP["dolby_vision_auto"]["label"],
-                COLOR_PRESET_LOOKUP["dolby_vision_pq"]["label"],
-                COLOR_PRESET_LOOKUP["dolby_vision_hlg"]["label"],
-            ]
+            if _s2h_on:
+                values = [COLOR_PRESET_LOOKUP["dolby_vision_pq"]["label"]]
+                self.color_preset_hdr_var.set("dolby_vision_pq")
+            else:
+                values = [
+                    COLOR_PRESET_LOOKUP["dolby_vision_auto"]["label"],
+                    COLOR_PRESET_LOOKUP["dolby_vision_pq"]["label"],
+                    COLOR_PRESET_LOOKUP["dolby_vision_hlg"]["label"],
+                ]
             self.color_preset_combo.config(values=values)
             current_key = self.color_preset_hdr_var.get()
             if current_key in ("dolby_vision_auto", "dolby_vision_pq",
@@ -2929,6 +3002,12 @@ class VideoProcessorApp:
                 self.dovi_frame.pack(fill=tk.X, pady=(5, 0))
             else:
                 self.dovi_frame.pack_forget()
+        if hasattr(self, "sdr2hdr_frame"):
+            if self.output_format_var.get() in ("hdr", "dolby_vision"):
+                self.sdr2hdr_frame.pack(fill=tk.X, pady=(5, 0))
+                self._refresh_sdr_to_hdr_state()
+            else:
+                self.sdr2hdr_frame.pack_forget()
 
     def _populate_dovi_mastering_combo(self):
         if self._dovi_combo_populated:
@@ -2957,6 +3036,31 @@ class VideoProcessorApp:
         m = re.match(r'(\d+):', label)
         if m:
             self.dovi_mastering_id_var.set(m.group(1))
+
+    def _on_sdr_to_hdr_toggle(self):
+        self._refresh_sdr_to_hdr_state()
+        self._update_selected_jobs("sdr_to_hdr")
+
+    def _refresh_sdr_to_hdr_state(self):
+        if not hasattr(self, "sdr_to_hdr_res_combo"):
+            return
+        on = self.sdr_to_hdr_var.get()
+        backend = self.encoder_backend_var.get()
+        family = self.encoder_family_var.get()
+        fmt = self.output_format_var.get()
+        backend_ok = (family == "nvenc" and backend in (
+            "nvencc_with_ffmpeg", "nvencc_only",
+            "nvencc_video_with_ffmpeg_audio"))
+        fmt_ok = fmt in ("hdr", "dolby_vision")
+        self.sdr_to_hdr_cb.config(state="normal" if (backend_ok and fmt_ok) else "disabled")
+        self.sdr_to_hdr_res_combo.config(state="readonly" if on else "disabled")
+        # If HLG preset is selected, force PQ when SDR→HDR is on
+        if on and fmt_ok:
+            ck = self.color_preset_hdr_var.get()
+            if ck in ("dolby_vision_hlg", "bt2020_hlg"):
+                self.color_preset_hdr_var.set(
+                    "dolby_vision_pq" if fmt == "dolby_vision" else "bt2020_pq")
+                self._update_color_preset_options()
 
     def _on_delivery_target_changed(self):
         code = DELIVERY_TARGET_LOOKUP.get(self.audio_delivery_target_var.get(), "custom")
@@ -3276,6 +3380,18 @@ class VideoProcessorApp:
         cb_fallback = ttk.Checkbutton(row2_1, text="Fallback (If No Subs)",
                                       variable=self.trigger_video_fallback_var)
         cb_fallback.pack(side=tk.LEFT, padx=5)
+        row2_1b = ttk.Frame(row2)
+        row2_1b.pack(fill=tk.X, pady=2)
+        ttk.Label(row2_1b, text="Source color filter:").pack(side=tk.LEFT, padx=(0, 5))
+        self.trigger_source_hdr_filter_combo = ttk.Combobox(
+            row2_1b, textvariable=self.trigger_source_hdr_filter_var,
+            values=TRIGGER_SOURCE_HDR_FILTERS, state="readonly", width=22)
+        self.trigger_source_hdr_filter_combo.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.trigger_source_hdr_filter_combo,
+                "Restrict auto-add to sources matching this color range. "
+                "Any Source = no filter (default). "
+                "SDR Only fires only when the source is SDR. "
+                "HDR Only fires only when the source is HDR (PQ or HLG).")
         row2_2a = ttk.Frame(row2)
         row2_2a.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(row2_2a, text="Trigger on Subtitle",
@@ -3691,7 +3807,9 @@ class VideoProcessorApp:
                 "SDR: BT.709 (default), BT.601 NTSC/PAL (legacy), sRGB (web), BT.2020 SDR (advanced).\n"
                 "HDR: BT.2020 PQ (HDR10) or BT.2020 HLG.\n"
                 "All settings tag the output with -color_primaries/-color_trc/-colorspace/-color_range.")
-        self.hdr_meta_frame = ttk.LabelFrame(quality_group,
+        self.dynamic_format_container = ttk.Frame(quality_group)
+        self.dynamic_format_container.pack(fill=tk.X, pady=(5, 0))
+        self.hdr_meta_frame = ttk.LabelFrame(self.dynamic_format_container,
                                              text="HDR10 Mastering Metadata (ST 2086 + CEA-861.3)",
                                              padding=5)
         meta_row1 = ttk.Frame(self.hdr_meta_frame)
@@ -3715,7 +3833,7 @@ class VideoProcessorApp:
         self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
         self.dovi_frame = ttk.LabelFrame(
-            quality_group,
+            self.dynamic_format_container,
             text="Dolby Vision (RPU auto-generated from source)",
             padding=5)
         dov_row = ttk.Frame(self.dovi_frame)
@@ -3730,6 +3848,25 @@ class VideoProcessorApp:
         ttk.Checkbutton(dov_row, text="Keep XML",
                         variable=self.dovi_keep_xml_var).pack(side=tk.LEFT, padx=(15, 0))
         self.dovi_frame.pack_forget()
+        self.sdr2hdr_frame = ttk.LabelFrame(
+            self.dynamic_format_container, text="SDR to HDR (NVENC AI TrueHDR)", padding=5)
+        s2h_row = ttk.Frame(self.sdr2hdr_frame)
+        s2h_row.pack(fill=tk.X)
+        self.sdr_to_hdr_cb = ttk.Checkbutton(
+            s2h_row, text="Convert SDR to HDR (PQ only)",
+            variable=self.sdr_to_hdr_var,
+            command=self._on_sdr_to_hdr_toggle)
+        self.sdr_to_hdr_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Label(s2h_row, text="Working resolution:").pack(side=tk.LEFT, padx=(0, 5))
+        self.sdr_to_hdr_res_combo = ttk.Combobox(
+            s2h_row, textvariable=self.sdr_to_hdr_res_var,
+            values=["source", "1080p"], state="readonly", width=10)
+        self.sdr_to_hdr_res_combo.pack(side=tk.LEFT)
+        ToolTip(self.sdr2hdr_frame,
+                "Uses NVIDIA RTX TrueHDR to upconvert SDR content to HDR10 PQ.\n"
+                "Requires an NVEncC backend. HLG output is not supported for SDR sources.\n"
+                "1080p working resolution runs TrueHDR at 1080p then upscales.")
+        self.sdr2hdr_frame.pack_forget()
         constraints_group = ttk.LabelFrame(quality_group, text="Target & Constraints", padding=5)
         constraints_group.pack(fill=tk.X, pady=(5, 0))
         con_row1 = ttk.Frame(constraints_group)
@@ -5399,6 +5536,8 @@ class VideoProcessorApp:
             "dovi_mastering_id": self.dovi_mastering_id_var.get(),
             "dovi_analysis_tuning": self.dovi_analysis_tuning_var.get(),
             "dovi_keep_xml": self.dovi_keep_xml_var.get(),
+            "sdr_to_hdr": self.sdr_to_hdr_var.get(),
+            "sdr_to_hdr_working_res": self.sdr_to_hdr_res_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -5447,6 +5586,9 @@ class VideoProcessorApp:
         else:
             self.trigger_exclude_suffix_enable_var.set(False)
             self.trigger_exclude_suffix_var.set("")
+        _src_filter_val = triggers.get("source_hdr_filter", "any")
+        self.trigger_source_hdr_filter_var.set(
+            TRIGGER_SOURCE_HDR_FILTER_REVERSE.get(_src_filter_val, TRIGGER_SOURCE_HDR_FILTER_ANY))
         self.output_suffix_override_var.set(preset['options'].get("output_suffix_override", ""))
         self.current_preset_var.set(preset_name)
         selected_indices = self.job_listbox.curselection()
@@ -5543,6 +5685,8 @@ class VideoProcessorApp:
                                                  tk.BooleanVar(value=False)).get() else "all"),
             "exclude_suffix_filter": self.trigger_exclude_suffix_var.get().strip()
             if self.trigger_exclude_suffix_enable_var.get() else None,
+            "source_hdr_filter": TRIGGER_SOURCE_HDR_FILTER_LOOKUP.get(
+                self.trigger_source_hdr_filter_var.get(), "any"),
         }
         self.preset_manager.save_preset(name, options, triggers)
         messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
@@ -5632,9 +5776,19 @@ class VideoProcessorApp:
             video_path = os.path.abspath(video_path)
             video_basename = os.path.splitext(os.path.basename(video_path))[0]
             detected_subs = self._detect_subtitles_for_video(video_path)
+            try:
+                _src_info = get_video_info(video_path)
+                _source_is_hdr = bool(_src_info.get("is_hdr", False))
+            except Exception:
+                _source_is_hdr = False
             for preset_name in self.preset_manager.get_preset_names():
                 preset = self.preset_manager.get_preset(preset_name)
                 triggers = preset['triggers']
+                _src_filter = triggers.get("source_hdr_filter", "any")
+                if _src_filter == "sdr_only" and _source_is_hdr:
+                    continue
+                if _src_filter == "hdr_only" and not _source_is_hdr:
+                    continue
                 video_trigger = triggers.get("video_trigger")
                 is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
                 if is_hybrid_duo and not (video_basename.endswith("-top") or
@@ -5815,6 +5969,18 @@ class VideoProcessorApp:
                         bot_path = bot_path_alt
                 if os.path.exists(bot_path):
                     options["hybrid_bottom_path"] = bot_path
+            try:
+                top_info = get_video_info(video_path)
+                bot_path = options.get("hybrid_bottom_path", "")
+                if bot_path and os.path.exists(bot_path):
+                    bot_info = get_video_info(bot_path)
+                    if top_info.get("color_transfer") != bot_info.get("color_transfer"):
+                        options["_duo_color_mismatch"] = True
+                        print(f"[WARN] Hybrid-duo color transfer mismatch: "
+                              f"top={top_info.get('color_transfer')}, "
+                              f"bottom={bot_info.get('color_transfer')}")
+            except Exception as e:
+                print(f"[WARN] Could not probe hybrid-duo pair: {e}")
         if subtitle_path is None:
             preset = self.preset_manager.get_preset(preset_name) if preset_name else None
             triggers = preset.get('triggers', {}) if preset else {}
@@ -5897,6 +6063,11 @@ class VideoProcessorApp:
                     self.trigger_exclude_suffix_enable_var.set(bool(ex_val))
                 if hasattr(self, 'trigger_exclude_suffix_var'):
                     self.trigger_exclude_suffix_var.set(ex_val if ex_val else "")
+                _src_filter_val = triggers.get("source_hdr_filter", "any")
+                if hasattr(self, 'trigger_source_hdr_filter_var'):
+                    self.trigger_source_hdr_filter_var.set(
+                        TRIGGER_SOURCE_HDR_FILTER_REVERSE.get(
+                            _src_filter_val, TRIGGER_SOURCE_HDR_FILTER_ANY))
         else:
             self.current_preset_var.set("")
             self.update_gui_from_job_options(selected_job)
@@ -5912,6 +6083,8 @@ class VideoProcessorApp:
                 self.trigger_exclude_suffix_enable_var.set(False)
             if hasattr(self, 'trigger_exclude_suffix_var'):
                 self.trigger_exclude_suffix_var.set("")
+            if hasattr(self, 'trigger_source_hdr_filter_var'):
+                self.trigger_source_hdr_filter_var.set(TRIGGER_SOURCE_HDR_FILTER_ANY)
         self._suppress_subtitle_path_trace = True
         self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
         self._suppress_subtitle_path_trace = False
@@ -5938,6 +6111,9 @@ class VideoProcessorApp:
         self.dovi_mastering_id_var.set(options.get("dovi_mastering_id", DEFAULT_DOVI_MASTERING_ID))
         self.dovi_analysis_tuning_var.set(options.get("dovi_analysis_tuning", DEFAULT_DOVI_ANALYSIS_TUNING))
         self.dovi_keep_xml_var.set(options.get("dovi_keep_xml", DEFAULT_DOVI_KEEP_XML))
+        self.sdr_to_hdr_var.set(options.get("sdr_to_hdr", DEFAULT_SDR_TO_HDR))
+        self.sdr_to_hdr_res_var.set(
+            options.get("sdr_to_hdr_working_res", DEFAULT_SDR_TO_HDR_WORKING_RES))
         mode = options.get("subfolder_mode")
         if not mode:
             if options.get("group_by_resolution"):
@@ -6974,48 +7150,100 @@ class VideoProcessorApp:
                     options["_loudnorm_stats"] = loudnorm_stats
             seek_start = options.get("seek_start")
             seek_duration = options.get("seek_duration")
-            # DV RPU generation must run BEFORE NVEncC encode so the encoder
-            # can embed the RPU and the container box in one pass.
+            _src_trc = str(info.get("color_transfer", "")).lower()
+            source_is_sdr = _src_trc not in ("smpte2084", "arib-std-b67")
+            sdr_conv_requested = bool(options.get("sdr_to_hdr", False))
+            do_sdr_conv = sdr_conv_requested and source_is_sdr
+            _is_dv = (options.get("output_format") == "dolby_vision")
+            _is_hdr = (options.get("output_format") == "hdr")
+            _is_hybrid = orientation in ("hybrid (stacked)",
+                                          "hybrid-duo (dual source)")
+            options.pop("_dovi_rpu_path", None)
+            options.pop("_inline_truehdr", None)
             dv_rpu_path = None
             dv_xml_path = None
-            if options.get("output_format") == "dolby_vision":
+            truehdr_intermediate = None
+            effective_job = job
+            effective_info = info
+            _dv_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+
+            # DV path: preprocessor MUST run first so cm_analyze sees PQ.
+            if _is_dv and not _is_hybrid:
+                if do_sdr_conv:
+                    print("[INFO] SDR-HDR: running TrueHDR preprocessor for DV...")
+                    truehdr_intermediate = self._truehdr_preprocess(
+                        job['video_path'], output_dir, options, info)
+                    register_temp_file(truehdr_intermediate)
+                    effective_info = get_video_info(truehdr_intermediate)
+                    effective_job = dict(job)
+                    effective_job['video_path'] = truehdr_intermediate
+                    options["_force_pq_tags"] = True
+                    if encoder_backend == "nvencc_with_ffmpeg":
+                        encoder_backend = "nvencc_only"
                 fmt_ok, dv_ok = check_dolby_tools()
                 if not fmt_ok or not dv_ok:
                     raise VideoProcessingError(
                         "Dolby Vision output requires both cm_analyze and "
                         "dovi_tool on PATH.")
-                print("[INFO] Generating Dolby Vision metadata from source...")
+                print(f"[INFO] Analyzing {os.path.basename(effective_job['video_path'])} "
+                      f"for Dolby Vision metadata...")
                 dv_rpu_path, dv_xml_path = self._generate_dolby_vision_rpu(
-                    job['video_path'], output_dir, options, info)
+                    effective_job['video_path'], output_dir, options, effective_info,
+                    basename_override=_dv_basename)
                 options["_dovi_rpu_path"] = dv_rpu_path
+            # HDR (non-DV) path: NVEncC does TrueHDR inline during encode.
+            elif do_sdr_conv and _is_hdr and not _is_hybrid:
+                options["_inline_truehdr"] = True
             if encoder_backend == "nvencc_with_ffmpeg":
-                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_",
+                fd, temp_preproc = tempfile.mkstemp(suffix=".mp4", prefix="vid_temp_preproc_",
                                                     dir=output_dir)
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
                 register_temp_file(temp_preproc)
-                pre_cmd = self.construct_ffmpeg_command(job, temp_preproc, orientation, ass_burn_path,
-                                                        options, title_ass_path,
+                pre_cmd = self.construct_ffmpeg_command(effective_job, temp_preproc, orientation,
+                                                        ass_burn_path, options, title_ass_path,
                                                         encoder_backend="preprocess", base_dir=base_dir)
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
+                composite_source = temp_preproc
+                composite_info = get_video_info(temp_preproc)
+                # Hybrid SDR→HDR: TrueHDR on composite
+                if do_sdr_conv and _is_hybrid:
+                    print("[INFO] SDR-HDR: running TrueHDR on composite...")
+                    truehdr_intermediate = self._truehdr_preprocess(
+                        temp_preproc, output_dir, options, composite_info)
+                    register_temp_file(truehdr_intermediate)
+                    composite_source = truehdr_intermediate
+                    composite_info = get_video_info(truehdr_intermediate)
+                    options["_force_pq_tags"] = True
+                # Hybrid DV: generate RPU from composite (or PQ composite)
+                if _is_dv and _is_hybrid:
+                    fmt_ok, dv_ok = check_dolby_tools()
+                    if not fmt_ok or not dv_ok:
+                        raise VideoProcessingError(
+                            "Dolby Vision output requires both cm_analyze and "
+                            "dovi_tool on PATH.")
+                    print("[INFO] Analyzing composite for Dolby Vision metadata...")
+                    dv_rpu_path, dv_xml_path = self._generate_dolby_vision_rpu(
+                        composite_source, output_dir, options, composite_info,
+                        basename_override=_dv_basename)
+                    options["_dovi_rpu_path"] = dv_rpu_path
                 nvencc_options = copy.deepcopy(options)
                 nvencc_options.pop("seek_start", None)
                 nvencc_options.pop("seek_duration", None)
-                nvencc_cmd = self.construct_nvencc_command(temp_preproc, output_file, nvencc_options,
-                                                           orientation,
-                                                           info=get_video_info(temp_preproc),
-                                                           base_dir=base_dir)
+                nvencc_cmd = self.construct_nvencc_command(
+                    composite_source, output_file, nvencc_options,
+                    orientation, info=composite_info, base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(
                         f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options,
+                nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
                                                            orientation,
                                                            subtitle_burn_path=nvencc_subburn_path,
-                                                           info=info, base_dir=base_dir)
+                                                           info=effective_info, base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(
@@ -7027,16 +7255,16 @@ class VideoProcessorApp:
                 CURRENT_TEMP_FILE = temp_audio
                 register_temp_file(temp_audio)
                 audio_cmd = self.construct_ffmpeg_audio_prepass(
-                    job['video_path'], temp_audio, options,
+                    effective_job['video_path'], temp_audio, options,
                     seek_start=seek_start, seek_duration=seek_duration)
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
-                nvencc_cmd = self.construct_nvencc_command(job['video_path'], output_file, options,
+                nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
                                                            orientation,
                                                            audio_source_path=temp_audio,
                                                            subtitle_burn_path=nvencc_subburn_path,
-                                                           info=info, base_dir=base_dir)
+                                                           info=effective_info, base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(
@@ -7072,6 +7300,11 @@ class VideoProcessorApp:
                         os.remove(dv_rpu_path)
                     except Exception:
                         pass
+            if truehdr_intermediate and os.path.exists(truehdr_intermediate):
+                try:
+                    cleanup_single_temp_file(truehdr_intermediate)
+                except Exception:
+                    pass
 
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
@@ -7465,6 +7698,8 @@ class VideoProcessorApp:
                             f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
         if options.get("nvenc_nvvfx_denoise"):
             cmd.append("--vpp-nvvfx-denoise")
+        if options.get("_inline_truehdr", False):
+            cmd.append("--vpp-ngx-truehdr")
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file),
                                     f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
@@ -7574,9 +7809,13 @@ class VideoProcessorApp:
         print(f"[INFO] DV auto-match resolved to: {resolved}")
         options["color_preset_hdr"] = resolved
 
-    def _generate_dolby_vision_rpu(self, source_path, work_dir, options, info):
-        base = os.path.splitext(os.path.basename(source_path))[0]
-        safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
+    def _generate_dolby_vision_rpu(self, source_path, work_dir, options, info,
+                                     basename_override=None):
+        if basename_override:
+            safe_base = re.sub(r'[\\/*?:"<>|]', "", basename_override).strip()
+        else:
+            base = os.path.splitext(os.path.basename(source_path))[0]
+            safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
         xml_path = os.path.join(work_dir, f"{safe_base}.dolbyvision_metadata.xml")
         rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
 
@@ -7658,6 +7897,40 @@ class VideoProcessorApp:
                     pass
 
         return final_mp4
+
+    def _truehdr_preprocess(self, input_file, work_dir, options, info):
+        base = os.path.splitext(os.path.basename(input_file))[0]
+        safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip() or "truehdr"
+        out_path = os.path.join(work_dir, f"{safe_base}_truehdr_intermediate.mp4")
+
+        working_res = str(options.get("sdr_to_hdr_working_res", "source")).lower()
+        md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
+        cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
+        try:
+            maxcll, maxfall = [x.strip() for x in cll.split(",")]
+        except ValueError:
+            maxcll, maxfall = "1000", "400"
+
+        w = info.get("width", 1920)
+        h = info.get("height", 1080)
+        if working_res == "1080p" and (w != 1920 or h != 1080):
+            res_str = "1920x1080"
+        else:
+            res_str = f"{w}x{h}"
+
+        cmd = [NVENCC_CMD, "--avsw", "--codec", "hevc",
+               "--output-depth", "10", "--profile", "main10",
+               "--colorprim", "bt2020", "--transfer", "smpte2084",
+               "--colormatrix", "bt2020nc",
+               "--master-display", md, "--max-cll", f"{maxcll},{maxfall}",
+               "--vpp-ngx-truehdr",
+               "--cqp", "12",
+               "--audio-copy",
+               "--output-res", res_str,
+               "-i", input_file, "--output", out_path]
+
+        self.run_external_tool(cmd, "NVEncC TrueHDR")
+        return out_path
 
     def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options,
                                          seek_start=None, seek_duration=None):
@@ -7813,7 +8086,8 @@ class VideoProcessorApp:
                     raise VideoProcessingError("Missing Mode setting in preset (Hybrid block).")
                 if not upscale_algo:
                     raise VideoProcessingError("Missing Upscale Algorithm setting in preset.")
-                scale = f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
+                scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
+                         f":format={cuda_work_fmt}")
                 if mode == 'stretch':
                     return scale, "", block_w, block_h
                 vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
@@ -7933,7 +8207,8 @@ class VideoProcessorApp:
                             f"flags={self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)}")
                     elif not (use_nvencc_resize and options.get("aspect_mode") == "stretch"):
                         vf_filters.append(
-                            f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}")
+                            f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                            f":format={cuda_work_fmt}")
                     else:
                         target_w, target_h = info["width"], info["height"]
             else:
@@ -7982,7 +8257,8 @@ class VideoProcessorApp:
                     else:
                         vf_filters.append(scale_base)
                 else:
-                    scale_base = f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                    scale_base = (f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                                  f":format={cuda_work_fmt}")
                     apply_pixelate = options.get("aspect_pixelate", False)
                     apply_blur = options.get("aspect_blur", False)
                     apply_ambient = options.get("aspect_ambient", False)
@@ -8168,18 +8444,34 @@ class VideoProcessorApp:
             cmd.insert(len(cmd) - 2, str(max_duration))
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
         if encoder_backend == "preprocess":
+            # Near-lossless intermediate (CQ 14). The preproc output is
+            # re-encoded at least once downstream (twice when TrueHDR
+            # runs), so bit-exact lossless buys nothing but ~20x disk
+            # space. CQ 14 is visually indistinguishable from source and
+            # leaves ample headroom for the AI/encoder passes that follow.
             if is_hdr_output or info["bit_depth"] == 10:
                 pix_fmt = "yuv420p10le"
                 encoder_opts = ["-c:v", "hevc_nvenc", "-pix_fmt", pix_fmt,
-                                "-preset", "p1", "-tune", "lossless",
-                                "-rc", "constqp", "-qp", "0"]
+                                "-preset", "p4", "-tune", "hq",
+                                "-rc", "vbr", "-cq", "14", "-b:v", "0"]
             else:
                 pix_fmt = "yuv420p"
                 encoder_opts = ["-c:v", "h264_nvenc", "-pix_fmt", pix_fmt,
-                                "-preset", "p1", "-tune", "lossless",
-                                "-rc", "constqp", "-qp", "0"]
+                                "-preset", "p4", "-tune", "hq",
+                                "-rc", "vbr", "-cq", "14", "-b:v", "0"]
+            if options.get("sdr_to_hdr", False):
+                preproc_tags = {"primaries": "bt709", "trc": "bt709",
+                                "matrix": "bt709", "range_ffmpeg": "tv"}
+            else:
+                preproc_tags = color_info
+            encoder_opts.extend([
+                "-color_primaries", preproc_tags["primaries"],
+                "-color_trc", preproc_tags["trc"],
+                "-colorspace", preproc_tags["matrix"],
+                "-color_range", preproc_tags["range_ffmpeg"],
+            ])
             cmd.extend(encoder_opts)
-            cmd.extend(["-f", "matroska", output_file])
+            cmd.extend(["-f", "mp4", output_file])
             return cmd
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         if is_cpu_encode:
@@ -8353,9 +8645,28 @@ class VideoProcessorApp:
                     src_info = get_video_info(
                         self.processing_jobs[sel[0]]['video_path'])
                     if not src_info.get("is_hdr"):
-                        warnings.append(
-                            "Dolby Vision output on a non-HDR source will fail in "
-                            "cm_analyze.")
+                        if self.sdr_to_hdr_var.get():
+                            pass
+                        else:
+                            warnings.append(
+                                "Dolby Vision output on a non-HDR source will fail "
+                                "in cm_analyze. Enable SDR-HDR conversion.")
+                    _trc = str(src_info.get("color_transfer", "")).lower()
+                    _ck = self.color_preset_hdr_var.get()
+                    if _trc == "arib-std-b67" and _ck in ("dolby_vision_hlg",
+                                                           "dolby_vision_auto"):
+                        issues.append(
+                            "cm_analyze cannot analyze HLG sources. Dolby Vision "
+                            "Profile 8.4 is blocked.")
+                    if (self.orientation_var.get() in ("hybrid (stacked)",
+                                                          "hybrid-duo (dual source)")
+                            and self.encoder_backend_var.get() == "ffmpeg_only"):
+                        issues.append(
+                            "Hybrid layouts + DV require an NVEncC backend.")
+                    if self.processing_jobs[sel[0]]["options"].get(
+                            "_duo_color_mismatch", False):
+                        issues.append(
+                            "Hybrid-duo inputs have mismatched color transfers.")
                     color_key = self.color_preset_hdr_var.get()
                     src_trc = src_info.get("color_transfer", "")
                     if color_key == "dolby_vision_auto":
@@ -8458,6 +8769,29 @@ class VideoProcessorApp:
                     issues.append(
                         "No audio processing tracks are selected. Choose at least one or "
                         "select Passthrough.")
+        _s2h = self.sdr_to_hdr_var.get()
+        _ofmt = self.output_format_var.get()
+        _fam = self.encoder_family_var.get()
+        _be = self.encoder_backend_var.get()
+        _ck2 = self.color_preset_hdr_var.get()
+        if _s2h:
+            if _ofmt == "sdr":
+                issues.append("SDR-HDR only applies to HDR or DV output.")
+            if _fam != "nvenc" or _be not in ("nvencc_with_ffmpeg", "nvencc_only",
+                                                "nvencc_video_with_ffmpeg_audio"):
+                issues.append(
+                    "SDR→HDR requires an NVEncC backend (NVIDIA GPU). "
+                    "Switch to nvencc_only, nvencc_with_ffmpeg, or "
+                    "nvencc_video_with_ffmpeg_audio.")
+            if _ofmt == "hdr" and _ck2 == "bt2020_hlg":
+                issues.append(
+                    "TrueHDR produces PQ. HLG output not supported for SDR sources.")
+        if (self.fruc_var.get()
+                and self.output_format_var.get() == "dolby_vision"
+                and self.orientation_var.get() in ("hybrid (stacked)",
+                                                      "hybrid-duo (dual source)")):
+            issues.append(
+                "FRUC cannot be combined with Dolby Vision + hybrid layouts.")
         if warnings and not issues:
             messagebox.showwarning("Warnings", "\n".join(f"• {w}" for w in warnings))
         if issues:
