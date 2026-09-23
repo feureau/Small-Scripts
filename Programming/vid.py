@@ -68,6 +68,44 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.29 - Every upscale stage now uses NVVFX SuperRes (2026-09-24)
+    • CHANGE: Multi-stage superres (>2x ratios) now uses NVEncC
+      nvvfx-superres (or ngx-vsr) for BOTH hops instead of FFmpeg
+      lanczos for the first hop. Example: 1080p → 8K becomes
+      1080p --superres--> 4K --superres--> 8K. The FFmpeg
+      preprocessor (subtitles, sharpening, FRUC, LUT, denoise) still
+      runs between the two superres passes, with its scaling step
+      reduced to a near-no-op.
+    • TRADE-OFF: Multi-stage superres jobs are now slower (one extra
+      NVEncC superres pass at the intermediate resolution) but every
+      pixel of every upscale is touched by the AI upscaler.
+    • KNOWN LIMITATION: Interlaced sources are not deinterlaced before
+      the first superres pass. NVEncC has no auto-deinterlace for
+      superres. Enable FRUC or avoid superres for interlaced inputs.
+v8.30 - TrueHDR preprocessor at source resolution (2026-09-24)
+    • CHANGE: SDR→HDR (non-DV) now runs TrueHDR as a dedicated
+      preprocessor pass at source resolution instead of inline on
+      the upscaled frame. NGX TrueHDR cost scales with pixel count,
+      so a 1080p→8K job now pays ~16x less TrueHDR work, and a
+      1080p→4K job pays ~4x less. This matches the DV path's
+      existing behavior.
+    • FEATURE: `_truehdr_preprocess` now honors seek_start /
+      seek_duration, so chapter-split SDR→HDR jobs no longer
+      re-encode the entire source for every chapter.
+    • FIX: The FFmpeg preprocessor and the NVVFX SuperRes prepass
+      now tag their output as HDR when they run AFTER the TrueHDR
+      preprocessor, instead of always tagging as SDR.
+v8.28 - Automatic multi-stage superres chaining (2026-09-24)
+    • FEATURE: nvvfx-superres and ngx-vsr now handle ratios >2x
+      automatically. When the requested linear upscale exceeds the
+      ~2x single-pass ceiling, the pipeline promotes the backend to
+      nvencc_with_ffmpeg, uses the FFmpeg preprocessor (lanczos) to
+      scale the source up to exactly half the final target, then lets
+      NVEncC superres complete the final 2x pass. Example: 1080p →
+      8K becomes 1080p --lanczos--> 4K --superres--> 8K.
+    • REMOVED: The nvvfx-superres >2x popup warning from v8.27.
+      Multi-stage chaining replaces it. Console INFO lines report the
+      promotion and the intermediate resolution per job.
 v8.27 - Preprocessor CUDA surface fix + cm_analyze extraction (2026-09-24)
     • FIX: FFmpeg preprocessor backend no longer leaves frames on a CUDA
       surface when the encoder expects a CPU pixel format. The non-hybrid
@@ -6888,6 +6926,36 @@ class VideoProcessorApp:
             return "original"
         return str(res_key)
 
+    def _multi_stage_superres_info(self, options, info, orientation):
+        """Return (needs_multi, intermediate_w, intermediate_h).
+
+        When the requested upscale ratio exceeds ~2x, NVVFX SuperRes and
+        NGX VSR cannot handle it in a single pass. In that case we chain
+        two stages: an FFmpeg lanczos pre-scale up to exactly half the
+        final target, followed by an NVEncC superres pass for the final
+        2x. Returns (False, 0, 0) when a single superres pass suffices.
+        """
+        algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+        if algo not in ("nvvfx-superres", "ngx-vsr"):
+            return False, 0, 0
+        try:
+            tgt_w, tgt_h = self.compute_target_resolution_for_options(
+                options, info, orientation)
+        except Exception:
+            return False, 0, 0
+        if not tgt_w or not tgt_h:
+            return False, 0, 0
+        src_short = min(int(info.get("width", 0)), int(info.get("height", 0)))
+        tgt_short = min(int(tgt_w), int(tgt_h))
+        if src_short <= 0 or tgt_short <= 0:
+            return False, 0, 0
+        ratio = tgt_short / src_short
+        if ratio <= 2.01:
+            return False, 0, 0
+        inter_w = max(2, ((tgt_w // 2) // 2) * 2)
+        inter_h = max(2, ((tgt_h // 2) // 2) * 2)
+        return True, inter_w, inter_h
+
     def build_ffmpeg_command_and_run(self, job, orientation):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
         options = copy.deepcopy(job['options'])
@@ -7064,6 +7132,34 @@ class VideoProcessorApp:
         try:
             info = get_video_info(job['video_path'])
             self._resolve_dv_auto_match(options, info)
+
+            # Multi-stage superres: when the requested upscale ratio
+            # exceeds the ~2x single-pass ceiling of NVVFX SuperRes /
+            # NGX VSR, promote the backend to nvencc_with_ffmpeg so
+            # FFmpeg can pre-scale to exactly half the final target
+            # (lanczos), leaving NVEncC to complete the final 2x pass.
+            _up_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+            if _up_algo in ("nvvfx-superres", "ngx-vsr"):
+                _needs_multi, _inter_w, _inter_h = self._multi_stage_superres_info(
+                    options, info, orientation)
+                if _needs_multi:
+                    if encoder_backend in ("nvencc_only",
+                                            "nvencc_video_with_ffmpeg_audio"):
+                        print(f"[INFO] Multi-stage {_up_algo} requires FFmpeg "
+                              f"preprocessing. Promoting backend to "
+                              f"'nvencc_with_ffmpeg' for "
+                              f"'{job['display_name']}'.")
+                        encoder_backend = "nvencc_with_ffmpeg"
+                        options["encoder_backend"] = encoder_backend
+                    options["_preproc_scale_override"] = (_inter_w, _inter_h)
+                    _tgt_w, _tgt_h = self.compute_target_resolution_for_options(
+                        options, info, orientation)
+                    print(f"[INFO] Multi-stage {_up_algo}: FFmpeg pre-scales to "
+                          f"{_inter_w}x{_inter_h} (lanczos), NVEncC superres to "
+                          f"{_tgt_w}x{_tgt_h}.")
+                else:
+                    options.pop("_preproc_scale_override", None)
+
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
             segment_sub_path = options.get("segment_subtitle_path")
             nvencc_direct_backends = ("nvencc_only", "nvencc_video_with_ffmpeg_audio")
@@ -7196,6 +7292,14 @@ class VideoProcessorApp:
                     options["_force_pq_tags"] = True
                     if encoder_backend == "nvencc_with_ffmpeg":
                         encoder_backend = "nvencc_only"
+                    # Multi-stage superres: DV path demotes the backend,
+                    # which would lose the promotion. Reapply if the
+                    # user's preset asked for superres on a >2x ratio.
+                    if options.get("_preproc_scale_override"):
+                        print("[INFO] DV + multi-stage superres: "
+                              "keeping nvencc_with_ffmpeg for pre-scale.")
+                        encoder_backend = "nvencc_with_ffmpeg"
+                        options["encoder_backend"] = encoder_backend
                 fmt_ok, dv_ok = check_dolby_tools()
                 if not fmt_ok or not dv_ok:
                     raise VideoProcessingError(
@@ -7207,10 +7311,54 @@ class VideoProcessorApp:
                     effective_job['video_path'], output_dir, options, effective_info,
                     basename_override=_dv_basename)
                 options["_dovi_rpu_path"] = dv_rpu_path
-            # HDR (non-DV) path: NVEncC does TrueHDR inline during encode.
+            # HDR (non-DV) path: run TrueHDR as a dedicated preprocessor
+            # pass at source resolution, then feed the HDR intermediate
+            # into the rest of the pipeline. NGX TrueHDR cost scales
+            # with pixel count, so doing this at 1080p instead of at
+            # 4K/8K cuts the TrueHDR workload by 4x/16x. This mirrors
+            # what the DV path already does.
             elif do_sdr_conv and _is_hdr and not _is_hybrid:
-                options["_inline_truehdr"] = True
+                print("[INFO] SDR-HDR: running TrueHDR preprocessor at "
+                      "source resolution...")
+                truehdr_intermediate = self._truehdr_preprocess(
+                    job['video_path'], output_dir, options, info)
+                register_temp_file(truehdr_intermediate)
+                effective_info = get_video_info(truehdr_intermediate)
+                effective_job = dict(job)
+                effective_job['video_path'] = truehdr_intermediate
+                options["_force_pq_tags"] = True
+                options["_truehdr_preprocessed"] = True
+                # All three NVEncC-backed encoders (nvencc_only,
+                # nvencc_with_ffmpeg, nvencc_video_with_ffmpeg_audio)
+                # read the TrueHDR intermediate directly. No backend
+                # promotion is needed — nvencc_only and
+                # nvencc_video_with_ffmpeg_audio run the final NVEncC
+                # encode on the intermediate as before, and
+                # nvencc_with_ffmpeg runs the FFmpeg preprocessor on
+                # it (the preprocessor's color tags are corrected in
+                # construct_ffmpeg_command).
             if encoder_backend == "nvencc_with_ffmpeg":
+                # Multi-stage superres: run an NVEncC superres preprocessor
+                # first so EVERY upscale stage uses nvvfx-superres (not
+                # FFmpeg lanczos). The FFmpeg preprocessor then runs on
+                # the upscaled intermediate with the scale step reduced
+                # to a near-no-op (input already at target size).
+                _sr_override = options.get("_preproc_scale_override")
+                if _sr_override:
+                    _sr_w, _sr_h = _sr_override
+                    _src_w = info["width"]
+                    _src_h = info["height"]
+                    print("[INFO] Multi-stage superres: NVEncC superres "
+                          "preprocessor {}x{} -> {}x{} ...".format(
+                              _src_w, _src_h, _sr_w, _sr_h))
+                    _sr_intermediate = self._nvvfx_superres_preprocess(
+                        effective_job["video_path"], output_dir, options,
+                        _sr_w, _sr_h)
+                    register_temp_file(_sr_intermediate)
+                    effective_job = dict(effective_job)
+                    effective_job["video_path"] = _sr_intermediate
+                    effective_info = get_video_info(_sr_intermediate)
+                    options["_sr_prepass_source"] = _sr_intermediate
                 fd, temp_preproc = tempfile.mkstemp(suffix=".mp4", prefix="vid_temp_preproc_",
                                                     dir=output_dir)
                 os.close(fd)
@@ -7319,6 +7467,12 @@ class VideoProcessorApp:
             if truehdr_intermediate and os.path.exists(truehdr_intermediate):
                 try:
                     cleanup_single_temp_file(truehdr_intermediate)
+                except Exception:
+                    pass
+            _sr_cleanup = options.get("_sr_prepass_source")
+            if _sr_cleanup and os.path.exists(_sr_cleanup):
+                try:
+                    cleanup_single_temp_file(_sr_cleanup)
                 except Exception:
                     pass
 
@@ -7836,13 +7990,14 @@ class VideoProcessorApp:
         rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
 
         # cm_analyze dispatches by file EXTENSION and only accepts raw
-        # elementary streams (.hevc/.265/.h264), Y4M, or image sequences.
-        # Containers (.mp4/.mkv/.mov) are rejected before the file is
-        # even opened ("ERROR format for extension 'mp4' not found").
-        # Extract the HEVC track to a temp elementary stream for analysis.
+        # elementary streams (.h265 for HEVC, .h264 for H.264), Y4M, or
+        # image sequences. Containers (.mp4/.mkv/.mov/.webm/.m4v) and
+        # the extensions .hevc AND .265 are all rejected before the
+        # file is even opened ("ERROR format for extension 'X' not
+        # found"). Extract the HEVC track to a .h265 elementary stream.
         _src_ext = os.path.splitext(source_path)[1].lower()
         if _src_ext in (".mp4", ".mkv", ".mov", ".webm", ".m4v"):
-            analysis_src = os.path.join(work_dir, f"{safe_base}_cm_input.hevc")
+            analysis_src = os.path.join(work_dir, f"{safe_base}_cm_input.h265")
             extract_cmd = [
                 FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error",
                 "-i", source_path,
@@ -7966,10 +8121,82 @@ class VideoProcessorApp:
                "--vpp-ngx-truehdr",
                "--cqp", "12",
                "--audio-copy",
-               "--output-res", res_str,
-               "-i", input_file, "--output", out_path]
+               "--output-res", res_str]
+        # Respect chapter splitting so we don't re-encode the full
+        # source for every chapter.
+        seek_start = options.get("seek_start")
+        seek_duration = options.get("seek_duration")
+        if seek_start is not None:
+            cmd.extend(["--seek", str(seek_start)])
+            if seek_duration is not None:
+                seek_to = float(seek_start) + float(seek_duration)
+                cmd.extend(["--seekto", str(seek_to)])
+        cmd.extend(["-i", input_file, "--output", out_path])
 
         self.run_external_tool(cmd, "NVEncC TrueHDR")
+        return out_path
+
+    def _nvvfx_superres_preprocess(self, input_file, work_dir, options,
+                                     target_w, target_h):
+        """Run NVEncC nvvfx-superres (or ngx-vsr) to upscale the source
+        to the target resolution. Video-only output; intended to be
+        consumed by a subsequent FFmpeg preprocessor (filters, subs)
+        and/or a final NVEncC encode pass.
+
+        v8.29 multi-stage upgrade: instead of letting FFmpeg lanczos
+        do the first 2x hop, we run superres twice, once per stage,
+        so every pixel of every upscale was touched by the AI
+        upscaler.
+        """
+        safe_base = re.sub(r'[\\/*?:"<>|]', "",
+                           os.path.splitext(os.path.basename(input_file))[0]).strip() or "sr"
+        out_path = os.path.join(work_dir, f"{safe_base}_sr_intermediate.mp4")
+
+        upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+        if upscale_algo == "ngx-vsr":
+            q = options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY)
+            resize_algo = f"ngx,vsr-quality={q}"
+        else:
+            mode = options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE)
+            resize_algo = f"nvvfx-superres,superres-mode={mode}"
+
+        aspect_mode = options.get("aspect_mode", "pad")
+        output_res = f"{target_w}x{target_h}"
+        if aspect_mode == "pad":
+            output_res = f"{output_res},preserve_aspect_ratio=decrease"
+        elif aspect_mode == "crop":
+            output_res = f"{output_res},preserve_aspect_ratio=increase"
+        # stretch = no mode specifier
+
+        _fmt = options.get("output_format", "")
+        is_hdr_output = _fmt in ("hdr", "dolby_vision")
+        color_preset_key = (options.get("color_preset_hdr") if is_hdr_output
+                            else options.get("color_preset_sdr",
+                                                    DEFAULT_COLOR_PRESET_SDR))
+        color_info = COLOR_PRESET_LOOKUP.get(color_preset_key,
+                                              COLOR_PRESET_LOOKUP["bt709"])
+        # When TrueHDR already ran in a dedicated preprocessor pass, the
+        # input to this prepass is HDR. Use the output color preset for
+        # tagging instead of forcing BT.709.
+        if (options.get("sdr_to_hdr", False)
+                and not options.get("_truehdr_preprocessed", False)):
+            src_prim, src_trc, src_matrix = "bt709", "bt709", "bt709"
+        else:
+            src_prim = color_info["primaries"]
+            src_trc = color_info["trc"]
+            src_matrix = color_info["matrix"]
+
+        cmd = [NVENCC_CMD, "--avhw", "--codec", "hevc",
+               "--output-depth", "10", "--profile", "main10",
+               "--colorprim", src_prim, "--transfer", src_trc,
+               "--colormatrix", src_matrix,
+               "--vpp-resize", resize_algo,
+               "--output-res", output_res,
+               "--cqp", "12",
+               "--audio-copy",
+               "-i", input_file, "--output", out_path]
+
+        self.run_external_tool(cmd, "NVEncC SuperRes preprocessor")
         return out_path
 
     def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options,
@@ -8103,6 +8330,11 @@ class VideoProcessorApp:
         ffmpeg_upscale_algo = (upscale_algo if upscale_algo in
                                ["nearest", "bilinear", "bicubic", "lanczos"]
                                else DEFAULT_UPSCALE_ALGO)
+        # Multi-stage intermediate: prefer lanczos for the FFmpeg pre-scale
+        # so the NVEncC superres pass starts from the cleanest possible
+        # input. Only active when the override is set (preprocessor path).
+        if options.get("_preproc_scale_override"):
+            ffmpeg_upscale_algo = "lanczos"
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
         audio_cmd_parts, audio_stream_groups = self.build_audio_segment(
@@ -8241,11 +8473,16 @@ class VideoProcessorApp:
                     target_w, target_h = compute_original_target_resolution(res_key, info)
                     if not target_w or not target_h:
                         raise VideoProcessingError(f"Invalid resolution '{res_key}' for original mode.")
+                    if encoder_backend == "preprocess":
+                        _ov = options.get("_preproc_scale_override")
+                        if _ov:
+                            target_w, target_h = _ov
                     if use_cpu_scaling:
                         vf_filters.append(
                             f"scale=w={target_w}:h={target_h}:"
                             f"flags={self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)}")
-                    elif not (use_nvencc_resize and options.get("aspect_mode") == "stretch"):
+                    elif (not (use_nvencc_resize and options.get("aspect_mode") == "stretch")
+                          or options.get("_preproc_scale_override")):
                         vf_filters.append(
                             f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
                             f":format={cuda_work_fmt}")
@@ -8278,6 +8515,13 @@ class VideoProcessorApp:
                         f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
                 target_h = int(target_w * den / num)
                 target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
+                # Multi-stage superres override: the FFmpeg preprocessor
+                # outputs at half the final target so NVEncC superres can
+                # complete the upscale in a single 2x pass.
+                if encoder_backend == "preprocess":
+                    _ov = options.get("_preproc_scale_override")
+                    if _ov:
+                        target_w, target_h = _ov
                 safe_algo = ffmpeg_upscale_algo
                 if not safe_algo:
                     raise VideoProcessingError("Upscale algorithm not specified in preset.")
@@ -8365,9 +8609,17 @@ class VideoProcessorApp:
                                 f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:"
                                 f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
                                 f"format={target_fmt},")
+                            # pad_cuda only accepts 8-bit nv12/yuv420p surfaces, so a
+                            # 10-bit p010le foreground (HDR output) makes it fail with
+                            # "Unsupported input format". Do the pad on the CPU side
+                            # instead — the ambient branch already round-trips through
+                            # hwdownload/hwupload one step later for gblur, so this
+                            # costs nothing extra.
                             fc_parts.append(
-                                f"pad_cuda={target_w}:{target_h}:"
-                                f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):black,")
+                                f"hwdownload,format={target_fmt},"
+                                f"pad={target_w}:{target_h}:"
+                                f"(ow-iw)/2+{ox}:(oh-ih)/2+{oy}:black,"
+                                f"format={target_fmt},hwupload_cuda,")
                             fc_parts.append(
                                 f"scale_cuda=w={target_w // spread}:h={target_h // spread}:"
                                 f"interp_algo=bilinear:format={target_fmt},")
@@ -8383,26 +8635,43 @@ class VideoProcessorApp:
                                 fc_parts.append(f"{bg_current}hwdownload,format={target_fmt}[v_bg_sys];")
                                 fc_parts.append(
                                     f"[v_ambient_layer]hwdownload,format={target_fmt}[v_ambient_sys];")
+                                # Keep the blend on CPU in 10-bit; the
+                                # final overlay also happens on CPU.
                                 fc_parts.append(
                                     f"[v_bg_sys][v_ambient_sys]blend=c0_mode=screen:"
-                                    f"c1_mode=average:c2_mode=average,format={target_fmt},"
-                                    f"hwupload_cuda[v_composited_bg];")
+                                    f"c1_mode=average:c2_mode=average[v_composited_bg];")
                                 bg_current = "[v_composited_bg]"
                             else:
-                                bg_current = "[v_ambient_layer]"
+                                # Only ambient; download it and stay on CPU.
+                                fc_parts.append(
+                                    f"[v_ambient_layer]hwdownload,format={target_fmt}"
+                                    f"[v_ambient_sys];")
+                                bg_current = "[v_ambient_sys]"
+                            # Foreground: scale on GPU, then download to CPU.
                             fc_parts.append(
                                 f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:"
                                 f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
-                                f"format={target_fmt}[v_fg_scaled];")
+                                f"format={target_fmt},hwdownload,format={target_fmt}[v_fg_scaled];")
                         else:
+                            # No ambient: has_bg_effect guarantees pixelate/blur,
+                            # so bg_current is a GPU surface. Download it.
+                            fc_parts.append(
+                                f"{bg_current}hwdownload,format={target_fmt}[v_bg_sys];")
+                            bg_current = "[v_bg_sys]"
                             fc_parts.append(
                                 f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:"
                                 f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
-                                f"format={target_fmt}[v_fg_scaled];")
+                                f"format={target_fmt},hwdownload,format={target_fmt}[v_fg_scaled];")
+                        # overlay_cuda rejects p010le main/overlay inputs
+                        # (10-bit HDR pipelines), and the p010le -> nv12
+                        # fallback would silently drop to 8-bit. Do the
+                        # composite on CPU in 10-bit, then upload once.
+                        # Both inputs have already been hwdownload'd to
+                        # {target_fmt} (p010le on CPU) by the branches above.
                         fc_parts.append(
-                            f"{bg_current}[v_fg_scaled]overlay_cuda="
-                            f"x=floor(({target_w}-w)/2+{ox}):y=floor(({target_h}-h)/2+{oy}),"
-                            f"setsar=1[v_bg_combined]")
+                            f"{bg_current}[v_fg_scaled]overlay="
+                            f"x=(W-w)/2+{ox}:y=(H-h)/2+{oy},"
+                            f"setsar=1,format={target_fmt},hwupload_cuda[v_bg_combined]")
                         filter_complex_parts.append("".join(fc_parts))
                         video_in_tag = "[v_bg_combined]"
                     else:
@@ -8418,7 +8687,8 @@ class VideoProcessorApp:
                             vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                             cpu_filters.append(f"crop={target_w}:{target_h}")
                         else:
-                            if use_nvencc_resize and aspect_mode == "stretch":
+                            if (use_nvencc_resize and aspect_mode == "stretch"
+                                    and not options.get("_preproc_scale_override")):
                                 target_w, target_h = info["width"], info["height"]
                             else:
                                 vf_filters.append(scale_base)
@@ -8508,7 +8778,12 @@ class VideoProcessorApp:
                 encoder_opts = ["-c:v", "h264_nvenc", "-pix_fmt", pix_fmt,
                                 "-preset", "p4", "-tune", "hq",
                                 "-rc", "vbr", "-cq", "14", "-b:v", "0"]
-            if options.get("sdr_to_hdr", False):
+            # The FFmpeg preprocessor only acts as the pre-TrueHDR stage
+            # on the legacy inline path. When a TrueHDR preprocessor has
+            # already run (v8.30), the input is HDR, so the output must
+            # be tagged as HDR too.
+            if (options.get("sdr_to_hdr", False)
+                    and not options.get("_truehdr_preprocessed", False)):
                 preproc_tags = {"primaries": "bt709", "trc": "bt709",
                                 "matrix": "bt709", "range_ffmpeg": "tv"}
             else:
@@ -8841,27 +9116,10 @@ class VideoProcessorApp:
                                                       "hybrid-duo (dual source)")):
             issues.append(
                 "FRUC cannot be combined with Dolby Vision + hybrid layouts.")
-        if self.upscale_algo_var.get() == "nvvfx-superres":
-            _sel = self.job_listbox.curselection()
-            _jobs = ([self.processing_jobs[i] for i in _sel]
-                     if _sel else list(self.processing_jobs))
-            _res_map = {"720p": 720, "1080p": 1080,
-                        "2160p": 2160, "4320p": 4320}
-            for _job in _jobs:
-                try:
-                    _info = get_video_info(_job['video_path'])
-                    _src_short = min(_info["width"], _info["height"])
-                    _tgt_short = _res_map.get(_job['options'].get('resolution'))
-                    if _src_short and _tgt_short and \
-                            _tgt_short / _src_short > 2.01:
-                        warnings.append(
-                            f"NVVFX SuperRes is rated up to ~2\u00d7. Job "
-                            f"'{_job['display_name']}' asks for "
-                            f"{_tgt_short / _src_short:.1f}\u00d7 "
-                            f"({_src_short}p \u2192 {_tgt_short}p). "
-                            f"Prefer bicubic/lanczos for that resolution.")
-                except Exception:
-                    pass
+        # Multi-stage superres (>2x ratios) is now handled automatically
+        # via FFmpeg pre-scale + final NVEncC superres. See
+        # _multi_stage_superres_info() and the promotion logic in
+        # _process_single_render_segment().
         if warnings and not issues:
             messagebox.showwarning("Warnings", "\n".join(f"• {w}" for w in warnings))
         if issues:
