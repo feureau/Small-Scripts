@@ -95,6 +95,24 @@ v8.30 - TrueHDR preprocessor at source resolution (2026-09-24)
     • FIX: The FFmpeg preprocessor and the NVVFX SuperRes prepass
       now tag their output as HDR when they run AFTER the TrueHDR
       preprocessor, instead of always tagging as SDR.
+v8.32 - cm_analyze now receives raw YUV420p10le (2026-09-24)
+    • FIX: Dolby Vision analysis. cm_analyze 5.6.x does not accept
+      HEVC elementary streams (.hevc, .265, .h265 all fail with
+      "format for extension 'X' not found"), nor MKV, nor MXF
+      produced by FFmpeg. The only input it accepts from this
+      pipeline is a raw YUV file whose filename encodes the frame
+      geometry: <name>_<W>x<H>_<bits>bit_<sub>p_<endian>.yuv.
+      The RPU generator now dumps YUV420p10le instead of
+      extracting an HEVC elementary stream, and passes
+      --source-format "pq bt2020". Verified against cm_analyze
+      5.6.4 build 8afde90.
+    • DISK NOTE: The YUV intermediate is large (~11 GB per 30s
+      of 1080p10-bit, ~44 GB per 30s of 4K10-bit). It is deleted
+      immediately after cm_analyze finishes, but jobs on long 4K
+      material need that much free space on the output drive.
+    • FIX: Dolby Vision RPU generation now honors seek_start /
+      seek_duration, so chapter-split DV jobs analyze the correct
+      frame range rather than the whole source.
 v8.28 - Automatic multi-stage superres chaining (2026-09-24)
     • FEATURE: nvvfx-superres and ngx-vsr now handle ratios >2x
       automatically. When the requested linear upscale exceeds the
@@ -7989,30 +8007,42 @@ class VideoProcessorApp:
         xml_path = os.path.join(work_dir, f"{safe_base}.dolbyvision_metadata.xml")
         rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
 
-        # cm_analyze dispatches by file EXTENSION and only accepts raw
-        # elementary streams (.h265 for HEVC, .h264 for H.264), Y4M, or
-        # image sequences. Containers (.mp4/.mkv/.mov/.webm/.m4v) and
-        # the extensions .hevc AND .265 are all rejected before the
-        # file is even opened ("ERROR format for extension 'X' not
-        # found"). Extract the HEVC track to a .h265 elementary stream.
-        _src_ext = os.path.splitext(source_path)[1].lower()
-        if _src_ext in (".mp4", ".mkv", ".mov", ".webm", ".m4v"):
-            analysis_src = os.path.join(work_dir, f"{safe_base}_cm_input.h265")
-            extract_cmd = [
-                FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error",
-                "-i", source_path,
-                "-map", "0:v:0", "-c:v", "copy",
-                "-bsf:v", "hevc_mp4toannexb",
-                "-an", "-sn", "-dn",
-                "-f", "hevc", analysis_src,
-            ]
-            self.run_external_tool(extract_cmd,
-                                   "ffmpeg extract HEVC for cm_analyze")
-            register_temp_file(analysis_src)
-            print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
-                  f"(raw HEVC)")
-        else:
-            analysis_src = source_path
+        # cm_analyze 5.6.x (Dolby Content Analyzer) does NOT accept
+        # HEVC elementary streams, MKV, or FFmpeg-produced MXF. Every
+        # extension we've tried (.hevc, .265, .h265) fails with
+        # "format for extension 'X' not found". The one input format
+        # this pipeline can produce that cm_analyze accepts is raw
+        # YUV420p10le with the frame geometry encoded in the filename:
+        #     <name>_<W>x<H>_<bits>bit_<sub>p_<endian>.yuv
+        # Confirmed working combination:
+        #     filename: ..._1920x1080_10bit_420p_le.yuv
+        #     --source-format "pq bt2020"
+        # The YUV dump is large (~11 GB/30s @ 1080p10, ~44 GB @ 4K10)
+        # and is deleted immediately after cm_analyze finishes.
+        _w = int(info.get("width", 1920))
+        _h = int(info.get("height", 1080))
+        analysis_src = os.path.join(
+            work_dir,
+            f"{safe_base}_cm_input_{_w}x{_h}_10bit_420p_le.yuv")
+        dump_cmd = [FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error"]
+        _sk_start = options.get("seek_start")
+        _sk_dur = options.get("seek_duration")
+        if _sk_start is not None:
+            dump_cmd.extend(["-ss", str(_sk_start)])
+        dump_cmd.extend(["-i", source_path])
+        if _sk_dur is not None:
+            dump_cmd.extend(["-t", str(_sk_dur)])
+        dump_cmd.extend([
+            "-map", "0:v:0",
+            "-pix_fmt", "yuv420p10le",
+            "-f", "rawvideo",
+            analysis_src,
+        ])
+        self.run_external_tool(dump_cmd,
+                               "ffmpeg dump YUV for cm_analyze")
+        register_temp_file(analysis_src)
+        print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
+              f"(raw YUV420p10le, {_w}x{_h})")
 
         fps = info.get("framerate", 24)
         if abs(fps - round(fps)) < 1e-6:
@@ -8046,6 +8076,13 @@ class VideoProcessorApp:
 
         cmd = [DOVI_TOOL_CMD, "generate", "--xml", xml_path, "-o", rpu_path]
         self.run_external_tool(cmd, "dovi_tool generate")
+
+        # The YUV dump is large; delete it as soon as analysis is done.
+        if analysis_src != source_path and os.path.exists(analysis_src):
+            try:
+                cleanup_single_temp_file(analysis_src)
+            except Exception:
+                pass
 
         return rpu_path, xml_path
 
