@@ -7855,6 +7855,33 @@ class VideoProcessorApp:
                 cmd.extend(["--dolby-vision-profile", dv_profile])
                 cmd.extend(["--dolby-vision-rpu", rpu_path])
         upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+
+        # PATCH2_VID_PY - NVVFX SuperRes and NGX VSR only support ratio
+        # >= 1.0. When a vertical crop makes the effective source frame
+        # larger than the requested target (e.g. 3840x2160 -> --crop to
+        # 1212x2160 -> requested 1080x1920 for the HD preset), NVEncC
+        # aborts with:
+        #     resize: nvvfx-superres not supported for resize ratio below 1.0.
+        #     resize: Failed to init nvvfx filter: undeveloped feature..
+        #     Unsupported vpp filter type.
+        # Detect the downscale case against the effective source size
+        # (after the centered precrop, when applicable) and fall back to
+        # lanczos, which is already a supported value throughout the
+        # pipeline. lanczos for that job. NVVFX is left in place for the
+        # genuine-upscale cases (4K vertical crop etc.).
+        _eff_src_w = int(info.get("width", 0))
+        _eff_src_h = int(info.get("height", 0))
+        if precrop:
+            _eff_src_w = max(2, _eff_src_w - precrop[0] - precrop[2])
+            _eff_src_h = max(2, _eff_src_h - precrop[1] - precrop[3])
+        if (upscale_algo in ("nvvfx-superres", "ngx-vsr")
+                and _eff_src_w > 0 and _eff_src_h > 0
+                and (target_w < _eff_src_w or target_h < _eff_src_h)):
+            print(f"[INFO] {upscale_algo} does not support downscaling "
+                  f"({_eff_src_w}x{_eff_src_h} -> {target_w}x{target_h}); "
+                  f"falling back to lanczos.")
+            upscale_algo = "lanczos"
+
         resize_algo = None
         if upscale_algo == "nvvfx-superres":
             mode = options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE)
@@ -8954,18 +8981,17 @@ class VideoProcessorApp:
                                  "-color_trc", color_info["trc"],
                                  "-colorspace", color_info["matrix"],
                                  "-color_range", color_info["range_ffmpeg"]])
-            if is_hdr_output and selected_codec in ("hevc", "av1"):
-                md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
-                cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
-                try:
-                    maxcll, maxfall = [x.strip() for x in cll.split(",")]
-                except ValueError:
-                    maxcll, maxfall = "1000", "400"
-                encoder_opts.extend([
-                    "-master_display", md,
-                    "-max_cll", maxcll,
-                    "-max_fall", maxfall,
-                ])
+            # PATCH1_VID_PY - FFmpeg's hevc_nvenc / av1_nvenc wrappers do not
+            # expose -master_display / -max_cll / -max_fall as AVOptions.
+            # Those are NVEncC-only flags (--master-display / --max-cll);
+            # passing them here makes FFmpeg abort with:
+            #     Unrecognized option 'master_display'.
+            #     Error splitting the argument list: Option not found
+            # The -color_primaries / -color_trc / -colorspace / -color_range
+            # tags emitted above already signal BT.2020 + PQ to players. The
+            # HDR10 ST 2086 / MaxCLL SEI side-metadata is simply omitted on
+            # this FFmpeg-only NVENC path. NVEncC-backed jobs continue to
+            # emit their own HDR10 SEI from construct_nvencc_command().
         if eff_w and eff_h:
             encoder_opts.extend(["-metadata:s:v", "rotate=0", "-aspect", f"{eff_w}:{eff_h}"])
         cmd.extend(encoder_opts)
