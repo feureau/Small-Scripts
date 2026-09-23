@@ -127,6 +127,8 @@ import signal
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
 FFPROBE_CMD = os.environ.get("FFPROBE_PATH", "ffprobe")
 NVENCC_CMD = os.environ.get("NVENCC_PATH", "NVEncC64")
+CM_ANALYZE_CMD = os.environ.get("CM_ANALYZE_PATH", "cm_analyze")
+DOVI_TOOL_CMD = os.environ.get("DOVI_TOOL_PATH", "dovi_tool")
 
 AUDIO_SAMPLE_RATE = 48000
 MONO_BITRATE_K = 128
@@ -181,6 +183,9 @@ YT_COMPATIBLE_CODECS = {"aac", "opus", "libopus", "eac3", "flac"}
 DEFAULT_RESOLUTION = "2160p"
 DEFAULT_UPSCALE_ALGO = "bicubic"
 DEFAULT_OUTPUT_FORMAT = "sdr"
+DEFAULT_DOVI_MASTERING_ID = "21"
+DEFAULT_DOVI_ANALYSIS_TUNING = "-1"
+DEFAULT_DOVI_KEEP_XML = True
 DEFAULT_VIDEO_CODEC = "h264"
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"
 DEFAULT_NVENC_SUPERRES_MODE = "1"
@@ -257,6 +262,25 @@ COLOR_PRESET_LOOKUP = {
     "bt2020_hlg": {"mode": "hdr", "label": "BT.2020 HLG (Broadcast)",
                    "primaries": "bt2020", "trc": "arib-std-b67", "matrix": "bt2020nc", "range": "tv",
                    "range_ffmpeg": "tv", "svt_prim": 9, "svt_trc": 18, "svt_matrix": 9},
+    "dolby_vision_pq": {"mode": "dv",
+                        "label": "Dolby Vision Profile 8.1 (HEVC Main 10, PQ)",
+                        "primaries": "bt2020", "trc": "smpte2084", "matrix": "bt2020nc",
+                        "range": "tv", "range_ffmpeg": "tv",
+                        "svt_prim": 9, "svt_trc": 16, "svt_matrix": 9,
+                        "dv_profile": "8.1", "cm_source_format": "pq bt2020"},
+    "dolby_vision_hlg": {"mode": "dv",
+                         "label": "Dolby Vision Profile 8.4 (HEVC Main 10, HLG)",
+                         "primaries": "bt2020", "trc": "arib-std-b67", "matrix": "bt2020nc",
+                         "range": "tv", "range_ffmpeg": "tv",
+                         "svt_prim": 9, "svt_trc": 18, "svt_matrix": 9,
+                         "dv_profile": "8.4", "cm_source_format": "hlg bt2020"},
+    "dolby_vision_auto": {"mode": "dv",
+                          "label": "Dolby Vision (auto-match source)",
+                          "primaries": "bt2020", "trc": "smpte2084", "matrix": "bt2020nc",
+                          "range": "tv", "range_ffmpeg": "tv",
+                          "svt_prim": 9, "svt_trc": 16, "svt_matrix": 9,
+                          "dv_profile": "8.1", "cm_source_format": "pq bt2020",
+                          "auto": True},
 }
 
 DEFAULT_NVENC_PRESET = "p1"
@@ -573,6 +597,27 @@ def check_nvencc_availability():
     if os.path.isfile(NVENCC_CMD):
         return True
     return shutil.which(NVENCC_CMD) is not None
+
+
+def check_dolby_tools():
+    cm = shutil.which(CM_ANALYZE_CMD) is not None or os.path.isfile(CM_ANALYZE_CMD)
+    dv = shutil.which(DOVI_TOOL_CMD) is not None or os.path.isfile(DOVI_TOOL_CMD)
+    return cm, dv
+
+
+def list_dolby_mastering_displays():
+    try:
+        r = subprocess.run([CM_ANALYZE_CMD, "--show-mastering-displays"],
+                           capture_output=True, text=True, timeout=15)
+        out = (r.stdout or "") + (r.stderr or "")
+        entries = []
+        for line in out.splitlines():
+            m = re.match(r'\s*(\d+):\s*(.+?)\s*$', line)
+            if m:
+                entries.append((m.group(1), m.group(2).strip()))
+        return entries
+    except Exception:
+        return []
 
 
 def check_decoder_availability(codec_name):
@@ -1616,12 +1661,14 @@ def get_video_info(file_path):
         is_interlaced = field_order in ("tt", "bb", "tb", "bt")
         return {"bit_depth": bit_depth, "framerate": framerate, "height": height, "width": width,
                 "is_hdr": is_hdr, "codec_name": codec_name, "is_interlaced": is_interlaced,
-                "field_order": field_order}
+                "field_order": field_order, "color_transfer": color_transfer,
+                "color_primaries": color_primaries}
     except Exception as e:
         print(f"[WARN] Could not get video info for {file_path}, using defaults: {e}")
         return {"bit_depth": 8, "framerate": 30.0, "height": 1080, "width": 1920,
                 "is_hdr": False, "codec_name": "h264", "is_interlaced": False,
-                "field_order": "progressive"}
+                "field_order": "progressive", "color_transfer": "",
+                "color_primaries": ""}
 
 
 def compute_original_target_resolution(res_key, info):
@@ -1893,6 +1940,9 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('color_preset_hdr', ''),
         job_options.get('hdr_master_display', ''),
         job_options.get('hdr_max_cll', ''),
+        job_options.get('dovi_mastering_id', ''),
+        job_options.get('dovi_analysis_tuning', ''),
+        str(job_options.get('dovi_keep_xml', True)),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
@@ -2167,6 +2217,9 @@ class WorkflowPresetManager:
             "color_preset_hdr": DEFAULT_COLOR_PRESET_HDR,
             "hdr_master_display": DEFAULT_HDR_MASTER_DISPLAY,
             "hdr_max_cll": DEFAULT_HDR_MAX_CLL,
+            "dovi_mastering_id": DEFAULT_DOVI_MASTERING_ID,
+            "dovi_analysis_tuning": DEFAULT_DOVI_ANALYSIS_TUNING,
+            "dovi_keep_xml": DEFAULT_DOVI_KEEP_XML,
         }
         self.load_presets()
 
@@ -2535,6 +2588,16 @@ class VideoProcessorApp:
             self._update_selected_jobs('audio_delivery_target')])
 
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
+        self.dovi_mastering_id_var = tk.StringVar(value=DEFAULT_DOVI_MASTERING_ID)
+        self.dovi_mastering_id_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('dovi_mastering_id'))
+        self.dovi_analysis_tuning_var = tk.StringVar(value=DEFAULT_DOVI_ANALYSIS_TUNING)
+        self.dovi_analysis_tuning_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('dovi_analysis_tuning'))
+        self.dovi_keep_xml_var = tk.BooleanVar(value=DEFAULT_DOVI_KEEP_XML)
+        self.dovi_keep_xml_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('dovi_keep_xml'))
+        self._dovi_combo_populated = False
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
         self.hybrid_layout_var.trace_add('write', lambda *args: (
@@ -2805,6 +2868,23 @@ class VideoProcessorApp:
     def _update_color_preset_options(self):
         if not hasattr(self, "color_preset_combo"):
             return
+        if self.output_format_var.get() == "dolby_vision":
+            values = [
+                COLOR_PRESET_LOOKUP["dolby_vision_auto"]["label"],
+                COLOR_PRESET_LOOKUP["dolby_vision_pq"]["label"],
+                COLOR_PRESET_LOOKUP["dolby_vision_hlg"]["label"],
+            ]
+            self.color_preset_combo.config(values=values)
+            current_key = self.color_preset_hdr_var.get()
+            if current_key in ("dolby_vision_auto", "dolby_vision_pq",
+                                "dolby_vision_hlg"):
+                label = COLOR_PRESET_LOOKUP[current_key]["label"]
+            else:
+                label = values[0]
+                self.color_preset_hdr_var.set("dolby_vision_auto")
+            self.color_preset_combo.set(label)
+            self._toggle_hdr_metadata_visibility()
+            return
         if self.output_format_var.get() == "hdr":
             values = [COLOR_PRESET_LOOKUP[k]["label"] for k in ("bt2020_pq", "bt2020_hlg")]
             current_key = self.color_preset_hdr_var.get()
@@ -2824,7 +2904,8 @@ class VideoProcessorApp:
         key = next((k for k, v in COLOR_PRESET_LOOKUP.items() if v["label"] == label), None)
         if key is None:
             return
-        if COLOR_PRESET_LOOKUP[key]["mode"] == "hdr":
+        mode = COLOR_PRESET_LOOKUP[key]["mode"]
+        if mode in ("hdr", "dv"):
             self.color_preset_hdr_var.set(key)
         else:
             self.color_preset_sdr_var.set(key)
@@ -2838,12 +2919,44 @@ class VideoProcessorApp:
         return COLOR_PRESET_LOOKUP.get(self._get_active_color_preset_key(), COLOR_PRESET_LOOKUP["bt709"])
 
     def _toggle_hdr_metadata_visibility(self):
-        if not hasattr(self, "hdr_meta_frame"):
+        if hasattr(self, "hdr_meta_frame"):
+            if self.output_format_var.get() == "hdr":
+                self.hdr_meta_frame.pack(fill=tk.X, pady=(3, 0))
+            else:
+                self.hdr_meta_frame.pack_forget()
+        if hasattr(self, "dovi_frame"):
+            if self.output_format_var.get() == "dolby_vision":
+                self.dovi_frame.pack(fill=tk.X, pady=(5, 0))
+            else:
+                self.dovi_frame.pack_forget()
+
+    def _populate_dovi_mastering_combo(self):
+        if self._dovi_combo_populated:
             return
-        if self.output_format_var.get() == "hdr":
-            self.hdr_meta_frame.pack(fill=tk.X, pady=(3, 0))
-        else:
-            self.hdr_meta_frame.pack_forget()
+        entries = list_dolby_mastering_displays()
+        if not entries:
+            self.dovi_mastering_combo.config(values=["(cm_analyze not found)"])
+            self.dovi_mastering_combo.set("(cm_analyze not found)")
+            return
+        labels = [f"{i}: {name}" for i, name in entries]
+        self.dovi_mastering_combo.config(values=labels)
+        default_id = self.dovi_mastering_id_var.get()
+        chosen = labels[0]
+        for label in labels:
+            if label.startswith(f"{default_id}:"):
+                chosen = label
+                break
+        self.dovi_mastering_combo.set(chosen)
+        m = re.match(r'(\d+):', chosen)
+        if m:
+            self.dovi_mastering_id_var.set(m.group(1))
+        self._dovi_combo_populated = True
+
+    def _on_dovi_mastering_selected(self, event=None):
+        label = self.dovi_mastering_combo.get()
+        m = re.match(r'(\d+):', label)
+        if m:
+            self.dovi_mastering_id_var.set(m.group(1))
 
     def _on_delivery_target_changed(self):
         code = DELIVERY_TARGET_LOOKUP.get(self.audio_delivery_target_var.get(), "custom")
@@ -3565,6 +3678,9 @@ class VideoProcessorApp:
                         command=self._on_output_format_change).pack(side=tk.LEFT)
         ttk.Radiobutton(output_format_frame, text="HDR", variable=self.output_format_var, value="hdr",
                         command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(output_format_frame, text="Dolby Vision",
+                        variable=self.output_format_var, value="dolby_vision",
+                        command=self._on_output_format_change).pack(side=tk.LEFT, padx=5)
         color_preset_frame = ttk.Frame(quality_group)
         color_preset_frame.pack(fill=tk.X, pady=(5, 0))
         ttk.Label(color_preset_frame, text="Color Space:").pack(side=tk.LEFT, padx=(0, 5))
@@ -3598,6 +3714,22 @@ class VideoProcessorApp:
         self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var)
         self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
+        self.dovi_frame = ttk.LabelFrame(
+            quality_group,
+            text="Dolby Vision (RPU auto-generated from source)",
+            padding=5)
+        dov_row = ttk.Frame(self.dovi_frame)
+        dov_row.pack(fill=tk.X)
+        ttk.Label(dov_row, text="Mastering Display:").pack(side=tk.LEFT, padx=(0, 5))
+        self.dovi_mastering_combo = ttk.Combobox(
+            dov_row, textvariable=self.dovi_mastering_id_var,
+            state="readonly", width=44)
+        self.dovi_mastering_combo.pack(side=tk.LEFT, padx=5)
+        self.dovi_mastering_combo.bind(
+            "<<ComboboxSelected>>", self._on_dovi_mastering_selected)
+        ttk.Checkbutton(dov_row, text="Keep XML",
+                        variable=self.dovi_keep_xml_var).pack(side=tk.LEFT, padx=(15, 0))
+        self.dovi_frame.pack_forget()
         constraints_group = ttk.LabelFrame(quality_group, text="Target & Constraints", padding=5)
         constraints_group.pack(fill=tk.X, pady=(5, 0))
         con_row1 = ttk.Frame(constraints_group)
@@ -4589,8 +4721,12 @@ class VideoProcessorApp:
             self.manual_bitrate_var.set(str(bitrate))
 
     def _get_allowed_codecs(self):
-        return (["h264", "hevc", "av1"] if self.output_format_var.get() == "sdr"
-                else ["hevc", "av1"])
+        fmt = self.output_format_var.get()
+        if fmt == "dolby_vision":
+            return ["hevc"]
+        if fmt == "hdr":
+            return ["hevc", "av1"]
+        return ["h264", "hevc", "av1"]
 
     def _update_codec_options(self, show_message=True):
         allowed = self._get_allowed_codecs()
@@ -4611,6 +4747,9 @@ class VideoProcessorApp:
         self._update_selected_jobs("output_format", "video_codec",
                                    "color_preset_sdr", "color_preset_hdr")
         self._update_bitrate_display()
+        if self.output_format_var.get() == "dolby_vision":
+            self._populate_dovi_mastering_combo()
+        self._toggle_hdr_metadata_visibility()
 
     def _browse_hybrid_file(self, position):
         file_path = filedialog.askopenfilename(title=f"Select {position.capitalize()} Video",
@@ -5257,6 +5396,9 @@ class VideoProcessorApp:
             "color_preset_hdr": self.color_preset_hdr_var.get(),
             "hdr_master_display": self.hdr_master_display_var.get(),
             "hdr_max_cll": self.hdr_max_cll_var.get(),
+            "dovi_mastering_id": self.dovi_mastering_id_var.get(),
+            "dovi_analysis_tuning": self.dovi_analysis_tuning_var.get(),
+            "dovi_keep_xml": self.dovi_keep_xml_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -5793,6 +5935,9 @@ class VideoProcessorApp:
         self.color_preset_hdr_var.set(options.get("color_preset_hdr", DEFAULT_COLOR_PRESET_HDR))
         self.hdr_master_display_var.set(options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY))
         self.hdr_max_cll_var.set(options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL))
+        self.dovi_mastering_id_var.set(options.get("dovi_mastering_id", DEFAULT_DOVI_MASTERING_ID))
+        self.dovi_analysis_tuning_var.set(options.get("dovi_analysis_tuning", DEFAULT_DOVI_ANALYSIS_TUNING))
+        self.dovi_keep_xml_var.set(options.get("dovi_keep_xml", DEFAULT_DOVI_KEEP_XML))
         mode = options.get("subfolder_mode")
         if not mode:
             if options.get("group_by_resolution"):
@@ -6726,6 +6871,7 @@ class VideoProcessorApp:
         base_dir = base_dir or os.getcwd()
         try:
             info = get_video_info(job['video_path'])
+            self._resolve_dv_auto_match(options, info)
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
             segment_sub_path = options.get("segment_subtitle_path")
             nvencc_direct_backends = ("nvencc_only", "nvencc_video_with_ffmpeg_audio")
@@ -6828,6 +6974,20 @@ class VideoProcessorApp:
                     options["_loudnorm_stats"] = loudnorm_stats
             seek_start = options.get("seek_start")
             seek_duration = options.get("seek_duration")
+            # DV RPU generation must run BEFORE NVEncC encode so the encoder
+            # can embed the RPU and the container box in one pass.
+            dv_rpu_path = None
+            dv_xml_path = None
+            if options.get("output_format") == "dolby_vision":
+                fmt_ok, dv_ok = check_dolby_tools()
+                if not fmt_ok or not dv_ok:
+                    raise VideoProcessingError(
+                        "Dolby Vision output requires both cm_analyze and "
+                        "dovi_tool on PATH.")
+                print("[INFO] Generating Dolby Vision metadata from source...")
+                dv_rpu_path, dv_xml_path = self._generate_dolby_vision_rpu(
+                    job['video_path'], output_dir, options, info)
+                options["_dovi_rpu_path"] = dv_rpu_path
             if encoder_backend == "nvencc_with_ffmpeg":
                 fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_",
                                                     dir=output_dir)
@@ -6886,6 +7046,33 @@ class VideoProcessorApp:
                                                     options, title_ass_path, base_dir=base_dir)
                 if self.run_ffmpeg_command(cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']}")
+            if options.get("output_format") == "dolby_vision":
+                nvencc_native_dv = encoder_backend in (
+                    "nvencc_with_ffmpeg", "nvencc_only",
+                    "nvencc_video_with_ffmpeg_audio")
+                if not nvencc_native_dv:
+                    print(f"[INFO] Injecting RPU into encoded file...")
+                    dv_mp4 = self._inject_dolby_vision_rpu(
+                        output_file, dv_rpu_path, output_dir, info)
+                    try:
+                        os.replace(dv_mp4, output_file)
+                    except Exception as e:
+                        raise VideoProcessingError(
+                            f"Failed to replace output with DV file: {e}")
+                else:
+                    print("[INFO] NVEncC wrote DV metadata directly into the container.")
+                if options.get("dovi_keep_xml", True) and dv_xml_path:
+                    try:
+                        final_xml = os.path.splitext(output_file)[0] + ".dolbyvision_metadata.xml"
+                        shutil.copyfile(dv_xml_path, final_xml)
+                    except Exception as e:
+                        print(f"[WARN] Could not copy DV XML next to output: {e}")
+                if dv_rpu_path and os.path.exists(dv_rpu_path):
+                    try:
+                        os.remove(dv_rpu_path)
+                    except Exception:
+                        pass
+
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
             if options.get("measure_loudness"):
@@ -6906,9 +7093,10 @@ class VideoProcessorApp:
             CURRENT_JOB_TEMP_DIR = None
 
     def compute_target_bitrate_kbps(self, options, info, file_path):
+        is_hdr_like = options.get("output_format") in ("hdr", "dolby_vision")
         bitrate_kbps = (int(options.get("manual_bitrate")) if options.get("override_bitrate")
                         else get_bitrate(options.get('resolution'), info["framerate"],
-                                         options.get("output_format") == "hdr",
+                                         is_hdr_like,
                                          source_height=info["height"], source_width=info["width"]))
         max_size_mb = float(options.get('max_size_mb', 0))
         max_duration = float(options.get('max_duration', 0))
@@ -7083,7 +7271,9 @@ class VideoProcessorApp:
                                  info=None, base_dir=None):
         if info is None:
             info = get_video_info(input_file)
-        is_hdr_output = options.get("output_format") == "hdr"
+        _fmt = options.get("output_format", "")
+        is_dv_output = (_fmt == "dolby_vision")
+        is_hdr_output = _fmt in ("hdr", "dolby_vision")
         color_preset_key = (options.get("color_preset_hdr") if is_hdr_output else
                             options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
@@ -7225,6 +7415,24 @@ class VideoProcessorApp:
         if not strict_no_color_tagging and auto_apply_color_tags:
             cmd.extend(["--colorprim", color_prim, "--transfer", color_transfer,
                         "--colormatrix", color_matrix])
+        if is_hdr_output and codec_name in ("hevc", "av1"):
+            md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
+            cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
+            try:
+                maxcll, maxfall = [x.strip() for x in cll.split(",")]
+            except ValueError:
+                maxcll, maxfall = "1000", "400"
+            cmd.extend(["--master-display", md])
+            cmd.extend(["--max-cll", f"{maxcll},{maxfall}"])
+        if is_dv_output and codec_name == "hevc":
+            rpu_path = str(options.get("_dovi_rpu_path", "")).strip()
+            if rpu_path and os.path.exists(rpu_path):
+                color_key = options.get("color_preset_hdr", "dolby_vision_pq")
+                color_info = COLOR_PRESET_LOOKUP.get(
+                    color_key, COLOR_PRESET_LOOKUP["dolby_vision_pq"])
+                dv_profile = color_info.get("dv_profile", "8.1")
+                cmd.extend(["--dolby-vision-profile", dv_profile])
+                cmd.extend(["--dolby-vision-rpu", rpu_path])
         upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
         resize_algo = None
         if upscale_algo == "nvvfx-superres":
@@ -7337,6 +7545,120 @@ class VideoProcessorApp:
             sys.stdout.write("\n")
         return ret_code
 
+    def run_external_tool(self, cmd, label="external tool"):
+        print(f"--- {label} ---")
+        print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if result.returncode != 0:
+            raise VideoProcessingError(
+                f"{label} failed (exit {result.returncode})\n"
+                f"--- stdout ---\n{result.stdout}\n"
+                f"--- stderr ---\n{result.stderr}")
+        return result
+
+    def _resolve_dv_auto_match(self, options, info):
+        """If DV color preset is 'auto', replace it with a concrete key
+        based on the source transfer function. Modifies options in place."""
+        key = options.get("color_preset_hdr", "")
+        if key != "dolby_vision_auto":
+            return
+        src_trc = str((info or {}).get("color_transfer", "")).lower()
+        if src_trc == "arib-std-b67":
+            resolved = "dolby_vision_hlg"
+        elif src_trc == "smpte2084":
+            resolved = "dolby_vision_pq"
+        else:
+            print(f"[WARN] DV auto-match: unknown source transfer "
+                  f"'{src_trc}'. Defaulting to Profile 8.1 (PQ).")
+            resolved = "dolby_vision_pq"
+        print(f"[INFO] DV auto-match resolved to: {resolved}")
+        options["color_preset_hdr"] = resolved
+
+    def _generate_dolby_vision_rpu(self, source_path, work_dir, options, info):
+        base = os.path.splitext(os.path.basename(source_path))[0]
+        safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
+        xml_path = os.path.join(work_dir, f"{safe_base}.dolbyvision_metadata.xml")
+        rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
+
+        fps = info.get("framerate", 24)
+        if abs(fps - round(fps)) < 1e-6:
+            fps_arg = str(int(round(fps)))
+        else:
+            fps_arg = f"{fps:.6f}".rstrip("0").rstrip(".")
+
+        w, h = info.get("width", 1920), info.get("height", 1080)
+        aspect = w / h if h else 1.77778
+        aspect_arg = f"{aspect:.6f}"
+
+        mastering_id = str(options.get("dovi_mastering_id", DEFAULT_DOVI_MASTERING_ID))
+        tuning = str(options.get("dovi_analysis_tuning", DEFAULT_DOVI_ANALYSIS_TUNING))
+
+        color_key = options.get("color_preset_hdr", "dolby_vision_pq")
+        color_info = COLOR_PRESET_LOOKUP.get(color_key, COLOR_PRESET_LOOKUP["dolby_vision_pq"])
+        source_format = color_info.get("cm_source_format", "pq bt2020")
+        print(f"[INFO] DV source format: {source_format} (from {color_key})")
+
+        cmd = [CM_ANALYZE_CMD,
+               "-m", mastering_id,
+               "-r", fps_arg,
+               "--aspect-ratios", aspect_arg, aspect_arg,
+               "-b",
+               "-l",
+               "--source-format", source_format]
+        if tuning not in ("", "-1"):
+            cmd.extend(["--analysis-tuning", tuning])
+        cmd.extend([source_path, xml_path])
+        self.run_external_tool(cmd, "cm_analyze")
+
+        cmd = [DOVI_TOOL_CMD, "generate", "--xml", xml_path, "-o", rpu_path]
+        self.run_external_tool(cmd, "dovi_tool generate")
+
+        return rpu_path, xml_path
+
+    def _inject_dolby_vision_rpu(self, encoded_file, rpu_path, work_dir, source_info):
+        base = os.path.splitext(os.path.basename(encoded_file))[0]
+        safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
+        hevc_path = os.path.join(work_dir, f"{safe_base}.annexb.hevc")
+        dv_hevc = os.path.join(work_dir, f"{safe_base}.dv.hevc")
+        final_mp4 = os.path.join(work_dir, f"{safe_base}.DV.mp4")
+
+        cmd = [FFMPEG_CMD, "-y", "-i", encoded_file,
+               "-c:v", "copy", "-bsf:v", "hevc_mp4toannexb",
+               "-f", "hevc", hevc_path]
+        self.run_external_tool(cmd, "ffmpeg extract HEVC")
+
+        cmd = [DOVI_TOOL_CMD, "inject-rpu",
+               "-i", hevc_path, "--rpu-in", rpu_path, "-o", dv_hevc]
+        self.run_external_tool(cmd, "dovi_tool inject-rpu")
+
+        fps = source_info.get("framerate", 24)
+        if abs(fps - round(fps)) < 1e-6:
+            fps_arg = str(int(round(fps)))
+        else:
+            fps_arg = f"{fps:.6f}"
+
+        cmd = [FFMPEG_CMD, "-y",
+               "-fflags", "+genpts",
+               "-r", fps_arg,
+               "-i", dv_hevc,
+               "-i", encoded_file,
+               "-map", "0:v", "-map", "1:a?",
+               "-c:v", "copy", "-c:a", "copy",
+               "-tag:v", "hvc1",
+               "-strict", "unofficial",
+               "-movflags", "+faststart",
+               final_mp4]
+        self.run_external_tool(cmd, "ffmpeg remux DV MP4")
+
+        for p in (hevc_path, dv_hevc):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+        return final_mp4
+
     def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options,
                                          seek_start=None, seek_duration=None):
         cmd = [FFMPEG_CMD, "-y"]
@@ -7418,7 +7740,10 @@ class VideoProcessorApp:
                      "cuda"] if use_cuda_decoder_bot else []) + ["-c:v", decoder_bot, "-i", bot_path]
         if seek_duration is not None:
             cmd.extend(["-t", str(seek_duration)])
-        filter_complex_parts, is_hdr_output = [], options.get("output_format") == 'hdr'
+        _fmt = options.get("output_format", "")
+        is_dv_output = (_fmt == "dolby_vision")
+        filter_complex_parts = []
+        is_hdr_output = _fmt in ("hdr", "dolby_vision")
         is_cpu_encode = (options.get("encoder_family") == "cpu_software")
         chroma = _normalize_chroma_code(options.get("chroma_subsampling", "420"))
         cuda_work_fmt = "p010le" if is_hdr_output else "nv12"
@@ -7976,6 +8301,18 @@ class VideoProcessorApp:
                                  "-color_trc", color_info["trc"],
                                  "-colorspace", color_info["matrix"],
                                  "-color_range", color_info["range_ffmpeg"]])
+            if is_hdr_output and selected_codec in ("hevc", "av1"):
+                md = options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY)
+                cll = options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL)
+                try:
+                    maxcll, maxfall = [x.strip() for x in cll.split(",")]
+                except ValueError:
+                    maxcll, maxfall = "1000", "400"
+                encoder_opts.extend([
+                    "-master_display", md,
+                    "-max_cll", maxcll,
+                    "-max_fall", maxfall,
+                ])
         if eff_w and eff_h:
             encoder_opts.extend(["-metadata:s:v", "rotate=0", "-aspect", f"{eff_w}:{eff_h}"])
         cmd.extend(encoder_opts)
@@ -7998,6 +8335,48 @@ class VideoProcessorApp:
         selected_codec = self.video_codec_var.get()
         if self.output_format_var.get() == "hdr" and selected_codec == "h264":
             issues.append("HDR output requires HEVC or AV1. H.264 cannot carry HDR.")
+        if self.output_format_var.get() == "dolby_vision":
+            cm_ok, dv_ok = check_dolby_tools()
+            if not cm_ok:
+                issues.append(
+                    f"'{CM_ANALYZE_CMD}' not found. Required for Dolby Vision output.")
+            if not dv_ok:
+                issues.append(
+                    f"'{DOVI_TOOL_CMD}' not found. Required for Dolby Vision output.")
+            if self.video_codec_var.get() != "hevc":
+                issues.append("Dolby Vision requires HEVC. Codec will be forced.")
+            if self._get_effective_chroma() != "420":
+                issues.append("Dolby Vision requires 4:2:0 chroma subsampling.")
+            sel = self.job_listbox.curselection()
+            if sel:
+                try:
+                    src_info = get_video_info(
+                        self.processing_jobs[sel[0]]['video_path'])
+                    if not src_info.get("is_hdr"):
+                        warnings.append(
+                            "Dolby Vision output on a non-HDR source will fail in "
+                            "cm_analyze.")
+                    color_key = self.color_preset_hdr_var.get()
+                    src_trc = src_info.get("color_transfer", "")
+                    if color_key == "dolby_vision_auto":
+                        if src_trc and src_trc not in ("smpte2084", "arib-std-b67"):
+                            warnings.append(
+                                f"DV auto-match: source transfer '{src_trc}' "
+                                f"is not PQ or HLG. The pipeline will default "
+                                f"to Profile 8.1 (PQ); cm_analyze may fail.")
+                    else:
+                        expected_trc = ("arib-std-b67"
+                                        if color_key == "dolby_vision_hlg"
+                                        else "smpte2084")
+                        expected_label = ("HLG" if expected_trc == "arib-std-b67"
+                                          else "PQ")
+                        if src_trc and src_trc != expected_trc:
+                            warnings.append(
+                                f"Selected profile expects a {expected_label} source, "
+                                f"but the input is {src_trc}. cm_analyze may fail or "
+                                f"produce incorrect metadata.")
+                except Exception:
+                    pass
         if self.encoder_family_var.get() == "cpu_software":
             codec = self.video_codec_var.get()
             caps = check_ffmpeg_capabilities().get('cpu_codecs', {})
