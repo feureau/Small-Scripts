@@ -68,6 +68,21 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.27 - Preprocessor CUDA surface fix + cm_analyze extraction (2026-09-24)
+    • FIX: FFmpeg preprocessor backend no longer leaves frames on a CUDA
+      surface when the encoder expects a CPU pixel format. The non-hybrid
+      path now mirrors the hybrid path and terminates the filter graph on
+      CPU frames (hwdownload + format) when backend == "preprocess" or the
+      encoder is CPU-software. Resolves "Impossible to convert between the
+      formats supported by the filter 'Parsed_hwupload_cuda' and the filter
+      'auto_scale'" (exit -40) for Ambient/Pixelate/Blur backgrounds on the
+      nvencc_with_ffmpeg backend.
+    • FIX: cm_analyze now receives a raw HEVC elementary stream. Any
+      container input (.mp4/.mkv/.mov/.webm/.m4v) is first demuxed to a
+      temporary .hevc via FFmpeg copy. Resolves "cm_analyze: ERROR format
+      for extension 'mp4' not found" for SDR→HDR + Dolby Vision jobs.
+    • VALIDATION: nvvfx-superres now warns when the requested upscale ratio
+      exceeds ~2× (its rated ceiling), suggesting bicubic/lanczos instead.
 v8.26 - SDR to HDR (NVENC TrueHDR) + Hybrid DV composite analysis (2026-09-24)
     • FEATURE: "Convert SDR to HDR (NVENC AI)" checkbox. Uses the RTX Video SDK
       via NVEncC --vpp-ngx-truehdr to expand SDR into HDR10 PQ. Requires an
@@ -78,8 +93,9 @@ v8.26 - SDR to HDR (NVENC TrueHDR) + Hybrid DV composite analysis (2026-09-24)
       metadata now describes the actual pixels that play back.
     • FIX: FFmpeg preprocessor intermediate now carries color tags sourced
       from the active color preset. Previously untagged.
-    • FIX: FFmpeg preprocessor intermediate switched from MKV to MP4 for
-      cm_analyze compatibility.
+    • FIX: cm_analyze now receives a raw HEVC elementary stream extracted
+      from the preprocessor output. Container extensions are rejected by
+      cm_analyze by design.
     • FIX: Hybrid-duo color-transfer mismatch now detected at job creation.
     • FIX: FRUC is blocked when DV output is combined with hybrid layouts
       (frame count vs RPU mismatch).
@@ -7819,6 +7835,30 @@ class VideoProcessorApp:
         xml_path = os.path.join(work_dir, f"{safe_base}.dolbyvision_metadata.xml")
         rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
 
+        # cm_analyze dispatches by file EXTENSION and only accepts raw
+        # elementary streams (.hevc/.265/.h264), Y4M, or image sequences.
+        # Containers (.mp4/.mkv/.mov) are rejected before the file is
+        # even opened ("ERROR format for extension 'mp4' not found").
+        # Extract the HEVC track to a temp elementary stream for analysis.
+        _src_ext = os.path.splitext(source_path)[1].lower()
+        if _src_ext in (".mp4", ".mkv", ".mov", ".webm", ".m4v"):
+            analysis_src = os.path.join(work_dir, f"{safe_base}_cm_input.hevc")
+            extract_cmd = [
+                FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", source_path,
+                "-map", "0:v:0", "-c:v", "copy",
+                "-bsf:v", "hevc_mp4toannexb",
+                "-an", "-sn", "-dn",
+                "-f", "hevc", analysis_src,
+            ]
+            self.run_external_tool(extract_cmd,
+                                   "ffmpeg extract HEVC for cm_analyze")
+            register_temp_file(analysis_src)
+            print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
+                  f"(raw HEVC)")
+        else:
+            analysis_src = source_path
+
         fps = info.get("framerate", 24)
         if abs(fps - round(fps)) < 1e-6:
             fps_arg = str(int(round(fps)))
@@ -7846,7 +7886,7 @@ class VideoProcessorApp:
                "--source-format", source_format]
         if tuning not in ("", "-1"):
             cmd.extend(["--analysis-tuning", tuning])
-        cmd.extend([source_path, xml_path])
+        cmd.extend([analysis_src, xml_path])
         self.run_external_tool(cmd, "cm_analyze")
 
         cmd = [DOVI_TOOL_CMD, "generate", "--xml", xml_path, "-o", rpu_path]
@@ -8406,6 +8446,15 @@ class VideoProcessorApp:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
                 cpu_filters.append(
                     f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
+            # The preprocessor (encoder_backend == "preprocess") writes a
+            # CPU-resident intermediate that a downstream encoder reads.
+            # Leaving frames on a CUDA surface here forces FFmpeg to
+            # auto-insert a scale (cuda -> yuv420p10le) that has no
+            # hwdownload, producing "Impossible to convert between the
+            # formats supported by the filter ...". Mirror the hybrid
+            # path: terminate the graph on CPU frames when the backend
+            # is the preprocessor or the encoder is CPU-software.
+            _leave_on_cpu = is_cpu_encode or encoder_backend == "preprocess"
             if use_cpu_scaling:
                 vf_filters.extend(cpu_filters)
                 vf_filters.append(f"format={target_cpu_pix_fmt}")
@@ -8413,16 +8462,16 @@ class VideoProcessorApp:
                 processing_chain = [f"hwdownload,format={cuda_work_fmt}",
                                     "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + \
                                    cpu_filters
-                if is_cpu_encode:
+                if _leave_on_cpu:
                     processing_chain.append(f"format={target_cpu_pix_fmt}")
                     vf_filters.append(",".join(processing_chain))
                 else:
                     if not is_hdr_output:
                         processing_chain.append("format=nv12")
                     vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
-            elif is_cpu_encode:
+            elif _leave_on_cpu:
                 vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
-            if is_cpu_encode and not vf_filters:
+            if _leave_on_cpu and not vf_filters:
                 vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
             if vf_filters:
                 filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
@@ -8792,6 +8841,27 @@ class VideoProcessorApp:
                                                       "hybrid-duo (dual source)")):
             issues.append(
                 "FRUC cannot be combined with Dolby Vision + hybrid layouts.")
+        if self.upscale_algo_var.get() == "nvvfx-superres":
+            _sel = self.job_listbox.curselection()
+            _jobs = ([self.processing_jobs[i] for i in _sel]
+                     if _sel else list(self.processing_jobs))
+            _res_map = {"720p": 720, "1080p": 1080,
+                        "2160p": 2160, "4320p": 4320}
+            for _job in _jobs:
+                try:
+                    _info = get_video_info(_job['video_path'])
+                    _src_short = min(_info["width"], _info["height"])
+                    _tgt_short = _res_map.get(_job['options'].get('resolution'))
+                    if _src_short and _tgt_short and \
+                            _tgt_short / _src_short > 2.01:
+                        warnings.append(
+                            f"NVVFX SuperRes is rated up to ~2\u00d7. Job "
+                            f"'{_job['display_name']}' asks for "
+                            f"{_tgt_short / _src_short:.1f}\u00d7 "
+                            f"({_src_short}p \u2192 {_tgt_short}p). "
+                            f"Prefer bicubic/lanczos for that resolution.")
+                except Exception:
+                    pass
         if warnings and not issues:
             messagebox.showwarning("Warnings", "\n".join(f"• {w}" for w in warnings))
         if issues:
