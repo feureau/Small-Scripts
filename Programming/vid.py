@@ -7391,7 +7391,13 @@ class VideoProcessorApp:
                     effective_job["video_path"] = _sr_intermediate
                     effective_info = get_video_info(_sr_intermediate)
                     options["_sr_prepass_source"] = _sr_intermediate
-                fd, temp_preproc = tempfile.mkstemp(suffix=".mp4", prefix="vid_temp_preproc_",
+                # v8.35 NVENCC MKV + AUDIO-COPY FIX
+                # The preprocessor writes Matroska, not MP4, because
+                # NVEncC's reader cannot parse AAC 5.1 channel layouts
+                # out of an MP4 container (FFmpeg puts them in the AAC
+                # PCE, not an MP4 "chan" atom). Matroska declares them
+                # in the container header, which NVEncC reads fine.
+                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_",
                                                     dir=output_dir)
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
@@ -7427,6 +7433,12 @@ class VideoProcessorApp:
                 nvencc_options = copy.deepcopy(options)
                 nvencc_options.pop("seek_start", None)
                 nvencc_options.pop("seek_duration", None)
+                # v8.35 NVENCC MKV + AUDIO-COPY FIX
+                # The FFmpeg preprocessor already built the final
+                # audio tracks (delivery target, sofalizer, loudness
+                # chain, both stereo + 5.1). NVEncC must not rebuild
+                # them from legacy booleans or it drops tracks.
+                nvencc_options["_audio_already_processed"] = True
                 nvencc_cmd = self.construct_nvencc_command(
                     composite_source, output_file, nvencc_options,
                     orientation, info=composite_info, base_dir=base_dir)
@@ -7946,6 +7958,16 @@ class VideoProcessorApp:
             cmd.extend(["--log", log_path, "--log-level", "info"])
         if audio_source_path:
             cmd.extend(["--audio-source", audio_source_path])
+        elif options and options.get("_audio_already_processed", False):
+            # v8.35 NVENCC MKV + AUDIO-COPY FIX
+            # The FFmpeg preprocessor already produced the final
+            # audio tracks with the correct delivery-target layout,
+            # loudness chain and channel mapping. Copy them straight
+            # into the output container. Rebuilding from the legacy
+            # audio_mono / audio_stereo_downmix / audio_surround_51
+            # booleans would silently drop the 5.1 bed that the
+            # user asked for via the delivery target.
+            cmd.extend(["--audio-copy"])
         else:
             if options and options.get("audio_mono"):
                 cmd.extend(["--audio-codec", "aac", "--audio-stream", ":mono",
@@ -8884,7 +8906,8 @@ class VideoProcessorApp:
                 "-color_range", preproc_tags["range_ffmpeg"],
             ])
             cmd.extend(encoder_opts)
-            cmd.extend(["-f", "mp4", output_file])
+            # v8.35 NVENCC MKV + AUDIO-COPY FIX: matroska, not mp4
+            cmd.extend(["-f", "matroska", output_file])
             return cmd
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         if is_cpu_encode:
@@ -9159,12 +9182,58 @@ class VideoProcessorApp:
                 issues.append(
                     "The Eclipsa (IAMF) delivery target requires an FFmpeg build with the "
                     "'iamf' muxer. Your current FFmpeg appears to lack it.")
-        if target_code in ("youtube_stereo_51", "youtube_stereo_eclipsa"):
-            if not self.sofa_file_var.get().strip():
-                warnings.append(
-                    f"Target '{self.audio_delivery_target_var.get()}' uses Sofalizer when the "
-                    "source has surround audio. No SOFA file is set — jobs with stereo/mono "
-                    "sources will still work, but surround sources will fail per-job.")
+        # v8.34 SOFA PREFLIGHT
+        # Per-job validation: figure out which enqueued jobs will
+        # actually invoke Sofalizer, and require the SOFA file to
+        # exist for each of them. The old check only looked at the
+        # GUI field and only fired when the path was empty, so a
+        # stale-but-nonempty path like
+        #   E:\Small-Scripts\SOFALIZER\D1_48K_...sofa
+        # would sail through validation and then hard-fail deep
+        # inside _build_stereo_plus_51 during encoding.
+        _sofa_auto_targets = {"youtube_stereo", "youtube_stereo_51",
+                              "youtube_stereo_eclipsa"}
+        for _job in self.processing_jobs:
+            _jopts = _job.get("options", {})
+            _jt = _jopts.get("audio_delivery_target", DEFAULT_DELIVERY_TARGET)
+            _needs_sofa = False
+            _why = ""
+            if _jt in _sofa_auto_targets:
+                try:
+                    _streams = get_audio_stream_info(_job.get("video_path", ""))
+                    _max_ch = max((int(s.get("channels", 0))
+                                   for s in _streams), default=0)
+                except Exception as _e:
+                    _max_ch = 0
+                    debug_print(f"Sofa preflight: probe failed for "
+                                f"{_job.get('video_path', '?')}: {_e}")
+                if _max_ch >= 6:
+                    _needs_sofa = True
+                    _why = (f"target '{_jt}' on a {_max_ch}-channel "
+                            f"(surround) source")
+            elif _jt == "custom":
+                if _jopts.get("audio_stereo_sofalizer", False):
+                    _needs_sofa = True
+                    _why = "custom target with 'Stereo (Sofalizer)' enabled"
+            if not _needs_sofa:
+                continue
+            _sp = (_jopts.get("sofa_file") or "").strip()
+            _job_name = _job.get("display_name", "?")
+            if not _sp:
+                issues.append(
+                    f"Job '{_job_name}' will use Sofalizer "
+                    f"({_why}), but that job's SOFA file is not set.\n"
+                    f"       Fix: set a SOFA file on the Audio tab "
+                    f"(or select a different Delivery Target / "
+                    f"uncheck Sofalizer), then re-apply to the job.")
+            elif not os.path.exists(_sp):
+                issues.append(
+                    f"Job '{_job_name}' will use Sofalizer "
+                    f"({_why}), but the SOFA file does not exist:\n"
+                    f"       {_sp}\n"
+                    f"       Fix: restore the file, point the Audio "
+                    f"tab at an existing .sofa, or pick a different "
+                    f"Delivery Target.")
         if target_code == "custom":
             if self.audio_stereo_sofalizer_var.get() and not self.audio_passthrough_var.get():
                 sofa_path = self.sofa_file_var.get()
