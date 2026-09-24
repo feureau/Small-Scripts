@@ -7179,6 +7179,20 @@ class VideoProcessorApp:
                     options.pop("_preproc_scale_override", None)
 
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
+            # v8.33 FROZEN TARGET FIX
+            # Freeze the target resolution computed here, while
+            # `info` still describes the SOURCE block.  The NVEncC
+            # encode pass below runs on the preprocessor output --
+            # a stacked canvas whose dimensions differ from the
+            # source -- so recomputing the target there re-resolves
+            # every "original" per-block aspect against the canvas
+            # instead of the block, producing:
+            #   hybrid-duo side-by-side -> 15360x2160 (over the
+            #       NVEncC 8192 hardware limit)
+            #   hybrid-duo stacked      -> 2160x6614 (should be
+            #       2160x3914)
+            # Freezing it here keeps both stages in agreement.
+            options["_frozen_target_res"] = (sub_target_w, sub_target_h)
             segment_sub_path = options.get("segment_subtitle_path")
             nvencc_direct_backends = ("nvencc_only", "nvencc_video_with_ffmpeg_audio")
             if encoder_backend in nvencc_direct_backends and options.get("seek_start") is not None:
@@ -7699,7 +7713,18 @@ class VideoProcessorApp:
                             options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
         bitrate_kbps, _, _ = self.compute_target_bitrate_kbps(options, info, input_file)
-        target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
+        # v8.33 FROZEN TARGET FIX
+        # Prefer the target frozen at the FFmpeg-preprocessor stage.
+        # Recomputing it here would resolve per-block "original"
+        # aspect ratios against the stacked composite, which is
+        # not what the user asked for.  `info` here is still the
+        # composite and is still used for crop/pad math below.
+        _frozen_target = options.get("_frozen_target_res")
+        if _frozen_target:
+            target_w, target_h = _frozen_target
+        else:
+            target_w, target_h = self.compute_target_resolution_for_options(
+                options, info, orientation)
         aspect_mode = options.get("aspect_mode", "stretch")
 
         def _compute_center_crop(src_w, src_h, dst_w, dst_h):
