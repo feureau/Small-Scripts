@@ -364,6 +364,7 @@ DEFAULT_AMBIENT_SPREAD = "2"
 DEFAULT_AMBIENT_ENGINE = "gpu"
 DEFAULT_HYBRID_TOP_MODE = "pad"
 DEFAULT_HYBRID_BOTTOM_MODE = "crop"
+DEFAULT_HYBRID_BLOCK_OFFSET_UNITS = "px"
 DEFAULT_HYBRID_TOP_OFFSET_X = "0"
 DEFAULT_HYBRID_TOP_OFFSET_Y = "0"
 DEFAULT_HYBRID_BOTTOM_OFFSET_X = "0"
@@ -375,12 +376,14 @@ DEFAULT_HYBRID_BOTTOM_ZOOM = "1.0"
 DEFAULT_HYBRID_COMPOSITE_PAD = False
 DEFAULT_HYBRID_COMPOSITE_PAD_COLOR = "#000000"
 DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR = "center"
-DEFAULT_HYBRID_COMPOSITE_OFFSET_X = "0"
-DEFAULT_HYBRID_COMPOSITE_OFFSET_Y = "0"
+DEFAULT_HYBRID_COMPOSITE_OFFSET_X = "0.0"
+DEFAULT_HYBRID_COMPOSITE_OFFSET_Y = "0.0"
+DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS = "frac"
 DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_VIDEO_OFFSET_X = "0"
 DEFAULT_VIDEO_OFFSET_Y = "0"
+DEFAULT_VIDEO_OFFSET_UNITS = "px"
 DEFAULT_FRUC = False
 DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = True
@@ -2137,6 +2140,7 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('hybrid_top_mode', DEFAULT_HYBRID_TOP_MODE),
         job_options.get('hybrid_top_offset_x', DEFAULT_HYBRID_TOP_OFFSET_X),
         job_options.get('hybrid_top_offset_y', DEFAULT_HYBRID_TOP_OFFSET_Y),
+        job_options.get('hybrid_block_offset_units', DEFAULT_HYBRID_BLOCK_OFFSET_UNITS),
         job_options.get('hybrid_top_zoom', DEFAULT_HYBRID_TOP_ZOOM),
         job_options.get('hybrid_top_pad_color', DEFAULT_HYBRID_TOP_PAD_COLOR),
         job_options.get('hybrid_bottom_aspect', ''),
@@ -2146,11 +2150,13 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('hybrid_bottom_offset_y', DEFAULT_HYBRID_BOTTOM_OFFSET_Y),
         job_options.get('hybrid_bottom_zoom', DEFAULT_HYBRID_BOTTOM_ZOOM),
         job_options.get('hybrid_bottom_pad_color', DEFAULT_HYBRID_BOTTOM_PAD_COLOR),
+        job_options.get('video_offset_units', DEFAULT_VIDEO_OFFSET_UNITS),
         str(job_options.get('hybrid_composite_pad', DEFAULT_HYBRID_COMPOSITE_PAD)),
         job_options.get('hybrid_composite_pad_color', DEFAULT_HYBRID_COMPOSITE_PAD_COLOR),
         job_options.get('hybrid_composite_pad_anchor', DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR),
         job_options.get('hybrid_composite_offset_x', DEFAULT_HYBRID_COMPOSITE_OFFSET_X),
         job_options.get('hybrid_composite_offset_y', DEFAULT_HYBRID_COMPOSITE_OFFSET_Y),
+        job_options.get('hybrid_composite_offset_units', DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS),
         job_options.get('hybrid_layout', ''),
         job_options.get('ambient_engine', DEFAULT_AMBIENT_ENGINE),
         job_options.get('subtitle_font', ''),
@@ -2357,6 +2363,7 @@ class WorkflowPresetManager:
             "aspect_mode": DEFAULT_ASPECT_MODE,
             "video_offset_x": DEFAULT_VIDEO_OFFSET_X,
             "video_offset_y": DEFAULT_VIDEO_OFFSET_Y,
+            "video_offset_units": DEFAULT_VIDEO_OFFSET_UNITS,
             "pixelate_multiplier": DEFAULT_PIXELATE_MULTIPLIER,
             "pixelate_brightness": DEFAULT_PIXELATE_BRIGHTNESS,
             "pixelate_saturation": DEFAULT_PIXELATE_SATURATION,
@@ -2366,6 +2373,7 @@ class WorkflowPresetManager:
             "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
             "hybrid_top_aspect": "16:9",
+            "hybrid_block_offset_units": DEFAULT_HYBRID_BLOCK_OFFSET_UNITS,
             "hybrid_top_mode": DEFAULT_HYBRID_TOP_MODE,
             "hybrid_top_path": "",
             "hybrid_top_offset_x": DEFAULT_HYBRID_TOP_OFFSET_X,
@@ -2384,6 +2392,7 @@ class WorkflowPresetManager:
             "hybrid_composite_pad_anchor": DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR,
             "hybrid_composite_offset_x": DEFAULT_HYBRID_COMPOSITE_OFFSET_X,
             "hybrid_composite_offset_y": DEFAULT_HYBRID_COMPOSITE_OFFSET_Y,
+            "hybrid_composite_offset_units": DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS,
             "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
             "hybrid_top_suffix": "-top",
             "hybrid_bot_suffix": "-bot",
@@ -2730,6 +2739,10 @@ class VideoProcessorApp:
         self.video_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_x'))
         self.video_offset_y_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_Y)
         self.video_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_y'))
+        self.video_offset_units_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_UNITS)
+        self.video_offset_units_var.trace_add('write', lambda *args: [
+            self._update_video_offset_labels(),
+            self._update_selected_jobs('video_offset_units')])
         self.pixelate_multiplier_var = tk.StringVar(value=DEFAULT_PIXELATE_MULTIPLIER)
         self.pixelate_multiplier_var.trace_add('write',
                                                lambda *args: self._update_selected_jobs('pixelate_multiplier'))
@@ -2923,6 +2936,11 @@ class VideoProcessorApp:
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
         self.hybrid_layout_var.trace_add('write', lambda *args: (
             self._update_hybrid_ui_labels(), self._update_selected_jobs('hybrid_layout')))
+        self.hybrid_block_offset_units_var = tk.StringVar(
+            value=DEFAULT_HYBRID_BLOCK_OFFSET_UNITS)
+        self.hybrid_block_offset_units_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs(
+                'hybrid_block_offset_units'))
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
         self.hybrid_top_mode_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_MODE)
         self.hybrid_top_offset_x_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_OFFSET_X)
@@ -2968,6 +2986,12 @@ class VideoProcessorApp:
             value=DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR)
         self.hybrid_composite_pad_anchor_var.trace_add(
             'write', lambda *args: self._update_selected_jobs('hybrid_composite_pad_anchor'))
+        self.hybrid_composite_offset_units_var = tk.StringVar(
+            value=DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS)
+        self.hybrid_composite_offset_units_var.trace_add(
+            'write', lambda *args: (self._update_composite_offset_labels(),
+                                    self._update_selected_jobs(
+                                        'hybrid_composite_offset_units')))
         self.hybrid_composite_offset_x_var = tk.StringVar(
             value=DEFAULT_HYBRID_COMPOSITE_OFFSET_X)
         self.hybrid_composite_offset_x_var.trace_add(
@@ -3936,23 +3960,77 @@ class VideoProcessorApp:
         self.composite_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
         cp_row2 = ttk.Frame(self.composite_pad_frame)
         cp_row2.pack(fill=tk.X, pady=(3, 0))
-        ttk.Label(cp_row2, text="Composite Off X:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(cp_row2, text="Units:").pack(side=tk.LEFT, padx=(0, 3))
+        self.composite_units_frac_rb = ttk.Radiobutton(
+            cp_row2, text="Frac", variable=self.hybrid_composite_offset_units_var,
+            value="frac")
+        self.composite_units_frac_rb.pack(side=tk.LEFT)
+        self.composite_units_px_rb = ttk.Radiobutton(
+            cp_row2, text="Px", variable=self.hybrid_composite_offset_units_var,
+            value="px")
+        self.composite_units_px_rb.pack(side=tk.LEFT, padx=(5, 15))
+        self.composite_off_x_label = ttk.Label(
+            cp_row2, text="Composite Off X (frac):")
+        self.composite_off_x_label.pack(side=tk.LEFT, padx=(0, 2))
         self.composite_off_x_entry = ttk.Entry(
-            cp_row2, textvariable=self.hybrid_composite_offset_x_var, width=5)
+            cp_row2, textvariable=self.hybrid_composite_offset_x_var, width=6)
         self.composite_off_x_entry.pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Label(cp_row2, text="Composite Off Y:").pack(side=tk.LEFT, padx=(0, 2))
+        self.composite_off_y_label = ttk.Label(
+            cp_row2, text="Composite Off Y (frac):")
+        self.composite_off_y_label.pack(side=tk.LEFT, padx=(0, 2))
         self.composite_off_y_entry = ttk.Entry(
-            cp_row2, textvariable=self.hybrid_composite_offset_y_var, width=5)
+            cp_row2, textvariable=self.hybrid_composite_offset_y_var, width=6)
         self.composite_off_y_entry.pack(side=tk.LEFT)
+        ToolTip(self.composite_units_frac_rb,
+                "Treat Off X / Y as fractions of the canvas dimension. "
+                "0.1 = shift by 10% of canvas width (SBS) or height "
+                "(stacked). On-screen position is identical at every "
+                "render resolution.")
+        ToolTip(self.composite_units_px_rb,
+                "Treat Off X / Y as raw pixel counts. At 1080p a value "
+                "of 100 shifts the composite 100px; at 2160p the same "
+                "value shifts only 100px out of a larger canvas, so "
+                "the on-screen fraction changes with resolution.")
         ToolTip(self.composite_anchor_start_rb,
                 "Where the composite sits inside the padded canvas. Top/Center/Bottom "
                 "for stacked layouts; Left/Center/Right for side-by-side.")
         ToolTip(self.composite_off_x_entry,
-                "Horizontal shift from the anchor, in pixels. Applies to side-by-side "
-                "layouts. Clamped so the composite stays inside the canvas.")
+                "Horizontal shift from the anchor. Units are set by the "
+                "Frac / Px toggle above. In Frac mode 0.1 = shift right "
+                "by 10% of canvas width. In Px mode the value is a raw "
+                "pixel count. Clamped to the pad range so the composite "
+                "stays inside the canvas. Switching units does NOT "
+                "convert the stored value.")
         ToolTip(self.composite_off_y_entry,
-                "Vertical shift from the anchor, in pixels. Applies to stacked layouts. "
-                "Clamped so the composite stays inside the canvas.")
+                "Vertical shift from the anchor. Units are set by the "
+                "Frac / Px toggle above. In Frac mode 0.1 = shift down "
+                "by 10% of canvas height. In Px mode the value is a raw "
+                "pixel count. Clamped to the pad range so the composite "
+                "stays inside the canvas. Switching units does NOT "
+                "convert the stored value.")
+
+        # === Block offset units (shared between top and bottom) ===
+        self.block_offset_units_frame = ttk.Frame(self.hybrid_frame)
+        self.block_offset_units_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(self.block_offset_units_frame,
+                  text="Block offset units:").pack(side=tk.LEFT, padx=(0, 5))
+        self.block_units_frac_rb = ttk.Radiobutton(
+            self.block_offset_units_frame, text="Frac",
+            variable=self.hybrid_block_offset_units_var, value="frac")
+        self.block_units_frac_rb.pack(side=tk.LEFT)
+        self.block_units_px_rb = ttk.Radiobutton(
+            self.block_offset_units_frame, text="Px",
+            variable=self.hybrid_block_offset_units_var, value="px")
+        self.block_units_px_rb.pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(self.block_units_frac_rb,
+                "Treat per-block Off X / Off Y as fractions of the block's "
+                "own width / height. 0.1 = shift 10% of the block dimension. "
+                "On-screen position is identical at every render resolution. "
+                "Applies to both the top/left and bottom/right blocks.")
+        ToolTip(self.block_units_px_rb,
+                "Treat per-block Off X / Off Y as raw pixel counts. Position "
+                "shifts with the render resolution. Applies to both the "
+                "top/left and bottom/right blocks.")
 
         self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5)
         self.top_video_frame.pack(fill=tk.X, pady=(5, 0))
@@ -4021,10 +4099,12 @@ class VideoProcessorApp:
                                                  "hybrid_top_pad_color"), width=2)
         self.hybrid_top_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
         ToolTip(self.hybrid_top_off_x_entry,
-                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Shift the crop window (Crop) or the padded image (Pad) from "
+                "center. Units set by the Block offset units toggle above. "
                 "Positive X = right, negative = left. Ignored in Stretch mode.")
         ToolTip(self.hybrid_top_off_y_entry,
-                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Shift the crop window (Crop) or the padded image (Pad) from "
+                "center. Units set by the Block offset units toggle above. "
                 "Positive Y = down, negative = up. Ignored in Stretch mode.")
         ToolTip(self.hybrid_top_zoom_entry,
                 "Zoom factor for Crop mode. 1.0 = tightest crop, >1.0 zooms in further. "
@@ -4104,10 +4184,12 @@ class VideoProcessorApp:
                                                  "hybrid_bottom_pad_color"), width=2)
         self.hybrid_bot_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
         ToolTip(self.hybrid_bot_off_x_entry,
-                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Shift the crop window (Crop) or the padded image (Pad) from "
+                "center. Units set by the Block offset units toggle above. "
                 "Positive X = right, negative = left. Ignored in Stretch mode.")
         ToolTip(self.hybrid_bot_off_y_entry,
-                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Shift the crop window (Crop) or the padded image (Pad) from "
+                "center. Units set by the Block offset units toggle above. "
                 "Positive Y = down, negative = up. Ignored in Stretch mode.")
         ToolTip(self.hybrid_bot_zoom_entry,
                 "Zoom factor for Crop mode. 1.0 = tightest crop, >1.0 zooms in further. "
@@ -4192,12 +4274,29 @@ class VideoProcessorApp:
         ttk.Label(ap_row2, text="Spread:").pack(side=tk.LEFT, padx=(8, 2))
         self.ambient_spread_entry = ttk.Entry(ap_row2, textvariable=self.ambient_spread_var, width=3)
         self.ambient_spread_entry.pack(side=tk.LEFT)
-        ttk.Label(ap_row2, text="X-Off:").pack(side=tk.LEFT, padx=(12, 2))
+        self.video_off_x_label = ttk.Label(ap_row2, text="X-Off:")
+        self.video_off_x_label.pack(side=tk.LEFT, padx=(12, 2))
         self.video_offset_x_entry = ttk.Entry(ap_row2, textvariable=self.video_offset_x_var, width=4)
         self.video_offset_x_entry.pack(side=tk.LEFT)
-        ttk.Label(ap_row2, text="Y-Off:").pack(side=tk.LEFT, padx=(8, 2))
+        self.video_off_y_label = ttk.Label(ap_row2, text="Y-Off:")
+        self.video_off_y_label.pack(side=tk.LEFT, padx=(8, 2))
         self.video_offset_y_entry = ttk.Entry(ap_row2, textvariable=self.video_offset_y_var, width=4)
         self.video_offset_y_entry.pack(side=tk.LEFT)
+        ttk.Label(ap_row2, text="Units:").pack(side=tk.LEFT, padx=(8, 2))
+        self.video_units_frac_rb = ttk.Radiobutton(
+            ap_row2, text="Frac", variable=self.video_offset_units_var,
+            value="frac")
+        self.video_units_frac_rb.pack(side=tk.LEFT)
+        self.video_units_px_rb = ttk.Radiobutton(
+            ap_row2, text="Px", variable=self.video_offset_units_var, value="px")
+        self.video_units_px_rb.pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(self.video_units_frac_rb,
+                "Treat X-Off / Y-Off as fractions of the canvas dimension. "
+                "0.1 = shift 10% of canvas width or height. On-screen "
+                "position is identical at every render resolution.")
+        ToolTip(self.video_units_px_rb,
+                "Treat X-Off / Y-Off as raw pixel counts. Position scales "
+                "with the render resolution.")
         quality_group = ttk.LabelFrame(parent, text="Format & Quality", padding=10)
         quality_group.pack(fill=tk.X, pady=(5, 5))
         resolution_options_frame = ttk.Frame(quality_group)
@@ -4378,6 +4477,8 @@ class VideoProcessorApp:
         self.sharpen_strength_entry.pack(side=tk.LEFT)
         self._toggle_upscale_options()
         self._update_hybrid_block_states()
+        self._update_composite_offset_labels()
+        self._update_video_offset_labels()
 
     def _reset_hdr_metadata_defaults(self):
         self.hdr_master_display_var.set(DEFAULT_HDR_MASTER_DISPLAY)
@@ -5510,14 +5611,40 @@ class VideoProcessorApp:
         cp_on = bool(options.get("hybrid_composite_pad", False))
         cp_color = options.get("hybrid_composite_pad_color", "#000000")
         cp_anchor = str(options.get("hybrid_composite_pad_anchor", "center")).lower()
+        # v8.49: composite offsets are fractions of the canvas
+        # dimension, not pixels. 0.1 = shift by 10% of canvas width
+        # (SBS) or height (stacked). This keeps the on-screen
+        # position resolution-independent. Values are still clamped
+        # to the available pad range.
         try:
-            cp_off_x = int(float(options.get("hybrid_composite_offset_x", "0") or "0"))
+            cp_off_x_frac = float(options.get("hybrid_composite_offset_x", "0") or "0")
         except Exception:
-            cp_off_x = 0
+            cp_off_x_frac = 0.0
         try:
-            cp_off_y = int(float(options.get("hybrid_composite_offset_y", "0") or "0"))
+            cp_off_y_frac = float(options.get("hybrid_composite_offset_y", "0") or "0")
         except Exception:
-            cp_off_y = 0
+            cp_off_y_frac = 0.0
+        # Units selector: "frac" (default) or "px".
+        _off_units = str(options.get(
+            "hybrid_composite_offset_units",
+            DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS)).lower()
+        # Legacy-value guard (fraction mode only): values with
+        # |v| > 1.5 were almost certainly set in the old pixel
+        # scheme. Warn once per job and treat them as fractions
+        # anyway (they will clamp).
+        if _off_units != "px" and (
+                abs(cp_off_x_frac) > 1.5 or abs(cp_off_y_frac) > 1.5):
+            print(f"[INFO] Composite offset values look legacy ")
+            print(f"       (X={cp_off_x_frac}, Y={cp_off_y_frac}). Treating "
+                  f"them as fractions; they will clamp to the pad range. "
+                  f"Reset to fractions in [-1.0, 1.0] for meaningful "
+                  f"positioning.")
+        if _off_units == "px":
+            cp_off_x = int(round(cp_off_x_frac))
+            cp_off_y = int(round(cp_off_y_frac))
+        else:
+            cp_off_x = int(round(cp_off_x_frac * target_w))
+            cp_off_y = int(round(cp_off_y_frac * target_h))
 
         result = {
             "layout": eff_layout,
@@ -5714,7 +5841,9 @@ class VideoProcessorApp:
                     "composite_anchor_end_rb",
                     "composite_pad_btn",
                     "composite_off_x_entry",
-                    "composite_off_y_entry"):
+                    "composite_off_y_entry",
+                    "composite_units_frac_rb",
+                    "composite_units_px_rb"):
             _w = getattr(self, _wn, None)
             if _w is not None:
                 try:
@@ -5745,6 +5874,35 @@ class VideoProcessorApp:
                 self.composite_anchor_start_rb.config(text="Top")
                 self.composite_anchor_center_rb.config(text="Center")
                 self.composite_anchor_end_rb.config(text="Bottom")
+
+    def _update_composite_offset_labels(self):
+        """Update the Composite Off X / Y label suffixes to reflect
+        the active unit mode (frac or px). Called on setup and when
+        the units radio changes."""
+        _units = getattr(self, "hybrid_composite_offset_units_var", None)
+        if _units is None:
+            return
+        sfx = "px" if _units.get() == "px" else "frac"
+        _lx = getattr(self, "composite_off_x_label", None)
+        if _lx is not None:
+            _lx.config(text=f"Composite Off X ({sfx}):")
+        _ly = getattr(self, "composite_off_y_label", None)
+        if _ly is not None:
+            _ly.config(text=f"Composite Off Y ({sfx}):")
+
+    def _update_video_offset_labels(self):
+        """Update the X-Off / Y-Off label suffixes to reflect the
+        active unit mode (frac or px)."""
+        _units = getattr(self, "video_offset_units_var", None)
+        if _units is None:
+            return
+        sfx = "frac" if _units.get() == "frac" else "px"
+        _lx = getattr(self, "video_off_x_label", None)
+        if _lx is not None:
+            _lx.config(text=f"X-Off ({sfx}):")
+        _ly = getattr(self, "video_off_y_label", None)
+        if _ly is not None:
+            _ly.config(text=f"Y-Off ({sfx}):")
 
     def _on_merged_aspect_change(self, aspect_value):
         self.merged_aspect_var.set(aspect_value)
@@ -6106,6 +6264,7 @@ class VideoProcessorApp:
             "ambient_engine": self.ambient_engine_var.get(),
             "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(), "video_offset_y": self.video_offset_y_var.get(),
+            "video_offset_units": self.video_offset_units_var.get(),
             "pixelate_multiplier": self.pixelate_multiplier_var.get(),
             "ambient_spread": self.ambient_spread_var.get(),
             "pixelate_brightness": self.pixelate_brightness_var.get(),
@@ -6145,6 +6304,7 @@ class VideoProcessorApp:
             "sofa_speakers": self._build_sofa_speakers_string(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(),
+            "hybrid_block_offset_units": self.hybrid_block_offset_units_var.get(),
             "hybrid_top_mode": self.hybrid_top_mode_var.get(),
             "hybrid_top_path": self.hybrid_top_path_var.get(),
             "hybrid_top_offset_x": self.hybrid_top_offset_x_var.get(),
@@ -6163,6 +6323,7 @@ class VideoProcessorApp:
             "hybrid_composite_pad_anchor": self.hybrid_composite_pad_anchor_var.get(),
             "hybrid_composite_offset_x": self.hybrid_composite_offset_x_var.get(),
             "hybrid_composite_offset_y": self.hybrid_composite_offset_y_var.get(),
+            "hybrid_composite_offset_units": self.hybrid_composite_offset_units_var.get(),
             "hybrid_layout": self.hybrid_layout_var.get(),
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
@@ -6907,6 +7068,8 @@ class VideoProcessorApp:
         self.pad_color_var.set(options.get("pad_color", DEFAULT_PAD_COLOR))
         self.video_offset_x_var.set(options.get("video_offset_x", DEFAULT_VIDEO_OFFSET_X))
         self.video_offset_y_var.set(options.get("video_offset_y", DEFAULT_VIDEO_OFFSET_Y))
+        self.video_offset_units_var.set(
+            options.get("video_offset_units", DEFAULT_VIDEO_OFFSET_UNITS))
         self.pixelate_multiplier_var.set(options.get("pixelate_multiplier", DEFAULT_PIXELATE_MULTIPLIER))
         self.ambient_spread_var.set(options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD))
         self.pixelate_brightness_var.set(options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS))
@@ -6961,6 +7124,9 @@ class VideoProcessorApp:
         self.audio_delivery_target_var.set(
             DELIVERY_TARGET_REVERSE.get(target_code, DELIVERY_TARGET_CUSTOM))
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
+        self.hybrid_block_offset_units_var.set(
+            options.get("hybrid_block_offset_units",
+                        DEFAULT_HYBRID_BLOCK_OFFSET_UNITS))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9"))
         self.hybrid_top_mode_var.set(
             options.get("hybrid_top_mode", DEFAULT_HYBRID_TOP_MODE))
@@ -6994,6 +7160,9 @@ class VideoProcessorApp:
             options.get("hybrid_composite_offset_x", DEFAULT_HYBRID_COMPOSITE_OFFSET_X))
         self.hybrid_composite_offset_y_var.set(
             options.get("hybrid_composite_offset_y", DEFAULT_HYBRID_COMPOSITE_OFFSET_Y))
+        self.hybrid_composite_offset_units_var.set(
+            options.get("hybrid_composite_offset_units",
+                        DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS))
         if hasattr(self, "composite_pad_swatch"):
             self.composite_pad_swatch.config(
                 bg=self.hybrid_composite_pad_color_var.get())
@@ -8772,8 +8941,22 @@ class VideoProcessorApp:
             output_res = f"{target_w}x{target_h}"
             pad_args = None
             if aspect_mode == "pad":
-                ox = int(options.get("video_offset_x", "0"))
-                oy = int(options.get("video_offset_y", "0"))
+                _vo_units = str(options.get("video_offset_units",
+                                             DEFAULT_VIDEO_OFFSET_UNITS)).lower()
+                try:
+                    _ox_f = float(options.get("video_offset_x", "0") or "0")
+                except (TypeError, ValueError):
+                    _ox_f = 0.0
+                try:
+                    _oy_f = float(options.get("video_offset_y", "0") or "0")
+                except (TypeError, ValueError):
+                    _oy_f = 0.0
+                if _vo_units == "frac":
+                    ox = int(round(_ox_f * target_w))
+                    oy = int(round(_oy_f * target_h))
+                else:
+                    ox = int(round(_ox_f))
+                    oy = int(round(_oy_f))
                 pad_res = _compute_pad(info["width"], info["height"], target_w, target_h, ox, oy)
                 if not pad_res:
                     output_res = f"{output_res},preserve_aspect_ratio=decrease"
@@ -9552,6 +9735,9 @@ class VideoProcessorApp:
             else:
                 target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
             eff_layout = self._resolve_hybrid_layout(options)
+            _hybrid_block_offset_units = str(options.get(
+                "hybrid_block_offset_units",
+                DEFAULT_HYBRID_BLOCK_OFFSET_UNITS)).lower()
 
             def _hybrid_scale_filter(w, h, force_ar=None):
                 """Build the block scale filter. Uses CPU swscale when
@@ -9570,7 +9756,7 @@ class VideoProcessorApp:
 
             def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h,
                                   src_info=None, offset_x=0, offset_y=0,
-                                  pad_color_hex="#000000", zoom=1.0):
+                                  pad_color_hex="#000000", zoom=1.0, units="px"):
                 """v8.45 per-block handling.
 
                 Modes: crop / pad / stretch / smart.
@@ -9599,13 +9785,21 @@ class VideoProcessorApp:
                             pass
                 # Sanitize offsets to even integers.
                 try:
-                    _ox = int(float(offset_x))
+                    _ox_raw = float(offset_x)
                 except Exception:
-                    _ox = 0
+                    _ox_raw = 0.0
                 try:
-                    _oy = int(float(offset_y))
+                    _oy_raw = float(offset_y)
                 except Exception:
-                    _oy = 0
+                    _oy_raw = 0.0
+                # v8.51: unit-aware conversion. Frac is relative to
+                # the block's own width / height.
+                if units == "frac":
+                    _ox = int(round(_ox_raw * block_w))
+                    _oy = int(round(_oy_raw * block_h))
+                else:
+                    _ox = int(round(_ox_raw))
+                    _oy = int(round(_oy_raw))
                 _ox = (_ox // 2) * 2
                 _oy = (_oy // 2) * 2
                 # Effective source aspect ratio, or None if unknown.
@@ -9706,11 +9900,13 @@ class VideoProcessorApp:
                 top_vf, top_cpu, _, _ = get_block_filters(
                     left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h,
                     src_info=info, offset_x=_top_ox, offset_y=_top_oy,
-                    pad_color_hex=_top_pad_c, zoom=_top_z)
+                    pad_color_hex=_top_pad_c, zoom=_top_z,
+                    units=_hybrid_block_offset_units)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
                     right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h,
                     src_info=info_right, offset_x=_bot_ox, offset_y=_bot_oy,
-                    pad_color_hex=_bot_pad_c, zoom=_bot_z)
+                    pad_color_hex=_bot_pad_c, zoom=_bot_z,
+                    units=_hybrid_block_offset_units)
                 stack_filter = "hstack=inputs=2[stacked]"
             else:
                 top_aspect = options.get('hybrid_top_aspect')
@@ -9723,11 +9919,13 @@ class VideoProcessorApp:
                 top_vf, top_cpu, _, _ = get_block_filters(
                     top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h,
                     src_info=info, offset_x=_top_ox, offset_y=_top_oy,
-                    pad_color_hex=_top_pad_c, zoom=_top_z)
+                    pad_color_hex=_top_pad_c, zoom=_top_z,
+                    units=_hybrid_block_offset_units)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
                     bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h,
                     src_info=info_bottom, offset_x=_bot_ox, offset_y=_bot_oy,
-                    pad_color_hex=_bot_pad_c, zoom=_bot_z)
+                    pad_color_hex=_bot_pad_c, zoom=_bot_z,
+                    units=_hybrid_block_offset_units)
                 stack_filter = "vstack=inputs=2[stacked]"
             cpu_pix_fmt = cuda_work_fmt
             cpu_chain = []
@@ -9854,6 +10052,25 @@ class VideoProcessorApp:
                     _ov = options.get("_preproc_scale_override")
                     if _ov:
                         target_w, target_h = _ov
+                # v8.51: convert video offsets to pixels if the user
+                # selected fraction units. Frac is relative to the
+                # canvas (target_w / target_h).
+                _vo_units = str(options.get("video_offset_units",
+                                             DEFAULT_VIDEO_OFFSET_UNITS)).lower()
+                try:
+                    _ox_f = float(ox) if ox not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    _ox_f = 0.0
+                try:
+                    _oy_f = float(oy) if oy not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    _oy_f = 0.0
+                if _vo_units == "frac":
+                    ox = int(round(_ox_f * target_w))
+                    oy = int(round(_oy_f * target_h))
+                else:
+                    ox = int(round(_ox_f))
+                    oy = int(round(_oy_f))
                 safe_algo = ffmpeg_upscale_algo
                 if not safe_algo:
                     raise VideoProcessingError("Upscale algorithm not specified in preset.")
