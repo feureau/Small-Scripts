@@ -9093,6 +9093,7 @@ class VideoProcessorApp:
         _cp_fix = color_info["primaries"]
         _ct_fix = color_info["trc"]
         _cm_fix = color_info["matrix"]
+        _r_fix = color_info["range_ffmpeg"]
         use_cpu_scaling = (chroma != "420")
         if is_hdr_output or info["bit_depth"] == 10:
             out_bit_depth = 10
@@ -9106,7 +9107,44 @@ class VideoProcessorApp:
                 "Chroma subsampling other than 4:2:0 is not supported in Hybrid modes "
                 "(GPU stacking filters require 4:2:0).")
         target_cpu_pix_fmt = self._chroma_to_pix_fmt(chroma, out_bit_depth)
+        # ---- GPU-needed predicate ----
+        # Detect whether the pipeline actually requires GPU-resident
+        # frames. If it does not, skip the hwupload/hwdownload ping-pong
+        # and keep everything in the decoder's native CPU format. For
+        # ProRes / DNxHR 4:2:2 sources this also preserves chroma through
+        # the filter chain instead of forcing a 4:2:2 -> 4:2:0 downconvert
+        # at hwupload and a fake upsample back at hwdownload.
+        _is_hybrid = orientation in ("hybrid (stacked)", "hybrid-duo (dual source)")
+        _is_original_orientation = (orientation == "original")
+        _res_key_raw = options.get("resolution", "original")
+        _res_key_norm = str(_res_key_raw).lower() if _res_key_raw else "original"
+        _has_bg_effect = bool(
+            options.get("aspect_pixelate", False)
+            or options.get("aspect_blur", False)
+            or options.get("aspect_ambient", False)
+        )
+        # For hybrid jobs whose sources are not CUDA-decodable, do the
+        # per-block scaling on the CPU. scale_cuda only accepts p010le or
+        # nv12 (both 4:2:0), so going through it would discard the 4:2:2
+        # chroma that ProRes / DNxHR carry.
+        _use_cpu_hybrid = False
+        if _is_hybrid:
+            if orientation == "hybrid-duo (dual source)":
+                _use_cpu_hybrid = (not use_cuda_decoder) and (not use_cuda_decoder_bot)
+            else:
+                _use_cpu_hybrid = not use_cuda_decoder
         if use_cpu_scaling:
+            _needs_gpu_scale = False
+        elif _is_hybrid:
+            _needs_gpu_scale = not _use_cpu_hybrid
+        elif (_is_original_orientation and _res_key_norm == "original"
+              and not _has_bg_effect):
+            _needs_gpu_scale = False
+        else:
+            _needs_gpu_scale = True
+        _skip_cuda_upload = not _needs_gpu_scale
+
+        if _skip_cuda_upload:
             if use_cuda_decoder:
                 filter_complex_parts.append(f"[0:v]hwdownload,format={cuda_work_fmt}[v_cpu_in]")
                 cuda_video_in = "[v_cpu_in]"
@@ -9121,7 +9159,10 @@ class VideoProcessorApp:
         cuda_video_in_top = cuda_video_in
         cuda_video_in_bot = None
         if orientation == "hybrid-duo (dual source)":
-            if not use_cuda_decoder_bot:
+            if _use_cpu_hybrid:
+                # Both legs already on CPU in native format.
+                cuda_video_in_bot = "[1:v]"
+            elif not use_cuda_decoder_bot:
                 filter_complex_parts.append(
                     f"[1:v]format={cuda_work_fmt},hwupload_cuda[v_cuda_in_bot]")
                 cuda_video_in_bot = "[v_cuda_in_bot]"
@@ -9161,6 +9202,21 @@ class VideoProcessorApp:
             else:
                 target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
             eff_layout = self._resolve_hybrid_layout(options)
+
+            def _hybrid_scale_filter(w, h, force_ar=None):
+                """Build the block scale filter. Uses CPU swscale when
+                _use_cpu_hybrid is set (non-CUDA-decodable sources like
+                ProRes/DNxHR, so we do not force a 4:2:2 -> 4:2:0 chroma
+                downconvert at hwupload); otherwise uses scale_cuda."""
+                if _use_cpu_hybrid:
+                    _fl = self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)
+                    s = f"scale=w={w}:h={h}:flags={_fl}"
+                else:
+                    s = (f"scale_cuda=w={w}:h={h}:interp_algo={ffmpeg_upscale_algo}"
+                         f":format={cuda_work_fmt}")
+                if force_ar:
+                    s += f":force_original_aspect_ratio={force_ar}"
+                return s
 
             def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h,
                                   src_info=None, offset_x=0, offset_y=0,
@@ -9214,8 +9270,7 @@ class VideoProcessorApp:
                         _src_ar = None
                 # --- STRETCH: exact target, no offsets, no pad ---
                 if mode == "stretch":
-                    scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
-                             f":format={cuda_work_fmt}")
+                    scale = _hybrid_scale_filter(block_w, block_h)
                     return scale, "", block_w, block_h
                 # --- CROP: scale up to cover, then cut ---
                 if mode == "crop":
@@ -9246,8 +9301,7 @@ class VideoProcessorApp:
                     crop_y = max(0, min(fit_h - block_h, crop_y))
                     crop_x = (crop_x // 2) * 2
                     crop_y = (crop_y // 2) * 2
-                    vf = (f"scale_cuda=w={zw}:h={zh}:interp_algo={upscale_algo}"
-                          f":format={cuda_work_fmt}:force_original_aspect_ratio=increase")
+                    vf = _hybrid_scale_filter(zw, zh, force_ar="increase")
                     cpu = f"crop={block_w}:{block_h}:{crop_x}:{crop_y}"
                     return vf, cpu, zw, zh
                 # --- PAD: scale down to fit, then pad ---
@@ -9271,8 +9325,7 @@ class VideoProcessorApp:
                     pad_y = max(0, min(block_h - fit_h, pad_y))
                     pad_x = (pad_x // 2) * 2
                     pad_y = (pad_y // 2) * 2
-                    scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
-                             f":format={cuda_work_fmt}:force_original_aspect_ratio=decrease")
+                    scale = _hybrid_scale_filter(block_w, block_h, force_ar="decrease")
                     cpu = f"pad={block_w}:{block_h}:{pad_x}:{pad_y}:{pad_color_hex}"
                     return scale, cpu, block_w, block_h
                 raise VideoProcessingError(f"Unknown hybrid block mode: {mode}")
@@ -9386,12 +9439,22 @@ class VideoProcessorApp:
                 video_fc_parts = [f"{cuda_video_in}split=2[v_top_in][v_bot_in]",
                                   f"[v_top_in]{top_vf}[v_top_out]",
                                   f"[v_bot_in]{bot_vf}[v_bot_out]"]
-            video_fc_parts.extend([
-                f"[v_top_out]hwdownload,format={cpu_pix_fmt},"
-                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},{top_cpu}[cpu_top]",
-                f"[v_bot_out]hwdownload,format={cpu_pix_fmt},"
-                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},{bot_cpu}[cpu_bot]",
-                f"[cpu_top][cpu_bot]{stack_filter}", final_v_out])
+            if _use_cpu_hybrid:
+                # Frames are already on CPU in the source's native 4:2:2
+                # format. No hwdownload, no CUDA format= on the setparams
+                # line; crop/pad run in the source format and the stack
+                # preserves it.
+                video_fc_parts.extend([
+                    f"[v_top_out]setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},{top_cpu}[cpu_top]",
+                    f"[v_bot_out]setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},{bot_cpu}[cpu_bot]",
+                    f"[cpu_top][cpu_bot]{stack_filter}", final_v_out])
+            else:
+                video_fc_parts.extend([
+                    f"[v_top_out]hwdownload,format={cpu_pix_fmt},"
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},{top_cpu}[cpu_top]",
+                    f"[v_bot_out]hwdownload,format={cpu_pix_fmt},"
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},{bot_cpu}[cpu_bot]",
+                    f"[cpu_top][cpu_bot]{stack_filter}", final_v_out])
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
         else:
@@ -9503,7 +9566,7 @@ class VideoProcessorApp:
                                 f"interp_algo={safe_algo}:format={target_fmt},")
                             fc_parts.append(
                                 f"hwdownload,format={target_fmt},"
-                                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},"
                                 f"eq=brightness={bright}:saturation={sat},hwupload_cuda,")
                             fc_parts.append(
                                 f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:"
@@ -9521,7 +9584,7 @@ class VideoProcessorApp:
                                     f"interp_algo={safe_algo}:format={target_fmt},")
                                 fc_parts.append(
                                     f"hwdownload,format={target_fmt},"
-                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},"
                                     f"gblur=sigma={sigma}:steps={steps}")
                                 if not apply_pixelate:
                                     fc_parts.append(f",eq=brightness={bright}:saturation={sat}")
@@ -9586,7 +9649,7 @@ class VideoProcessorApp:
                                     f"interp_algo=bilinear:format={target_fmt},")
                                 fc_parts.append(
                                     f"hwdownload,format={target_fmt},"
-                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},"
                                     f"gblur=sigma={sigma}:steps={steps},eq=saturation={sat},"
                                     f"format={target_fmt},hwupload_cuda,")
                                 fc_parts.append(
@@ -9602,7 +9665,7 @@ class VideoProcessorApp:
                                     f"interp_algo=bilinear:format={target_fmt},")
                                 fc_parts.append(
                                     f"hwdownload,format={target_fmt},"
-                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},"
                                     f"eq=saturation={sat},"
                                     f"format={target_fmt},hwupload_cuda,")
                                 fc_parts.append(
@@ -9710,13 +9773,17 @@ class VideoProcessorApp:
             # path: terminate the graph on CPU frames when the backend
             # is the preprocessor or the encoder is CPU-software.
             _leave_on_cpu = True  # v8.39 patched: FFmpeg encoders (libx* and h*_nvenc) both consume CPU AVFrames; the h*_nvenc wrappers upload internally.
+            _cuda_active = not _skip_cuda_upload
             if use_cpu_scaling:
                 vf_filters.extend(cpu_filters)
                 vf_filters.append(f"format={target_cpu_pix_fmt}")
             elif cpu_filters:
-                processing_chain = [f"hwdownload,format={cuda_work_fmt}",
-                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}"] + \
-                                   cpu_filters
+                processing_chain = []
+                if _cuda_active:
+                    processing_chain.append(f"hwdownload,format={cuda_work_fmt}")
+                processing_chain.append(
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}")
+                processing_chain.extend(cpu_filters)
                 if _leave_on_cpu:
                     processing_chain.append(f"format={target_cpu_pix_fmt}")
                     vf_filters.append(",".join(processing_chain))
@@ -9725,23 +9792,22 @@ class VideoProcessorApp:
                         processing_chain.append("format=nv12")
                     vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
             elif _leave_on_cpu:
-                # v8.36 HWDOWNLOAD FIX
-                # hwdownload must unmap to the format that matches
-                # the CUDA surface (cuda_work_fmt: p010le for HDR,
-                # nv12 for SDR). A subsequent format= filter does
-                # the CPU-side conversion if the encoder wants a
-                # different pixel format (e.g. yuv420p10le for
-                # HEVC 10-bit). Passing target_cpu_pix_fmt directly
-                # to hwdownload produces:
-                #   Invalid output format yuv420p10le for hwframe download.
-                #   Failed to configure output pad on Parsed_hwdownload_1
-                vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
-                if cuda_work_fmt != target_cpu_pix_fmt:
+                # v8.36 HWDOWNLOAD FIX (extended): only hwdownload when the
+                # frames are actually on a CUDA surface. When _cuda_active
+                # is False, we came in on the decoder's native CPU format
+                # and only need to normalise to the encoder's format.
+                if _cuda_active:
+                    vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
+                    if cuda_work_fmt != target_cpu_pix_fmt:
+                        vf_filters.append(f"format={target_cpu_pix_fmt}")
+                else:
                     vf_filters.append(f"format={target_cpu_pix_fmt}")
             if _leave_on_cpu and not vf_filters:
-                # v8.36 HWDOWNLOAD FIX
-                vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
-                if cuda_work_fmt != target_cpu_pix_fmt:
+                # v8.36 HWDOWNLOAD FIX (extended): only hwdownload if the
+                # frames are actually on a CUDA surface.
+                if _cuda_active:
+                    vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
+                if cuda_work_fmt != target_cpu_pix_fmt or not _cuda_active:
                     vf_filters.append(f"format={target_cpu_pix_fmt}")
             if vf_filters:
                 filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
