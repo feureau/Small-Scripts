@@ -372,6 +372,11 @@ DEFAULT_HYBRID_TOP_PAD_COLOR = "#000000"
 DEFAULT_HYBRID_BOTTOM_PAD_COLOR = "#000000"
 DEFAULT_HYBRID_TOP_ZOOM = "1.0"
 DEFAULT_HYBRID_BOTTOM_ZOOM = "1.0"
+DEFAULT_HYBRID_COMPOSITE_PAD = False
+DEFAULT_HYBRID_COMPOSITE_PAD_COLOR = "#000000"
+DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR = "center"
+DEFAULT_HYBRID_COMPOSITE_OFFSET_X = "0"
+DEFAULT_HYBRID_COMPOSITE_OFFSET_Y = "0"
 DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_VIDEO_OFFSET_X = "0"
@@ -2141,6 +2146,11 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('hybrid_bottom_offset_y', DEFAULT_HYBRID_BOTTOM_OFFSET_Y),
         job_options.get('hybrid_bottom_zoom', DEFAULT_HYBRID_BOTTOM_ZOOM),
         job_options.get('hybrid_bottom_pad_color', DEFAULT_HYBRID_BOTTOM_PAD_COLOR),
+        str(job_options.get('hybrid_composite_pad', DEFAULT_HYBRID_COMPOSITE_PAD)),
+        job_options.get('hybrid_composite_pad_color', DEFAULT_HYBRID_COMPOSITE_PAD_COLOR),
+        job_options.get('hybrid_composite_pad_anchor', DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR),
+        job_options.get('hybrid_composite_offset_x', DEFAULT_HYBRID_COMPOSITE_OFFSET_X),
+        job_options.get('hybrid_composite_offset_y', DEFAULT_HYBRID_COMPOSITE_OFFSET_Y),
         job_options.get('hybrid_layout', ''),
         job_options.get('ambient_engine', DEFAULT_AMBIENT_ENGINE),
         job_options.get('subtitle_font', ''),
@@ -2369,6 +2379,11 @@ class WorkflowPresetManager:
             "hybrid_bottom_offset_y": DEFAULT_HYBRID_BOTTOM_OFFSET_Y,
             "hybrid_bottom_zoom": DEFAULT_HYBRID_BOTTOM_ZOOM,
             "hybrid_bottom_pad_color": DEFAULT_HYBRID_BOTTOM_PAD_COLOR,
+            "hybrid_composite_pad": DEFAULT_HYBRID_COMPOSITE_PAD,
+            "hybrid_composite_pad_color": DEFAULT_HYBRID_COMPOSITE_PAD_COLOR,
+            "hybrid_composite_pad_anchor": DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR,
+            "hybrid_composite_offset_x": DEFAULT_HYBRID_COMPOSITE_OFFSET_X,
+            "hybrid_composite_offset_y": DEFAULT_HYBRID_COMPOSITE_OFFSET_Y,
             "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
             "hybrid_top_suffix": "-top",
             "hybrid_bot_suffix": "-bot",
@@ -2941,6 +2956,26 @@ class VideoProcessorApp:
         self.hybrid_bottom_path_var = tk.StringVar(value="")
         self.hybrid_bottom_path_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
+        self.hybrid_composite_pad_var = tk.BooleanVar(value=DEFAULT_HYBRID_COMPOSITE_PAD)
+        self.hybrid_composite_pad_var.trace_add('write', lambda *args: (
+            self._update_hybrid_block_states(),
+            self._update_selected_jobs('hybrid_composite_pad')))
+        self.hybrid_composite_pad_color_var = tk.StringVar(
+            value=DEFAULT_HYBRID_COMPOSITE_PAD_COLOR)
+        self.hybrid_composite_pad_color_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_composite_pad_color'))
+        self.hybrid_composite_pad_anchor_var = tk.StringVar(
+            value=DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR)
+        self.hybrid_composite_pad_anchor_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_composite_pad_anchor'))
+        self.hybrid_composite_offset_x_var = tk.StringVar(
+            value=DEFAULT_HYBRID_COMPOSITE_OFFSET_X)
+        self.hybrid_composite_offset_x_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_composite_offset_x'))
+        self.hybrid_composite_offset_y_var = tk.StringVar(
+            value=DEFAULT_HYBRID_COMPOSITE_OFFSET_Y)
+        self.hybrid_composite_offset_y_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_composite_offset_y'))
         self.hybrid_top_suffix_var = tk.StringVar(value="-top")
         self.hybrid_top_suffix_var.trace_add('write',
                                              lambda *args: self._update_selected_jobs('hybrid_top_suffix'))
@@ -3857,6 +3892,68 @@ class VideoProcessorApp:
                         variable=self.hybrid_layout_var, value="side_by_side",
                         command=lambda: (self._update_hybrid_ui_labels(),
                                          self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT)
+
+        # === Composite Padding group ===
+        self.composite_pad_frame = ttk.LabelFrame(
+            self.hybrid_frame, text="Composite Padding", padding=5)
+        self.composite_pad_frame.pack(fill=tk.X, pady=(5, 0))
+        cp_row1 = ttk.Frame(self.composite_pad_frame)
+        cp_row1.pack(fill=tk.X)
+        self.hybrid_composite_pad_cb = ttk.Checkbutton(
+            cp_row1, text="Pad composite to canvas (outer bars)",
+            variable=self.hybrid_composite_pad_var)
+        self.hybrid_composite_pad_cb.pack(side=tk.LEFT)
+        ToolTip(self.hybrid_composite_pad_cb,
+                "When on, each block keeps its own aspect ratio and the composite "
+                "(stacked or side-by-side) is padded to fill the canvas from Canvas "
+                "Aspect Ratio. Anchor picks the base position; Off X / Off Y shift "
+                "the composite further. When off (default), the blocks absorb the "
+                "extra space instead.")
+        ttk.Label(cp_row1, text="Anchor:").pack(side=tk.LEFT, padx=(15, 5))
+        self.composite_anchor_start_rb = ttk.Radiobutton(
+            cp_row1, text="Start", variable=self.hybrid_composite_pad_anchor_var,
+            value="start")
+        self.composite_anchor_start_rb.pack(side=tk.LEFT)
+        self.composite_anchor_center_rb = ttk.Radiobutton(
+            cp_row1, text="Center", variable=self.hybrid_composite_pad_anchor_var,
+            value="center")
+        self.composite_anchor_center_rb.pack(side=tk.LEFT, padx=5)
+        self.composite_anchor_end_rb = ttk.Radiobutton(
+            cp_row1, text="End", variable=self.hybrid_composite_pad_anchor_var,
+            value="end")
+        self.composite_anchor_end_rb.pack(side=tk.LEFT)
+        ttk.Label(cp_row1, text="Pad:").pack(side=tk.LEFT, padx=(15, 2))
+        self.composite_pad_swatch = tk.Label(
+            cp_row1, width=2, relief="solid",
+            bg=self.hybrid_composite_pad_color_var.get())
+        self.composite_pad_swatch.pack(side=tk.LEFT)
+        self.composite_pad_btn = ttk.Button(
+            cp_row1, text="..",
+            command=lambda: self.choose_color(
+                self.hybrid_composite_pad_color_var,
+                self.composite_pad_swatch,
+                "hybrid_composite_pad_color"), width=2)
+        self.composite_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
+        cp_row2 = ttk.Frame(self.composite_pad_frame)
+        cp_row2.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(cp_row2, text="Composite Off X:").pack(side=tk.LEFT, padx=(0, 2))
+        self.composite_off_x_entry = ttk.Entry(
+            cp_row2, textvariable=self.hybrid_composite_offset_x_var, width=5)
+        self.composite_off_x_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(cp_row2, text="Composite Off Y:").pack(side=tk.LEFT, padx=(0, 2))
+        self.composite_off_y_entry = ttk.Entry(
+            cp_row2, textvariable=self.hybrid_composite_offset_y_var, width=5)
+        self.composite_off_y_entry.pack(side=tk.LEFT)
+        ToolTip(self.composite_anchor_start_rb,
+                "Where the composite sits inside the padded canvas. Top/Center/Bottom "
+                "for stacked layouts; Left/Center/Right for side-by-side.")
+        ToolTip(self.composite_off_x_entry,
+                "Horizontal shift from the anchor, in pixels. Applies to side-by-side "
+                "layouts. Clamped so the composite stays inside the canvas.")
+        ToolTip(self.composite_off_y_entry,
+                "Vertical shift from the anchor, in pixels. Applies to stacked layouts. "
+                "Clamped so the composite stays inside the canvas.")
+
         self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5)
         self.top_video_frame.pack(fill=tk.X, pady=(5, 0))
         self.top_file_frame = ttk.Frame(self.top_video_frame)
@@ -5384,6 +5481,196 @@ class VideoProcessorApp:
         orient = self._aspect_to_orientation(aspect, fallback="vertical")
         return "side_by_side" if orient == "horizontal" else "stacked"
 
+    def _compute_hybrid_layout(self, options, info_top, info_bot, orientation,
+                                 target_w, target_h, verbose=False):
+        """Single source of truth for hybrid block dims, composite pad
+        placement, and the seam position between the two blocks.
+
+        Returns a dict:
+            layout      : "stacked" | "side_by_side"
+            top_w, top_h: top (or left) block dims
+            bot_w, bot_h: bottom (or right) block dims
+            pad_x, pad_y: composite pad offsets (0 when not padding)
+            pad_color   : composite pad color
+            cp_filter   : FFmpeg pad= filter string, "" when none
+            canvas_w,
+            canvas_h    : final canvas dims (may differ from target_w/h
+                          when merged_aspect == "auto")
+            seam_x,
+            seam_y      : pixel where the two blocks meet (for the
+                          subtitle "seam" anchor)
+            auto        : True when merged_aspect == "auto"
+            fell_back   : True when composite pad was requested but the
+                          natural stack exceeded the canvas
+        """
+        eff_layout = self._resolve_hybrid_layout(options)
+        merged_raw = str(options.get("merged_aspect", "")).lower()
+        is_auto = (merged_raw == "auto")
+
+        cp_on = bool(options.get("hybrid_composite_pad", False))
+        cp_color = options.get("hybrid_composite_pad_color", "#000000")
+        cp_anchor = str(options.get("hybrid_composite_pad_anchor", "center")).lower()
+        try:
+            cp_off_x = int(float(options.get("hybrid_composite_offset_x", "0") or "0"))
+        except Exception:
+            cp_off_x = 0
+        try:
+            cp_off_y = int(float(options.get("hybrid_composite_offset_y", "0") or "0"))
+        except Exception:
+            cp_off_y = 0
+
+        result = {
+            "layout": eff_layout,
+            "top_w": 0, "top_h": 0,
+            "bot_w": 0, "bot_h": 0,
+            "pad_x": 0, "pad_y": 0,
+            "pad_color": cp_color,
+            "cp_filter": "",
+            "canvas_w": target_w, "canvas_h": target_h,
+            "seam_x": 0, "seam_y": 0,
+            "auto": is_auto,
+            "fell_back": False,
+        }
+
+        # Bottom-block source info: the second file for hybrid-duo,
+        # the same file for hybrid-stacked.
+        if orientation == "hybrid-duo (dual source)" and info_bot is not None:
+            info_other = info_bot
+        else:
+            info_other = info_top
+
+        if eff_layout == "side_by_side":
+            left_aspect = options.get('hybrid_top_aspect')
+            right_aspect = options.get('hybrid_bottom_aspect')
+            num_l, den_l = self._resolve_aspect_ratio(left_aspect, info_top, '16:9')
+            left_w = (int(target_h * num_l / den_l) // 2) * 2
+            num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_other, '16:9')
+            right_w = (int(target_h * num_r / den_r) // 2) * 2
+            if is_auto:
+                canvas_w = left_w + right_w
+                if cp_on and verbose:
+                    print("[INFO] Composite padding is a no-op when merged "
+                          "aspect is \"auto\" (canvas fits content).")
+                result.update({
+                    "top_w": left_w, "top_h": target_h,
+                    "bot_w": right_w, "bot_h": target_h,
+                    "canvas_w": canvas_w, "canvas_h": target_h,
+                    "seam_x": left_w, "seam_y": target_h // 2,
+                })
+                return result
+            if cp_on:
+                natural_w = left_w + right_w
+                if natural_w <= target_w:
+                    pad_total = target_w - natural_w
+                    if cp_anchor == "start":
+                        base_left = 0
+                    elif cp_anchor == "end":
+                        base_left = (pad_total // 2) * 2
+                    else:
+                        base_left = ((pad_total // 2) // 2) * 2
+                    pad_left = max(0, min(pad_total, base_left + cp_off_x))
+                    pad_left = (pad_left // 2) * 2
+                    result.update({
+                        "top_w": left_w, "top_h": target_h,
+                        "bot_w": right_w, "bot_h": target_h,
+                        "pad_x": pad_left, "pad_y": 0,
+                        "cp_filter": f"pad={target_w}:{target_h}:{pad_left}:0:{cp_color}",
+                        "canvas_w": target_w, "canvas_h": target_h,
+                        "seam_x": pad_left + left_w, "seam_y": target_h // 2,
+                    })
+                    if verbose:
+                        print(f"[INFO] Composite pad (SBS): left={left_w}, right={right_w}, "
+                              f"canvas_w={target_w}, pad_left={pad_left}, "
+                              f"anchor={cp_anchor}")
+                    return result
+                if verbose:
+                    print(f"[INFO] Composite pad requested but natural width "
+                          f"{natural_w} exceeds canvas width {target_w}; "
+                          f"falling back to block-absorb for this job.")
+                result["fell_back"] = True
+                right_w = max(2, target_w - left_w)
+                if left_w >= target_w:
+                    left_w = (target_w // 4) * 2
+                    right_w = target_w - left_w
+            else:
+                right_w = max(2, target_w - left_w)
+                if left_w >= target_w:
+                    left_w = (target_w // 4) * 2
+                    right_w = target_w - left_w
+            result.update({
+                "top_w": left_w, "top_h": target_h,
+                "bot_w": right_w, "bot_h": target_h,
+                "canvas_w": target_w, "canvas_h": target_h,
+                "seam_x": left_w, "seam_y": target_h // 2,
+            })
+            return result
+
+        # stacked
+        top_aspect = options.get('hybrid_top_aspect')
+        bot_aspect = options.get('hybrid_bottom_aspect')
+        num_t, den_t = self._resolve_aspect_ratio(top_aspect, info_top, '16:9')
+        top_h = (int(target_w * den_t / num_t) // 2) * 2
+        num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_other, '4:5')
+        bot_h = (int(target_w * den_b / num_b) // 2) * 2
+        if is_auto:
+            canvas_h = top_h + bot_h
+            if cp_on and verbose:
+                print("[INFO] Composite padding is a no-op when merged "
+                      "aspect is \"auto\" (canvas fits content).")
+            result.update({
+                "top_w": target_w, "top_h": top_h,
+                "bot_w": target_w, "bot_h": bot_h,
+                "canvas_w": target_w, "canvas_h": canvas_h,
+                "seam_x": target_w // 2, "seam_y": top_h,
+            })
+            return result
+        if cp_on:
+            natural_h = top_h + bot_h
+            if natural_h <= target_h:
+                pad_total = target_h - natural_h
+                if cp_anchor == "start":
+                    base_top = 0
+                elif cp_anchor == "end":
+                    base_top = (pad_total // 2) * 2
+                else:
+                    base_top = ((pad_total // 2) // 2) * 2
+                pad_top = max(0, min(pad_total, base_top + cp_off_y))
+                pad_top = (pad_top // 2) * 2
+                result.update({
+                    "top_w": target_w, "top_h": top_h,
+                    "bot_w": target_w, "bot_h": bot_h,
+                    "pad_x": 0, "pad_y": pad_top,
+                    "cp_filter": f"pad={target_w}:{target_h}:0:{pad_top}:{cp_color}",
+                    "canvas_w": target_w, "canvas_h": target_h,
+                    "seam_x": target_w // 2, "seam_y": pad_top + top_h,
+                })
+                if verbose:
+                    print(f"[INFO] Composite pad (stacked): top={top_h}, bot={bot_h}, "
+                          f"canvas_h={target_h}, pad_top={pad_top}, "
+                          f"anchor={cp_anchor}")
+                return result
+            if verbose:
+                print(f"[INFO] Composite pad requested but natural height "
+                      f"{natural_h} exceeds canvas height {target_h}; "
+                      f"falling back to block-absorb for this job.")
+            result["fell_back"] = True
+            bot_h = max(2, target_h - top_h)
+            if top_h >= target_h:
+                top_h = (target_h // 4) * 2
+                bot_h = target_h - top_h
+        else:
+            bot_h = max(2, target_h - top_h)
+            if top_h >= target_h:
+                top_h = (target_h // 4) * 2
+                bot_h = target_h - top_h
+        result.update({
+            "top_w": target_w, "top_h": top_h,
+            "bot_w": target_w, "bot_h": bot_h,
+            "canvas_w": target_w, "canvas_h": target_h,
+            "seam_x": target_w // 2, "seam_y": top_h,
+        })
+        return result
+
     def _update_hybrid_block_states(self):
         """Enable/disable per-block settings based on the current mode."""
         for prefix in ("top", "bottom"):
@@ -5417,6 +5704,23 @@ class VideoProcessorApp:
                 off_y_entry.config(state="normal")
                 zoom_entry.config(state="normal")
                 pad_btn.config(state="normal")
+        # Composite pad controls: enabled only when the checkbox is on.
+        _pad_var = getattr(self, "hybrid_composite_pad_var", None)
+        if _pad_var is None:
+            return
+        _state = "normal" if _pad_var.get() else "disabled"
+        for _wn in ("composite_anchor_start_rb",
+                    "composite_anchor_center_rb",
+                    "composite_anchor_end_rb",
+                    "composite_pad_btn",
+                    "composite_off_x_entry",
+                    "composite_off_y_entry"):
+            _w = getattr(self, _wn, None)
+            if _w is not None:
+                try:
+                    _w.config(state=_state)
+                except Exception:
+                    pass
 
     def _update_hybrid_ui_labels(self):
         if not hasattr(self, 'top_video_frame') or not hasattr(self, 'bottom_video_frame'):
@@ -5431,6 +5735,16 @@ class VideoProcessorApp:
         else:
             self.top_video_frame.config(text="Top Video (Video 1)")
             self.bottom_video_frame.config(text="Bottom Video (Video 2)")
+        # Anchor labels differ by layout.
+        if hasattr(self, "composite_anchor_start_rb"):
+            if eff_layout == "side_by_side":
+                self.composite_anchor_start_rb.config(text="Left")
+                self.composite_anchor_center_rb.config(text="Center")
+                self.composite_anchor_end_rb.config(text="Right")
+            else:
+                self.composite_anchor_start_rb.config(text="Top")
+                self.composite_anchor_center_rb.config(text="Center")
+                self.composite_anchor_end_rb.config(text="Bottom")
 
     def _on_merged_aspect_change(self, aspect_value):
         self.merged_aspect_var.set(aspect_value)
@@ -5844,6 +6158,11 @@ class VideoProcessorApp:
             "hybrid_bottom_offset_y": self.hybrid_bottom_offset_y_var.get(),
             "hybrid_bottom_zoom": self.hybrid_bottom_zoom_var.get(),
             "hybrid_bottom_pad_color": self.hybrid_bottom_pad_color_var.get(),
+            "hybrid_composite_pad": self.hybrid_composite_pad_var.get(),
+            "hybrid_composite_pad_color": self.hybrid_composite_pad_color_var.get(),
+            "hybrid_composite_pad_anchor": self.hybrid_composite_pad_anchor_var.get(),
+            "hybrid_composite_offset_x": self.hybrid_composite_offset_x_var.get(),
+            "hybrid_composite_offset_y": self.hybrid_composite_offset_y_var.get(),
             "hybrid_layout": self.hybrid_layout_var.get(),
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
@@ -6665,6 +6984,19 @@ class VideoProcessorApp:
             options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM))
         self.hybrid_bottom_pad_color_var.set(
             options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR))
+        self.hybrid_composite_pad_var.set(
+            options.get("hybrid_composite_pad", DEFAULT_HYBRID_COMPOSITE_PAD))
+        self.hybrid_composite_pad_color_var.set(
+            options.get("hybrid_composite_pad_color", DEFAULT_HYBRID_COMPOSITE_PAD_COLOR))
+        self.hybrid_composite_pad_anchor_var.set(
+            options.get("hybrid_composite_pad_anchor", DEFAULT_HYBRID_COMPOSITE_PAD_ANCHOR))
+        self.hybrid_composite_offset_x_var.set(
+            options.get("hybrid_composite_offset_x", DEFAULT_HYBRID_COMPOSITE_OFFSET_X))
+        self.hybrid_composite_offset_y_var.set(
+            options.get("hybrid_composite_offset_y", DEFAULT_HYBRID_COMPOSITE_OFFSET_Y))
+        if hasattr(self, "composite_pad_swatch"):
+            self.composite_pad_swatch.config(
+                bg=self.hybrid_composite_pad_color_var.get())
         self.hybrid_bottom_path_var.set(options.get("hybrid_bottom_path", ""))
         self.hybrid_top_suffix_var.set(options.get("hybrid_top_suffix", "-top"))
         self.hybrid_bot_suffix_var.set(options.get("hybrid_bot_suffix", "-bot"))
@@ -7633,25 +7965,25 @@ class VideoProcessorApp:
                 if subtitle_source_file:
                     if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and \
                             options.get("subtitle_alignment") == "seam":
-                        eff_layout = self._resolve_hybrid_layout(options)
-                        if eff_layout == "side_by_side":
-                            try:
-                                num_left, den_left = self._resolve_aspect_ratio(
-                                    options.get('hybrid_top_aspect', '16:9'), info, '16:9')
-                                left_w = (int(sub_target_h * num_left / den_left) // 2) * 2
-                                options["calculated_pos"] = (left_w, sub_target_h // 2)
-                            except Exception:
-                                print(f"[WARN] Failed to parse hybrid aspect ratios for "
-                                      f"seam alignment in '{job['display_name']}'")
-                        else:
-                            try:
-                                num_top, den_top = self._resolve_aspect_ratio(
-                                    options.get('hybrid_top_aspect', '16:9'), info, '16:9')
-                                top_h = (int(sub_target_w * den_top / num_top) // 2) * 2
-                                options["calculated_pos"] = (sub_target_w // 2, top_h)
-                            except Exception:
-                                print(f"[WARN] Failed to parse hybrid aspect ratios for "
-                                      f"seam alignment in '{job['display_name']}'")
+                        try:
+                            # Fetch the second source's info for hybrid-duo
+                            # so the helper can resolve "original" aspects
+                            # against the correct block. For hybrid-stacked
+                            # (single source split in two) info_bot stays
+                            # None and the helper falls back to info_top.
+                            _seam_info_bot = None
+                            if orientation == "hybrid-duo (dual source)":
+                                _seam_bot_path = options.get("hybrid_bottom_path", "")
+                                if _seam_bot_path and os.path.exists(_seam_bot_path):
+                                    _seam_info_bot = get_video_info(_seam_bot_path)
+                            _seam_layout = self._compute_hybrid_layout(
+                                options, info, _seam_info_bot, orientation,
+                                sub_target_w, sub_target_h, verbose=False)
+                            options["calculated_pos"] = (
+                                _seam_layout["seam_x"], _seam_layout["seam_y"])
+                        except Exception as _e:
+                            print(f"[WARN] Failed to compute hybrid seam position "
+                                  f"for '{job['display_name']}': {_e}")
                     sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
                     if sub_ext in [".ass", ".ssa"]:
                         ass_burn_path = create_temporary_ass_passthrough_file(subtitle_source_file)
@@ -8121,20 +8453,38 @@ class VideoProcessorApp:
                         h_bot = int(target_w * 5 / 4)
                     return (target_w // 2) * 2, ((h_top + h_bot) // 2) * 2
             canvas_orient = self._aspect_to_orientation(aspect_str, fallback="vertical")
-            if canvas_orient == "vertical":
-                width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
-                             "HD": 1080, "4k": 2160, "8k": 4320}
-                target_w = width_map.get(res_key, 1080)
-            else:
-                width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
-                             "HD": 1920, "4k": 3840, "8k": 7680}
-                target_w = width_map.get(res_key, 1920)
             try:
                 num, den = map(int, aspect_str.split(':'))
-                target_h = int(target_w * den / num)
             except Exception:
-                target_h = (int(target_w * 16 / 9) if canvas_orient == "vertical"
-                            else int(target_w * 9 / 16))
+                num, den = ((9, 16) if canvas_orient == "vertical" else (16, 9))
+            # v8.48 -- canvas short side = source short side when
+            # resolution is "original" and the canvas aspect is fixed.
+            # Previously "original" fell through width_map.get(..., default)
+            # and silently rendered at 1080p regardless of source size.
+            _is_original_res = (str(res_key).lower() == "original")
+            _src_w = int(info.get("width", 0)) if info else 0
+            _src_h = int(info.get("height", 0)) if info else 0
+            _src_short = min(_src_w, _src_h) if (_src_w > 0 and _src_h > 0) else 0
+            if _is_original_res and _src_short > 0:
+                if canvas_orient == "vertical":
+                    target_w = (_src_short // 2) * 2
+                    target_h = int(target_w * den / num)
+                else:
+                    target_h = (_src_short // 2) * 2
+                    target_w = int(target_h * num / den)
+                print(f"[INFO] Original-res hybrid canvas: source short side "
+                      f"{_src_short} -> {target_w}x{target_h} "
+                      f"(canvas {aspect_str})")
+            else:
+                if canvas_orient == "vertical":
+                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                                 "HD": 1080, "4k": 2160, "8k": 4320}
+                    target_w = width_map.get(res_key, 1080)
+                else:
+                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
+                                 "HD": 1920, "4k": 3840, "8k": 7680}
+                    target_w = width_map.get(res_key, 1920)
+                target_h = int(target_w * den / num)
             return (target_w // 2) * 2, (target_h // 2) * 2
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
@@ -9333,29 +9683,26 @@ class VideoProcessorApp:
             safe_algo = ffmpeg_upscale_algo
             if not safe_algo:
                 raise VideoProcessingError("Upscale algorithm not specified in preset.")
+            _layout = self._compute_hybrid_layout(
+                options, info, info_bot, orientation, target_w, total_h,
+                verbose=True)
+            _cp_filter = _layout["cp_filter"]
+            _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
+            _bot_pad_c = options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
+            _top_z = options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM)
+            _bot_z = options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM)
+            _top_ox = options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X)
+            _top_oy = options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y)
+            _bot_ox = options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X)
+            _bot_oy = options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
             if eff_layout == "side_by_side":
                 left_aspect = options.get('hybrid_top_aspect')
                 right_aspect = options.get('hybrid_bottom_aspect')
                 info_right = info_bot if orientation == "hybrid-duo (dual source)" else info
-                num_l, den_l = self._resolve_aspect_ratio(left_aspect, info, '16:9')
-                left_w = (int(total_h * num_l / den_l) // 2) * 2
-                if str(options.get("merged_aspect")).lower() == "auto":
-                    num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_right, '16:9')
-                    right_w = (int(total_h * num_r / den_r) // 2) * 2
-                    target_w = left_w + right_w
-                else:
-                    right_w = max(2, target_w - left_w)
-                    if left_w >= target_w:
-                        left_w = (target_w // 4) * 2
-                        right_w = target_w - left_w
-                _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
-                _bot_pad_c = options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
-                _top_z = options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM)
-                _bot_z = options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM)
-                _top_ox = options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X)
-                _top_oy = options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y)
-                _bot_ox = options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X)
-                _bot_oy = options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
+                left_w = _layout["top_w"]
+                right_w = _layout["bot_w"]
+                target_w = _layout["canvas_w"]
+                total_h = _layout["canvas_h"]
                 top_vf, top_cpu, _, _ = get_block_filters(
                     left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h,
                     src_info=info, offset_x=_top_ox, offset_y=_top_oy,
@@ -9369,25 +9716,10 @@ class VideoProcessorApp:
                 top_aspect = options.get('hybrid_top_aspect')
                 bot_aspect = options.get('hybrid_bottom_aspect')
                 info_bottom = info_bot if orientation == "hybrid-duo (dual source)" else info
-                num_t, den_t = self._resolve_aspect_ratio(top_aspect, info, '16:9')
-                top_h = (int(target_w * den_t / num_t) // 2) * 2
-                if str(options.get("merged_aspect")).lower() == "auto":
-                    num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_bottom, '4:5')
-                    bot_h = (int(target_w * den_b / num_b) // 2) * 2
-                    total_h = top_h + bot_h
-                else:
-                    bot_h = max(2, total_h - top_h)
-                    if top_h >= total_h:
-                        top_h = (total_h // 4) * 2
-                        bot_h = total_h - top_h
-                _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
-                _bot_pad_c = options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
-                _top_z = options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM)
-                _bot_z = options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM)
-                _top_ox = options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X)
-                _top_oy = options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y)
-                _bot_ox = options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X)
-                _bot_oy = options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
+                top_h = _layout["top_h"]
+                bot_h = _layout["bot_h"]
+                target_w = _layout["canvas_w"]
+                total_h = _layout["canvas_h"]
                 top_vf, top_cpu, _, _ = get_block_filters(
                     top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h,
                     src_info=info, offset_x=_top_ox, offset_y=_top_oy,
@@ -9399,6 +9731,10 @@ class VideoProcessorApp:
                 stack_filter = "vstack=inputs=2[stacked]"
             cpu_pix_fmt = cuda_work_fmt
             cpu_chain = []
+            if _cp_filter:
+                # Pad the composite before any CPU filter so subtitles /
+                # sharpening / LUT see the final canvas dimensions.
+                cpu_chain.append(_cp_filter)
             if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and \
                     os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
