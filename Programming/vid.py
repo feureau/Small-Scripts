@@ -68,6 +68,50 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.38 - Reuse source Dolby Vision RPU when possible (2026-09-25)
+    • FEATURE: _generate_dolby_vision_rpu now checks whether the
+      source already carries a Dolby Vision RPU (HEVC in an
+      MP4/MKV container or Annex-B elementary stream). When it
+      does, and the pipeline does not alter pixel luminance, the
+      existing RPU is extracted with dovi_tool and cm_analyze is
+      skipped entirely. Saves both the analysis time and the
+      disk I/O of the YUV dump.
+    • SAFETY: Reuse is blocked when any of these are active:
+      resize, sharpening, LUT, subtitle/title burn-in, FRUC,
+      SDR-to-HDR, hybrid layouts, or a background effect. In
+      those cases the source RPU no longer describes the output
+      pixels, and cm_analyze is run as before.
+    • NOTE: Detection and extraction both go through dovi_tool.
+      The RPU is the only piece reused; every other stage of the
+      pipeline (superres, encode, muxing) is unchanged.
+v8.37 - Direct ProRes handoff to cm_analyze (2026-09-25)
+    • CHANGE: For HDR→DV jobs whose source is already ProRes,
+      _generate_dolby_vision_rpu now hands the source file
+      directly to cm_analyze instead of dumping ~93 GB/10min
+      of raw yuv420p10le at 1080p24 (~370 GB at 4K). Chapter-
+      split jobs get a ProRes-to-ProRes trim first. Non-ProRes
+      sources keep the YUV dump path and its disk preflight.
+    • NOTE: cm_analyze natively supports ProRes .mov per Dolby.
+      Analysis stays CUDA-accelerated; only the decode moves
+      from FFmpeg readback to CPU ProRes decode (Dolby's
+      ProRes library is not GPU-accelerated on Windows).
+v8.35 - NVVFX SuperRes on ProRes/DNxHR + hybrid-duo (2026-09-24)
+    • FIX: _nvvfx_superres_preprocess hardcoded --avhw (NVDEC),
+      which only accelerates H.264/HEVC/AV1/VP9/MPEG-2/VC-1.
+      ProRes and DNxHR sources failed at the reader with
+      'avcuvid: codec prores(yuv422p10le) unable to decode by
+      cuvid'. The prepass is now codec-aware, matching
+      construct_nvencc_command().
+    • FIX: Multi-stage superres on hybrid-duo prepassed only the
+      top source; bottom was lanczos'd by the FFmpeg stage.
+      Both legs are now prepassed to half-block dimensions.
+    • FIX: construct_ffmpeg_command's hybrid branch ignored
+      _preproc_scale_override, so the composite was built at the
+      full target and then superres'd again by NVEncC.
+    • FALLBACK: hybrid-stacked skips multi-stage superres.
+    • UX: The stale 'FFmpeg pre-scales to X (lanczos)' INFO
+      message now describes the actual NVEncC prepass pipeline.
+
 v8.29 - Every upscale stage now uses NVVFX SuperRes (2026-09-24)
     • CHANGE: Multi-stage superres (>2x ratios) now uses NVEncC
       nvvfx-superres (or ngx-vsr) for BOTH hops instead of FFmpeg
@@ -1106,6 +1150,63 @@ def hex_to_libass_color(hex_color):
     return f"&H{b:02X}{g:02X}{r:02X}"
 
 
+
+def srgb_hex_to_bt2020_pq_hex(srgb_hex, target_nits=1000):
+    """
+    Converts an SDR sRGB hex color to an HDR BT.2020 PQ hex color.
+    This pre-compensates the color so it appears correct when burned
+    into an HDR video and viewed on an HDR display (or tone-mapped to SDR).
+
+    target_nits: The luminance of SDR white in HDR.
+                 ITU-R BT.2408 recommends 203 nits for graphics/subtitles.
+    """
+    srgb_hex = srgb_hex.lstrip('#')
+    if len(srgb_hex) != 6:
+        return srgb_hex
+
+    # 1. Parse hex to normalized sRGB [0.0, 1.0]
+    r_srgb, g_srgb, b_srgb = [int(srgb_hex[i:i+2], 16) / 255.0 for i in (0, 2, 4)]
+
+    # 2. Linearize sRGB (BT.709)
+    def linearize(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r_lin = linearize(r_srgb)
+    g_lin = linearize(g_srgb)
+    b_lin = linearize(b_srgb)
+
+    # 3. Convert BT.709 to BT.2020 (linear light)
+    r_2020 = 0.6274 * r_lin + 0.3293 * g_lin + 0.0433 * b_lin
+    g_2020 = 0.0691 * r_lin + 0.9195 * g_lin + 0.0114 * b_lin
+    b_2020 = 0.0164 * r_lin + 0.0880 * g_lin + 0.8956 * b_lin
+
+    # 4. Apply PQ (SMPTE ST 2084) transfer function
+    def pq_st2084(c):
+        L = c * target_nits
+        m1 = 2610 / 16384
+        m2 = 2523 / 4096 * 128
+        c1 = 3424 / 4096
+        c2 = 2413 / 4096 * 32
+        c3 = 2392 / 4096 * 32
+
+        L_norm = L / 10000.0
+        L_m1 = L_norm ** m1
+        num = c1 + c2 * L_m1
+        den = 1 + c3 * L_m1
+        return (num / den) ** m2
+
+    r_pq = pq_st2084(r_2020)
+    g_pq = pq_st2084(g_2020)
+    b_pq = pq_st2084(b_2020)
+
+    # 5. Quantize back to 8-bit
+    r_8 = int(round(max(0.0, min(1.0, r_pq)) * 255))
+    g_8 = int(round(max(0.0, min(1.0, g_pq)) * 255))
+    b_8 = int(round(max(0.0, min(1.0, b_pq)) * 255))
+
+    return f"#{r_8:02X}{g_8:02X}{b_8:02X}"
+
+
 def alpha_to_libass_alpha(alpha_val):
     return f"&H{alpha_val:02X}"
 
@@ -1178,12 +1279,26 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     except (ValueError, TypeError):
         repeat_ratio = float(DEFAULT_SUBTITLE_REPEAT_RATIO)
     truncate_suffix = "..."
+    # === PATCH: HDR Subtitle Color Pre-compensation ===
+    _is_hdr = options.get('output_format') in ('hdr', 'dolby_vision')
+
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
+    if _is_hdr:
+        fill_color_hex = srgb_hex_to_bt2020_pq_hex(fill_color_hex)
+
     fill_alpha_val = options.get('fill_alpha', DEFAULT_FILL_ALPHA)
+
     outline_color_hex = options.get('outline_color', DEFAULT_OUTLINE_COLOR)
+    if _is_hdr:
+        outline_color_hex = srgb_hex_to_bt2020_pq_hex(outline_color_hex)
+
     outline_alpha_val = options.get('outline_alpha', DEFAULT_OUTLINE_ALPHA)
     outline_width = float(options.get('outline_width', DEFAULT_OUTLINE_WIDTH))
+
     shadow_color_hex = options.get('shadow_color', DEFAULT_SHADOW_COLOR)
+    if _is_hdr:
+        shadow_color_hex = srgb_hex_to_bt2020_pq_hex(shadow_color_hex)
+
     shadow_alpha_val = options.get('shadow_alpha', DEFAULT_SHADOW_ALPHA)
     shadow_offset_x = float(options.get('shadow_offset_x', DEFAULT_SHADOW_OFFSET_X))
     shadow_offset_y = float(options.get('shadow_offset_y', DEFAULT_SHADOW_OFFSET_Y))
@@ -1570,20 +1685,37 @@ def create_title_ass_file(title_text, options, target_res=None):
         line_spacing_offset = float(options.get('title_line_spacing', DEFAULT_TITLE_LINE_SPACING))
     except (ValueError, TypeError):
         line_spacing_offset = 0.0
+    # === PATCH: HDR Title Color Pre-compensation ===
+    _is_hdr = options.get('output_format') in ('hdr', 'dolby_vision')
+
     fill_color_hex = options.get('title_fill_color', DEFAULT_TITLE_FILL_COLOR)
+    if _is_hdr:
+        fill_color_hex = srgb_hex_to_bt2020_pq_hex(fill_color_hex)
+
     outline_color_hex = options.get('title_outline_color', DEFAULT_TITLE_OUTLINE_COLOR)
+    if _is_hdr:
+        outline_color_hex = srgb_hex_to_bt2020_pq_hex(outline_color_hex)
+
     try:
         outline_width = float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH))
     except (ValueError, TypeError):
         outline_width = 3.0
+
     shadow_color_hex = options.get('title_shadow_color', DEFAULT_TITLE_SHADOW_COLOR)
+    if _is_hdr:
+        shadow_color_hex = srgb_hex_to_bt2020_pq_hex(shadow_color_hex)
+
     try:
         shadow_offset_y = float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y))
     except (ValueError, TypeError):
         shadow_offset_y = 3.0
     bg_enabled = options.get('title_bg_enabled', DEFAULT_TITLE_BG_ENABLED)
     bg_mode = options.get('title_bg_mode', DEFAULT_TITLE_BG_MODE)
+
     bg_color_hex = options.get('title_bg_color', DEFAULT_TITLE_BG_COLOR)
+    if _is_hdr:
+        bg_color_hex = srgb_hex_to_bt2020_pq_hex(bg_color_hex)
+
     try:
         bg_alpha_val = int(options.get('title_bg_alpha', DEFAULT_TITLE_BG_ALPHA))
     except (ValueError, TypeError):
@@ -6956,6 +7088,12 @@ class VideoProcessorApp:
         algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
         if algo not in ("nvvfx-superres", "ngx-vsr"):
             return False, 0, 0
+        # v8.35 SUPERRES FULL FIX: hybrid-stacked (single source split
+        # into two independently-scaled blocks) cannot be prepassed by
+        # the current architecture. Fall back to bicubic for the first
+        # hop rather than producing a half-superres composite.
+        if orientation == "hybrid (stacked)":
+            return False, 0, 0
         try:
             tgt_w, tgt_h = self.compute_target_resolution_for_options(
                 options, info, orientation)
@@ -6973,6 +7111,47 @@ class VideoProcessorApp:
         inter_w = max(2, ((tgt_w // 2) // 2) * 2)
         inter_h = max(2, ((tgt_h // 2) // 2) * 2)
         return True, inter_w, inter_h
+
+    def _compute_hybrid_block_dims(self, options, info_top, info_bot,
+                                     orientation, target_w, target_h):
+        """Return (top_w, top_h, bot_w, bot_h) for a hybrid composite
+        of target_w x target_h. Mirrors the block-size math used by
+        construct_ffmpeg_command's hybrid branch so callers (e.g. the
+        superres prepass) can target the exact same dimensions.
+        info_top is the source for the first block; info_bot is the
+        second (may be None for single-source hybrid-stacked)."""
+        eff_layout = self._resolve_hybrid_layout(options)
+        merged_aspect = str(options.get("merged_aspect", "")).lower()
+        if eff_layout == "side_by_side":
+            left_aspect = options.get('hybrid_top_aspect')
+            right_aspect = options.get('hybrid_bottom_aspect')
+            info_r = info_bot if info_bot else info_top
+            num_l, den_l = self._resolve_aspect_ratio(left_aspect, info_top, '16:9')
+            left_w = (int(target_h * num_l / den_l) // 2) * 2
+            if merged_aspect == "auto":
+                num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_r, '16:9')
+                right_w = (int(target_h * num_r / den_r) // 2) * 2
+            else:
+                right_w = max(2, target_w - left_w)
+                if left_w >= target_w:
+                    left_w = (target_w // 4) * 2
+                    right_w = target_w - left_w
+            return left_w, target_h, right_w, target_h
+        else:
+            top_aspect = options.get('hybrid_top_aspect')
+            bot_aspect = options.get('hybrid_bottom_aspect')
+            info_b = info_bot if info_bot else info_top
+            num_t, den_t = self._resolve_aspect_ratio(top_aspect, info_top, '16:9')
+            top_h = (int(target_w * den_t / num_t) // 2) * 2
+            if merged_aspect == "auto":
+                num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_b, '4:5')
+                bot_h = (int(target_w * den_b / num_b) // 2) * 2
+            else:
+                bot_h = max(2, target_h - top_h)
+                if top_h >= target_h:
+                    top_h = (target_h // 4) * 2
+                    bot_h = target_h - top_h
+            return target_w, top_h, target_w, bot_h
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
@@ -7172,9 +7351,9 @@ class VideoProcessorApp:
                     options["_preproc_scale_override"] = (_inter_w, _inter_h)
                     _tgt_w, _tgt_h = self.compute_target_resolution_for_options(
                         options, info, orientation)
-                    print(f"[INFO] Multi-stage {_up_algo}: FFmpeg pre-scales to "
-                          f"{_inter_w}x{_inter_h} (lanczos), NVEncC superres to "
-                          f"{_tgt_w}x{_tgt_h}.")
+                    print(f"[INFO] Multi-stage {_up_algo}: NVEncC superres "
+                          f"prepass to {_inter_w}x{_inter_h}, then final "
+                          f"NVEncC superres to {_tgt_w}x{_tgt_h}.")
                 else:
                     options.pop("_preproc_scale_override", None)
 
@@ -7378,19 +7557,53 @@ class VideoProcessorApp:
                 _sr_override = options.get("_preproc_scale_override")
                 if _sr_override:
                     _sr_w, _sr_h = _sr_override
-                    _src_w = info["width"]
-                    _src_h = info["height"]
-                    print("[INFO] Multi-stage superres: NVEncC superres "
-                          "preprocessor {}x{} -> {}x{} ...".format(
-                              _src_w, _src_h, _sr_w, _sr_h))
-                    _sr_intermediate = self._nvvfx_superres_preprocess(
-                        effective_job["video_path"], output_dir, options,
-                        _sr_w, _sr_h)
-                    register_temp_file(_sr_intermediate)
-                    effective_job = dict(effective_job)
-                    effective_job["video_path"] = _sr_intermediate
-                    effective_info = get_video_info(_sr_intermediate)
-                    options["_sr_prepass_source"] = _sr_intermediate
+                    if orientation == "hybrid-duo (dual source)":
+                        # v8.35 SUPERRES FULL FIX: both legs must be
+                        # prepassed to their half-block dims. The
+                        # single-leg path below would leave the bottom
+                        # source at original resolution when the FFmpeg
+                        # preprocessor stacks them.
+                        _top_src = (options.get("hybrid_top_path")
+                                    or effective_job["video_path"])
+                        _bot_src = options.get("hybrid_bottom_path", "")
+                        if not _bot_src or not os.path.exists(_bot_src):
+                            raise VideoProcessingError(
+                                "Multi-stage superres on hybrid-duo requires "
+                                "both top and bottom sources.")
+                        _top_info = get_video_info(_top_src)
+                        _bot_info = get_video_info(_bot_src)
+                        _bw_t, _bh_t, _bw_b, _bh_b = self._compute_hybrid_block_dims(
+                            options, _top_info, _bot_info, orientation,
+                            _sr_w, _sr_h)
+                        print("[INFO] Multi-stage superres (hybrid-duo): "
+                              "prepass top {}x{} -> {}x{}, bottom {}x{} -> {}x{} ...".format(
+                                  _top_info["width"], _top_info["height"],
+                                  _bw_t, _bh_t,
+                                  _bot_info["width"], _bot_info["height"],
+                                  _bw_b, _bh_b))
+                        _top_sr = self._nvvfx_superres_preprocess(
+                            _top_src, output_dir, options, _bw_t, _bh_t)
+                        _bot_sr = self._nvvfx_superres_preprocess(
+                            _bot_src, output_dir, options, _bw_b, _bh_b)
+                        register_temp_file(_top_sr)
+                        register_temp_file(_bot_sr)
+                        options["hybrid_top_path"] = _top_sr
+                        options["hybrid_bottom_path"] = _bot_sr
+                        options["_sr_prepass_sources"] = [_top_sr, _bot_sr]
+                    else:
+                        _src_w = info["width"]
+                        _src_h = info["height"]
+                        print("[INFO] Multi-stage superres: NVEncC superres "
+                              "preprocessor {}x{} -> {}x{} ...".format(
+                                  _src_w, _src_h, _sr_w, _sr_h))
+                        _sr_intermediate = self._nvvfx_superres_preprocess(
+                            effective_job["video_path"], output_dir, options,
+                            _sr_w, _sr_h)
+                        register_temp_file(_sr_intermediate)
+                        effective_job = dict(effective_job)
+                        effective_job["video_path"] = _sr_intermediate
+                        effective_info = get_video_info(_sr_intermediate)
+                        options["_sr_prepass_source"] = _sr_intermediate
                 # v8.35 NVENCC MKV + AUDIO-COPY FIX
                 # The preprocessor writes Matroska, not MP4, because
                 # NVEncC's reader cannot parse AAC 5.1 channel layouts
@@ -7513,12 +7726,16 @@ class VideoProcessorApp:
                     cleanup_single_temp_file(truehdr_intermediate)
                 except Exception:
                     pass
-            _sr_cleanup = options.get("_sr_prepass_source")
-            if _sr_cleanup and os.path.exists(_sr_cleanup):
-                try:
-                    cleanup_single_temp_file(_sr_cleanup)
-                except Exception:
-                    pass
+            _sr_cleanup_list = list(options.get("_sr_prepass_sources", []))
+            _single_sr = options.get("_sr_prepass_source")
+            if _single_sr:
+                _sr_cleanup_list.append(_single_sr)
+            for _sr_path in _sr_cleanup_list:
+                if _sr_path and os.path.exists(_sr_path):
+                    try:
+                        cleanup_single_temp_file(_sr_path)
+                    except Exception:
+                        pass
 
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
@@ -7819,13 +8036,28 @@ class VideoProcessorApp:
         codec_name = codec_map.get(selected_codec, "h264")
         cmd = [NVENCC_CMD, "--avsw" if use_avsw_reader else "--avhw",
                "--codec", codec_name, "--output", output_file, "-i", input_file]
+        # v8.40 EXACT-DURATION PIN (NVEncC muxer)
+        # Same AAC-padding rationale as the FFmpeg path: without an
+        # explicit output window, the container's mvhd reports the padded
+        # audio length. --seek 0 --seekto N is NVEncC's equivalent of -t
+        # and caps the output at N seconds regardless of codec padding.
         seek_start = options.get("seek_start")
         seek_duration = options.get("seek_duration")
         if seek_start is not None:
             cmd.extend(["--seek", str(seek_start)])
             if seek_duration is not None:
                 seek_to = float(seek_start) + float(seek_duration)
-                cmd.extend(["--seekto", str(seek_to)])
+                cmd.extend(["--seekto", f"{seek_to:.6f}"])
+        else:
+            _src_dur = get_file_duration(input_file)
+            if _src_dur and _src_dur > 0:
+                try:
+                    _max_dur = float(options.get("max_duration", 0))
+                except (TypeError, ValueError):
+                    _max_dur = 0.0
+                if _max_dur > 0 and _src_dur > _max_dur:
+                    _src_dur = _max_dur
+                cmd.extend(["--seek", "0", "--seekto", f"{_src_dur:.6f}"])
         cmd.extend(["--vbr", str(bitrate_kbps), "--max-bitrate", str(bitrate_kbps * 2)])
         nv_preset = options.get("nvenc_preset", DEFAULT_NVENC_PRESET)
         preset_map = {"p1": "performance", "p2": "performance", "p3": "performance",
@@ -8071,6 +8303,105 @@ class VideoProcessorApp:
         print(f"[INFO] DV auto-match resolved to: {resolved}")
         options["color_preset_hdr"] = resolved
 
+    def _source_rpu_is_still_valid(self, options):
+        """Return (valid, reasons). If the pipeline applies any
+        transform that changes pixel luminance, a source RPU would
+        describe the wrong pixels and cm_analyze must be re-run."""
+        reasons = []
+        res_key = str(options.get("resolution", "original")).lower()
+        if res_key != "original":
+            reasons.append(f"target resolution is {res_key}")
+        if options.get("use_sharpening", False):
+            reasons.append("sharpening is enabled")
+        lut = str(options.get("lut_file", "")).strip()
+        if lut and os.path.exists(lut):
+            reasons.append("a LUT is active")
+        if options.get("burn_subtitles", False):
+            reasons.append("subtitles are burned in")
+        if options.get("title_burn_enabled", False):
+            reasons.append("titles are burned in")
+        if options.get("fruc", False):
+            reasons.append("FRUC is enabled")
+        if options.get("sdr_to_hdr", False):
+            reasons.append("SDR-to-HDR conversion is on")
+        orient = str(options.get("orientation", ""))
+        if orient.startswith("hybrid"):
+            reasons.append(f"orientation is {orient}")
+        if (options.get("aspect_pixelate", False)
+                or options.get("aspect_blur", False)
+                or options.get("aspect_ambient", False)):
+            reasons.append("a background effect is enabled")
+        return (len(reasons) == 0), reasons
+
+    def _try_extract_source_dv_rpu(self, source_path, work_dir, safe_base):
+        """If source_path is HEVC and carries a Dolby Vision RPU
+        track, demux to HEVC and extract the RPU with dovi_tool.
+        Returns (True, rpu_path) on success, (False, None) otherwise.
+        extract-rpu itself is the detection step: it fails cleanly
+        when no RPU is present, so no container parsing is needed."""
+        _cm_ok, _dv_ok = check_dolby_tools()
+        if not _dv_ok:
+            return False, None
+        hevc_path = os.path.join(work_dir, f"{safe_base}_dv_probe.hevc")
+        rpu_path = os.path.join(work_dir, f"{safe_base}_src.RPU.bin")
+        _success = False
+        try:
+            # 1. Demux to Annex-B HEVC. MP4 and MKV store HEVC with
+            #    length-prefixed NALs, so hevc_mp4toannexb is the
+            #    right filter. If that fails, retry without the
+            #    filter for raw .hevc sources.
+            demux_cmd = [FFMPEG_CMD, "-y", "-hide_banner",
+                         "-loglevel", "error",
+                         "-i", source_path,
+                         "-map", "0:v:0", "-c:v", "copy",
+                         "-bsf:v", "hevc_mp4toannexb",
+                         "-f", "hevc", hevc_path]
+            result = subprocess.run(demux_cmd, capture_output=True,
+                                    text=True, env=env, timeout=600)
+            if result.returncode != 0:
+                demux_cmd_alt = [FFMPEG_CMD, "-y", "-hide_banner",
+                                 "-loglevel", "error",
+                                 "-i", source_path,
+                                 "-map", "0:v:0", "-c:v", "copy",
+                                 "-f", "hevc", hevc_path]
+                result = subprocess.run(demux_cmd_alt,
+                                        capture_output=True, text=True,
+                                        env=env, timeout=600)
+            if (result.returncode != 0
+                    or not os.path.exists(hevc_path)
+                    or os.path.getsize(hevc_path) == 0):
+                return False, None
+            # 2. Try to extract. dovi_tool fails cleanly when no RPU
+            #    is present, so this doubles as the detection step.
+            extract_cmd = [DOVI_TOOL_CMD, "extract-rpu",
+                           "-i", hevc_path, "-o", rpu_path]
+            result = subprocess.run(extract_cmd, capture_output=True,
+                                    text=True, env=env, timeout=600)
+            if (result.returncode != 0
+                    or not os.path.exists(rpu_path)
+                    or os.path.getsize(rpu_path) == 0):
+                return False, None
+            register_temp_file(rpu_path)
+            print(f"[INFO] Source already carries a Dolby Vision "
+                  f"RPU; extracted to {os.path.basename(rpu_path)} "
+                  f"({os.path.getsize(rpu_path)} bytes)")
+            _success = True
+            return True, rpu_path
+        except Exception as e:
+            print(f"[WARN] Source DV RPU extraction failed: {e}")
+            return False, None
+        finally:
+            if os.path.exists(hevc_path):
+                try:
+                    cleanup_single_temp_file(hevc_path)
+                except Exception:
+                    pass
+            if not _success and os.path.exists(rpu_path):
+                try:
+                    cleanup_single_temp_file(rpu_path)
+                except Exception:
+                    pass
+
     def _generate_dolby_vision_rpu(self, source_path, work_dir, options, info,
                                      basename_override=None):
         if basename_override:
@@ -8080,6 +8411,29 @@ class VideoProcessorApp:
             safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip()
         xml_path = os.path.join(work_dir, f"{safe_base}.dolbyvision_metadata.xml")
         rpu_path = os.path.join(work_dir, f"{safe_base}.RPU.bin")
+
+        # v8.38 DV SOURCE RPU REUSE
+        # If the source already carries a Dolby Vision RPU, and the
+        # pipeline does not alter pixel luminance between source and
+        # output, extract the source RPU and skip cm_analyze. The
+        # pixels described by the RPU must match the pixels that
+        # actually play back, so any resize, sharpening, LUT,
+        # subtitle burn-in, FRUC, SDR-to-HDR conversion, hybrid
+        # stacking or background effect blocks reuse.
+        _src_codec_v838 = str(info.get("codec_name", "")).lower()
+        if _src_codec_v838 == "hevc":
+            _valid_v838, _reasons_v838 = self._source_rpu_is_still_valid(
+                options)
+            if _valid_v838:
+                _has_src_rpu, _src_rpu_path = self._try_extract_source_dv_rpu(
+                    source_path, work_dir, safe_base)
+                if _has_src_rpu and _src_rpu_path:
+                    return _src_rpu_path, None
+            else:
+                _reasons_str_v838 = "; ".join(_reasons_v838)
+                print(f"[INFO] Skipping source DV RPU reuse "
+                      f"({_reasons_str_v838}); re-analyzing with "
+                      f"cm_analyze instead.")
 
         # cm_analyze 5.6.x (Dolby Content Analyzer) does NOT accept
         # HEVC elementary streams, MKV, or FFmpeg-produced MXF. Every
@@ -8095,28 +8449,100 @@ class VideoProcessorApp:
         # and is deleted immediately after cm_analyze finishes.
         _w = int(info.get("width", 1920))
         _h = int(info.get("height", 1080))
-        analysis_src = os.path.join(
-            work_dir,
-            f"{safe_base}_cm_input_{_w}x{_h}_10bit_420p_le.yuv")
-        dump_cmd = [FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error"]
-        _sk_start = options.get("seek_start")
-        _sk_dur = options.get("seek_duration")
-        if _sk_start is not None:
-            dump_cmd.extend(["-ss", str(_sk_start)])
-        dump_cmd.extend(["-i", source_path])
-        if _sk_dur is not None:
-            dump_cmd.extend(["-t", str(_sk_dur)])
-        dump_cmd.extend([
-            "-map", "0:v:0",
-            "-pix_fmt", "yuv420p10le",
-            "-f", "rawvideo",
-            analysis_src,
-        ])
-        self.run_external_tool(dump_cmd,
-                               "ffmpeg dump YUV for cm_analyze")
-        register_temp_file(analysis_src)
-        print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
-              f"(raw YUV420p10le, {_w}x{_h})")
+        # v8.37 PRO-RES DIRECT HANDOFF
+        # If the source is ProRes, cm_analyze can read it natively.
+        # Skip the YUV dump: ~93 GB/10min at 1080p24, ~370 GB at 4K.
+        # For non-ProRes sources, keep the YUV path and preflight.
+        #
+        # Trade-off: Dolby's ProRes decoder is not GPU accelerated
+        # on Windows, so decode becomes CPU-bound. Analysis itself
+        # remains CUDA-driven either way.
+        _src_codec = str(info.get("codec_name", "")).lower()
+        _is_prores = _src_codec == "prores"
+
+        if _is_prores:
+            _sk_start = options.get("seek_start")
+            _sk_dur = options.get("seek_duration")
+            _has_seek = (_sk_start is not None) or (_sk_dur is not None)
+            if not _has_seek:
+                # Full-file analysis: hand the source over directly.
+                analysis_src = source_path
+                print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
+                      f"(ProRes source, direct handoff)")
+            else:
+                # Chapter split: pre-trim to a ProRes temp file.
+                # ProRes is all-intra, so -ss before -i is frame-exact.
+                fd, _trimmed = tempfile.mkstemp(
+                    suffix=".mov", prefix="vid_temp_dv_trim_",
+                    dir=work_dir)
+                os.close(fd)
+                register_temp_file(_trimmed)
+                trim_cmd = [FFMPEG_CMD, "-y", "-hide_banner",
+                            "-loglevel", "error"]
+                if _sk_start is not None:
+                    trim_cmd.extend(["-ss", str(_sk_start)])
+                trim_cmd.extend(["-i", source_path, "-map", "0:v:0",
+                                 "-c:v", "copy", "-an", "-sn", "-dn"])
+                if _sk_dur is not None:
+                    trim_cmd.extend(["-t", str(_sk_dur)])
+                trim_cmd.append(_trimmed)
+                self.run_external_tool(trim_cmd,
+                                       "ffmpeg ProRes trim for cm_analyze")
+                analysis_src = _trimmed
+                print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
+                      f"(ProRes trim, {_sk_start or 0:.1f}s + {_sk_dur or 0:.1f}s)")
+        else:
+            analysis_src = os.path.join(
+                work_dir,
+                f"{safe_base}_cm_input_{_w}x{_h}_10bit_420p_le.yuv")
+            # v8.36 DISK SPACE CHECK
+            # cm_analyze needs the analysed range dumped as uncompressed
+            # yuv420p10le. At 1080p24 that's ~6.2 MB/frame, so a 10-min
+            # source needs ~93 GB; at 4K it is ~370 GB. Reject early
+            # with a clear message rather than ENOSPC mid-dump.
+            _bytes_per_frame = int(_w) * int(_h) * 3
+            try:
+                _dur_check = options.get("seek_duration")
+                if _dur_check is None:
+                    _dur_check = get_file_duration(source_path)
+                _dur_check = float(_dur_check or 0)
+            except Exception:
+                _dur_check = 0.0
+            if _dur_check > 0:
+                _fps_check = float(info.get("framerate", 24) or 24)
+                _est_bytes = int(_bytes_per_frame * _dur_check * _fps_check * 1.05)
+                try:
+                    _free_bytes = shutil.disk_usage(work_dir).free
+                except Exception:
+                    _free_bytes = None
+                if _free_bytes is not None and _est_bytes > _free_bytes * 0.9:
+                    _drive = os.path.splitdrive(os.path.abspath(work_dir))[0] or work_dir
+                    raise VideoProcessingError(
+                        f"Not enough free disk space for cm_analyze YUV dump.\n"
+                        f"       Estimated need: {_est_bytes/1e9:.1f} GB "
+                        f"({_dur_check:.1f}s @ {_fps_check:.2f} fps, "
+                        f"{_w}x{_h} yuv420p10le).\n"
+                        f"       Free on {_drive}: {_free_bytes/1e9:.1f} GB.\n"
+                        f"       Free space or point the output directory elsewhere.")
+            dump_cmd = [FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error"]
+            _sk_start = options.get("seek_start")
+            _sk_dur = options.get("seek_duration")
+            if _sk_start is not None:
+                dump_cmd.extend(["-ss", str(_sk_start)])
+            dump_cmd.extend(["-i", source_path])
+            if _sk_dur is not None:
+                dump_cmd.extend(["-t", str(_sk_dur)])
+            dump_cmd.extend([
+                "-map", "0:v:0",
+                "-pix_fmt", "yuv420p10le",
+                "-f", "rawvideo",
+                analysis_src,
+            ])
+            self.run_external_tool(dump_cmd,
+                                   "ffmpeg dump YUV for cm_analyze")
+            register_temp_file(analysis_src)
+            print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
+                  f"(raw YUV420p10le, {_w}x{_h})")
 
         fps = info.get("framerate", 24)
         if abs(fps - round(fps)) < 1e-6:
@@ -8235,13 +8661,28 @@ class VideoProcessorApp:
                "--output-res", res_str]
         # Respect chapter splitting so we don't re-encode the full
         # source for every chapter.
+        # v8.40 EXACT-DURATION PIN (NVEncC muxer)
+        # Same AAC-padding rationale as the FFmpeg path: without an
+        # explicit output window, the container's mvhd reports the padded
+        # audio length. --seek 0 --seekto N is NVEncC's equivalent of -t
+        # and caps the output at N seconds regardless of codec padding.
         seek_start = options.get("seek_start")
         seek_duration = options.get("seek_duration")
         if seek_start is not None:
             cmd.extend(["--seek", str(seek_start)])
             if seek_duration is not None:
                 seek_to = float(seek_start) + float(seek_duration)
-                cmd.extend(["--seekto", str(seek_to)])
+                cmd.extend(["--seekto", f"{seek_to:.6f}"])
+        else:
+            _src_dur = get_file_duration(input_file)
+            if _src_dur and _src_dur > 0:
+                try:
+                    _max_dur = float(options.get("max_duration", 0))
+                except (TypeError, ValueError):
+                    _max_dur = 0.0
+                if _max_dur > 0 and _src_dur > _max_dur:
+                    _src_dur = _max_dur
+                cmd.extend(["--seek", "0", "--seekto", f"{_src_dur:.6f}"])
         cmd.extend(["-i", input_file, "--output", out_path])
 
         self.run_external_tool(cmd, "NVEncC TrueHDR")
@@ -8261,7 +8702,7 @@ class VideoProcessorApp:
         """
         safe_base = re.sub(r'[\\/*?:"<>|]', "",
                            os.path.splitext(os.path.basename(input_file))[0]).strip() or "sr"
-        out_path = os.path.join(work_dir, f"{safe_base}_sr_intermediate.mp4")
+        out_path = os.path.join(work_dir, f"{safe_base}_sr_intermediate.mkv")
 
         upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
         if upscale_algo == "ngx-vsr":
@@ -8297,7 +8738,18 @@ class VideoProcessorApp:
             src_trc = color_info["trc"]
             src_matrix = color_info["matrix"]
 
-        cmd = [NVENCC_CMD, "--avhw", "--codec", "hevc",
+        # v8.35 SUPERRES FULL FIX: pick the reader mode from the source
+        # codec, matching construct_nvencc_command(). NVDEC only
+        # accelerates H.264/HEVC/AV1/VP9/MPEG-2/VC-1, so ProRes,
+        # DNxHR and other mezzanine codecs must use --avsw.
+        _src_info = get_video_info(input_file)
+        _cuvid_codecs = {"h264", "hevc", "av1", "vp9",
+                         "mpeg1", "mpeg2", "vc1", "vp8", "mjpeg"}
+        _src_codec = str(_src_info.get("codec_name", "")).lower()
+        _use_avsw = _src_codec not in _cuvid_codecs
+
+        cmd = [NVENCC_CMD, "--avsw" if _use_avsw else "--avhw",
+               "--codec", "hevc",
                "--output-depth", "10", "--profile", "main10",
                "--colorprim", src_prim, "--transfer", src_trc,
                "--colormatrix", src_matrix,
@@ -8459,7 +8911,15 @@ class VideoProcessorApp:
         except ValueError:
             pass
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
-            target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
+            # v8.35 SUPERRES FULL FIX: when the multi-stage superres
+            # prepass has already built the legs at half-block size,
+            # the FFmpeg stage must target half the final canvas. The
+            # NVEncC final pass will superres 2x to close the gap.
+            _ffmpeg_stage_ov = options.get("_preproc_scale_override") if encoder_backend == "preprocess" else None
+            if _ffmpeg_stage_ov:
+                target_w, total_h = _ffmpeg_stage_ov
+            else:
+                target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
             eff_layout = self._resolve_hybrid_layout(options)
 
             def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h):
@@ -8551,7 +9011,7 @@ class VideoProcessorApp:
                 cpu_chain.append(f"format={target_cpu_pix_fmt}")
             elif not is_hdr_output:
                 cpu_chain.append("format=nv12")
-            if is_cpu_encode or encoder_backend == "preprocess":
+            if True:  # v8.39 patched
                 final_v_out = (f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]"
                                if cpu_chain else "[stacked][v_out]")
             else:
@@ -8728,6 +9188,15 @@ class VideoProcessorApp:
                             # costs nothing extra.
                             fc_parts.append(
                                 f"hwdownload,format={target_fmt},"
+                                # v8.41 CHROMA-ALIGNMENT FIX: the aspect-preserving scale above
+                                # lands on an odd height for a 16:9 source in a portrait canvas
+                                # (2160x1215 in 2160x3840). The last 4:2:0 chroma row is then
+                                # half-populated, and pad/blend/overlay carry that half-row
+                                # into the output as an off-neutral chroma line at the seam
+                                # with the black pad (visible as a green edge). One extra row
+                                # of black here makes chroma well-formed for every downstream
+                                # filter; invisible at display scale.
+                                f"pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black,"
                                 f"pad={target_w}:{target_h}:"
                                 f"(ow-iw)/2+{ox}:(oh-ih)/2+{oy}:black,"
                                 f"format={target_fmt},hwupload_cuda,")
@@ -8762,7 +9231,11 @@ class VideoProcessorApp:
                             fc_parts.append(
                                 f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:"
                                 f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
-                                f"format={target_fmt},hwdownload,format={target_fmt}[v_fg_scaled];")
+                                # v8.41 CHROMA-ALIGNMENT FIX: normalize the odd-height
+                                # aspect-preserving scale output to even dimensions before
+                                # the overlay, so chroma is well-formed for the composite.
+                                f"format={target_fmt},hwdownload,format={target_fmt},"
+                                f"pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black[v_fg_scaled];")
                         else:
                             # No ambient: has_bg_effect guarantees pixelate/blur,
                             # so bg_current is a GPU surface. Download it.
@@ -8772,7 +9245,11 @@ class VideoProcessorApp:
                             fc_parts.append(
                                 f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:"
                                 f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
-                                f"format={target_fmt},hwdownload,format={target_fmt}[v_fg_scaled];")
+                                # v8.41 CHROMA-ALIGNMENT FIX: normalize the odd-height
+                                # aspect-preserving scale output to even dimensions before
+                                # the overlay, so chroma is well-formed for the composite.
+                                f"format={target_fmt},hwdownload,format={target_fmt},"
+                                f"pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black[v_fg_scaled];")
                         # overlay_cuda rejects p010le main/overlay inputs
                         # (10-bit HDR pipelines), and the p010le -> nv12
                         # fallback would silently drop to 8-bit. Do the
@@ -8835,7 +9312,7 @@ class VideoProcessorApp:
             # formats supported by the filter ...". Mirror the hybrid
             # path: terminate the graph on CPU frames when the backend
             # is the preprocessor or the encoder is CPU-software.
-            _leave_on_cpu = is_cpu_encode or encoder_backend == "preprocess"
+            _leave_on_cpu = True  # v8.39 patched: FFmpeg encoders (libx* and h*_nvenc) both consume CPU AVFrames; the h*_nvenc wrappers upload internally.
             if use_cpu_scaling:
                 vf_filters.extend(cpu_filters)
                 vf_filters.append(f"format={target_cpu_pix_fmt}")
@@ -8851,9 +9328,24 @@ class VideoProcessorApp:
                         processing_chain.append("format=nv12")
                     vf_filters.append(f"{','.join(processing_chain)},hwupload_cuda")
             elif _leave_on_cpu:
-                vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
+                # v8.36 HWDOWNLOAD FIX
+                # hwdownload must unmap to the format that matches
+                # the CUDA surface (cuda_work_fmt: p010le for HDR,
+                # nv12 for SDR). A subsequent format= filter does
+                # the CPU-side conversion if the encoder wants a
+                # different pixel format (e.g. yuv420p10le for
+                # HEVC 10-bit). Passing target_cpu_pix_fmt directly
+                # to hwdownload produces:
+                #   Invalid output format yuv420p10le for hwframe download.
+                #   Failed to configure output pad on Parsed_hwdownload_1
+                vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
+                if cuda_work_fmt != target_cpu_pix_fmt:
+                    vf_filters.append(f"format={target_cpu_pix_fmt}")
             if _leave_on_cpu and not vf_filters:
-                vf_filters.append(f"hwdownload,format={target_cpu_pix_fmt}")
+                # v8.36 HWDOWNLOAD FIX
+                vf_filters.append(f"hwdownload,format={cuda_work_fmt}")
+                if cuda_work_fmt != target_cpu_pix_fmt:
+                    vf_filters.append(f"format={target_cpu_pix_fmt}")
             if vf_filters:
                 filter_complex_parts.append(f"{video_in_tag}{','.join(vf_filters)}[v_out]")
                 video_out_tag = "[v_out]"
@@ -8869,9 +9361,29 @@ class VideoProcessorApp:
         cmd.extend(audio_cmd_parts)
         bitrate_kbps, max_duration, input_duration = self.compute_target_bitrate_kbps(
             options, info, file_path)
-        if max_duration > 0 and input_duration > max_duration and seek_duration is None:
-            cmd.insert(len(cmd) - 2, "-t")
-            cmd.insert(len(cmd) - 2, str(max_duration))
+        # v8.40 EXACT-DURATION PIN (FFmpeg muxer)
+        # AAC adds a 1024-sample priming delay at the head of the stream
+        # and pads the final AAC block up to the next 1024-sample boundary
+        # with silence. FFmpeg's MP4 muxer normally trims both via an edit
+        # list, but +negative_cts_offsets suppresses that list, so the
+        # container's mvhd reports the padded length. At 48 kHz that's
+        # +10.7 ms for a 3-minute source -- enough to push an exactly-
+        # 180.000 s Short over YouTube's 180 s long-form threshold.
+        #
+        # Pin the container to the probed source duration with -t. For
+        # chapter splits the seek window wins; a user-supplied
+        # max_duration then caps that. -t is an output option, so the
+        # muxer trims the AAC tail padding out of the reported duration.
+        if seek_duration is not None:
+            _pin_dur = float(seek_duration)
+        elif input_duration and input_duration > 0:
+            _pin_dur = float(input_duration)
+            if max_duration > 0 and _pin_dur > float(max_duration):
+                _pin_dur = float(max_duration)
+        else:
+            _pin_dur = 0.0
+        if _pin_dur > 0:
+            cmd.extend(["-t", f"{_pin_dur:.6f}"])
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
         if encoder_backend == "preprocess":
             # Near-lossless intermediate (CQ 14). The preproc output is
