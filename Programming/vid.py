@@ -361,6 +361,17 @@ DEFAULT_PIXELATE_SATURATION = "0.6"
 DEFAULT_BLUR_SIGMA = "30"
 DEFAULT_BLUR_STEPS = "1"
 DEFAULT_AMBIENT_SPREAD = "2"
+DEFAULT_AMBIENT_ENGINE = "gpu"
+DEFAULT_HYBRID_TOP_MODE = "pad"
+DEFAULT_HYBRID_BOTTOM_MODE = "crop"
+DEFAULT_HYBRID_TOP_OFFSET_X = "0"
+DEFAULT_HYBRID_TOP_OFFSET_Y = "0"
+DEFAULT_HYBRID_BOTTOM_OFFSET_X = "0"
+DEFAULT_HYBRID_BOTTOM_OFFSET_Y = "0"
+DEFAULT_HYBRID_TOP_PAD_COLOR = "#000000"
+DEFAULT_HYBRID_BOTTOM_PAD_COLOR = "#000000"
+DEFAULT_HYBRID_TOP_ZOOM = "1.0"
+DEFAULT_HYBRID_BOTTOM_ZOOM = "1.0"
 DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
 DEFAULT_VIDEO_OFFSET_X = "0"
@@ -2118,9 +2129,20 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('subtitle_alignment', ''),
         job_options.get('hybrid_top_aspect', ''),
         job_options.get('hybrid_top_path', ''),
+        job_options.get('hybrid_top_mode', DEFAULT_HYBRID_TOP_MODE),
+        job_options.get('hybrid_top_offset_x', DEFAULT_HYBRID_TOP_OFFSET_X),
+        job_options.get('hybrid_top_offset_y', DEFAULT_HYBRID_TOP_OFFSET_Y),
+        job_options.get('hybrid_top_zoom', DEFAULT_HYBRID_TOP_ZOOM),
+        job_options.get('hybrid_top_pad_color', DEFAULT_HYBRID_TOP_PAD_COLOR),
         job_options.get('hybrid_bottom_aspect', ''),
         job_options.get('hybrid_bottom_path', ''),
+        job_options.get('hybrid_bottom_mode', DEFAULT_HYBRID_BOTTOM_MODE),
+        job_options.get('hybrid_bottom_offset_x', DEFAULT_HYBRID_BOTTOM_OFFSET_X),
+        job_options.get('hybrid_bottom_offset_y', DEFAULT_HYBRID_BOTTOM_OFFSET_Y),
+        job_options.get('hybrid_bottom_zoom', DEFAULT_HYBRID_BOTTOM_ZOOM),
+        job_options.get('hybrid_bottom_pad_color', DEFAULT_HYBRID_BOTTOM_PAD_COLOR),
         job_options.get('hybrid_layout', ''),
+        job_options.get('ambient_engine', DEFAULT_AMBIENT_ENGINE),
         job_options.get('subtitle_font', ''),
         job_options.get('subtitle_font_size', ''),
         job_options.get('outline_width', ''),
@@ -2330,14 +2352,23 @@ class WorkflowPresetManager:
             "pixelate_saturation": DEFAULT_PIXELATE_SATURATION,
             "blur_sigma": DEFAULT_BLUR_SIGMA,
             "blur_steps": DEFAULT_BLUR_STEPS,
+            "ambient_engine": DEFAULT_AMBIENT_ENGINE,
             "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
             "hybrid_top_aspect": "16:9",
-            "hybrid_top_mode": "pad",
+            "hybrid_top_mode": DEFAULT_HYBRID_TOP_MODE,
             "hybrid_top_path": "",
+            "hybrid_top_offset_x": DEFAULT_HYBRID_TOP_OFFSET_X,
+            "hybrid_top_offset_y": DEFAULT_HYBRID_TOP_OFFSET_Y,
+            "hybrid_top_zoom": DEFAULT_HYBRID_TOP_ZOOM,
+            "hybrid_top_pad_color": DEFAULT_HYBRID_TOP_PAD_COLOR,
             "hybrid_bottom_aspect": "4:5",
-            "hybrid_bottom_mode": "crop",
+            "hybrid_bottom_mode": DEFAULT_HYBRID_BOTTOM_MODE,
             "hybrid_bottom_path": "",
+            "hybrid_bottom_offset_x": DEFAULT_HYBRID_BOTTOM_OFFSET_X,
+            "hybrid_bottom_offset_y": DEFAULT_HYBRID_BOTTOM_OFFSET_Y,
+            "hybrid_bottom_zoom": DEFAULT_HYBRID_BOTTOM_ZOOM,
+            "hybrid_bottom_pad_color": DEFAULT_HYBRID_BOTTOM_PAD_COLOR,
             "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
             "hybrid_top_suffix": "-top",
             "hybrid_bot_suffix": "-bot",
@@ -2676,6 +2707,9 @@ class VideoProcessorApp:
         self.aspect_blur_var = tk.BooleanVar(value=False)
         self.aspect_pixelate_var = tk.BooleanVar(value=False)
         self.aspect_ambient_var = tk.BooleanVar(value=False)
+        self.ambient_engine_var = tk.StringVar(value=DEFAULT_AMBIENT_ENGINE)
+        self.ambient_engine_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('ambient_engine'))
         self.pad_color_var = tk.StringVar(value=DEFAULT_PAD_COLOR)
         self.video_offset_x_var = tk.StringVar(value=DEFAULT_VIDEO_OFFSET_X)
         self.video_offset_x_var.trace_add('write', lambda *args: self._update_selected_jobs('video_offset_x'))
@@ -2875,11 +2909,35 @@ class VideoProcessorApp:
         self.hybrid_layout_var.trace_add('write', lambda *args: (
             self._update_hybrid_ui_labels(), self._update_selected_jobs('hybrid_layout')))
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
-        self.hybrid_top_mode_var = tk.StringVar(value="pad")
+        self.hybrid_top_mode_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_MODE)
+        self.hybrid_top_offset_x_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_OFFSET_X)
+        self.hybrid_top_offset_x_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_top_offset_x'))
+        self.hybrid_top_offset_y_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_OFFSET_Y)
+        self.hybrid_top_offset_y_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_top_offset_y'))
+        self.hybrid_top_zoom_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_ZOOM)
+        self.hybrid_top_zoom_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_top_zoom'))
+        self.hybrid_top_pad_color_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_PAD_COLOR)
+        self.hybrid_top_pad_color_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_top_pad_color'))
         self.hybrid_top_path_var = tk.StringVar(value="")
         self.hybrid_top_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_top_path'))
         self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
-        self.hybrid_bottom_mode_var = tk.StringVar(value="crop")
+        self.hybrid_bottom_mode_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_MODE)
+        self.hybrid_bottom_offset_x_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_OFFSET_X)
+        self.hybrid_bottom_offset_x_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_bottom_offset_x'))
+        self.hybrid_bottom_offset_y_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
+        self.hybrid_bottom_offset_y_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_bottom_offset_y'))
+        self.hybrid_bottom_zoom_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_ZOOM)
+        self.hybrid_bottom_zoom_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_bottom_zoom'))
+        self.hybrid_bottom_pad_color_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
+        self.hybrid_bottom_pad_color_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('hybrid_bottom_pad_color'))
         self.hybrid_bottom_path_var = tk.StringVar(value="")
         self.hybrid_bottom_path_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('hybrid_bottom_path'))
@@ -3820,12 +3878,62 @@ class VideoProcessorApp:
         ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
         self.hybrid_top_crop_rb = ttk.Radiobutton(top_aspect_frame, text="Crop",
                                                   variable=self.hybrid_top_mode_var, value="crop",
-                                                  command=lambda: self._update_selected_jobs("hybrid_top_mode"))
+                                                  command=lambda: (self._update_selected_jobs("hybrid_top_mode"),
+                                                                   self._update_hybrid_block_states()))
         self.hybrid_top_crop_rb.pack(side=tk.LEFT)
         self.hybrid_top_pad_rb = ttk.Radiobutton(top_aspect_frame, text="Pad",
                                                  variable=self.hybrid_top_mode_var, value="pad",
-                                                 command=lambda: self._update_selected_jobs("hybrid_top_mode"))
+                                                 command=lambda: (self._update_selected_jobs("hybrid_top_mode"),
+                                                                  self._update_hybrid_block_states()))
         self.hybrid_top_pad_rb.pack(side=tk.LEFT, padx=5)
+        self.hybrid_top_stretch_rb = ttk.Radiobutton(top_aspect_frame, text="Stretch",
+                                                     variable=self.hybrid_top_mode_var, value="stretch",
+                                                     command=lambda: (self._update_selected_jobs("hybrid_top_mode"),
+                                                                      self._update_hybrid_block_states()))
+        self.hybrid_top_stretch_rb.pack(side=tk.LEFT, padx=(5, 0))
+        self.hybrid_top_smart_rb = ttk.Radiobutton(top_aspect_frame, text="Smart",
+                                                   variable=self.hybrid_top_mode_var, value="smart",
+                                                   command=lambda: (self._update_selected_jobs("hybrid_top_mode"),
+                                                                    self._update_hybrid_block_states()))
+        self.hybrid_top_smart_rb.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.hybrid_top_smart_rb,
+                "Smart auto-selects Pad or Crop at encode time based on the aspect mismatch. "
+                "Ratio < 1.5 -> Pad (bars). Ratio >= 1.5 -> Crop (content loss).")
+        top_settings_frame = ttk.Frame(self.top_video_frame)
+        top_settings_frame.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(top_settings_frame, text="Off X:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_top_off_x_entry = ttk.Entry(top_settings_frame,
+                                                textvariable=self.hybrid_top_offset_x_var, width=5)
+        self.hybrid_top_off_x_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(top_settings_frame, text="Off Y:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_top_off_y_entry = ttk.Entry(top_settings_frame,
+                                                textvariable=self.hybrid_top_offset_y_var, width=5)
+        self.hybrid_top_off_y_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(top_settings_frame, text="Zoom:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_top_zoom_entry = ttk.Entry(top_settings_frame,
+                                               textvariable=self.hybrid_top_zoom_var, width=5)
+        self.hybrid_top_zoom_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(top_settings_frame, text="Pad:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_top_pad_swatch = tk.Label(top_settings_frame, width=2, relief="solid",
+                                              bg=self.hybrid_top_pad_color_var.get())
+        self.hybrid_top_pad_swatch.pack(side=tk.LEFT)
+        self.hybrid_top_pad_btn = ttk.Button(top_settings_frame, text="..",
+                                             command=lambda: self.choose_color(
+                                                 self.hybrid_top_pad_color_var,
+                                                 self.hybrid_top_pad_swatch,
+                                                 "hybrid_top_pad_color"), width=2)
+        self.hybrid_top_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
+        ToolTip(self.hybrid_top_off_x_entry,
+                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Positive X = right, negative = left. Ignored in Stretch mode.")
+        ToolTip(self.hybrid_top_off_y_entry,
+                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Positive Y = down, negative = up. Ignored in Stretch mode.")
+        ToolTip(self.hybrid_top_zoom_entry,
+                "Zoom factor for Crop mode. 1.0 = tightest crop, >1.0 zooms in further. "
+                "Ignored in Pad and Stretch modes.")
+        ToolTip(self.hybrid_top_pad_btn,
+                "Pad color for this block. Only used in Pad mode.")
         top_suffix_frame = ttk.Frame(self.top_video_frame)
         top_suffix_frame.pack(fill=tk.X, pady=(3, 0))
         ttk.Label(top_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
@@ -3853,12 +3961,62 @@ class VideoProcessorApp:
         ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
         self.hybrid_bot_crop_rb = ttk.Radiobutton(bot_aspect_frame, text="Crop",
                                                   variable=self.hybrid_bottom_mode_var, value="crop",
-                                                  command=lambda: self._update_selected_jobs("hybrid_bottom_mode"))
+                                                  command=lambda: (self._update_selected_jobs("hybrid_bottom_mode"),
+                                                                   self._update_hybrid_block_states()))
         self.hybrid_bot_crop_rb.pack(side=tk.LEFT)
         self.hybrid_bot_pad_rb = ttk.Radiobutton(bot_aspect_frame, text="Pad",
                                                  variable=self.hybrid_bottom_mode_var, value="pad",
-                                                 command=lambda: self._update_selected_jobs("hybrid_bottom_mode"))
+                                                 command=lambda: (self._update_selected_jobs("hybrid_bottom_mode"),
+                                                                  self._update_hybrid_block_states()))
         self.hybrid_bot_pad_rb.pack(side=tk.LEFT, padx=5)
+        self.hybrid_bot_stretch_rb = ttk.Radiobutton(bot_aspect_frame, text="Stretch",
+                                                     variable=self.hybrid_bottom_mode_var, value="stretch",
+                                                     command=lambda: (self._update_selected_jobs("hybrid_bottom_mode"),
+                                                                      self._update_hybrid_block_states()))
+        self.hybrid_bot_stretch_rb.pack(side=tk.LEFT, padx=(5, 0))
+        self.hybrid_bot_smart_rb = ttk.Radiobutton(bot_aspect_frame, text="Smart",
+                                                   variable=self.hybrid_bottom_mode_var, value="smart",
+                                                   command=lambda: (self._update_selected_jobs("hybrid_bottom_mode"),
+                                                                    self._update_hybrid_block_states()))
+        self.hybrid_bot_smart_rb.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.hybrid_bot_smart_rb,
+                "Smart auto-selects Pad or Crop at encode time based on the aspect mismatch. "
+                "Ratio < 1.5 -> Pad (bars). Ratio >= 1.5 -> Crop (content loss).")
+        bot_settings_frame = ttk.Frame(self.bottom_video_frame)
+        bot_settings_frame.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(bot_settings_frame, text="Off X:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_bot_off_x_entry = ttk.Entry(bot_settings_frame,
+                                                textvariable=self.hybrid_bottom_offset_x_var, width=5)
+        self.hybrid_bot_off_x_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(bot_settings_frame, text="Off Y:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_bot_off_y_entry = ttk.Entry(bot_settings_frame,
+                                                textvariable=self.hybrid_bottom_offset_y_var, width=5)
+        self.hybrid_bot_off_y_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(bot_settings_frame, text="Zoom:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_bot_zoom_entry = ttk.Entry(bot_settings_frame,
+                                               textvariable=self.hybrid_bottom_zoom_var, width=5)
+        self.hybrid_bot_zoom_entry.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(bot_settings_frame, text="Pad:").pack(side=tk.LEFT, padx=(0, 2))
+        self.hybrid_bot_pad_swatch = tk.Label(bot_settings_frame, width=2, relief="solid",
+                                              bg=self.hybrid_bottom_pad_color_var.get())
+        self.hybrid_bot_pad_swatch.pack(side=tk.LEFT)
+        self.hybrid_bot_pad_btn = ttk.Button(bot_settings_frame, text="..",
+                                             command=lambda: self.choose_color(
+                                                 self.hybrid_bottom_pad_color_var,
+                                                 self.hybrid_bot_pad_swatch,
+                                                 "hybrid_bottom_pad_color"), width=2)
+        self.hybrid_bot_pad_btn.pack(side=tk.LEFT, padx=(2, 0))
+        ToolTip(self.hybrid_bot_off_x_entry,
+                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Positive X = right, negative = left. Ignored in Stretch mode.")
+        ToolTip(self.hybrid_bot_off_y_entry,
+                "Shift the crop window (Crop) or the padded image (Pad) from center, in pixels. "
+                "Positive Y = down, negative = up. Ignored in Stretch mode.")
+        ToolTip(self.hybrid_bot_zoom_entry,
+                "Zoom factor for Crop mode. 1.0 = tightest crop, >1.0 zooms in further. "
+                "Ignored in Pad and Stretch modes.")
+        ToolTip(self.hybrid_bot_pad_btn,
+                "Pad color for this block. Only used in Pad mode.")
         bot_suffix_frame = ttk.Frame(self.bottom_video_frame)
         bot_suffix_frame.pack(fill=tk.X, pady=(3, 0))
         ttk.Label(bot_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
@@ -3903,6 +4061,16 @@ class VideoProcessorApp:
                                                  variable=self.aspect_ambient_var,
                                                  command=self._toggle_upscale_options)
         self.aspect_ambient_cb.pack(side=tk.LEFT)
+        ttk.Label(aspect_bg_frame, text="Engine:").pack(side=tk.LEFT, padx=(10, 2))
+        self.ambient_engine_combo = ttk.Combobox(
+            aspect_bg_frame, textvariable=self.ambient_engine_var,
+            values=["gpu", "cpu"], width=5, state="readonly")
+        self.ambient_engine_combo.pack(side=tk.LEFT)
+        ToolTip(self.ambient_engine_combo,
+                "gpu = Fast CUDA blur (scale_cuda downscale + bicubic upscale). "
+                "Roughly 10-100x faster than legacy gblur. "
+                "cpu = Legacy CPU gblur + full-res blend/overlay. "
+                "Pixel-identical to v8.41 but very slow on 4K.")
         aspect_params_frame = ttk.Frame(geometry_group)
         aspect_params_frame.pack(fill=tk.X, pady=(0, 5))
         ap_row1 = ttk.Frame(aspect_params_frame)
@@ -4112,6 +4280,7 @@ class VideoProcessorApp:
                                                 textvariable=self.sharpening_strength_var, width=5)
         self.sharpen_strength_entry.pack(side=tk.LEFT)
         self._toggle_upscale_options()
+        self._update_hybrid_block_states()
 
     def _reset_hdr_metadata_defaults(self):
         self.hdr_master_display_var.set(DEFAULT_HDR_MASTER_DISPLAY)
@@ -5215,6 +5384,40 @@ class VideoProcessorApp:
         orient = self._aspect_to_orientation(aspect, fallback="vertical")
         return "side_by_side" if orient == "horizontal" else "stacked"
 
+    def _update_hybrid_block_states(self):
+        """Enable/disable per-block settings based on the current mode."""
+        for prefix in ("top", "bottom"):
+            mode_var = getattr(self, f"hybrid_{prefix}_mode_var", None)
+            if mode_var is None:
+                continue
+            off_x_entry = getattr(self, f"hybrid_{prefix}_off_x_entry", None)
+            off_y_entry = getattr(self, f"hybrid_{prefix}_off_y_entry", None)
+            zoom_entry = getattr(self, f"hybrid_{prefix}_zoom_entry", None)
+            pad_btn = getattr(self, f"hybrid_{prefix}_pad_btn", None)
+            if not all([off_x_entry, off_y_entry, zoom_entry, pad_btn]):
+                continue
+            mode = mode_var.get()
+            if mode == "stretch":
+                off_x_entry.config(state="disabled")
+                off_y_entry.config(state="disabled")
+                zoom_entry.config(state="disabled")
+                pad_btn.config(state="disabled")
+            elif mode == "pad":
+                off_x_entry.config(state="normal")
+                off_y_entry.config(state="normal")
+                zoom_entry.config(state="disabled")
+                pad_btn.config(state="normal")
+            elif mode == "crop":
+                off_x_entry.config(state="normal")
+                off_y_entry.config(state="normal")
+                zoom_entry.config(state="normal")
+                pad_btn.config(state="disabled")
+            else:  # smart
+                off_x_entry.config(state="normal")
+                off_y_entry.config(state="normal")
+                zoom_entry.config(state="normal")
+                pad_btn.config(state="normal")
+
     def _update_hybrid_ui_labels(self):
         if not hasattr(self, 'top_video_frame') or not hasattr(self, 'bottom_video_frame'):
             return
@@ -5586,6 +5789,7 @@ class VideoProcessorApp:
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "aspect_blur": self.aspect_blur_var.get(), "aspect_pixelate": self.aspect_pixelate_var.get(),
             "aspect_ambient": self.aspect_ambient_var.get(),
+            "ambient_engine": self.ambient_engine_var.get(),
             "pad_color": self.pad_color_var.get(),
             "video_offset_x": self.video_offset_x_var.get(), "video_offset_y": self.video_offset_y_var.get(),
             "pixelate_multiplier": self.pixelate_multiplier_var.get(),
@@ -5629,9 +5833,17 @@ class VideoProcessorApp:
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(),
             "hybrid_top_mode": self.hybrid_top_mode_var.get(),
             "hybrid_top_path": self.hybrid_top_path_var.get(),
+            "hybrid_top_offset_x": self.hybrid_top_offset_x_var.get(),
+            "hybrid_top_offset_y": self.hybrid_top_offset_y_var.get(),
+            "hybrid_top_zoom": self.hybrid_top_zoom_var.get(),
+            "hybrid_top_pad_color": self.hybrid_top_pad_color_var.get(),
             "hybrid_bottom_aspect": self.hybrid_bottom_aspect_var.get(),
             "hybrid_bottom_mode": self.hybrid_bottom_mode_var.get(),
             "hybrid_bottom_path": self.hybrid_bottom_path_var.get(),
+            "hybrid_bottom_offset_x": self.hybrid_bottom_offset_x_var.get(),
+            "hybrid_bottom_offset_y": self.hybrid_bottom_offset_y_var.get(),
+            "hybrid_bottom_zoom": self.hybrid_bottom_zoom_var.get(),
+            "hybrid_bottom_pad_color": self.hybrid_bottom_pad_color_var.get(),
             "hybrid_layout": self.hybrid_layout_var.get(),
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
@@ -6016,7 +6228,14 @@ class VideoProcessorApp:
                                          if not self._matches_suffix_pattern(s, exclude_patterns)]
                                         if exclude_patterns else detected_subs)
                 has_preset_subs = len(preset_detected_subs) > 0
-                if video_trigger == "Always (Clean/Backup)":
+                # Exclude suffix also gates the "Always" video trigger:
+                # a video whose own base name matches an excluded suffix
+                # is skipped, matching the way the exclude list already
+                # filters subtitles. Reuses _matches_suffix_pattern by
+                # passing an empty suffix and the video base name.
+                video_excluded = bool(exclude_patterns) and self._matches_suffix_pattern(
+                    {'suffix': '', 'basename': video_basename}, exclude_patterns)
+                if not video_excluded and video_trigger == "Always (Clean/Backup)":
                     self._create_job_entry(video_path, None, preset['options'],
                                            preset_name, "[No Subtitles]")
                     files_processed_count += 1
@@ -6375,6 +6594,7 @@ class VideoProcessorApp:
         self.pixelate_saturation_var.set(options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION))
         self.blur_sigma_var.set(options.get("blur_sigma", DEFAULT_BLUR_SIGMA))
         self.blur_steps_var.set(options.get("blur_steps", DEFAULT_BLUR_STEPS))
+        self.ambient_engine_var.set(options.get("ambient_engine", DEFAULT_AMBIENT_ENGINE))
         self.horizontal_aspect_var.set(options.get("horizontal_aspect", DEFAULT_HORIZONTAL_ASPECT))
         self.vertical_aspect_var.set(options.get("vertical_aspect", DEFAULT_VERTICAL_ASPECT))
         self.fruc_var.set(options.get("fruc", DEFAULT_FRUC))
@@ -6423,10 +6643,28 @@ class VideoProcessorApp:
             DELIVERY_TARGET_REVERSE.get(target_code, DELIVERY_TARGET_CUSTOM))
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
         self.hybrid_top_aspect_var.set(options.get("hybrid_top_aspect", "16:9"))
-        self.hybrid_top_mode_var.set(options.get("hybrid_top_mode", "crop"))
+        self.hybrid_top_mode_var.set(
+            options.get("hybrid_top_mode", DEFAULT_HYBRID_TOP_MODE))
+        self.hybrid_top_offset_x_var.set(
+            options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X))
+        self.hybrid_top_offset_y_var.set(
+            options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y))
+        self.hybrid_top_zoom_var.set(
+            options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM))
+        self.hybrid_top_pad_color_var.set(
+            options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR))
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5"))
-        self.hybrid_bottom_mode_var.set(options.get("hybrid_bottom_mode", "crop"))
+        self.hybrid_bottom_mode_var.set(
+            options.get("hybrid_bottom_mode", DEFAULT_HYBRID_BOTTOM_MODE))
+        self.hybrid_bottom_offset_x_var.set(
+            options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X))
+        self.hybrid_bottom_offset_y_var.set(
+            options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y))
+        self.hybrid_bottom_zoom_var.set(
+            options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM))
+        self.hybrid_bottom_pad_color_var.set(
+            options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR))
         self.hybrid_bottom_path_var.set(options.get("hybrid_bottom_path", ""))
         self.hybrid_top_suffix_var.set(options.get("hybrid_top_suffix", "-top"))
         self.hybrid_bot_suffix_var.set(options.get("hybrid_bot_suffix", "-bot"))
@@ -7610,7 +7848,19 @@ class VideoProcessorApp:
                 # out of an MP4 container (FFmpeg puts them in the AAC
                 # PCE, not an MP4 "chan" atom). Matroska declares them
                 # in the container header, which NVEncC reads fine.
-                fd, temp_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_preproc_",
+                # v8.44 PRO-RES COMPOSITE FOR DV
+                # For hybrid+DV, output the preprocessor as ProRes so cm_analyze
+                # reads the composite directly. Skips the HEVC->ProRes transcode
+                # step entirely and lets NVEncC consume the same file.
+                _use_prores_composite = bool(_is_dv and _is_hybrid)
+                if _use_prores_composite:
+                    options["_dv_prores_preproc"] = True
+                    _preproc_suffix = ".mov"
+                else:
+                    options.pop("_dv_prores_preproc", None)
+                    _preproc_suffix = ".mkv"
+                fd, temp_preproc = tempfile.mkstemp(suffix=_preproc_suffix,
+                                                    prefix="vid_temp_preproc_",
                                                     dir=output_dir)
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
@@ -7639,8 +7889,14 @@ class VideoProcessorApp:
                             "Dolby Vision output requires both cm_analyze and "
                             "dovi_tool on PATH.")
                     print("[INFO] Analyzing composite for Dolby Vision metadata...")
+                    # v8.44: the composite is already trimmed to the chapter
+                    # range by the FFmpeg preprocessor. Strip the original
+                    # seek info so we do not over-trim the analysis source.
+                    _dv_opts = copy.deepcopy(options)
+                    _dv_opts.pop("seek_start", None)
+                    _dv_opts.pop("seek_duration", None)
                     dv_rpu_path, dv_xml_path = self._generate_dolby_vision_rpu(
-                        composite_source, output_dir, options, composite_info,
+                        composite_source, output_dir, _dv_opts, composite_info,
                         basename_override=_dv_basename)
                     options["_dovi_rpu_path"] = dv_rpu_path
                 nvencc_options = copy.deepcopy(options)
@@ -8492,57 +8748,36 @@ class VideoProcessorApp:
                 print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
                       f"(ProRes trim, {_sk_start or 0:.1f}s + {_sk_dur or 0:.1f}s)")
         else:
+            # v8.43 PRO-RES TRANSCODE FOR CM_ANALYZE
+            # cm_analyze rejects every FFmpeg container (MKV, MP4, MOV
+            # containing HEVC, MXF) but accepts ProRes .mov natively.
+            # ProRes 422 LT is ~5% the size of a raw YUV dump: for
+            # 19.6s @ 7680x1608 60fps that's ~2 GB instead of ~46 GB.
             analysis_src = os.path.join(
-                work_dir,
-                f"{safe_base}_cm_input_{_w}x{_h}_10bit_420p_le.yuv")
-            # v8.36 DISK SPACE CHECK
-            # cm_analyze needs the analysed range dumped as uncompressed
-            # yuv420p10le. At 1080p24 that's ~6.2 MB/frame, so a 10-min
-            # source needs ~93 GB; at 4K it is ~370 GB. Reject early
-            # with a clear message rather than ENOSPC mid-dump.
-            _bytes_per_frame = int(_w) * int(_h) * 3
-            try:
-                _dur_check = options.get("seek_duration")
-                if _dur_check is None:
-                    _dur_check = get_file_duration(source_path)
-                _dur_check = float(_dur_check or 0)
-            except Exception:
-                _dur_check = 0.0
-            if _dur_check > 0:
-                _fps_check = float(info.get("framerate", 24) or 24)
-                _est_bytes = int(_bytes_per_frame * _dur_check * _fps_check * 1.05)
-                try:
-                    _free_bytes = shutil.disk_usage(work_dir).free
-                except Exception:
-                    _free_bytes = None
-                if _free_bytes is not None and _est_bytes > _free_bytes * 0.9:
-                    _drive = os.path.splitdrive(os.path.abspath(work_dir))[0] or work_dir
-                    raise VideoProcessingError(
-                        f"Not enough free disk space for cm_analyze YUV dump.\n"
-                        f"       Estimated need: {_est_bytes/1e9:.1f} GB "
-                        f"({_dur_check:.1f}s @ {_fps_check:.2f} fps, "
-                        f"{_w}x{_h} yuv420p10le).\n"
-                        f"       Free on {_drive}: {_free_bytes/1e9:.1f} GB.\n"
-                        f"       Free space or point the output directory elsewhere.")
-            dump_cmd = [FFMPEG_CMD, "-y", "-hide_banner", "-loglevel", "error"]
+                work_dir, f"{safe_base}_cm_input.mov")
+            _prores_cmd = [FFMPEG_CMD, "-y", "-hide_banner",
+                           "-loglevel", "error"]
             _sk_start = options.get("seek_start")
             _sk_dur = options.get("seek_duration")
             if _sk_start is not None:
-                dump_cmd.extend(["-ss", str(_sk_start)])
-            dump_cmd.extend(["-i", source_path])
+                _prores_cmd.extend(["-ss", str(_sk_start)])
+            _prores_cmd.extend(["-i", source_path])
             if _sk_dur is not None:
-                dump_cmd.extend(["-t", str(_sk_dur)])
-            dump_cmd.extend([
+                _prores_cmd.extend(["-t", str(_sk_dur)])
+            _prores_cmd.extend([
                 "-map", "0:v:0",
-                "-pix_fmt", "yuv420p10le",
-                "-f", "rawvideo",
+                "-c:v", "prores_ks",
+                "-profile:v", "1",
+                "-pix_fmt", "yuv422p10le",
+                "-an", "-sn", "-dn",
                 analysis_src,
             ])
-            self.run_external_tool(dump_cmd,
-                                   "ffmpeg dump YUV for cm_analyze")
+            self.run_external_tool(
+                _prores_cmd, "ffmpeg transcode to ProRes for cm_analyze")
             register_temp_file(analysis_src)
+            _size_mb = os.path.getsize(analysis_src) / (1024 * 1024)
             print(f"[INFO] cm_analyze input: {os.path.basename(analysis_src)} "
-                  f"(raw YUV420p10le, {_w}x{_h})")
+                  f"(ProRes 422 LT, {_w}x{_h}, {_size_mb:.1f} MB)")
 
         fps = info.get("framerate", 24)
         if abs(fps - round(fps)) < 1e-6:
@@ -8853,6 +9088,11 @@ class VideoProcessorApp:
         color_preset_key = (options.get("color_preset_hdr") if is_hdr_output
                             else options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
+        # Local aliases so the f-strings below can interpolate the
+        # resolved color tags without nested quotes.
+        _cp_fix = color_info["primaries"]
+        _ct_fix = color_info["trc"]
+        _cm_fix = color_info["matrix"]
         use_cpu_scaling = (chroma != "420")
         if is_hdr_output or info["bit_depth"] == 10:
             out_bit_depth = 10
@@ -8922,22 +9162,120 @@ class VideoProcessorApp:
                 target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
             eff_layout = self._resolve_hybrid_layout(options)
 
-            def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h):
+            def get_block_filters(aspect_str, mode, upscale_algo, block_w, block_h,
+                                  src_info=None, offset_x=0, offset_y=0,
+                                  pad_color_hex="#000000", zoom=1.0):
+                """v8.45 per-block handling.
+
+                Modes: crop / pad / stretch / smart.
+                Offsets apply to Crop and Pad only. Zoom applies to Crop only.
+                Smart auto-selects Pad or Crop based on the aspect mismatch.
+                """
                 if not aspect_str:
                     raise VideoProcessingError("Missing Aspect Ratio setting in preset (Hybrid block).")
                 if not mode:
                     raise VideoProcessingError("Missing Mode setting in preset (Hybrid block).")
                 if not upscale_algo:
                     raise VideoProcessingError("Missing Upscale Algorithm setting in preset.")
-                scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
-                         f":format={cuda_work_fmt}")
-                if mode == 'stretch':
+                # Resolve "smart" -> concrete mode from src/target aspect mismatch.
+                if mode == "smart":
+                    mode = "pad"
+                    if src_info and src_info.get("width") and src_info.get("height"):
+                        try:
+                            _sw = float(src_info["width"])
+                            _sh = float(src_info["height"])
+                            if _sw > 0 and _sh > 0 and block_w > 0 and block_h > 0:
+                                _src_ar = _sw / _sh
+                                _tgt_ar = float(block_w) / float(block_h)
+                                _ratio = max(_src_ar, _tgt_ar) / min(_src_ar, _tgt_ar)
+                                mode = "pad" if _ratio < 1.5 else "crop"
+                        except Exception:
+                            pass
+                # Sanitize offsets to even integers.
+                try:
+                    _ox = int(float(offset_x))
+                except Exception:
+                    _ox = 0
+                try:
+                    _oy = int(float(offset_y))
+                except Exception:
+                    _oy = 0
+                _ox = (_ox // 2) * 2
+                _oy = (_oy // 2) * 2
+                # Effective source aspect ratio, or None if unknown.
+                _src_ar = None
+                if src_info and src_info.get("width") and src_info.get("height"):
+                    try:
+                        _sw = float(src_info["width"])
+                        _sh = float(src_info["height"])
+                        if _sw > 0 and _sh > 0:
+                            _src_ar = _sw / _sh
+                    except Exception:
+                        _src_ar = None
+                # --- STRETCH: exact target, no offsets, no pad ---
+                if mode == "stretch":
+                    scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
+                             f":format={cuda_work_fmt}")
                     return scale, "", block_w, block_h
-                vf = f"{scale}:force_original_aspect_ratio={'decrease' if mode == 'pad' else 'increase'}"
-                pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
-                cpu = (f"pad={block_w}:{block_h}:(ow-iw)/2:(oh-ih)/2:{pad_color}"
-                       if mode == 'pad' else f"crop={block_w}:{block_h}")
-                return vf, cpu, block_w, block_h
+                # --- CROP: scale up to cover, then cut ---
+                if mode == "crop":
+                    try:
+                        _z = float(zoom)
+                    except Exception:
+                        _z = 1.0
+                    if _z < 1.0:
+                        _z = 1.0
+                    zw = max(2, (int(block_w * _z) // 2) * 2)
+                    zh = max(2, (int(block_h * _z) // 2) * 2)
+                    fit_w, fit_h = zw, zh
+                    if _src_ar:
+                        _tgt_ar = float(zw) / float(zh)
+                        if _src_ar > _tgt_ar:
+                            fit_w = max(zw, (int(round(zh * _src_ar)) // 2) * 2)
+                            fit_h = zh
+                        else:
+                            fit_h = max(zh, (int(round(zw / _src_ar)) // 2) * 2)
+                            fit_w = zw
+                    max_ox = max(0, (fit_w - block_w) // 2)
+                    max_oy = max(0, (fit_h - block_h) // 2)
+                    ox = max(-max_ox, min(max_ox, _ox))
+                    oy = max(-max_oy, min(max_oy, _oy))
+                    crop_x = (fit_w - block_w) // 2 + ox
+                    crop_y = (fit_h - block_h) // 2 + oy
+                    crop_x = max(0, min(fit_w - block_w, crop_x))
+                    crop_y = max(0, min(fit_h - block_h, crop_y))
+                    crop_x = (crop_x // 2) * 2
+                    crop_y = (crop_y // 2) * 2
+                    vf = (f"scale_cuda=w={zw}:h={zh}:interp_algo={upscale_algo}"
+                          f":format={cuda_work_fmt}:force_original_aspect_ratio=increase")
+                    cpu = f"crop={block_w}:{block_h}:{crop_x}:{crop_y}"
+                    return vf, cpu, zw, zh
+                # --- PAD: scale down to fit, then pad ---
+                if mode == "pad":
+                    fit_w, fit_h = block_w, block_h
+                    if _src_ar:
+                        _tgt_ar = float(block_w) / float(block_h)
+                        if _src_ar > _tgt_ar:
+                            fit_w = block_w
+                            fit_h = max(2, (int(round(block_w / _src_ar)) // 2) * 2)
+                        else:
+                            fit_h = block_h
+                            fit_w = max(2, (int(round(block_h * _src_ar)) // 2) * 2)
+                    max_ox = max(0, (block_w - fit_w) // 2)
+                    max_oy = max(0, (block_h - fit_h) // 2)
+                    ox = max(-max_ox, min(max_ox, _ox))
+                    oy = max(-max_oy, min(max_oy, _oy))
+                    pad_x = (block_w - fit_w) // 2 + ox
+                    pad_y = (block_h - fit_h) // 2 + oy
+                    pad_x = max(0, min(block_w - fit_w, pad_x))
+                    pad_y = max(0, min(block_h - fit_h, pad_y))
+                    pad_x = (pad_x // 2) * 2
+                    pad_y = (pad_y // 2) * 2
+                    scale = (f"scale_cuda=w={block_w}:h={block_h}:interp_algo={upscale_algo}"
+                             f":format={cuda_work_fmt}:force_original_aspect_ratio=decrease")
+                    cpu = f"pad={block_w}:{block_h}:{pad_x}:{pad_y}:{pad_color_hex}"
+                    return scale, cpu, block_w, block_h
+                raise VideoProcessingError(f"Unknown hybrid block mode: {mode}")
 
             safe_algo = ffmpeg_upscale_algo
             if not safe_algo:
@@ -8957,10 +9295,22 @@ class VideoProcessorApp:
                     if left_w >= target_w:
                         left_w = (target_w // 4) * 2
                         right_w = target_w - left_w
+                _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
+                _bot_pad_c = options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
+                _top_z = options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM)
+                _bot_z = options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM)
+                _top_ox = options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X)
+                _top_oy = options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y)
+                _bot_ox = options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X)
+                _bot_oy = options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
                 top_vf, top_cpu, _, _ = get_block_filters(
-                    left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h)
+                    left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h,
+                    src_info=info, offset_x=_top_ox, offset_y=_top_oy,
+                    pad_color_hex=_top_pad_c, zoom=_top_z)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
-                    right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h)
+                    right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h,
+                    src_info=info_right, offset_x=_bot_ox, offset_y=_bot_oy,
+                    pad_color_hex=_bot_pad_c, zoom=_bot_z)
                 stack_filter = "hstack=inputs=2[stacked]"
             else:
                 top_aspect = options.get('hybrid_top_aspect')
@@ -8977,10 +9327,22 @@ class VideoProcessorApp:
                     if top_h >= total_h:
                         top_h = (total_h // 4) * 2
                         bot_h = total_h - top_h
+                _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
+                _bot_pad_c = options.get("hybrid_bottom_pad_color", DEFAULT_HYBRID_BOTTOM_PAD_COLOR)
+                _top_z = options.get("hybrid_top_zoom", DEFAULT_HYBRID_TOP_ZOOM)
+                _bot_z = options.get("hybrid_bottom_zoom", DEFAULT_HYBRID_BOTTOM_ZOOM)
+                _top_ox = options.get("hybrid_top_offset_x", DEFAULT_HYBRID_TOP_OFFSET_X)
+                _top_oy = options.get("hybrid_top_offset_y", DEFAULT_HYBRID_TOP_OFFSET_Y)
+                _bot_ox = options.get("hybrid_bottom_offset_x", DEFAULT_HYBRID_BOTTOM_OFFSET_X)
+                _bot_oy = options.get("hybrid_bottom_offset_y", DEFAULT_HYBRID_BOTTOM_OFFSET_Y)
                 top_vf, top_cpu, _, _ = get_block_filters(
-                    top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h)
+                    top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h,
+                    src_info=info, offset_x=_top_ox, offset_y=_top_oy,
+                    pad_color_hex=_top_pad_c, zoom=_top_z)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
-                    bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h)
+                    bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h,
+                    src_info=info_bottom, offset_x=_bot_ox, offset_y=_bot_oy,
+                    pad_color_hex=_bot_pad_c, zoom=_bot_z)
                 stack_filter = "vstack=inputs=2[stacked]"
             cpu_pix_fmt = cuda_work_fmt
             cpu_chain = []
@@ -9013,7 +9375,7 @@ class VideoProcessorApp:
                 cpu_chain.append("format=nv12")
             if True:  # v8.39 patched
                 final_v_out = (f"[stacked]{','.join(filter(None, cpu_chain))}[v_out]"
-                               if cpu_chain else "[stacked][v_out]")
+                               if cpu_chain else "[stacked]null[v_out]")
             else:
                 final_v_out = (f"[stacked]{','.join(filter(None, cpu_chain))},hwupload_cuda[v_out]"
                                if cpu_chain else "[stacked]hwupload_cuda[v_out]")
@@ -9026,9 +9388,9 @@ class VideoProcessorApp:
                                   f"[v_bot_in]{bot_vf}[v_bot_out]"]
             video_fc_parts.extend([
                 f"[v_top_out]hwdownload,format={cpu_pix_fmt},"
-                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{top_cpu}[cpu_top]",
+                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},{top_cpu}[cpu_top]",
                 f"[v_bot_out]hwdownload,format={cpu_pix_fmt},"
-                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,{bot_cpu}[cpu_bot]",
+                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},{bot_cpu}[cpu_bot]",
                 f"[cpu_top][cpu_bot]{stack_filter}", final_v_out])
             filter_complex_parts.extend(video_fc_parts)
             video_out_tag = "[v_out]"
@@ -9141,7 +9503,7 @@ class VideoProcessorApp:
                                 f"interp_algo={safe_algo}:format={target_fmt},")
                             fc_parts.append(
                                 f"hwdownload,format={target_fmt},"
-                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+                                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
                                 f"eq=brightness={bright}:saturation={sat},hwupload_cuda,")
                             fc_parts.append(
                                 f"scale_cuda=w={target_w}:h={target_h}:interp_algo=nearest:"
@@ -9152,19 +9514,36 @@ class VideoProcessorApp:
                             steps = options.get("blur_steps", DEFAULT_BLUR_STEPS)
                             bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
                             sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
-                            fc_parts.append(
-                                f"{bg_current}scale_cuda=w={target_w // 2}:h={target_h // 2}:"
-                                f"interp_algo={safe_algo}:format={target_fmt},")
-                            fc_parts.append(
-                                f"hwdownload,format={target_fmt},"
-                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
-                                f"gblur=sigma={sigma}:steps={steps}")
-                            if not apply_pixelate:
-                                fc_parts.append(f",eq=brightness={bright}:saturation={sat}")
-                            fc_parts.append(f",format={target_fmt},hwupload_cuda,")
-                            fc_parts.append(
-                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
-                                f"format={target_fmt}[v_bg_blurred];")
+                            _bg_engine = str(options.get("ambient_engine", DEFAULT_AMBIENT_ENGINE)).lower()
+                            if _bg_engine == "cpu":
+                                fc_parts.append(
+                                    f"{bg_current}scale_cuda=w={target_w // 2}:h={target_h // 2}:"
+                                    f"interp_algo={safe_algo}:format={target_fmt},")
+                                fc_parts.append(
+                                    f"hwdownload,format={target_fmt},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"gblur=sigma={sigma}:steps={steps}")
+                                if not apply_pixelate:
+                                    fc_parts.append(f",eq=brightness={bright}:saturation={sat}")
+                                fc_parts.append(f",format={target_fmt},hwupload_cuda,")
+                                fc_parts.append(
+                                    f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                    f"format={target_fmt}[v_bg_blurred];")
+                            else:
+                                # v8.42 GPU AMBIENT ENGINE
+                                _bg_small_w = max(2, target_w // 8)
+                                _bg_small_h = max(2, target_h // 8)
+                                fc_parts.append(
+                                    f"{bg_current}scale_cuda=w={_bg_small_w}:h={_bg_small_h}:"
+                                    f"interp_algo=bilinear:format={target_fmt},")
+                                fc_parts.append(
+                                    f"hwdownload,format={target_fmt},"
+                                    f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+                                    f"eq=brightness={bright}:saturation={sat},"
+                                    f"format={target_fmt},hwupload_cuda,")
+                                fc_parts.append(
+                                    f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                    f"format={target_fmt}[v_bg_blurred];")
                             bg_current = "[v_bg_blurred]"
                         if apply_ambient:
                             sigma = options.get("blur_sigma", "25")
@@ -9200,17 +9579,35 @@ class VideoProcessorApp:
                                 f"pad={target_w}:{target_h}:"
                                 f"(ow-iw)/2+{ox}:(oh-ih)/2+{oy}:black,"
                                 f"format={target_fmt},hwupload_cuda,")
-                            fc_parts.append(
-                                f"scale_cuda=w={target_w // spread}:h={target_h // spread}:"
-                                f"interp_algo=bilinear:format={target_fmt},")
-                            fc_parts.append(
-                                f"hwdownload,format={target_fmt},"
-                                f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
-                                f"gblur=sigma={sigma}:steps={steps},eq=saturation={sat},"
-                                f"format={target_fmt},hwupload_cuda,")
-                            fc_parts.append(
-                                f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
-                                f"format={target_fmt}[v_ambient_layer];")
+                            _ambient_engine = str(options.get("ambient_engine", DEFAULT_AMBIENT_ENGINE)).lower()
+                            if _ambient_engine == "cpu":
+                                fc_parts.append(
+                                    f"scale_cuda=w={target_w // spread}:h={target_h // spread}:"
+                                    f"interp_algo=bilinear:format={target_fmt},")
+                                fc_parts.append(
+                                    f"hwdownload,format={target_fmt},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"gblur=sigma={sigma}:steps={steps},eq=saturation={sat},"
+                                    f"format={target_fmt},hwupload_cuda,")
+                                fc_parts.append(
+                                    f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                    f"format={target_fmt}[v_ambient_layer];")
+                            else:
+                                # v8.42 GPU AMBIENT ENGINE
+                                _ambient_blur = max(4, spread * 4)
+                                _amb_small_w = max(2, target_w // _ambient_blur)
+                                _amb_small_h = max(2, target_h // _ambient_blur)
+                                fc_parts.append(
+                                    f"scale_cuda=w={_amb_small_w}:h={_amb_small_h}:"
+                                    f"interp_algo=bilinear:format={target_fmt},")
+                                fc_parts.append(
+                                    f"hwdownload,format={target_fmt},"
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix},"
+                                    f"eq=saturation={sat},"
+                                    f"format={target_fmt},hwupload_cuda,")
+                                fc_parts.append(
+                                    f"scale_cuda=w={target_w}:h={target_h}:interp_algo=bicubic:"
+                                    f"format={target_fmt}[v_ambient_layer];")
                             if apply_pixelate or apply_blur:
                                 fc_parts.append(f"{bg_current}hwdownload,format={target_fmt}[v_bg_sys];")
                                 fc_parts.append(
@@ -9318,7 +9715,7 @@ class VideoProcessorApp:
                 vf_filters.append(f"format={target_cpu_pix_fmt}")
             elif cpu_filters:
                 processing_chain = [f"hwdownload,format={cuda_work_fmt}",
-                                    "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"] + \
+                                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}"] + \
                                    cpu_filters
                 if _leave_on_cpu:
                     processing_chain.append(f"format={target_cpu_pix_fmt}")
@@ -9391,7 +9788,15 @@ class VideoProcessorApp:
             # runs), so bit-exact lossless buys nothing but ~20x disk
             # space. CQ 14 is visually indistinguishable from source and
             # leaves ample headroom for the AI/encoder passes that follow.
-            if is_hdr_output or info["bit_depth"] == 10:
+            _dv_prores_preproc = bool(options.get("_dv_prores_preproc", False))
+            if _dv_prores_preproc:
+                # v8.44 ProRes 422 LT composite: cm_analyze reads it directly
+                # and NVEncC consumes it for the final encode.
+                pix_fmt = "yuv422p10le"
+                encoder_opts = ["-c:v", "prores_ks",
+                                "-profile:v", "1",
+                                "-pix_fmt", pix_fmt]
+            elif is_hdr_output or info["bit_depth"] == 10:
                 pix_fmt = "yuv420p10le"
                 encoder_opts = ["-c:v", "hevc_nvenc", "-pix_fmt", pix_fmt,
                                 "-preset", "p4", "-tune", "hq",
@@ -9419,7 +9824,11 @@ class VideoProcessorApp:
             ])
             cmd.extend(encoder_opts)
             # v8.35 NVENCC MKV + AUDIO-COPY FIX: matroska, not mp4
-            cmd.extend(["-f", "matroska", output_file])
+            # v8.44: DV ProRes composite uses MOV so cm_analyze accepts it.
+            if _dv_prores_preproc:
+                cmd.extend(["-f", "mov", output_file])
+            else:
+                cmd.extend(["-f", "matroska", output_file])
             return cmd
         selected_codec = options.get("video_codec", DEFAULT_VIDEO_CODEC)
         if is_cpu_encode:
