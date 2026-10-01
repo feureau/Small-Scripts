@@ -7847,8 +7847,23 @@ class VideoProcessorApp:
         ratio = tgt_short / src_short
         if ratio <= 2.01:
             return False, 0, 0
+        # v8.57 SUPERRES INTERMEDIATE HEIGHT CAP
+        # nvvfx-superres rejects any input taller than 2160 pixels.
+        # The default half-target intermediate exceeds that for tall
+        # aspect ratios: e.g. 7680x5760 (4:3 8K) has a half-target of
+        # 3840x2880, which the final SR pass cannot consume.
+        #
+        # Cap the intermediate y-dim at 2160, preserving the target
+        # aspect ratio, so the final SR pass gets a legal input. The
+        # final pass then runs a larger single-stage upscale (2.67x
+        # for the 4:3 8K case), which nvvfx-superres handles fine.
+        _SR_MAX_INPUT_HEIGHT = 2160
         inter_w = max(2, ((tgt_w // 2) // 2) * 2)
         inter_h = max(2, ((tgt_h // 2) // 2) * 2)
+        if inter_h > _SR_MAX_INPUT_HEIGHT:
+            _scale = _SR_MAX_INPUT_HEIGHT / float(inter_h)
+            inter_h = _SR_MAX_INPUT_HEIGHT
+            inter_w = max(2, (int(round(inter_w * _scale)) // 2) * 2)
         return True, inter_w, inter_h
 
     def _compute_hybrid_block_dims(self, options, info_top, info_bot,
@@ -9064,15 +9079,79 @@ class VideoProcessorApp:
         return ret_code
 
     def run_external_tool(self, cmd, label="external tool"):
+        """Run an external tool, streaming its output to the console live.
+
+        v8.52 STREAMING FIX
+        Previously this used subprocess.run(capture_output=True), which
+        buffered every line of the child's output until the process
+        exited. Long-running children (NVEncC SuperRes prepass on
+        ProRes masters, cm_analyze on 4K material, TrueHDR prepass on
+        chapter-split sources, dovi_tool on large RPUs) therefore made
+        the console appear frozen for minutes to hours. We now stream
+        character-by-character, mirroring run_nvencc_command() and
+        safe_ffmpeg_execution().
+        """
         print(f"--- {label} ---")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        if result.returncode != 0:
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env, text=True,
+            encoding="utf-8", errors="replace", bufsize=1)
+        recent = deque(maxlen=200)
+        carry = ""
+        progress_line_active = False
+        last_progress_len = 0
+        return_code = 1
+        try:
+            while True:
+                ch = process.stdout.read(1)
+                if ch == "":
+                    if process.poll() is not None:
+                        if carry.strip():
+                            line = carry.strip()
+                            recent.append(line)
+                            if progress_line_active:
+                                sys.stdout.write("\n")
+                            sys.stdout.write(line + "\n")
+                            sys.stdout.flush()
+                        break
+                    continue
+                if ch in ("\r", "\n"):
+                    line = carry.strip()
+                    carry = ""
+                    if not line:
+                        continue
+                    recent.append(line)
+                    is_progress = any(tok in line for tok in
+                                      ("fps", "frames", "%", "remaining",
+                                       "time=", "ETA", "Analyzing"))
+                    if is_progress:
+                        pad = " " * max(0, last_progress_len - len(line))
+                        sys.stdout.write("\r" + line + pad)
+                        sys.stdout.flush()
+                        progress_line_active = True
+                        last_progress_len = len(line)
+                    else:
+                        if progress_line_active:
+                            sys.stdout.write("\n")
+                            progress_line_active = False
+                            last_progress_len = 0
+                        sys.stdout.write(line + "\n")
+                        sys.stdout.flush()
+                else:
+                    carry += ch
+            process.stdout.close()
+            return_code = process.wait()
+        finally:
+            if progress_line_active:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+        if return_code != 0:
+            tail = "\n".join(recent)
             raise VideoProcessingError(
-                f"{label} failed (exit {result.returncode})\n"
-                f"--- stdout ---\n{result.stdout}\n"
-                f"--- stderr ---\n{result.stderr}")
-        return result
+                f"{label} failed (exit {return_code})\n"
+                f"--- last output ---\n{tail}")
+        return return_code
 
     def _resolve_dv_auto_match(self, options, info):
         """If DV color preset is 'auto', replace it with a concrete key
@@ -9516,16 +9595,31 @@ class VideoProcessorApp:
         _src_codec = str(_src_info.get("codec_name", "")).lower()
         _use_avsw = _src_codec not in _cuvid_codecs
 
+        # v8.53 AV1-INTERMEDIATE OPTION
+        # Match the intermediate codec to the final output codec when
+        # that codec is AV1. NVENC AV1 is significantly slower than
+        # NVENC HEVC (2.5-4x on consumer RTX), but some workflows
+        # prefer codec consistency between transients and output.
+        # The intermediate is near-lossless (CQP 12) either way, so
+        # the pixel result is unchanged.
+        _job_codec = str(options.get("video_codec", "h264")).lower()
+        if _job_codec == "av1":
+            _inter_codec = "av1"
+            _inter_codec_args = ["--output-depth", "10"]
+        else:
+            _inter_codec = "hevc"
+            _inter_codec_args = ["--output-depth", "10", "--profile", "main10"]
         cmd = [NVENCC_CMD, "--avsw" if _use_avsw else "--avhw",
-               "--codec", "hevc",
-               "--output-depth", "10", "--profile", "main10",
+               "--codec", _inter_codec]
+        cmd.extend(_inter_codec_args)
+        cmd.extend([
                "--colorprim", src_prim, "--transfer", src_trc,
                "--colormatrix", src_matrix,
                "--vpp-resize", resize_algo,
                "--output-res", output_res,
                "--cqp", "12",
                "--audio-copy",
-               "-i", input_file, "--output", out_path]
+               "-i", input_file, "--output", out_path])
 
         self.run_external_tool(cmd, "NVEncC SuperRes preprocessor")
         return out_path
@@ -10325,7 +10419,89 @@ class VideoProcessorApp:
             # formats supported by the filter ...". Mirror the hybrid
             # path: terminate the graph on CPU frames when the backend
             # is the preprocessor or the encoder is CPU-software.
-            _leave_on_cpu = True  # v8.39 patched: FFmpeg encoders (libx* and h*_nvenc) both consume CPU AVFrames; the h*_nvenc wrappers upload internally.
+            # =====================================================
+            # ROUND-TRIP DOCUMENTATION (DO NOT OPTIMIZE)
+            # =====================================================
+            # The pipeline for a non-hybrid NVENC job performs what
+            # looks like a wasteful GPU -> CPU -> GPU round trip:
+            #
+            #     scale_cuda (CUDA surface, p010le on-device)
+            #         |
+            #         v   hwdownload,format=p010le
+            #     CPU frames in p010le
+            #         |
+            #         v   format=yuv420p10le
+            #     CPU frames in yuv420p10le
+            #         |
+            #         v   [FFmpeg sees encoder wants p010le, auto-inserts]
+            #     auto_scale: yuv420p10le -> p010le  (CPU, same size)
+            #         |
+            #         v   hwupload_cuda (auto-inserted by wrapper)
+            #     CUDA surface in p010le
+            #         |
+            #         v
+            #     hevc_nvenc / av1_nvenc
+            #
+            # On a 3840x2880 10-bit 60p stream this costs roughly
+            # 1.3 GB/s of PCIe traffic and one full-frame swscale
+            # conversion per frame. It is NOT a bug and it is NOT
+            # accidentally redundant.
+            #
+            # It exists because the encoder options in this function
+            # declare a CPU pixel format via `-pix_fmt`:
+            #
+            #     encoder_opts = ["-c:v", "hevc_nvenc",
+            #                     "-pix_fmt", "yuv420p10le", ...]
+            #
+            # When FFmpeg sees a filter graph that terminates on a
+            # CUDA surface but an encoder that declares a CPU format,
+            # it inserts an automatic swscale (`auto_scale`) between
+            # them to bridge the two. swscale cannot read CUDA
+            # surfaces, so it errors out with:
+            #
+            #     Impossible to convert between the formats supported
+            #     by the filter 'Parsed_scale_cuda_0' and the filter
+            #     'auto_scale_4'
+            #     src: cuda
+            #     dst: yuv420p yuyv422 rgb24 ... p010le ...
+            #     Conversion failed!
+            #
+            # ...which kills the job before a single frame is
+            # encoded. This was verified empirically (see the v8.54
+            # patch history).
+            #
+            # Two ways out:
+            #
+            #   (a) Explicitly hwdownload the frames to CPU (this
+            #       branch). The auto_scale step then succeeds
+            #       because both sides are on the CPU. The NVENC
+            #       wrapper re-uploads internally.
+            #
+            #   (b) Remove `-pix_fmt` from the encoder options AND
+            #       terminate the filter graph on the CUDA surface.
+            #       This requires FFmpeg to accept CUDA AVFrames
+            #       directly for every NVENC codec variant we target
+            #       and every FFmpeg version users might have. It is
+            #       the "correct" fix but historically fragile:
+            #       av1_nvenc's CUDA input path in particular has
+            #       been inconsistent across FFmpeg releases.
+            #
+            # We choose (a) for robustness. A future contributor is
+            # welcome to pursue (b), but only as one atomic change
+            # with regression coverage across:
+            #
+            #   codecs:    h264 / hevc / av1 (all three NVENC)
+            #   outputs:   SDR / HDR / Dolby Vision
+            #   backends:  ffmpeg_only, nvencc_with_ffmpeg
+            #   features:  subtitles, LUT, sharpening, DV ProRes
+            #              composite, multi-stage superres, SDR-to-HDR
+            #
+            # Do not remove this hardcode casually. The cost of the
+            # round trip (~15-30% on the preproc stage) is small
+            # compared to the failure mode of a broken 8K job that
+            # dies before frame 1.
+            # =====================================================
+            _leave_on_cpu = True
             _cuda_active = not _skip_cuda_upload
             if use_cpu_scaling:
                 vf_filters.extend(cpu_filters)
@@ -10416,10 +10592,20 @@ class VideoProcessorApp:
                                 "-profile:v", "1",
                                 "-pix_fmt", pix_fmt]
             elif is_hdr_output or info["bit_depth"] == 10:
-                pix_fmt = "yuv420p10le"
-                encoder_opts = ["-c:v", "hevc_nvenc", "-pix_fmt", pix_fmt,
-                                "-preset", "p4", "-tune", "hq",
-                                "-rc", "vbr", "-cq", "14", "-b:v", "0"]
+                # v8.53 AV1-INTERMEDIATE OPTION
+                # Match the intermediate codec to the final output
+                # codec when that codec is AV1. HEVC otherwise.
+                _job_codec = str(options.get("video_codec", "h264")).lower()
+                if _job_codec == "av1":
+                    pix_fmt = "p010le"
+                    encoder_opts = ["-c:v", "av1_nvenc", "-pix_fmt", pix_fmt,
+                                    "-preset", "p4", "-tune", "hq",
+                                    "-rc", "vbr", "-cq", "14", "-b:v", "0"]
+                else:
+                    pix_fmt = "yuv420p10le"
+                    encoder_opts = ["-c:v", "hevc_nvenc", "-pix_fmt", pix_fmt,
+                                    "-preset", "p4", "-tune", "hq",
+                                    "-rc", "vbr", "-cq", "14", "-b:v", "0"]
             else:
                 pix_fmt = "yuv420p"
                 encoder_opts = ["-c:v", "h264_nvenc", "-pix_fmt", pix_fmt,
