@@ -2,17 +2,40 @@
 transcribe_ultimate_v5.py
 -------------------------
 Production-Grade Transcription Pipeline
-(Defaulted to Large-V2 for Maximum Stability)
+Default backend: faster-whisper (large-v3-turbo) on CUDA.
 
 Changelog v5:
-- Changed Default Model to 'large-v2' per user request.
-- Retains Smart Compute Type & Error Handling from v4.
-- Added strict GPU/CUDA check to prevent CPU fallbacks.
+- Default model: deepdml/faster-whisper-large-v3-turbo-ct2 (alias: "turbo").
+  Aliases: default / turbo -> turbo, large-v2, large-v3, distil, medium, small,
+           qwen3-asr-0.6b, qwen3-asr-1.7b.
+- Smart compute type: float16 on CUDA, auto-fallback to int8 on CUBLAS errors.
+- Strict GPU/CUDA enforcement: exits on CPU-only environments.
+- Optional Qwen3-ASR backend (env: QWEN_ASR_ALIGNER). Never falls back to Whisper.
+- Audio pipeline stages: isolate (Demucs), enhance (dynaudnorm),
+  cl (compressor+limiter).
+  IMPORTANT: "cl" is appended to the pipeline by default in main(); there is
+  currently no CLI flag to disable it.
+- Rescue pass: ON by default (--rescue-missed / --no-rescue-missed). Runs a
+  second no-VAD transcription and merges likely-missed segments.
+- Post-processing chain (applied in this order):
+    1. resegment_by_phrase          -- rebuilds segments from word timestamps
+    2. sanitize_subtitle_segments   -- hallucination / repetition cleanup
+    3. split_long_subtitle_segments -- enforces max_duration / max_words
+    4. normalize_timeline           -- removes overlap, enforces min_duration
+    5. (optional) apply_diarization -- pyannote speaker labels
+- Silero VAD (--use_vad) is used for word-timestamp snapping, not for
+  gating transcription. Whisper's own VAD is controlled by --vad_filter.
+- Diarization is midpoint-based: each subtitle gets one speaker, no splitting.
+- Debug logging via --debug-log writes per-run .log next to the output.
 
 Dependencies:
   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
   pip install faster-whisper yt-dlp tqdm av demucs silero-vad pyannote.audio
   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+  # Optional Qwen3-ASR backend:
+  pip install qwen-asr
+  # When using --model qwen3-asr-*, set:
+  #   QWEN_ASR_ALIGNER=Qwen/Qwen3-ASR-Aligner
 """
 
 import sys
@@ -111,6 +134,60 @@ _ydl_pbar = None
 CURRENT_LOG_FILE = None
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma", ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".m4v", ".webm"}
+
+# Words that must never be the last token of a subtitle segment.
+# Kept intentionally broad across EN/PT so the guard fires before a split.
+HANGING_START_WORDS = {
+    # Coordinating conjunctions that should not open a subtitle segment.
+    "and", "or", "but", "so", "yet", "nor",
+    "e", "ou", "mas", "porém", "porem",
+}
+
+
+HANGING_TAIL_WORDS = {
+    # Articles / determiners / demonstratives (EN)
+    "a", "an", "the", "this", "that", "these", "those",
+    "my", "your", "his", "her", "its", "our", "their",
+    "some", "any", "each", "every", "no", "both", "either", "neither",
+    # Conjunctions / subordinators (EN)
+    "and", "or", "but", "so", "yet", "nor", "if", "than",
+    "because", "since", "while", "when", "where", "which", "who", "whom",
+    "whose", "although", "though", "unless", "until", "whether",
+    # Prepositions (EN)
+    "of", "to", "in", "on", "at", "by", "for", "with", "from",
+    "into", "onto", "over", "under", "about", "against", "between",
+    "through", "during", "before", "after", "above", "below",
+    "upon", "within", "without", "toward", "towards", "across",
+    # Auxiliary / copula / modal (EN)
+    "is", "are", "was", "were", "am", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had",
+    "will", "would", "shall", "should", "can", "could",
+    "may", "might", "must",
+    # Negatives (EN)
+    "not", "never",
+    # Articles / determiners (PT)
+    "o", "os", "um", "uma", "uns", "umas",
+    "este", "esta", "estes", "estas", "esse", "essa", "esses", "essas",
+    "isso", "isto", "aquilo", "aquele", "aquela", "aqueles", "aquelas",
+    "meu", "minha", "meus", "minhas", "seu", "sua", "seus", "suas",
+    "nosso", "nossa", "nossos", "nossas", "dele", "dela", "deles", "delas",
+    # Conjunctions / subordinators (PT)
+    "e", "ou", "mas", "porém", "porem", "porque", "pois", "se",
+    "que", "como", "quando", "onde", "enquanto", "embora", "caso", "logo",
+    # Prepositions (PT)
+    "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+    "para", "pra", "por", "com", "sem", "sob", "sobre", "entre",
+    "até", "ate", "desde", "contra", "durante", "após", "apos", "ante",
+    # Auxiliary / copula (PT)
+    "é", "eh", "são", "sao", "era", "eram", "foi", "foram",
+    "ser", "sendo", "sido", "está", "esta", "estão", "estao",
+    "estava", "estavam", "estar", "tem", "têm", "tinha", "tinham",
+    "ter", "tendo", "vai", "vão", "vao", "ir", "iria", "iriam",
+    "pode", "podem", "podia", "podiam", "deve", "devem", "devia", "deviam",
+    # Negatives (PT)
+    "não", "nao", "nunca", "jamais", "nem",
+}
+
 
 class PipelineAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
@@ -406,7 +483,7 @@ def has_valid_audio_track(file_path: str) -> bool:
     except Exception:
         return False
 
-def extract_audio_to_wav(input_path: str, output_dir: str = None, track: int = None) -> str:
+def extract_audio_to_wav(input_path: str, output_dir: str = None, track: int = None, keep_stereo: bool = False) -> str:
     try:
         wd = output_dir if output_dir else os.path.dirname(input_path)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
@@ -416,8 +493,16 @@ def extract_audio_to_wav(input_path: str, output_dir: str = None, track: int = N
 
         audio_map = f"0:a:{max(0, track - 1)}" if track is not None else "0:a:0"
 
+        if keep_stereo:
+            # Preserve channels and use a higher sample rate so spatial cues
+            # survive through Demucs/enhance/CL. Downmix happens later, right
+            # before transcription (Whisper still needs mono 16 kHz).
+            ar_out, ac_out = "44100", "2"
+        else:
+            ar_out, ac_out = "16000", "1"
+
         cmd = ["ffmpeg", "-y", "-v", "error", "-progress", "pipe:1",
-               "-i", input_path, "-map", audio_map, "-ar", "16000", "-ac", "1", temp_wav]
+               "-i", input_path, "-map", audio_map, "-ar", ar_out, "-ac", ac_out, temp_wav]
 
         with tqdm(total=duration if duration > 0 else None, unit='s',
                   desc="   Extracting", dynamic_ncols=True, leave=False) as pbar:
@@ -427,9 +512,15 @@ def extract_audio_to_wav(input_path: str, output_dir: str = None, track: int = N
             for line in proc.stdout:
                 if line.startswith("out_time_us="):
                     current_time = int(line.strip().split("=")[1]) / 1_000_000
+                    # Clamp against reported duration: ffmpeg's out_time_us
+                    # can drift slightly past it on some containers.
+                    if duration > 0:
+                        current_time = min(current_time, duration)
                     delta = current_time - last_time
                     if delta > 0 and duration > 0:
-                        pbar.update(delta)
+                        delta = min(delta, pbar.total - pbar.n)
+                        if delta > 0:
+                            pbar.update(delta)
                     last_time = current_time
             proc.wait()
 
@@ -786,6 +877,8 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
             prev = all_words[i - 1]
             gap = float(word.get("start", 0.0)) - float(prev.get("end", 0.0))
             next_norm = _norm_token(word.get("word", ""))
+            prev_norm = _norm_token(prev.get("word", ""))
+            prev_is_hanging = prev_norm in HANGING_TAIL_WORDS
 
             # Split when there is a real pause between spoken words.
             # Require a larger pause when the current phrase is still very short,
@@ -795,15 +888,26 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
                 pause_threshold = max(pause_split_s, 1.20)
             elif len(current_words) <= 5:
                 pause_threshold = max(pause_split_s, 1.00)
-            if gap >= pause_threshold:
+
+            # A very large pause is almost certainly a real sentence boundary.
+            # In that case, allow the split even after a function word, since
+            # blocking it would only push the boundary to a worse location.
+            big_gap = gap >= max(pause_split_s * 1.5, 1.20)
+
+            # Do not split on a pause if the previous word is a function word
+            # (article, preposition, conjunction, auxiliary) -- it cannot end
+            # a line, unless the pause is emphatically sentence-level.
+            if gap >= pause_threshold and (not prev_is_hanging or big_gap):
                 process_and_add_phrase(current_words)
                 current_words = []
             # Additional clause boundary split for long run-ons with light pauses.
-            elif len(current_words) >= 10 and gap >= 0.45:
+            elif len(current_words) >= 10 and gap >= 0.45 and not prev_is_hanging:
                 process_and_add_phrase(current_words)
                 current_words = []
             # Discourse-starter split after enough context.
-            elif len(current_words) >= 10 and gap >= 0.08 and next_norm in discourse_starters:
+            elif (len(current_words) >= 10 and gap >= 0.08
+                  and next_norm in discourse_starters
+                  and not prev_is_hanging):
                 process_and_add_phrase(current_words)
                 current_words = []
 
@@ -1023,16 +1127,41 @@ def sanitize_subtitle_segments(
 
     # Merge tiny orphan fragments into neighboring segments so lines start/end cleanly.
     # Guard with timing so genuine standalone short utterances are preserved.
-    MERGE_GAP_MAX = 0.35
+    MERGE_GAP_MAX = 1.0  # was 0.35 -- allows genuine intra-sentence pauses
+
     def _is_fragment_text(t: str) -> bool:
         s = (t or "").strip().lower()
         if not s:
             return True
         tokens = re.findall(r"\w+", s, flags=re.UNICODE)
-        if len(tokens) <= 1 and len(s) <= 12:
+        if not tokens:
             return True
-        if len(tokens) <= 2 and len(s) <= 10 and s[-1] not in ".!?":
+
+        # Legitimate one-word replies must survive.
+        common_standalone = {
+            "yes", "no", "ok", "okay", "right", "sure", "thanks", "thank",
+            "sorry", "please", "hello", "hi", "hey", "bye", "wait",
+            "sim", "não", "nao", "oi", "olá", "ola", "tchau", "obrigado",
+            "obrigada", "valeu", "beleza",
+        }
+        if len(tokens) == 1 and tokens[0] in common_standalone:
+            return False
+
+        # Any other single-token segment is an orphan.
+        if len(tokens) == 1:
             return True
+
+        # Two tokens or fewer with no sentence-ending punctuation.
+        if len(tokens) <= 2 and s[-1] not in ".!?":
+            return True
+
+        # Hanging tail on a SHORT phrase indicates a genuine orphan.
+        # Longer phrases were already vetted by resegment_by_phrase and
+        # are legitimate standalone lines even if they end on a function
+        # word (e.g. "For example when Vox said that").
+        if len(tokens) <= 4 and tokens[-1] in HANGING_TAIL_WORDS:
+            return True
+
         return False
 
     merged = []
@@ -1049,6 +1178,11 @@ def sanitize_subtitle_segments(
                 if (cur_start - prev_end) <= MERGE_GAP_MAX:
                     prev["text"] = f"{prev.get('text', '').rstrip()} {txt}".strip()
                     prev["end"] = max(prev_end, cur_end)
+                    # Also merge word timestamps so split_long_subtitle_segments
+                    # (which rebuilds text from words) doesn't drop the fragment.
+                    cur_words = list(cur.get("words", []) or [])
+                    if cur_words:
+                        prev["words"] = list(prev.get("words", []) or []) + cur_words
                     i += 1
                     continue
             if i + 1 < len(cleaned):
@@ -1057,12 +1191,18 @@ def sanitize_subtitle_segments(
                 if (nxt_start - cur_end) <= MERGE_GAP_MAX:
                     nxt["text"] = f"{txt} {nxt.get('text', '').lstrip()}".strip()
                     nxt["start"] = min(nxt_start, cur_start)
+                    # Also merge word timestamps so split_long_subtitle_segments
+                    # (which rebuilds text from words) doesn't drop the fragment.
+                    cur_words = list(cur.get("words", []) or [])
+                    if cur_words:
+                        nxt["words"] = cur_words + list(nxt.get("words", []) or [])
                     i += 1
                     continue
         merged.append(cur)
         i += 1
 
     cleaned = merged
+    cleaned = dedupe_cross_segment_boundaries({"segments": cleaned}).get("segments", cleaned)
     return {"segments": cleaned}
 
 def split_long_subtitle_segments(
@@ -1159,12 +1299,36 @@ def split_long_subtitle_segments(
                         minor_words = {"a", "an", "the", "and", "or", "but", "of", "in", "to", "for", "with", "on", "at", "by", "from", "as", "is", "are", "was", "were", "it", "this", "that", "o", "os", "as", "um", "uma", "uns", "umas", "e", "ou", "mas", "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "para", "pra", "com", "por", "como", "é", "são", "foi", "era", "isso", "aquilo", "este", "esta", "esse", "essa", "que", "se"}
                         best_diff = 999
                         for j in range(2, len(cur) - 1):
+                            # Skip if this split would leave a hanging word behind.
+                            prev_tok = _norm_token(str(cur[j - 1].get("word", "")))
+                            if prev_tok in HANGING_TAIL_WORDS:
+                                continue
                             tw = str(cur[j].get("word", "")).strip().lower()
+                            # Skip if this split would put a connector at the
+                            # start of the next segment.
+                            if tw in HANGING_START_WORDS:
+                                continue
                             if tw in minor_words:
                                 diff = abs(j - mid)
                                 if diff < best_diff:
                                     best_diff = diff
                                     chosen = j
+                        if chosen is None:
+                            # Last resort: walk outwards from mid and pick the
+                            # first position whose preceding word is not hanging.
+                            for off in range(0, mid):
+                                found = False
+                                for j in (mid - off, mid + off):
+                                    if 1 <= j <= len(cur) - 1:
+                                        prev_tok = _norm_token(str(cur[j - 1].get("word", "")))
+                                        start_tok = _norm_token(str(cur[j].get("word", "")))
+                                        if (prev_tok not in HANGING_TAIL_WORDS
+                                                and start_tok not in HANGING_START_WORDS):
+                                            chosen = j
+                                            found = True
+                                            break
+                                if found:
+                                    break
                         if chosen is None:
                             chosen = max(1, mid)
                     left = cur[:chosen]
@@ -1175,6 +1339,69 @@ def split_long_subtitle_segments(
         flush_chunk(cur)
 
     return {"segments": out}
+
+
+
+def _tokenize_for_dedup(text: str):
+    """Split into word-like tokens, preserving trailing punctuation."""
+    return [t for t in (text or "").split() if t]
+
+
+def dedupe_cross_segment_boundaries(data: dict) -> dict:
+    """If segment N+1 starts with the same word(s) segment N ended with,
+    strip the duplicate words from N+1 and collapse the timing gap.
+    Operates word-by-word on whitespace tokens."""
+    segs = list(data.get("segments", []))
+    if len(segs) < 2:
+        return data
+
+    def norm(w):
+        return w.strip().lower().strip(".,!?;:")
+
+    out = [segs[0]]
+    for i in range(1, len(segs)):
+        prev = out[-1]
+        cur = dict(segs[i])
+        prev_tokens = _tokenize_for_dedup(prev.get("text", ""))
+        cur_tokens = _tokenize_for_dedup(cur.get("text", ""))
+
+        max_k = min(len(prev_tokens), len(cur_tokens))
+        k = 0
+        for cand in range(max_k, 0, -1):
+            if [norm(w) for w in prev_tokens[-cand:]] == [norm(w) for w in cur_tokens[:cand]]:
+                k = cand
+                break
+
+        if k > 0:
+            remaining = cur_tokens[k:]
+            if not remaining:
+                # Entire segment was a duplicate; drop it.
+                continue
+            new_text = " ".join(remaining)
+            cur["text"] = new_text
+            # Drop the corresponding leading word timestamps if present.
+            words = list(cur.get("words", []) or [])
+            if len(words) >= k:
+                cur["words"] = words[k:]
+            # Collapse the gap: start of this segment becomes end of prev.
+            try:
+                prev_end = float(prev.get("end", 0.0))
+                if prev_end > 0 and float(cur.get("start", 0.0)) > prev_end:
+                    cur["start"] = prev_end
+            except Exception:
+                pass
+        out.append(cur)
+
+    return {"segments": out}
+
+
+
+def _norm_token(t: str) -> str:
+    """Lowercase and strip punctuation from a single token for comparison."""
+    t = (t or "").strip().lower()
+    t = re.sub(r"[^\wÀ-ÖØ-öø-ÿ]", "", t)
+    return t
+
 
 def _normalize_text_for_compare(text: str) -> str:
     t = (text or "").lower().strip()
@@ -1363,12 +1590,40 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     temp_files = []
 
     if not file_path.lower().endswith(".wav"):
-        base_wav = extract_audio_to_wav(file_path, args.output_dir, track=getattr(args, 'track', None))
+        base_wav = extract_audio_to_wav(
+            file_path, args.output_dir,
+            track=getattr(args, 'track', None),
+            keep_stereo=getattr(args, 'keep_stereo', False),
+        )
         if base_wav:
             transcription_source = base_wav
             temp_files.append(base_wav)
         elif getattr(args, 'track', None) is not None:
             return False, f"Failed to extract audio track {args.track} from {file_path}"
+
+    _stereo_downmixed = False
+
+    def _downmix_to_mono_16k(src: str) -> str:
+        """Downmix an arbitrary audio file to mono 16 kHz."""
+        if not src or not os.path.isfile(src):
+            return None
+        out = os.path.join(
+            os.path.dirname(src),
+            os.path.splitext(os.path.basename(src))[0] + "_mono16k.wav"
+        )
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error",
+                "-i", src,
+                "-af", "pan=mono|c0=0.5*c0+0.5*c1",
+                "-ar", "16000", "-ac", "1",
+                out
+            ], check=True)
+            if os.path.exists(out):
+                return out
+        except Exception as e:
+            log_event(f"downmix_to_mono_16k failed: {e}")
+        return None
 
     for step in getattr(args, 'pipeline', []):
         new_source = None
@@ -1377,6 +1632,17 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
         elif step == 'enhance' and args.enhance:
             new_source = preprocess_audio(transcription_source, args.output_dir)
         elif step == 'cl' and args.cl:
+            # With --keep-stereo we ran the earlier stages on stereo, but CL
+            # was calibrated for mono 16 kHz. Downmix before CL so the
+            # compression curve matches the default pipeline.
+            if (getattr(args, 'keep_stereo', False)
+                    and not _stereo_downmixed):
+                mono = _downmix_to_mono_16k(transcription_source)
+                if mono:
+                    transcription_source = mono
+                    temp_files.append(mono)
+                    _stereo_downmixed = True
+                    log_event(f"keep_stereo pre-CL downmix -> {mono}")
             new_source = apply_compression_limiter(transcription_source, args.output_dir, threshold=getattr(args, 'cl_threshold', 0.125), ratio=getattr(args, 'cl_ratio', 2.0))
 
         if new_source and os.path.exists(new_source):
@@ -1604,6 +1870,19 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             return try_transcribe_qwen(vad_filt)
         return try_transcribe_whisper(vad_filt)
 
+    # --keep-stereo fallback downmix: only if no CL stage already collapsed
+    # the signal to mono. Handles the case where --no-cl is combined with
+    # --keep-stereo.
+    if (getattr(args, 'keep_stereo', False)
+            and not _stereo_downmixed
+            and os.path.isfile(transcription_source)):
+        mono_path = _downmix_to_mono_16k(transcription_source)
+        if mono_path:
+            temp_files.append(mono_path)
+            transcription_source = mono_path
+            _stereo_downmixed = True
+            log_event(f"keep_stereo pre-Whisper downmix -> {mono_path}")
+
     try:
         ensure_model_loaded(args.model)
         cleaned_data = try_transcribe(args.vad_filter)
@@ -1629,7 +1908,9 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
 
     if not cleaned_data: return False, "Transcription failed"
 
-    if args.rescue_missed:
+    if args.rescue_missed and not args.vad_filter:
+        print("   >> Rescue pass skipped (primary VAD is already off; a second pass would be identical).")
+    elif args.rescue_missed:
         print("   🛟 Running rescue pass (no Whisper VAD) for quiet/missed lines...")
         try:
             rescue_data = try_transcribe(False)
@@ -1716,6 +1997,11 @@ def main():
 
     parser.add_argument("-hq", "--high-quality", action="store_true", help="Enable large-v3 + isolate + enhance + limiter")
     parser.add_argument("-cl", "--compression-limiter", action=PipelineAction, nargs=0, const=True, dest="cl")
+    parser.add_argument("--no-cl", action="store_true", dest="no_cl",
+                        help="Disable the compression/limiter stage (otherwise forced on by default)")
+    parser.add_argument("--keep-stereo", action="store_true", dest="keep_stereo",
+                        help="Preserve stereo through pipeline stages; downmix to mono only before "
+                             "transcription. Improves rear/spatial content and lets Demucs use stereo input.")
     parser.add_argument("-e", "--enhance", action=PipelineAction, nargs=0, const=True, dest="enhance")
     parser.add_argument("-i", "--isolate", action=PipelineAction, nargs=0, const=True, dest="isolate")
     parser.add_argument("-k", "--keep", action="store_true", help="Keep temp files")
@@ -1794,10 +2080,17 @@ def main():
 
     if not hasattr(args, 'pipeline'): args.pipeline = []
 
-    # Force Compression/Limiter on by default to boost quiet background game voices
-    if 'cl' not in args.pipeline:
-        args.pipeline.append('cl')
-        args.cl = True
+    # Compression/Limiter is OFF by default. It was originally force-enabled
+    # to boost quiet voices, but with --keep-stereo it damages the stereo-
+    # preserved signal more than it helps and can cause Whisper
+    # hallucinations. Use -cl / --compression-limiter to enable it.
+    if getattr(args, 'no_cl', False):
+        # --no-cl explicitly disables even if -cl was also passed.
+        args.cl = False
+        if 'cl' in args.pipeline:
+            args.pipeline.remove('cl')
+    # If the user passed -cl, PipelineAction has already added it to
+    # args.pipeline and set args.cl = True. Otherwise leave CL off.
 
     if args.high_quality:
         args.model = "large-v3"

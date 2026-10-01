@@ -34,9 +34,10 @@ TITLE RULES
   Plain how-to with no twist (1.07x, effectively average).
 - Use at least one power element across the three titles where it fits naturally: a number or list, a year tag, or a bracket or parenthetical such as (Explained) or (2026 Update).
 - The three titles must use three different frames and three different angles. No two titles should feel like variations of the same idea.
+- FRAME ROTATION: Maintain awareness of frames used in recent videos. Do not reuse the same lead frame (the first title) across consecutive videos. Rotate through the full list before repeating a lead frame. If a frame was used as lead in the previous video, choose a different lead frame for this one.
 
 DESCRIPTION RULES
-- Length: 150 to 300 words, under 1,000 characters total.
+- Length: 150 to 300 words, under 1,000 characters total. Count words before finalizing. If under 150, expand with more detail from the source. If over 300, trim.
 - First 125 characters must contain the primary keyword and the core hook, since that is all YouTube shows before Show More.
 - Primary keyword should appear naturally 2 to 4 times across the description. No keyword stuffing.
 - Open with the core dramatic event or revelation. Do not frame it as a video, do not say "in this video," do not mention editing, narration, or production.
@@ -44,7 +45,7 @@ DESCRIPTION RULES
 - Include 4 to 8 chapters pulled from the natural beats of the discussion, formatted as:
   00:00 - Chapter Name
   MM:SS - Chapter Name
-  First chapter must be 0:00. Each chapter must be at least 10 seconds long. Use real timestamps from the SRT if it exists. If no timestamps exist, estimate based on the length of the discussion and label them sensibly.
+  First chapter must be 0:00. Each chapter must be at least 10 seconds long. Use real timestamps from the SRT if it exists. If the SRT is shorter than the number of chapters you need, either confine chapters to the SRT length and note that the full video continues, or estimate timestamps based on the full discussion length and label them sensibly. Do not invent timestamps that imply a much longer video than the source material supports.
 - End with one specific, debatable question tied to the central tension of the topic to drive comments. Not "What do you think?" Anchor it to the actual debate.
 - Close with exactly 3 hashtags on their own line. Each starts with the # symbol.
 
@@ -54,6 +55,18 @@ TAG RULES
 - Total combined length of all tags including commas and spaces must stay under 480 characters.
 - Mix exact-match proper names, subject-specific terminology, and high-intent discovery phrases.
 - No repetitive variations of the same keyword. If two tags overlap heavily, keep only the stronger one.
+
+QUALITY CHECK
+Before returning output, verify:
+- Three titles use three different frames. Lead frame is different from the previous video's lead frame (if applicable).
+- Title lengths are 40 to 60 characters. Primary keyword is in the first 40 to 45 characters.
+- No penalty patterns used.
+- At least one power element (number, year, bracket) appears across the three titles.
+- Description is 150 to 300 words. First 125 characters contain primary keyword and core hook.
+- Chapters use real SRT timestamps when available and do not exceed the source length unrealistically.
+- Closing question is specific and debatable.
+- Exactly 3 hashtags on their own line.
+- Tags are 12 to 16, under 480 characters, with no heavy repetition.
 
 OUTPUT FORMAT
 Return exactly five code blocks in this order, nothing else:

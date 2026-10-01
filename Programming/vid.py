@@ -1942,15 +1942,32 @@ def compute_original_target_resolution(res_key, info):
     res_key_norm = res_key.lower()
     if res_key_norm == "original":
         return info["width"], info["height"]
-    width_map_landscape = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
-                           "hd": 1920, "4k": 3840, "8k": 7680}
-    width_map_portrait = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
-                          "hd": 1080, "4k": 2160, "8k": 4320}
-    target_w = (width_map_landscape.get(res_key_norm) if info["width"] >= info["height"]
-                else width_map_portrait.get(res_key_norm))
-    if not target_w:
+    # v8.58 SHORT-SIDE-ANCHORED RESOLUTION
+    # "Xp" means X lines on the SHORT side of the frame, whichever axis
+    # that falls on. For a landscape source the short side is the
+    # height, so "4320p" targets 4320 tall and the width is derived
+    # from the source aspect. Portrait sources anchor on width.
+    #
+    # This replaces the old width-first interpretation, which computed
+    # 4:3 4320p as 7680x5760 -- over the NVVFX SuperRes output ceiling.
+    # The new math yields 5760x4320 for that case, which fits.
+    short_side_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                      "hd": 1080, "4k": 2160, "8k": 4320}
+    target_short = short_side_map.get(res_key_norm)
+    if not target_short:
         return None, None
-    target_h = int(target_w * info["height"] / info["width"])
+    src_w = int(info["width"])
+    src_h = int(info["height"])
+    if src_w <= 0 or src_h <= 0:
+        return None, None
+    if src_w >= src_h:
+        # Landscape: short side is the height.
+        target_h = target_short
+        target_w = int(round(target_h * src_w / src_h))
+    else:
+        # Portrait: short side is the width.
+        target_w = target_short
+        target_h = int(round(target_w * src_h / src_w))
     return (target_w // 2) * 2, (target_h // 2) * 2
 
 
@@ -8661,14 +8678,22 @@ class VideoProcessorApp:
                       f"(canvas {aspect_str})")
             else:
                 if canvas_orient == "vertical":
+                    # Portrait canvas: short side is the width. The
+                    # current width_map is already short-side-anchored,
+                    # so no change needed here.
                     width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                                  "HD": 1080, "4k": 2160, "8k": 4320}
                     target_w = width_map.get(res_key, 1080)
+                    target_h = int(target_w * den / num)
                 else:
-                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
-                                 "HD": 1920, "4k": 3840, "8k": 7680}
-                    target_w = width_map.get(res_key, 1920)
-                target_h = int(target_w * den / num)
+                    # v8.58 SHORT-SIDE-ANCHORED RESOLUTION
+                    # Landscape canvas: the short side is the height.
+                    # Anchor on the requested "Xp" value as target_h
+                    # and derive the width from the canvas aspect.
+                    height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                                  "HD": 1080, "4k": 2160, "8k": 4320}
+                    target_h = height_map.get(res_key, 1080)
+                    target_w = int(target_h * num / den)
             return (target_w // 2) * 2, (target_h // 2) * 2
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
@@ -8685,14 +8710,19 @@ class VideoProcessorApp:
             if not target_w or not target_h:
                 return info["width"], info["height"]
             return target_w, target_h
-        width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
-                     "HD": 1920, "4k": 3840, "8k": 7680}
-        target_w = width_map.get(res_key, 1920)
+        # v8.58 SHORT-SIDE-ANCHORED RESOLUTION
+        # Horizontal output: the short side is the height, so anchor
+        # on the requested "Xp" value as target_h and derive the width
+        # from the configured aspect ratio. This keeps 4:3 and 5:4
+        # outputs inside the same vertical envelope as 16:9.
+        height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                      "HD": 1080, "4k": 2160, "8k": 4320}
+        target_h = height_map.get(res_key, 1080)
         try:
             num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
-            target_h = int(target_w * den / num)
+            target_w = int(target_h * num / den)
         except Exception:
-            target_h = 1080
+            target_w = 1920
         return (target_w // 2) * 2, (target_h // 2) * 2
 
     @staticmethod

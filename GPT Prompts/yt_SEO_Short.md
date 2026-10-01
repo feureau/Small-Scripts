@@ -36,9 +36,10 @@ TITLE RULES
   I-was-wrong confession titles (below half of average, worst performer).
   Plain how-to with no twist (1.07x, effectively average).
 - The three titles must use three different frames and three different angles. No two titles should feel like variations of the same idea.
+- FRAME ROTATION: Maintain awareness of frames used in recent videos. Do not reuse the same lead frame (the first title) across consecutive videos. Rotate through the full list before repeating a lead frame. If a frame was used as lead in the previous video, choose a different lead frame for this one.
 
 DESCRIPTION RULES
-- Length: 50 to 125 words. Shorts descriptions should be short and intentional, not essays.
+- Length: 50 to 125 words. Shorts descriptions should be short and intentional, not essays. Count words before finalizing.
 - First 125 characters must contain the primary keyword and the core hook, since that is all YouTube shows before Show more.
 - Primary keyword should appear naturally 1 to 2 times. No keyword stuffing.
 - Open with the core dramatic event or revelation. Do not frame it as a video, do not say "in this video," do not mention editing, narration, or production.
@@ -60,6 +61,15 @@ TAG RULES
 - Total combined length of all tags including commas and spaces must stay under 250 characters.
 - Mix 2 to 3 exact-match proper names, 2 to 3 subject-specific terms, and 1 to 2 broader category terms.
 - No repetitive variations of the same keyword.
+
+QUALITY CHECK
+Before returning output, verify:
+- Three titles use three different frames. Lead frame is different from the previous video's lead frame (if applicable).
+- Title lengths are 20 to 40 characters. Primary keyword is front-loaded in the first 3 to 5 words.
+- No penalty patterns used.
+- Description is 50 to 125 words. First 125 characters contain primary keyword and core hook.
+- Hashtag line has exactly 3 to 5 hashtags, first is #shorts, no banned hashtags.
+- Tags are 5 to 8, under 250 characters, with no heavy repetition and a mix of proper names, subject terms, and broader terms.
 
 OUTPUT FORMAT
 Return exactly four code blocks in this order, nothing else:
