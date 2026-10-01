@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
 Generate DaVinci Resolve compliant Proxy files.
-Fixed: 
-- Implemented mathematically safe resolution scaling to prevent odd-integer format crashes.
-- Resolved token parsing failures for pipe-delimited custom user patterns.
-- Added absolute validation on audio stream channels before executing channel mapping parameters.
-- Standardized error redirection across all process communication pipelines.
-- Added Resolve-compliant H.264 proxy with NVIDIA NVENC auto-detection and libx264 fallback.
-- Added AAC-MF (Windows Media Foundation) auto-detection with native AAC fallback.
-- Bypassed fnmatch wildcard interpretation for exact, literal filenames (fixes bracket [] bugs).
-- Changed input pattern to use the -i / --input flag.
-- Added top-level variable block for easy default format switching (Video, Audio, Quality).
-- Added dynamic scale multiplier variable with dynamic math bounding.
-- Added a pre-validation check to skip files without a video stream.
+Fixes applied in this version:
+- Fixed drop-frame timecode conversion (only last colon replaced).
+- Fixed --slow to properly disable NVENC hardware encoding.
+- Fixed per-codec qscale defaults.
+- Changed default audio to PCM for .mov compatibility.
+- Removed forced BT.709 color tagging; now copies source color metadata.
+- Replaced -ch_layout with -ac for better compatibility.
+- Removed hardcoded H.264 level 4.0 to support 4K proxies.
+- Added validation for --scale > 0.
+- Added FFmpeg/FFprobe existence check.
+- Only warn about missing tmcd track when source actually had timecode.
+
+NEW Resolve-compatibility fixes:
+- Hard-fail (and delete output) if source has timecode but proxy lacks tmcd track.
+- Verify output timecode matches source timecode.
+- Detect variable frame rate (VFR) sources and force constant frame rate on the proxy.
+- Match proxy container extension to source type (MOV for ProRes/DNxHR, MP4 for H.264).
+- Log the resolved timecode, fps, and container so failures are diagnosable.
 """
 
 import sys
@@ -20,6 +26,7 @@ import subprocess
 import os
 import argparse
 import fnmatch
+import shutil
 
 # ==========================================
 # USER CONFIGURATION
@@ -34,22 +41,22 @@ DEFAULT_SCALE_MULTIPLIER = 0.5
 
 # Default file search pattern if no -i is provided
 DEFAULT_PATTERN = "*.[Mm][Pp]4|*.[Mm][Kk][Vv]|*.[Aa][Vv][Ii]|*.[Mm][Oo][Vv]|*.[Ww][Ee][Bb][Mm]|*.[Tt][Ss]"
+
+# If the source has a timecode and the proxy fails to embed a tmcd track,
+# delete the proxy so Resolve doesn't try to use an unusable file.
+HARD_FAIL_ON_MISSING_TMCD = True
+
+# Force constant frame rate on the proxy when the source is detected as VFR.
+FORCE_CFR_ON_VFR = True
 # ==========================================
 
 def parse_arguments():
-    # Automatically route ideal settings based on the user's DEFAULT_FORMAT choice above
     if DEFAULT_FORMAT.lower() == "h264":
         def_codec = "h264"
-        def_audio = "copy"
-        def_qscale = 22
     elif DEFAULT_FORMAT.lower() == "dnxhr":
         def_codec = "dnxhr"
-        def_audio = "copy"
-        def_qscale = 10
-    else:  # prores
+    else:
         def_codec = "prores"
-        def_audio = "copy"
-        def_qscale = 10
 
     parser = argparse.ArgumentParser(description="Generate DaVinci Resolve compliant Proxy files.")
     parser.add_argument("input", nargs="?", default=None,
@@ -62,15 +69,27 @@ def parse_arguments():
                         help=f"Resolution multiplier (e.g. 0.5 for half). Default: {DEFAULT_SCALE_MULTIPLIER}")
     parser.add_argument("-p", "--profile", choices=["proxy","lt","standard","hq","4444","4444xq"],
                         default="proxy", help="ProRes profile")
-    parser.add_argument("-q", "--qscale", type=int, default=def_qscale,
-                        help=f"ProRes quality (higher=smaller) or H.264 CRF/CQ. Default: {def_qscale}")
-    parser.add_argument("-a", "--audio", choices=["pcm","copy","aac"], default=def_audio,
-                        help=f"Audio codec. Default: {def_audio}")
+    parser.add_argument("-q", "--qscale", type=int, default=None,
+                        help="ProRes quality (higher=smaller) or H.264 CRF/CQ. Default: 10 for ProRes/DNxHR, 22 for H.264")
+    parser.add_argument("-a", "--audio", choices=["pcm","copy","aac"], default="pcm",
+                        help="Audio codec. Default: pcm")
     parser.add_argument("--slow", action="store_true", help="Disable hardware acceleration.")
     parser.add_argument("--no-scale", action="store_true", help="Keep exact original resolution (bypasses multiplier entirely).")
     
     args = parser.parse_args()
     args.input = args.input or args.input_flag or DEFAULT_PATTERN
+
+    if args.qscale is None:
+        if args.codec == "h264":
+            args.qscale = 22
+        elif args.codec == "dnxhr":
+            args.qscale = 10
+        else:  # prores
+            args.qscale = 10
+
+    if args.scale <= 0:
+        parser.error("--scale must be greater than 0")
+
     return args
 
 def is_nvenc_available():
@@ -113,7 +132,6 @@ def is_aac_mf_available():
 def has_video_stream(filepath):
     """
     Checks if the targeted file contains a valid video stream track.
-    This prevents FFmpeg failures on subtitle-only Matroska files.
     """
     try:
         cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -158,34 +176,79 @@ def get_audio_info(filepath):
         return None, None
 
 def get_frame_rate(filepath):
+    """
+    Returns (r_frame_rate, avg_frame_rate) as floats.
+    r_frame_rate is the nominal base rate; avg_frame_rate is the real average.
+    If they diverge significantly, the source is likely VFR.
+    """
     try:
         cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=r_frame_rate",
-               "-of", "default=noprint_wrappers=1:nokey=1", filepath]
+               "-show_entries", "stream=r_frame_rate,avg_frame_rate",
+               "-of", "default=noprint_wrappers=1:nokey=0", filepath]
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-        if '/' in out:
-            num, den = map(int, out.split('/'))
-            return num / den if den else None
-        return float(out)
+        r_rate = None
+        avg_rate = None
+        for line in out.splitlines():
+            if line.startswith("r_frame_rate="):
+                val = line.split("=", 1)[1]
+                if '/' in val:
+                    num, den = map(int, val.split('/'))
+                    r_rate = num / den if den else None
+                else:
+                    r_rate = float(val)
+            elif line.startswith("avg_frame_rate="):
+                val = line.split("=", 1)[1]
+                if '/' in val:
+                    num, den = map(int, val.split('/'))
+                    avg_rate = num / den if den else None
+                else:
+                    avg_rate = float(val)
+        return r_rate, avg_rate
     except Exception:
-        return None
+        return None, None
+
+def is_vfr(r_rate, avg_rate):
+    """
+    Returns True if the source appears to be variable frame rate.
+    Uses a 2% tolerance between nominal and average frame rate.
+    """
+    if r_rate is None or avg_rate is None or avg_rate == 0:
+        return False
+    return abs(r_rate - avg_rate) / avg_rate > 0.02
+
+def get_color_info(filepath):
+    """Probe source color metadata to copy into the proxy."""
+    try:
+        cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=color_range,color_primaries,color_trc,colorspace",
+               "-of", "default=noprint_wrappers=1:nokey=0", filepath]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+        info = {}
+        for line in out.splitlines():
+            if '=' in line:
+                key, val = line.split('=', 1)
+                if val and val != 'unknown':
+                    info[key] = val
+        return info
+    except Exception:
+        return {}
 
 def to_dropframe_tc(tc_str, fps):
     if not tc_str or fps is None:
         return tc_str
     if (abs(fps - 29.97) < 0.1 or abs(fps - 59.94) < 0.1) and ':' in tc_str and ';' not in tc_str:
-        return tc_str.replace(':', ';')
+        # Only replace the last colon with a semicolon for drop-frame
+        head, frames = tc_str.rsplit(':', 1)
+        return f"{head};{frames}"
     return tc_str
 
 def find_video_files_recursive(base_dir, pattern_str):
-    # Bypass wildcard parsing if the exact literal file exists (fixes [] brackets issue)
     if os.path.isfile(pattern_str):
         return [os.path.abspath(pattern_str)]
     exact_path = os.path.join(base_dir, pattern_str)
     if os.path.isfile(exact_path):
         return [os.path.abspath(exact_path)]
 
-    # Otherwise run wildcard pattern matching
     found = []
     skip_dirs = {"proxy", "input", "output"}
     patterns = [p.strip() for p in pattern_str.split("|") if p.strip()]
@@ -200,20 +263,41 @@ def find_video_files_recursive(base_dir, pattern_str):
     return found
 
 def has_tmcd_track(filepath):
+    """
+    Returns (has_track, timecode_value_or_None).
+    Checks for a real QuickTime tmcd track, which is what Resolve reads.
+    """
     try:
         cmd = ["ffprobe", "-v", "error", "-select_streams", "d",
-               "-show_entries", "stream=codec_tag_string",
-               "-of", "default=noprint_wrappers=1:nokey=1", filepath]
+               "-show_entries", "stream=codec_tag_string:stream_tags=timecode",
+               "-of", "default=noprint_wrappers=1:nokey=0", filepath]
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-        return "tmcd" in out
+        has_track = "tmcd" in out
+        tc_value = None
+        for line in out.splitlines():
+            if line.startswith("TAG:timecode="):
+                tc_value = line.split("=", 1)[1].strip()
+        return has_track, tc_value
     except Exception:
-        return False
+        return False, None
+
+def pick_output_extension(codec):
+    """
+    Match the proxy container to what Resolve expects for the codec family.
+    ProRes and DNxHR are MOV-native. H.264 works best as MP4 with avc1 tag.
+    """
+    if codec == "h264":
+        return ".mp4"
+    return ".mov"
 
 def main():
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        print("Error: ffmpeg and ffprobe must be installed and in PATH.")
+        sys.exit(1)
+
     args = parse_arguments()
     profile_map = {"proxy":"0","lt":"1","standard":"2","hq":"3","4444":"4","4444xq":"5"}
     
-    # args.input replaces the old args.pattern
     files = find_video_files_recursive(os.getcwd(), args.input)
     if not files:
         print("No files found.")
@@ -222,12 +306,15 @@ def main():
     # Hardware detection for H.264 
     use_nvenc = False
     if args.codec == "h264":
-        print("Detecting video hardware encoding capabilities...")
-        use_nvenc = is_nvenc_available()
-        if use_nvenc:
-            print("🚀 NVIDIA GPU detected! Using hardware encoder (h264_nvenc).")
+        if args.slow:
+            print("🚫 Hardware acceleration disabled by --slow. Using software encoder.")
         else:
-            print("💻 No compatible NVIDIA GPU found. Falling back to software encoder (libx264).")
+            print("Detecting video hardware encoding capabilities...")
+            use_nvenc = is_nvenc_available()
+            if use_nvenc:
+                print("🚀 NVIDIA GPU detected! Using hardware encoder (h264_nvenc).")
+            else:
+                print("💻 No compatible NVIDIA GPU found. Falling back to software encoder (libx264).")
 
     # Hardware detection for AAC
     use_aac_mf = False
@@ -239,8 +326,9 @@ def main():
         else:
             print("🎵 Using native FFmpeg AAC encoder (aac).")
 
+    out_ext = pick_output_extension(args.codec)
+
     for file in sorted(files):
-        # Pre-Validation Check: Skip if file doesn't actually have video (like subtitle mkv files)
         if not has_video_stream(file):
             continue
 
@@ -249,12 +337,29 @@ def main():
         base = os.path.splitext(os.path.basename(file))[0]
         output_dir = os.path.join(file_dir, "Proxy")
         os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, base + ".mov")
+        output_file = os.path.join(output_dir, base + out_ext)
 
         # Timecode extraction and normalization
         tc = extract_timecode(file)
-        fps = get_frame_rate(file)
+        r_rate, avg_rate = get_frame_rate(file)
+        fps = r_rate  # nominal fps used for timecode drop-frame decision
         tc = to_dropframe_tc(tc, fps)
+        vfr = is_vfr(r_rate, avg_rate)
+
+        # Report resolved media properties for diagnosis
+        print(f"  ↳ fps: r={r_rate} avg={avg_rate}  VFR={vfr}  TC={tc}")
+
+        # Color metadata from source
+        color_info = get_color_info(file)
+        color_args = []
+        if 'color_range' in color_info:
+            color_args.extend(["-color_range", color_info['color_range']])
+        if 'color_primaries' in color_info:
+            color_args.extend(["-color_primaries", color_info['color_primaries']])
+        if 'color_trc' in color_info:
+            color_args.extend(["-color_trc", color_info['color_trc']])
+        if 'colorspace' in color_info:
+            color_args.extend(["-colorspace", color_info['colorspace']])
 
         # Audio stream evaluation and configuration routing
         aud_channels, aud_layout = get_audio_info(file)
@@ -262,68 +367,53 @@ def main():
             if args.audio == "copy":
                 audio_args = ["-map", "0:a?", "-c:a", "copy"]
             else:
-                is_sony = aud_layout and aud_layout.lower() in ["unknown", "", "null"]
-                if is_sony:
-                    # When layout is unknown, rely on channel count instead of forcing stereo downmix
-                    if args.audio == "pcm":
-                        audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ac", aud_channels]
-                    else:
-                        aac_codec = "aac_mf" if use_aac_mf else "aac"
-                        audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ac", aud_channels]
+                if args.audio == "pcm":
+                    audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ac", aud_channels]
                 else:
-                    if args.audio == "pcm":
-                        audio_args = ["-map", "0:a?", "-c:a", "pcm_s16le", "-ch_layout", aud_layout]
-                    else:
-                        aac_codec = "aac_mf" if use_aac_mf else "aac"
-                        audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ch_layout", aud_layout]
+                    aac_codec = "aac_mf" if use_aac_mf else "aac"
+                    audio_args = ["-map", "0:a?", "-c:a", aac_codec, "-b:a", "640k", "-ac", aud_channels]
         else:
             audio_args = ["-an"]
 
-        # Base execution command initialization
+        # Base execution command
         command = ["ffmpeg", "-y"]
         if not args.slow and not tc:
             command.extend(["-hwaccel", "auto"])
 
         command.extend(["-i", file, "-map", "0:v:0"])
 
-        # Dynamically scaled and mathematically bounded macroblock filtering (divisible by 2)
+        # Scale filter
         if not args.no_scale:
             command.extend(["-vf", f"scale=2*trunc(iw*{args.scale}/2):2*trunc(ih*{args.scale}/2)"])
 
-        # Video encoder specification setup
+        # Force constant frame rate for VFR sources so Resolve can link the proxy
+        if vfr and FORCE_CFR_ON_VFR and avg_rate:
+            command.extend(["-r", f"{avg_rate:.6f}"])
+
+        # Video encoder setup
         if args.codec == "dnxhr":
             command.extend([
-                "-c:v", "dnxhd", "-profile:v", "dnxhr_lb", "-pix_fmt", "yuv422p",
-                "-color_range", "tv", "-color_primaries", "bt709",
-                "-color_trc", "bt709", "-colorspace", "bt709"
+                "-c:v", "dnxhd", "-profile:v", "dnxhr_lb", "-pix_fmt", "yuv422p"
             ])
+            command.extend(color_args)
             if tc:
                 command.extend(["-timecode", tc, "-metadata:s:v:0", f"timecode={tc}"])
             command.extend(["-write_tmcd", "1", "-movflags", "+write_colr"])
             
         elif args.codec == "h264":
-            # If default ProRes qscale (10) slips through via CLI flags, remap to CRF 22 safely
-            crf = 22 if args.qscale == 10 else args.qscale
-            
             if use_nvenc:
-                # NVENC uses -cq for Constant Quality. -b:v 0 allows unrestricted VBR up to target quality
                 command.extend([
-                    "-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "main", "-level", "4.0",
-                    "-pix_fmt", "yuv420p", "-cq", str(crf), "-b:v", "0",
-                    "-color_range", "tv", "-color_primaries", "bt709",
-                    "-color_trc", "bt709", "-colorspace", "bt709",
+                    "-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "main",
+                    "-pix_fmt", "yuv420p", "-cq", str(args.qscale), "-b:v", "0",
                     "-tag:v", "avc1"
                 ])
             else:
-                # libx264 software fallback
                 command.extend([
-                    "-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
-                    "-pix_fmt", "yuv420p", "-refs", "4", "-crf", str(crf),
-                    "-color_range", "tv", "-color_primaries", "bt709",
-                    "-color_trc", "bt709", "-colorspace", "bt709",
+                    "-c:v", "libx264", "-profile:v", "main",
+                    "-pix_fmt", "yuv420p", "-refs", "4", "-crf", str(args.qscale),
                     "-tag:v", "avc1"
                 ])
-
+            command.extend(color_args)
             if tc:
                 command.extend(["-timecode", tc, "-metadata:s:v:0", f"timecode={tc}"])
             command.extend(["-write_tmcd", "1", "-movflags", "+write_colr"])
@@ -331,33 +421,54 @@ def main():
         else:  # prores
             command.extend([
                 "-c:v", "prores_ks", "-profile:v", profile_map[args.profile],
-                "-qscale:v", str(args.qscale), "-vendor", "ap10",
-                "-color_range", "tv", "-color_primaries", "bt709",
-                "-color_trc", "bt709", "-colorspace", "bt709"
+                "-qscale:v", str(args.qscale), "-vendor", "ap10"
             ])
             if args.profile not in ["4444","4444xq"]:
                 command.extend(["-pix_fmt", "yuv422p10le"])
+            command.extend(color_args)
             if tc:
                 command.extend(["-timecode", tc, "-metadata:s:v:0", f"timecode={tc}"])
             command.extend(["-write_tmcd", "1", "-movflags", "+write_colr"])
 
-        # Append audio arguments and target path output
         command.extend(audio_args)
         command.append(output_file)
 
-        # Subprocess execution and evaluation loop
         result = subprocess.run(command)
         if result.returncode != 0:
-            print(f"Failed: {file}")
+            print(f"❌ Failed: {file}")
             continue
 
-        # Verification of timecode track signature
-        if has_tmcd_track(output_file):
-            print(f"✅ Created: {output_file} (tmcd track present)")
+        # Post-encode verification
+        out_has_tmcd, out_tc = has_tmcd_track(output_file)
+
+        if tc:
+            # Source had timecode — proxy must have a tmcd track and matching TC
+            if not out_has_tmcd:
+                print(f"❌ INCOMPATIBLE: {output_file} has no tmcd track (source TC = {tc}).")
+                if HARD_FAIL_ON_MISSING_TMCD:
+                    try:
+                        os.remove(output_file)
+                        print("   Output deleted — Resolve would not link it.")
+                    except OSError:
+                        pass
+                continue
+
+            if out_tc and out_tc != tc:
+                print(f"❌ INCOMPATIBLE: proxy TC ({out_tc}) does not match source TC ({tc}).")
+                try:
+                    os.remove(output_file)
+                    print("   Output deleted — Resolve would not link it.")
+                except OSError:
+                    pass
+                continue
+
+            print(f"✅ Created: {output_file}  (tmcd = {out_tc or tc})")
         else:
-            print(f"❌ WARNING: {output_file} has no tmcd track! Resolve will NOT recognise it.")
-            if args.codec in ["dnxhr", "h264"]:
-                print("   Timecode write failed. Check your source file or re-run with --codec prores.")
+            # Source had no timecode — proxy linking relies on filename + fps overlap
+            if out_has_tmcd:
+                print(f"✅ Created: {output_file}  (tmcd present, source had none)")
+            else:
+                print(f"✅ Created: {output_file}  (no timecode in source, tmcd not expected)")
 
 if __name__ == "__main__":
     main()
