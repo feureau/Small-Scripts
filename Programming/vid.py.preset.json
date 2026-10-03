@@ -4343,7 +4343,7 @@
         "options": {
             "output_mode": "local",
             "resolution": "4320p",
-            "upscale_algo": "bicubic",
+            "upscale_algo": "nvvfx-superres",
             "output_format": "hdr",
             "video_codec": "av1",
             "encoder_backend": "nvencc_video_with_ffmpeg_audio",
