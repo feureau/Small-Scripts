@@ -2155,7 +2155,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -2589,7 +2592,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -3919,10 +3925,10 @@
             "multi_stage_superres": true,
             "stage1_upscale_algo": "source",
             "stage1_upscale_level": "source",
-            "stage1_upscale_strength": "source",
+            "stage1_upscale_strength": "0.8",
             "stage2_upscale_algo": "source",
             "stage2_upscale_level": "source",
-            "stage2_upscale_strength": "source",
+            "stage2_upscale_strength": "0.8",
             "nvenc_ngx_vsr_quality": "1",
             "fruc": false,
             "fruc_fps": "60",
@@ -4357,7 +4363,7 @@
             "encoder_backend": "nvencc_video_with_ffmpeg_audio",
             "nvenc_nvvfx_denoise": false,
             "nvenc_superres_mode": "0",
-            "nvenc_superres_strength": "",
+            "nvenc_superres_strength": "0.8",
             "multi_stage_superres": true,
             "stage1_upscale_algo": "nvvfx-superres",
             "stage1_upscale_level": "0",
@@ -5209,7 +5215,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": true,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Always (Clean/Backup)",
@@ -5426,7 +5435,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": true,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Always (Clean/Backup)",
@@ -5860,7 +5872,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": true,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -6077,7 +6092,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": true,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -6105,10 +6123,10 @@
             "multi_stage_superres": true,
             "stage1_upscale_algo": "source",
             "stage1_upscale_level": "source",
-            "stage1_upscale_strength": "source",
+            "stage1_upscale_strength": "0.8",
             "stage2_upscale_algo": "source",
             "stage2_upscale_level": "source",
-            "stage2_upscale_strength": "source",
+            "stage2_upscale_strength": "0.8",
             "nvenc_ngx_vsr_quality": "1",
             "fruc": false,
             "fruc_fps": "60",
@@ -6519,7 +6537,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -6736,7 +6757,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -6953,7 +6977,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": true,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -7415,10 +7442,10 @@
             "multi_stage_superres": true,
             "stage1_upscale_algo": "source",
             "stage1_upscale_level": "source",
-            "stage1_upscale_strength": "source",
+            "stage1_upscale_strength": "0.8",
             "stage2_upscale_algo": "source",
             "stage2_upscale_level": "source",
-            "stage2_upscale_strength": "source",
+            "stage2_upscale_strength": "0.8",
             "nvenc_ngx_vsr_quality": "1",
             "fruc": false,
             "fruc_fps": "60",
@@ -8463,7 +8490,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -8680,7 +8710,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -10165,7 +10198,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -10599,7 +10635,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -10816,7 +10855,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -11033,7 +11075,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
@@ -11467,7 +11512,10 @@
             "dovi_analysis_tuning": "-1",
             "dovi_keep_xml": true,
             "sdr_to_hdr": false,
-            "sdr_to_hdr_working_res": "source"
+            "sdr_to_hdr_working_res": "source",
+            "nvenc_superres_strength": "0.8",
+            "stage1_upscale_strength": "0.8",
+            "stage2_upscale_strength": "0.8"
         },
         "triggers": {
             "video_trigger": "Never",
