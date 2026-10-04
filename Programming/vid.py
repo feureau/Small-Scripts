@@ -8138,10 +8138,11 @@ class VideoProcessorApp:
         self.output_mode_var.set(options.get("output_mode", self.output_mode))
         self.output_mode = self.output_mode_var.get()
         self.resolution_var.set(options.get("resolution", DEFAULT_RESOLUTION))
+        self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
         self.upscale_algo_var.set(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO))
         self.output_format_var.set(options.get("output_format", DEFAULT_OUTPUT_FORMAT))
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
-        self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
+        # PATCHED: set backend before upscale_algo in update_gui_from_job_options
         self.nvenc_nvvfx_denoise_var.set(options.get("nvenc_nvvfx_denoise", DEFAULT_NVENC_NVVFX_DENOISE))
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self._sync_superres_mode_display()
