@@ -75,6 +75,22 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.60 - Correct ngx-vsr --vpp-resize token (2026-10-04)
+    • FIX: format_stage_resize_algo() emitted an NVEncC --vpp-resize
+      value of "ngx,vsr-quality=N" for the ngx-vsr algorithm. NVEncC's
+      --vpp-resize accepts "ngx-vsr" as the algorithm name; "ngx" alone
+      is rejected with:
+          Error: Invalid value "ngx" for "--vpp-resize"
+          Option value should be one of below...
+          ..., nvvfx-superres, ngx-vsr, libplacebo-...
+      Any job whose main Upscale Algo, stage1_upscale_algo, or
+      stage2_upscale_algo resolved to ngx-vsr would abort at the NVEncC
+      encode step. The emitted token is now "ngx-vsr,vsr-quality=N".
+    • AFFECTED: presets that set "upscale_algo": "ngx-vsr",
+      "stage1_upscale_algo": "ngx-vsr", or "stage2_upscale_algo":
+      "ngx-vsr". In the shipped preset file the only entry that hits
+      this is "AV1 8K - HDR" (stage2_upscale_algo = "ngx-vsr"); all
+      other presets use nvvfx-superres, bicubic, or lanczos.
 v8.59 - Multi-stage upscaling toggle + per-stage algorithms (2026-09-25)
     • FEATURE: New "Multi-stage SuperRes (>2x)" checkbox on the Upscale
       Algo row in Format & Quality. It controls the automatic chaining
@@ -2654,7 +2670,7 @@ def format_stage_resize_algo(algo, level, strength=None):
             spec += f",superres-strength={norm_strength}"
         return spec
     if algo == "ngx-vsr":
-        return f"ngx,vsr-quality={level if level is not None else DEFAULT_NVENC_NGX_VSR_QUALITY}"
+        return f"ngx-vsr,vsr-quality={level if level is not None else DEFAULT_NVENC_NGX_VSR_QUALITY}"
     return algo
 
 
