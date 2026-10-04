@@ -37,7 +37,14 @@ Core Feature Sets
         (BT.2020 PQ / BT.2020 HLG) with proper range tagging and optional HDR10
         mastering metadata (ST 2086 + MaxCLL/MaxFALL).
     *   **Scaling**: Smart upscaling (Nearest, Bilinear, Bicubic, Lanczos) with aspect
-        ratio handling (Crop/Fill, Pad/Fit, Stretch).
+        ratio handling (Crop/Fill, Pad/Fit, Stretch). NVVFX SuperRes / NGX VSR
+        jobs can chain two AI passes for ratios beyond ~2x (e.g. 1080p → 8K),
+        with a "Multi-stage SuperRes (>2x)" toggle beside the Upscale Algo
+        dropdown in Format & Quality. When chaining, the intermediate and final
+        hops can each use their own algorithm and AI level. NVVFX SuperRes
+        exposes both of its parameters — superres-mode (Quality-priority /
+        Performance-priority) and superres-strength (0.0-1.0) — at the main
+        control and per hop.
     *   **Sharpening**: Integrated CAS (Contrast Adaptive Sharpen) and
         matrix-based `unsharp` filters. Enabled by default for all jobs.
     *   **Motion**: FRUC (Frame Rate Up-Conversion) via `minterpolate`.
@@ -68,6 +75,127 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.59 - Multi-stage upscaling toggle + per-stage algorithms (2026-09-25)
+    • FEATURE: New "Multi-stage SuperRes (>2x)" checkbox on the Upscale
+      Algo row in Format & Quality. It controls the automatic chaining
+      added in v8.28/v8.29, where an upscale beyond ~2x is split into
+      two passes (e.g. 1080p → 4K → 8K).
+    • FEATURE: A "Multi-stage Upscaling" box exposes Stage 1 (the
+      intermediate hop, half the final target) and Stage 2 (the final
+      NVEncC pass) independently. Each stage has its own algorithm
+      (nearest, bilinear, bicubic, lanczos, spline36, nvvfx-superres,
+      ngx-vsr) and, for the AI upscalers, its own level (NVVFX SuperRes
+      mode 0/1, NGX VSR quality 1-4). Any mix is allowed: bicubic → 4K
+      then nvvfx-superres → 8K, two different AI upscalers, or AI →
+      classical. Classical algorithms have no level in this pipeline.
+      The box sits directly below the NVVFX SuperRes Mode / NGX VSR
+      Quality row and is shown only while the "Multi-stage SuperRes
+      (>2x)" checkbox is on.
+    • DEFAULT: Both stage pickers and both level pickers sit on "Same as
+      main control" and inherit the Upscale Algo / NVVFX SuperRes Mode /
+      NGX VSR Quality values, so existing presets, saved jobs, and
+      per-job options that predate this version keep the v8.28+
+      behavior byte-for-byte.
+    • OFF: _resolve_multi_stage_config() reports no intermediate, so no
+      backend promotion to 'nvencc_with_ffmpeg' and no NVEncC prepass
+      are performed. NVEncC is handed the full ratio in a single pass.
+      Faster, but ratios beyond the AI upscaler's rated ~2x ceiling may
+      fail or degrade. A new [INFO] line names the source, the target,
+      and the ratio the single pass will attempt (this replaces the >2x
+      popup warning that v8.28 removed).
+    • PIPELINE: _multi_stage_superres_info() is now a wrapper around
+      _resolve_multi_stage_config(), the single source of truth for the
+      chain decision. It records the plan in options["_multi_stage_plan"];
+      _nvvfx_superres_preprocess() takes explicit algo/level arguments;
+      construct_nvencc_command() builds its --vpp-resize from the
+      resolved stage-2 algorithm; construct_ffmpeg_command() uses the
+      stage-1 algorithm for the intermediate scale (a classical stage 1
+      is done by FFmpeg, an AI stage 1 by the NVEncC prepass).
+    • GUARD: A chain is skipped when neither stage is an AI upscaler
+      (two classical scale passes add nothing) and still skipped for
+      hybrid-stacked layouts. The downscale fallback for the AI
+      upscalers now compares against the geometry NVEncC actually
+      receives, not the original source dimensions.
+    • OPTION: persisted as 'multi_stage_superres', 'stage1_upscale_algo',
+      'stage1_upscale_level', 'stage2_upscale_algo', and
+      'stage2_upscale_level' (GUI, presets, per-job options, job hash).
+      The AI entries appear only on an NVEncC-backed encoder backend.
+    • UX: The "Multi-stage SuperRes (>2x)" checkbox is enabled on any
+      NVEncC-backed encoder backend (nvencc_only, nvencc_with_ffmpeg,
+      nvencc_video_with_ffmpeg_audio), so it can be checked ahead of
+      choosing an AI upscaler or left checked in a preset. It stays
+      disabled on ffmpeg_only / CPU software, where the AI upscalers are
+      not offered at all.
+    • UX: The Multi-stage Upscaling box visibility follows that checkbox
+      alone -- on shows the box, off hides it -- so the state can be
+      prepared before an AI upscaler is selected. The chain itself still
+      needs an NVEncC backend plus an AI upscaler at either stage; the
+      decision lives in the render path, and the stage dropdowns are
+      limited to the algorithms the current backend can actually run.
+    • UX: All AI-upscaler controls now live in one "Super Resolution &
+      AI Upscaling" group placed directly below the Upscale Algo row
+      (plain pack order: resolution row, Upscale Algo row + the
+      Multi-stage SuperRes (>2x) checkbox, this group, then Output
+      Format). Inside the group: NVVFX SuperRes Mode / NGX VSR Quality,
+      then the Multi-stage Upscaling box while the checkbox is on, then
+      the denoise row. The per-stage sub-options therefore sit one line
+      under the checkbox instead of at the bottom of the panel.
+    • UX: The NGX VSR Quality dropdowns (main control and both per-stage
+      Level pickers) show what each level means instead of a bare
+      number: 1 = Lowest quality, lowest GPU load; 2 = Medium;
+      3 = High - usually the recommended/default balance; 4 = Ultra/
+      highest quality, highest GPU cost. Only the label changed: the
+      stored option, the preset value, the job hash, and the NVEncC
+      argument all remain the bare number.
+    • FIX: Selecting an NGX VSR Quality entry no longer clears the
+      dropdown list. The selection handler used to write the bare number
+      into the option variable and then re-enter the display sync, which
+      briefly wrote the descriptive label back into the same variable the
+      readonly combobox reads from. The sync now sets the combobox text
+      directly and never touches the variable, and the handler re-asserts
+      the entry list, so the same dropdown keeps working across repeated
+      selections. A label that leaked into a saved preset is repaired on
+      load.
+    • FIX: The descriptive text can no longer go missing from the Mode /
+      Quality / Level dropdowns. The bare codes ("0"/"1"/"1".."4") live in
+      the option variables while the widgets must show labels, and setting
+      the text only from the call sites that happened to know about it was
+      fragile: Tk could blank a readonly combobox when its values list was
+      reconfigured or when a selection landed after the update. Every
+      configured combobox is now re-asserted once the event loop is idle
+      (_start_combo_label_watch / _schedule_combo_label_sync), so the
+      label always wins regardless of the order those events arrive in.
+    • FEATURE: NVVFX SuperRes now exposes BOTH of its parameters, fully
+      labelled, at the main control and at each multi-stage hop.
+      superres-mode entries read "0 (Quality-priority)" and
+      "1 (Performance-priority)"; the stored option stays the bare
+      "0"/"1". superres-strength is a 0.0-1.0 float entered as free text
+      behind a "Specify" checkbox. With Specify off the parameter is
+      omitted from --vpp-resize entirely and NVEncC's own default
+      applies, so nothing changes for presets or jobs that never touch
+      it. Per-stage strengths inherit the main value unless their own
+      Specify box is ticked; typing "off" in a ticked stage field sends
+      no strength for that hop only.
+    • OPTION: new keys 'nvenc_superres_strength',
+      'stage1_upscale_strength', and 'stage2_upscale_strength' (GUI,
+      presets, per-job options, job hash). 'nvenc_superres_strength'
+      defaults to empty ("not specified"); the per-stage keys default to
+      "source" (inherit).
+    • VALIDATION: an out-of-range or non-numeric strength is rejected
+      with a warning and never reaches the command line. Combining
+      superres-strength with superres-mode=1 (Performance-priority)
+      prints a warning, because the strength parameter is documented for
+      Quality-priority mode.
+    • FIX: The Mode / Quality dropdowns can no longer leak their display
+      text into a saved preset. A preset written while the labels were
+      being round-tripped through the option variable stored
+      "0 (Quality-priority)" instead of "0" (and the NGX equivalent),
+      which then showed up in the GUI as the mode/quality value.
+      get_current_gui_options() now normalizes both fields on read via
+      option_value_from_label(), so presets, job options, and the job hash
+      only ever receive the bare code; resolve_stage_upscale_level() was
+      already label-tolerant for reads. The two affected preset entries in
+      vid.py.preset.json are repaired in place.
 v8.38 - Reuse source Dolby Vision RPU when possible (2026-09-25)
     • FEATURE: _generate_dolby_vision_rpu now checks whether the
       source already carries a Dolby Vision RPU (HEVC in an
@@ -126,6 +254,10 @@ v8.29 - Every upscale stage now uses NVVFX SuperRes (2026-09-24)
     • KNOWN LIMITATION: Interlaced sources are not deinterlaced before
       the first superres pass. NVEncC has no auto-deinterlace for
       superres. Enable FRUC or avoid superres for interlaced inputs.
+    • SUPERSEDED (v8.59): The "both hops use the same AI upscaler"
+      rule is now the DEFAULT rather than a hard rule. The
+      "Multi-stage Upscaling" box lets stage 1 and stage 2 each pick
+      their own algorithm and AI level.
 v8.30 - TrueHDR preprocessor at source resolution (2026-09-24)
     • CHANGE: SDR→HDR (non-DV) now runs TrueHDR as a dedicated
       preprocessor pass at source resolution instead of inline on
@@ -347,8 +479,84 @@ DEFAULT_SDR_TO_HDR_WORKING_RES = "source"
 DEFAULT_VIDEO_CODEC = "h264"
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"
 DEFAULT_NVENC_SUPERRES_MODE = "1"
+# v8.59: NVVFX SuperRes strength (0.0 - 1.0 float). Empty means "not
+# specified", in which case the superres-strength token is omitted from
+# --vpp-resize entirely and NVEncC's own default applies. That keeps every
+# command line identical to the pre-strength build until the user opts in.
+DEFAULT_NVENC_SUPERRES_STRENGTH = ""
 DEFAULT_NVENC_NVVFX_DENOISE = False
 DEFAULT_NVENC_NGX_VSR_QUALITY = "1"
+# v8.59: chain two NVVFX SuperRes / NGX VSR passes when the requested
+# upscale exceeds their ~2x single-pass ceiling. True preserves the
+# v8.28+ behavior; False attempts the whole jump in one superres pass.
+DEFAULT_MULTI_STAGE_SUPERRES = True
+# v8.59: per-stage upscale overrides for multi-stage mode. Both the
+# algorithm and its level default to "source", meaning "inherit the main
+# Upscale Algo / NVVFX SuperRes Mode / NGX VSR Quality controls", so
+# every preset and queued job that predates this feature keeps the
+# exact same two-pass command lines.
+STAGE_UPSCALE_INHERIT = "source"
+DEFAULT_STAGE_UPSCALE_ALGO = STAGE_UPSCALE_INHERIT
+DEFAULT_STAGE_UPSCALE_LEVEL = STAGE_UPSCALE_INHERIT
+# Per-stage NVVFX SuperRes strength. "source" inherits the main strength
+# control; an empty value means "do not specify strength for this hop".
+DEFAULT_STAGE_UPSCALE_STRENGTH = STAGE_UPSCALE_INHERIT
+# Algorithms accepted at either stage. The AI upscalers are filtered out
+# at the GUI level when the encoder backend cannot drive NVEncC.
+STAGE_UPSCALE_ALGOS = ("nearest", "bilinear", "bicubic", "lanczos",
+                       "spline36", "nvvfx-superres", "ngx-vsr")
+# Label shown in the per-stage dropdowns for the inherit sentinel.
+STAGE_UPSCALE_INHERIT_LABEL = "Same as main control"
+CLASSICAL_UPSCALE_ALGOS = ("nearest", "bilinear", "bicubic", "lanczos", "spline36")
+AI_UPSCALE_ALGOS = ("nvvfx-superres", "ngx-vsr")
+# Level dropdown values per AI algorithm. Classical algorithms have no
+# tunable level anywhere in this pipeline, so their list is empty.
+STAGE_UPSCALE_LEVELS = {
+    "nvvfx-superres": ["0", "1"],
+    "ngx-vsr": ["1", "2", "3", "4"],
+}
+# v8.59: dropdown labels for the NGX VSR quality levels. The stored
+# option value stays the bare number ("1".."4"), because that is what
+# NVEncC receives as vsr-quality and what presets already contain; only
+# the visible text carries the meaning. NGX_VSR_LEVEL_NOTE has one line
+# per level for the tooltip below.
+NGX_VSR_LEVEL_LABELS = {
+    "1": "1 (Lowest quality, lowest GPU load)",
+    "2": "2 (Medium)",
+    "3": "3 (High - recommended balance)",
+    "4": "4 (Ultra/highest quality, highest GPU cost)",
+}
+NGX_VSR_LEVEL_NOTE = (
+    "NGX VSR quality:\n"
+    "1 = Lowest quality, lowest GPU load\n"
+    "2 = Medium\n"
+    "3 = High - usually the recommended/default balance\n"
+    "4 = Ultra/highest quality, highest GPU cost")
+# v8.59: NVVFX SuperRes exposes TWO parameters, and both are labelled.
+# superres-mode picks the priority of the whole pass; the stored option
+# stays the bare "0"/"1" that NVEncC receives. superres-strength is a
+# 0.0-1.0 float entered as free text behind a "Specify" checkbox.
+NVVFX_SUPERRES_MODE_LABELS = {
+    "0": "0 (Quality-priority)",
+    "1": "1 (Performance-priority)",
+}
+NVVFX_SUPERRES_MODE_NOTE = (
+    "NVVFX SuperRes mode:\n"
+    "0 = Quality-priority mode\n"
+    "1 = Performance-priority mode")
+NVVFX_SUPERRES_STRENGTH_NOTE = (
+    "NVVFX SuperRes strength: floating point 0.0 - 1.0.\n"
+    "Tick Specify to send superres-strength=<value>; leave it unticked "
+    "to omit the parameter entirely and use NVEncC's own default.\n"
+    "Both per-stage Strength controls inherit this value unless their "
+    "own Specify box is ticked; type off there to send no strength for "
+    "that hop only.\n"
+    "Note: strength is normally paired with mode 0 (Quality-priority); "
+    "combining it with mode 1 prints a warning.")
+NVVFX_SUPERRES_STRENGTH_RANGE = (0.0, 1.0)
+# Per-stage sentinel for "explicitly send no superres-strength for this
+# hop", as opposed to "source" (inherit the main strength).
+STAGE_STRENGTH_OFF = "off"
 DEFAULT_MAX_SIZE_MB = 0
 DEFAULT_MAX_DURATION = 0
 DEFAULT_ORIENTATION = "horizontal + vertical"
@@ -2246,11 +2454,208 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('dovi_keep_xml', True)),
         str(job_options.get('sdr_to_hdr', False)),
         job_options.get('sdr_to_hdr_working_res', ''),
+        # === v8.59 ===
+        str(job_options.get('multi_stage_superres', DEFAULT_MULTI_STAGE_SUPERRES)),
+        str(job_options.get('nvenc_superres_strength', DEFAULT_NVENC_SUPERRES_STRENGTH)),
+        str(job_options.get('stage1_upscale_algo', DEFAULT_STAGE_UPSCALE_ALGO)),
+        str(job_options.get('stage1_upscale_level', DEFAULT_STAGE_UPSCALE_LEVEL)),
+        str(job_options.get('stage1_upscale_strength', DEFAULT_STAGE_UPSCALE_STRENGTH)),
+        str(job_options.get('stage2_upscale_algo', DEFAULT_STAGE_UPSCALE_ALGO)),
+        str(job_options.get('stage2_upscale_level', DEFAULT_STAGE_UPSCALE_LEVEL)),
+        str(job_options.get('stage2_upscale_strength', DEFAULT_STAGE_UPSCALE_STRENGTH)),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
         hash_str += f"|{extra_data}"
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
+
+
+def resolve_stage_upscale_algo(options, key):
+    """Return the concrete upscale algorithm for a multi-stage hop.
+
+    `key` is either "stage1_upscale_algo" (intermediate hop) or
+    "stage2_upscale_algo" (final hop). A missing or "source" value means
+    "inherit the main Upscale Algo control", which is what keeps every
+    pre-v8.59 preset and queued job byte-identical.
+    """
+    raw = str(options.get(key, DEFAULT_STAGE_UPSCALE_ALGO) or "").strip()
+    if not raw or raw == STAGE_UPSCALE_INHERIT:
+        raw = str(options.get("upscale_algo", DEFAULT_UPSCALE_ALGO) or "").strip()
+    if raw not in STAGE_UPSCALE_ALGOS:
+        return DEFAULT_UPSCALE_ALGO
+    return raw
+
+
+def resolve_stage_upscale_level(options, key, algo):
+    """Return the (algorithm-specific) level for a multi-stage hop.
+
+    For nvvfx-superres this is the SuperRes mode ("0"/"1"); for ngx-vsr
+    it is the VSR quality ("1".."4"). "source" inherits the matching
+    main control. Returns None for classical algorithms, which have no
+    level in this pipeline.
+
+    v8.59: the NGX VSR dropdown shows a descriptive label rather than
+    the bare number, so a value may arrive as "3 (High - recommended
+    balance)". stage_level_from_display() normalizes it back to "3"
+    before it reaches `--vpp-resize ngx,vsr-quality=`.
+    """
+    valid = STAGE_UPSCALE_LEVELS.get(algo)
+    if not valid:
+        return None
+    main_key = ("nvenc_superres_mode" if algo == "nvvfx-superres"
+                else "nvenc_ngx_vsr_quality")
+    main_default = (DEFAULT_NVENC_SUPERRES_MODE if algo == "nvvfx-superres"
+                    else DEFAULT_NVENC_NGX_VSR_QUALITY)
+    raw = str(options.get(key, DEFAULT_STAGE_UPSCALE_LEVEL) or "").strip()
+    if not raw or raw == STAGE_UPSCALE_INHERIT:
+        raw = str(options.get(main_key, main_default) or "").strip()
+    # Normalize after the inherit hop: either the stage value or the
+    # inherited main value may be a descriptive dropdown label.
+    raw = stage_level_from_display(raw, algo)
+    if raw not in valid:
+        return main_default
+    return raw
+
+
+def stage_level_display_options(algo, include_inherit=False):
+    """Dropdown entries for a per-stage level picker.
+
+    For ngx-vsr each entry carries its meaning (see
+    NGX_VSR_LEVEL_LABELS) so the user does not have to guess what
+    quality 3 means; for nvvfx-superres the entries carry the mode's
+    priority (see NVVFX_SUPERRES_MODE_LABELS). The stored option value
+    stays the bare number either way.
+    """
+    valid = list(STAGE_UPSCALE_LEVELS.get(algo, []))
+    if algo == "ngx-vsr":
+        opts = [NGX_VSR_LEVEL_LABELS.get(v, v) for v in valid]
+    elif algo == "nvvfx-superres":
+        opts = [NVVFX_SUPERRES_MODE_LABELS.get(v, v) for v in valid]
+    else:
+        opts = valid
+    if include_inherit:
+        opts = [STAGE_UPSCALE_INHERIT_LABEL] + opts
+    return opts
+
+
+def stage_level_display(level, algo=None):
+    """Display text for one stored level value."""
+    raw = str(level or "").strip()
+    if algo == "ngx-vsr":
+        return NGX_VSR_LEVEL_LABELS.get(raw, raw)
+    if algo == "nvvfx-superres":
+        return NVVFX_SUPERRES_MODE_LABELS.get(raw, raw)
+    # No algorithm given (or a classical one): map whichever table knows
+    # the value, preferring the NGX quality labels.
+    return NGX_VSR_LEVEL_LABELS.get(
+        raw, NVVFX_SUPERRES_MODE_LABELS.get(raw, raw))
+
+
+def normalize_strength_value(raw):
+    """Normalize an NVVFX SuperRes strength value to a float string.
+
+    Accepts any float in 0.0 - 1.0 and returns it in a stable form
+    ("0.8", "1.0", "0"). Returns None for "not specified", for anything
+    that is not a number, and for out-of-range input, so a malformed
+    value can never reach `--vpp-resize`.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    low, high = NVVFX_SUPERRES_STRENGTH_RANGE
+    if value < low or value > high:
+        return None
+    return f"{value:g}"
+
+
+def resolve_stage_upscale_strength(options, key, algo):
+    """Return the NVVFX SuperRes strength for a multi-stage hop.
+
+    Returns None for every non-nvvfx-superres algorithm, and also when
+    the value resolves to "not specified" -- in both cases the
+    superres-strength token is omitted from --vpp-resize entirely.
+
+    "source" (or a missing key) inherits the main strength control, so a
+    per-stage control can stay blank and still follow the main one. The
+    STAGE_STRENGTH_OFF sentinel means "explicitly send no strength for
+    this hop", which is how a stage opts out while the main control has
+    one set.
+    """
+    if algo != "nvvfx-superres":
+        return None
+    raw = options.get(key, DEFAULT_STAGE_UPSCALE_STRENGTH)
+    text = "" if raw is None else str(raw).strip()
+    if text == STAGE_STRENGTH_OFF or text.lower() == STAGE_STRENGTH_OFF:
+        return None
+    if text == STAGE_UPSCALE_INHERIT or not text:
+        main = options.get("nvenc_superres_strength",
+                           DEFAULT_NVENC_SUPERRES_STRENGTH)
+        return normalize_strength_value(main)
+    return normalize_strength_value(text)
+
+
+def stage_level_from_display(display, algo):
+    """Map a level dropdown entry back to its stored option value.
+
+    The entries are descriptive strings ("3 (High - recommended
+    balance)"), but the option -- and therefore the preset, the job hash
+    and the NVEncC argument -- must stay the bare number.
+    """
+    text = str(display or "").strip()
+    if text == STAGE_UPSCALE_INHERIT_LABEL:
+        return STAGE_UPSCALE_INHERIT
+    valid = list(STAGE_UPSCALE_LEVELS.get(algo, []))
+    if text in valid:
+        return text
+    if algo == "ngx-vsr":
+        for value in valid:
+            if NGX_VSR_LEVEL_LABELS.get(value) == text:
+                return value
+    elif algo == "nvvfx-superres":
+        for value in valid:
+            if NVVFX_SUPERRES_MODE_LABELS.get(value) == text:
+                return value
+    return STAGE_UPSCALE_INHERIT
+
+
+def option_value_from_label(value, algo, default):
+    """Normalize a combobox reading back to the bare option value.
+
+    v8.59: the Mode / Quality comboboxes show descriptive labels while
+    their option must stay the bare code that presets, the job hash, and
+    NVEncC consume. Passing a bare code through, and mapping a leaked
+    label back, both fall out of stage_level_from_display(). Anything
+    that resolves to the inherit sentinel or an unknown value falls back
+    to `default` so a preset can never capture display text.
+    """
+    resolved = stage_level_from_display(value, algo)
+    if resolved == STAGE_UPSCALE_INHERIT or resolved not in STAGE_UPSCALE_LEVELS.get(algo, []):
+        return default
+    return resolved
+
+
+def format_stage_resize_algo(algo, level, strength=None):
+    """Build the NVEncC `--vpp-resize` value for a stage algorithm.
+
+    v8.59: for nvvfx-superres the mode is always emitted and the
+    strength token is appended only when a validated 0.0-1.0 value was
+    resolved. With strength unset the string is exactly what earlier
+    versions produced.
+    """
+    if algo == "nvvfx-superres":
+        mode = level if level is not None else DEFAULT_NVENC_SUPERRES_MODE
+        spec = f"nvvfx-superres,superres-mode={mode}"
+        norm_strength = normalize_strength_value(strength)
+        if norm_strength is not None:
+            spec += f",superres-strength={norm_strength}"
+        return spec
+    if algo == "ngx-vsr":
+        return f"ngx,vsr-quality={level if level is not None else DEFAULT_NVENC_NGX_VSR_QUALITY}"
+    return algo
 
 
 class ToolTip:
@@ -2369,6 +2774,14 @@ class WorkflowPresetManager:
             "video_codec": DEFAULT_VIDEO_CODEC,
             "encoder_backend": DEFAULT_ENCODER_BACKEND,
             "nvenc_superres_mode": DEFAULT_NVENC_SUPERRES_MODE,
+            "nvenc_superres_strength": DEFAULT_NVENC_SUPERRES_STRENGTH,
+            "multi_stage_superres": DEFAULT_MULTI_STAGE_SUPERRES,
+            "stage1_upscale_algo": DEFAULT_STAGE_UPSCALE_ALGO,
+            "stage1_upscale_level": DEFAULT_STAGE_UPSCALE_LEVEL,
+            "stage1_upscale_strength": DEFAULT_STAGE_UPSCALE_STRENGTH,
+            "stage2_upscale_algo": DEFAULT_STAGE_UPSCALE_ALGO,
+            "stage2_upscale_level": DEFAULT_STAGE_UPSCALE_LEVEL,
+            "stage2_upscale_strength": DEFAULT_STAGE_UPSCALE_STRENGTH,
             "nvenc_ngx_vsr_quality": DEFAULT_NVENC_NGX_VSR_QUALITY,
             "orientation": DEFAULT_ORIENTATION,
             "render_by_chapters": DEFAULT_RENDER_BY_CHAPTERS,
@@ -2728,10 +3141,51 @@ class VideoProcessorApp:
         self.nvenc_superres_mode_var = tk.StringVar(value=DEFAULT_NVENC_SUPERRES_MODE)
         self.nvenc_superres_mode_var.trace_add('write',
                                                lambda *args: self._update_selected_jobs('nvenc_superres_mode'))
+        # v8.59: NVVFX SuperRes strength (0.0 - 1.0 float). The option is
+        # empty until the user ticks "Specify", so no superres-strength
+        # token is emitted and every pre-existing command line is
+        # unchanged. The entry text is validated on commit.
+        self.nvenc_superres_strength_specify_var = tk.BooleanVar(value=False)
+        self.nvenc_superres_strength_var = tk.StringVar(value=DEFAULT_NVENC_SUPERRES_STRENGTH)
+        self.nvenc_superres_strength_specify_var.trace_add(
+            'write', lambda *args: [self._sync_superres_strength_controls(),
+                                    self._update_selected_jobs('nvenc_superres_strength')])
         self.nvenc_nvvfx_denoise_var = tk.BooleanVar(value=DEFAULT_NVENC_NVVFX_DENOISE)
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
-        self.nvenc_ngx_vsr_quality_var.trace_add('write',
-                                                 lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
+        # v8.59: the NGX VSR Quality dropdown shows a descriptive label
+        # ("3 (High - recommended balance)") while the variable keeps the
+        # bare number. The label is refreshed explicitly -- never inside
+        # this trace -- because a trace that sets the variable mid-write
+        # would let get_current_gui_options() capture the label instead
+        # of the number. See _sync_ngx_quality_display().
+        self.nvenc_ngx_vsr_quality_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvenc_ngx_vsr_quality'))
+        self.multi_stage_superres_var = tk.BooleanVar(value=DEFAULT_MULTI_STAGE_SUPERRES)
+        self.multi_stage_superres_var.trace_add('write',
+                                                lambda *args: self._update_selected_jobs('multi_stage_superres'))
+        # v8.59 per-stage multi-stage overrides. "source" inherits the
+        # main Upscale Algo / SuperRes Mode / VSR Quality controls.
+        # Each trace refreshes the level widgets through
+        # _toggle_superres_options(), which already runs the stage-algo
+        # resolution, then pushes the value into the selected jobs.
+        self.stage1_upscale_algo_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_ALGO)
+        self.stage1_upscale_algo_var.trace_add(
+            'write', lambda *args: [self._toggle_superres_options(),
+                                    self._update_selected_jobs('stage1_upscale_algo')])
+        self.stage1_upscale_level_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_LEVEL)
+        self.stage1_upscale_level_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('stage1_upscale_level'))
+        self.stage1_upscale_strength_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_STRENGTH)
+        self.stage1_upscale_strength_specify_var = tk.BooleanVar(value=False)
+        self.stage2_upscale_algo_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_ALGO)
+        self.stage2_upscale_algo_var.trace_add(
+            'write', lambda *args: [self._toggle_superres_options(),
+                                    self._update_selected_jobs('stage2_upscale_algo')])
+        self.stage2_upscale_level_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_LEVEL)
+        self.stage2_upscale_level_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('stage2_upscale_level'))
+        self.stage2_upscale_strength_var = tk.StringVar(value=DEFAULT_STAGE_UPSCALE_STRENGTH)
+        self.stage2_upscale_strength_specify_var = tk.BooleanVar(value=False)
         self.subfolder_mode_var = tk.StringVar(
             value=SUBFOLDER_MODE_DISPLAY_MAP.get(DEFAULT_SUBFOLDER_MODE, "None (Default: Output)"))
         self.output_subfolders_var = tk.BooleanVar(value=DEFAULT_OUTPUT_TO_SUBFOLDERS)
@@ -3218,6 +3672,9 @@ class VideoProcessorApp:
         self._update_color_preset_options()
         if self.current_preset_var.get():
             self.load_preset_to_gui(self.current_preset_var.get())
+        # v8.59: arm the idle label re-assert now that a preset has been
+        # loaded, so every labelled combobox shows its descriptive text.
+        self._start_combo_label_watch()
 
     def _on_chroma_var_changed(self, *args):
         self._sync_chroma_display()
@@ -4348,19 +4805,211 @@ class VideoProcessorApp:
         self.upscale_algo_combo.pack(side=tk.LEFT)
         self.upscale_algo_combo.bind("<<ComboboxSelected>>",
                                      lambda e: self._update_selected_jobs("upscale_algo"))
-        superres_frame = ttk.Frame(quality_group)
+        # v8.59 MULTI-STAGE SUPERRES TOGGLE
+        # Sits on the Upscale Algo row because it only affects the two
+        # AI upscalers (nvvfx-superres / ngx-vsr). Checked = chain two
+        # passes for >2x ratios (v8.28+ behavior). Unchecked = attempt
+        # the whole jump in a single superres pass, past the AI
+        # upscaler's rated ~2x ceiling.
+        self.multi_stage_superres_check = ttk.Checkbutton(
+            upscale_frame, text="Multi-stage SuperRes (>2x)",
+            variable=self.multi_stage_superres_var,
+            command=lambda: [self._update_multi_stage_options(),
+                             self._update_selected_jobs("multi_stage_superres")])
+        self.multi_stage_superres_check.pack(side=tk.LEFT, padx=(15, 0))
+        ToolTip(self.multi_stage_superres_check,
+                "On: when the requested upscale exceeds ~2x (e.g. 1080p to 8K), "
+                "chain two NVVFX SuperRes / NGX VSR passes (source -> half target "
+                "-> target). Every pixel is touched by the AI upscaler, and the "
+                "job is promoted to the nvencc_with_ffmpeg backend for the "
+                "intermediate FFmpeg pass.\n"
+                "Off: attempt the full jump in a single superres pass. Faster, "
+                "but ratios beyond ~2x are past the AI upscaler's rated ceiling "
+                "and may fail or degrade. Only affects nvvfx-superres / ngx-vsr.")
+        # v8.59 SUPER-RES SUPERGROUP
+        # Everything AI-upscaler related lives in one bordered group that
+        # sits directly UNDER the Upscale Algo row: the NVVFX SuperRes
+        # Mode / NGX VSR Quality row, then the Multi-stage Upscaling box
+        # (shown while the "Multi-stage SuperRes (>2x)" checkbox above is
+        # on), then the denoise row. The group's widgets are populated
+        # further down, once the output format section has claimed its
+        # slot after it.
+        superres_frame = ttk.LabelFrame(quality_group, text="Super Resolution & AI Upscaling",
+                                        padding=5)
         superres_frame.pack(fill=tk.X, pady=(5, 0))
         sres_row1 = ttk.Frame(superres_frame)
         sres_row1.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(sres_row1, text="NVVFX SuperRes Mode:").pack(side=tk.LEFT, padx=(0, 5))
-        self.superres_mode_combo = ttk.Combobox(sres_row1, textvariable=self.nvenc_superres_mode_var,
-                                                values=["0", "1"], width=5, state="readonly")
+        # v8.59: labelled entries. The stored option stays the bare "0"/"1"
+        # that NVEncC receives as superres-mode (see the selection handler).
+        self.superres_mode_combo = ttk.Combobox(
+            sres_row1, textvariable=self.nvenc_superres_mode_var,
+            values=stage_level_display_options("nvvfx-superres"),
+            width=22, state="readonly")
         self.superres_mode_combo.pack(side=tk.LEFT)
+        self.superres_mode_combo.bind(
+            "<<ComboboxSelected>>", self._on_superres_mode_selected)
+        ToolTip(self.superres_mode_combo, NVVFX_SUPERRES_MODE_NOTE)
         ttk.Label(sres_row1, text="NGX VSR Quality:").pack(side=tk.LEFT, padx=(15, 5))
-        self.ngx_vsr_quality_combo = ttk.Combobox(sres_row1, textvariable=self.nvenc_ngx_vsr_quality_var,
-                                                  values=["1", "2", "3", "4"], width=5, state="readonly")
+        # v8.59: the dropdown shows what each quality level costs and
+        # buys; the stored option stays the bare number that NVEncC's
+        # vsr-quality wants (see _on_ngx_vsr_quality_selected).
+        self.ngx_vsr_quality_combo = ttk.Combobox(
+            sres_row1, textvariable=self.nvenc_ngx_vsr_quality_var,
+            values=stage_level_display_options("ngx-vsr"),
+            width=42, state="readonly")
         self.ngx_vsr_quality_combo.pack(side=tk.LEFT)
-        sres_row2 = ttk.Frame(superres_frame)
+        self.ngx_vsr_quality_combo.bind(
+            "<<ComboboxSelected>>", self._on_ngx_vsr_quality_selected)
+        ToolTip(self.ngx_vsr_quality_combo, NGX_VSR_LEVEL_NOTE)
+        # Show the descriptive label for the stored default right away.
+        self._sync_ngx_quality_display()
+        # v8.59 NVVFX SUPERRES STRENGTH
+        # Second parameter of the same filter: superres-strength is a
+        # 0.0-1.0 float, entered as free text behind a Specify checkbox.
+        # Unticked = the token is omitted from --vpp-resize entirely and
+        # NVEncC's own default applies.
+        sres_row1b = ttk.Frame(superres_frame)
+        sres_row1b.pack(fill=tk.X, pady=(0, 2))
+        self.nvenc_superres_strength_specify_check = ttk.Checkbutton(
+            sres_row1b, text="Specify",
+            variable=self.nvenc_superres_strength_specify_var)
+        self.nvenc_superres_strength_specify_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(sres_row1b, text="NVVFX SuperRes Strength:").pack(side=tk.LEFT, padx=(0, 5))
+        self.nvenc_superres_strength_entry = ttk.Entry(
+            sres_row1b, textvariable=self.nvenc_superres_strength_var, width=8)
+        self.nvenc_superres_strength_entry.pack(side=tk.LEFT)
+        self.nvenc_superres_strength_entry.bind(
+            "<FocusOut>", lambda e: self._commit_main_strength())
+        self.nvenc_superres_strength_entry.bind(
+            "<Return>", lambda e: self._commit_main_strength())
+        ttk.Label(sres_row1b, text="0.0 - 1.0").pack(side=tk.LEFT, padx=(6, 0))
+        ToolTip(self.nvenc_superres_strength_entry, NVVFX_SUPERRES_STRENGTH_NOTE)
+        ToolTip(self.nvenc_superres_strength_specify_check,
+                "Send superres-strength for every NVVFX SuperRes pass. "
+                "When unticked the parameter is omitted and NVEncC uses its "
+                "own default, which is the behavior of earlier versions.")
+        self._sync_superres_strength_controls()
+        # v8.59 MULTI-STAGE UPSCALING BOX
+        # Sits inside this group, directly under the NVVFX SuperRes Mode /
+        # NGX VSR Quality row and directly above the denoise row, so it is
+        # visually adjacent to the "Multi-stage SuperRes (>2x)" checkbox on
+        # the Upscale Algo row. _update_multi_stage_options() packs or
+        # forgets the whole box, so it is visible only while that checkbox
+        # is on.
+        self.multi_stage_frame = ttk.LabelFrame(
+            superres_frame, text="Multi-stage Upscaling", padding=5)
+        _stage_opts = [STAGE_UPSCALE_INHERIT_LABEL] + list(STAGE_UPSCALE_ALGOS)
+        ms_row1 = ttk.Frame(self.multi_stage_frame)
+        ms_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(ms_row1, text="Stage 1 Algo:").pack(side=tk.LEFT, padx=(0, 5))
+        self.stage1_algo_combo = ttk.Combobox(
+            ms_row1, textvariable=self.stage1_upscale_algo_var,
+            values=_stage_opts, width=20, state="readonly")
+        self.stage1_algo_combo.pack(side=tk.LEFT)
+        self.stage1_algo_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._update_selected_jobs("stage1_upscale_algo"))
+        ttk.Label(ms_row1, text="Level:").pack(side=tk.LEFT, padx=(10, 5))
+        self.stage1_level_combo = ttk.Combobox(
+            ms_row1, textvariable=self.stage1_upscale_level_var,
+            values=[STAGE_UPSCALE_INHERIT_LABEL], width=26, state="readonly")
+        self.stage1_level_combo.pack(side=tk.LEFT)
+        self.stage1_level_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._on_stage_level_selected(
+                self.stage1_upscale_algo_var, self.stage1_upscale_level_var,
+                self.stage1_level_combo))
+        # NVVFX SuperRes strength for stage 1: tick Specify to override the
+        # main strength for this hop only, otherwise it inherits.
+        self.stage1_strength_specify_check = ttk.Checkbutton(
+            ms_row1, text="Strength:",
+            variable=self.stage1_upscale_strength_specify_var,
+            command=lambda: [self._update_multi_stage_options(),
+                             self._update_selected_jobs('stage1_upscale_strength')])
+        self.stage1_strength_specify_check.pack(side=tk.LEFT, padx=(10, 2))
+        self.stage1_strength_entry = ttk.Entry(
+            ms_row1, textvariable=self.stage1_upscale_strength_var, width=6)
+        self.stage1_strength_entry.pack(side=tk.LEFT)
+        self.stage1_strength_entry.bind(
+            "<FocusOut>", lambda e: self._commit_stage_strength(
+                self.stage1_upscale_strength_specify_var,
+                self.stage1_upscale_strength_var, 'stage1_upscale_strength'))
+        self.stage1_strength_entry.bind(
+            "<Return>", lambda e: self._commit_stage_strength(
+                self.stage1_upscale_strength_specify_var,
+                self.stage1_upscale_strength_var, 'stage1_upscale_strength'))
+        ToolTip(self.stage1_strength_entry, NVVFX_SUPERRES_STRENGTH_NOTE)
+        ms_row2 = ttk.Frame(self.multi_stage_frame)
+        ms_row2.pack(fill=tk.X, pady=(2, 2))
+        ttk.Label(ms_row2, text="Stage 2 Algo:").pack(side=tk.LEFT, padx=(0, 5))
+        self.stage2_algo_combo = ttk.Combobox(
+            ms_row2, textvariable=self.stage2_upscale_algo_var,
+            values=_stage_opts, width=20, state="readonly")
+        self.stage2_algo_combo.pack(side=tk.LEFT)
+        self.stage2_algo_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._update_selected_jobs("stage2_upscale_algo"))
+        ttk.Label(ms_row2, text="Level:").pack(side=tk.LEFT, padx=(10, 5))
+        self.stage2_level_combo = ttk.Combobox(
+            ms_row2, textvariable=self.stage2_upscale_level_var,
+            values=[STAGE_UPSCALE_INHERIT_LABEL], width=26, state="readonly")
+        self.stage2_level_combo.pack(side=tk.LEFT)
+        self.stage2_level_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._on_stage_level_selected(
+                self.stage2_upscale_algo_var, self.stage2_upscale_level_var,
+                self.stage2_level_combo))
+        self.stage2_strength_specify_check = ttk.Checkbutton(
+            ms_row2, text="Strength:",
+            variable=self.stage2_upscale_strength_specify_var,
+            command=lambda: [self._update_multi_stage_options(),
+                             self._update_selected_jobs('stage2_upscale_strength')])
+        self.stage2_strength_specify_check.pack(side=tk.LEFT, padx=(10, 2))
+        self.stage2_strength_entry = ttk.Entry(
+            ms_row2, textvariable=self.stage2_upscale_strength_var, width=6)
+        self.stage2_strength_entry.pack(side=tk.LEFT)
+        self.stage2_strength_entry.bind(
+            "<FocusOut>", lambda e: self._commit_stage_strength(
+                self.stage2_upscale_strength_specify_var,
+                self.stage2_upscale_strength_var, 'stage2_upscale_strength'))
+        self.stage2_strength_entry.bind(
+            "<Return>", lambda e: self._commit_stage_strength(
+                self.stage2_upscale_strength_specify_var,
+                self.stage2_upscale_strength_var, 'stage2_upscale_strength'))
+        ToolTip(self.stage2_strength_entry, NVVFX_SUPERRES_STRENGTH_NOTE)
+        ms_row3 = ttk.Frame(self.multi_stage_frame)
+        ms_row3.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(ms_row3, text=(
+            "Stage 1 scales the source to half the final target, then Stage 2 "
+            "takes it to the requested resolution. \"Same as main control\" "
+            "inherits the Upscale Algo, NVVFX SuperRes Mode, superres-strength, "
+            "and NGX VSR Quality settings above. Levels and strengths apply to "
+            "the AI upscalers only."),
+            wraplength=760, justify=tk.LEFT).pack(side=tk.LEFT)
+        ToolTip(self.stage1_algo_combo,
+                "Algorithm for the intermediate hop. Classical algorithms "
+                "(nearest, bilinear, bicubic, lanczos, spline36) are scaled by "
+                "FFmpeg; nvvfx-superres / ngx-vsr run a dedicated NVEncC "
+                "superres prepass. No level applies to the classical ones.")
+        ToolTip(self.stage1_level_combo,
+                "Level for Stage 1 when it uses an AI upscaler.\n"
+                "\"Same as main control\" inherits the settings above.\n\n"
+                + NVVFX_SUPERRES_MODE_NOTE + "\n\n" + NGX_VSR_LEVEL_NOTE)
+        ToolTip(self.stage2_algo_combo,
+                "Algorithm for the final hop, which NVEncC performs while "
+                "encoding. \"Same as main control\" uses the Upscale Algo "
+                "dropdown above.")
+        ToolTip(self.stage2_level_combo,
+                "Level for Stage 2 when it uses an AI upscaler.\n"
+                "\"Same as main control\" inherits the settings above.\n\n"
+                + NVVFX_SUPERRES_MODE_NOTE + "\n\n" + NGX_VSR_LEVEL_NOTE)
+        # Denoise row: packed last inside the Super Resolution group so it
+        # stays below the Multi-stage Upscaling box, which appears and
+        # disappears above it. Kept on self because it is the pack anchor
+        # _update_multi_stage_options() repacks the box against.
+        self.sres_denoise_row = ttk.Frame(superres_frame)
+        sres_row2 = self.sres_denoise_row
         sres_row2.pack(fill=tk.X, pady=(2, 0))
         self.nvvfx_denoise_check = ttk.Checkbutton(sres_row2, text="AI Video Denoising",
                                                    variable=self.nvenc_nvvfx_denoise_var,
@@ -5947,6 +6596,273 @@ class VideoProcessorApp:
         self.ambient_spread_entry.config(state=ambient_state)
         self._update_selected_jobs("aspect_mode", "aspect_blur", "aspect_pixelate", "aspect_ambient")
 
+    def _on_ngx_vsr_quality_selected(self, event=None):
+        """Store the bare number behind the descriptive NGX VSR label.
+
+        The dropdown shows "3 (High - recommended balance)" so the user
+        can see what each level means, but the option that presets, job
+        hashes, and `--vpp-resize ngx,vsr-quality=` consume must remain
+        the bare "1".."4".
+
+        v8.59 FIX: this writes the number to the variable and then sets
+        the combo text to the matching label *directly*, instead of
+        round-tripping through the variable again. The old version called
+        _sync_ngx_quality_display(), which momentarily wrote the label
+        back into the very variable this readonly combobox reads from --
+        a feedback loop on the widget's own source that could leave the
+        list showing nothing.
+        """
+        shown = str(self.nvenc_ngx_vsr_quality_var.get() or "").strip()
+        chosen = None
+        for value in STAGE_UPSCALE_LEVELS["ngx-vsr"]:
+            if NGX_VSR_LEVEL_LABELS.get(value) == shown or value == shown:
+                chosen = value
+                break
+        if chosen is None:
+            # Unknown text (should not happen with state="readonly"):
+            # fall back to the stored default so the option stays valid.
+            chosen = DEFAULT_NVENC_NGX_VSR_QUALITY
+        # NOTE: the values list is deliberately NOT reconfigured here.
+        # Re-setting a readonly combobox's values during its own selection
+        # handler is one of the ways Tk ends up blanking the entry; the
+        # list is managed by _update_multi_stage_options() instead.
+        if self.nvenc_ngx_vsr_quality_var.get() != chosen:
+            self.nvenc_ngx_vsr_quality_var.set(chosen)
+        _label = NGX_VSR_LEVEL_LABELS.get(chosen, chosen)
+        if hasattr(self, "ngx_vsr_quality_combo") and self.ngx_vsr_quality_combo.get() != _label:
+            self.ngx_vsr_quality_combo.set(_label)
+        # Re-assert after Tk finishes its own selection handling.
+        self._schedule_combo_label_sync()
+
+    def _sync_ngx_quality_display(self, reassert=True):
+        """Show the descriptive label for the stored NGX VSR quality.
+
+        v8.59 FIX: sets the combobox text directly and never writes the
+        label back into the variable the combobox reads from. The option
+        variable always holds the bare number, and the combo always shows
+        the matching label; both are driven independently so neither can
+        stomp on the other over repeated selections.
+        """
+        if not hasattr(self, "ngx_vsr_quality_combo"):
+            return
+        raw = str(self.nvenc_ngx_vsr_quality_var.get() or "").strip()
+        # Tolerate a descriptive label arriving from a preset saved while
+        # the display mapping was still able to leak into the option.
+        if raw not in NGX_VSR_LEVEL_LABELS:
+            raw = stage_level_from_display(raw, "ngx-vsr")
+            if raw == STAGE_UPSCALE_INHERIT or raw not in NGX_VSR_LEVEL_LABELS:
+                raw = DEFAULT_NVENC_NGX_VSR_QUALITY
+            if self.nvenc_ngx_vsr_quality_var.get() != raw:
+                self.nvenc_ngx_vsr_quality_var.set(raw)
+        label = NGX_VSR_LEVEL_LABELS.get(raw) or raw
+        if self.ngx_vsr_quality_combo.get() != label:
+            self.ngx_vsr_quality_combo.set(label)
+        if reassert:
+            self._schedule_combo_label_sync()
+
+    def _on_stage_level_selected(self, algo_var, level_var, level_combo):
+        """Store the bare level number behind a descriptive stage label.
+
+        Shares stage_level_from_display() with the GUI builder so the
+        two can never disagree about which text maps to which value.
+        """
+        selected = self._current_stage_selection(algo_var)
+        raw = stage_level_from_display(level_combo.get(), selected)
+        if level_var.get() != raw:
+            level_var.set(raw)
+
+    def _on_superres_mode_selected(self, event=None):
+        """Store the bare SuperRes mode behind its descriptive label.
+
+        Mirrors _on_ngx_vsr_quality_selected(): the widget shows
+        "0 (Quality-priority)" / "1 (Performance-priority)" while the
+        option that presets, the job hash and `superres-mode=` consume
+        stays the bare "0"/"1". The list is re-asserted so the dropdown
+        survives repeated selections, and the label is applied to the
+        combo text directly rather than through the variable.
+        """
+        shown = str(self.nvenc_superres_mode_var.get() or "").strip()
+        chosen = None
+        for value in STAGE_UPSCALE_LEVELS["nvvfx-superres"]:
+            if NVVFX_SUPERRES_MODE_LABELS.get(value) == shown or value == shown:
+                chosen = value
+                break
+        if chosen is None:
+            chosen = DEFAULT_NVENC_SUPERRES_MODE
+        # As in _on_ngx_vsr_quality_selected(): the values list is managed
+        # by _update_multi_stage_options(), never re-set from inside the
+        # widget's own selection handler.
+        if self.nvenc_superres_mode_var.get() != chosen:
+            self.nvenc_superres_mode_var.set(chosen)
+        label = NVVFX_SUPERRES_MODE_LABELS.get(chosen, chosen)
+        if hasattr(self, "superres_mode_combo") and self.superres_mode_combo.get() != label:
+            self.superres_mode_combo.set(label)
+        # Re-assert after Tk has finished its own selection handling, so
+        # the label cannot be left blank by the widget's internal update.
+        self._schedule_combo_label_sync()
+
+    def _start_combo_label_watch(self):
+        """Arm the idle-time label re-assert for the labelled comboboxes.
+
+        Called once at the end of GUI construction. From then on every
+        call to _update_multi_stage_options(), the mode/quality selection
+        handlers, and the display syncs schedules a single idle re-assert,
+        which is what guarantees the descriptive text is always shown
+        instead of being blanked by a Tk-internal update.
+        """
+        self._combo_label_watch_started = True
+        self._schedule_combo_label_sync()
+
+    def _schedule_combo_label_sync(self):
+        """Re-assert every labelled combobox once the event loop is idle.
+
+        v8.59 FIX: the option variables hold bare codes ("0"/"1"/"1".."4")
+        while the widgets must show descriptive labels. Setting the text
+        only from the discrete call sites that happen to know about it was
+        fragile -- Tk can reset a readonly combobox's text when its values
+        list is reconfigured or when a selection lands after our update,
+        which left the entry blank. This runs *after* Tk has finished its
+        own event handling (after_idle), so the label always wins and the
+        text never goes missing.
+        """
+        if getattr(self, "_combo_label_sync_pending", False):
+            return
+        if getattr(self, "_combo_label_sync_active", False):
+            # Already inside the idle pass; do not schedule another one.
+            return
+        if not getattr(self, "_combo_label_watch_started", False):
+            # The GUI is still being constructed; the startup pass after
+            # __init__ schedules the first re-assert.
+            return
+        self._combo_label_sync_pending = True
+
+        def _run():
+            self._combo_label_sync_pending = False
+            self._combo_label_sync_active = True
+            try:
+                for _sync in (self._sync_superres_mode_display,
+                              self._sync_ngx_quality_display):
+                    try:
+                        _sync(reassert=False)
+                    except tk.TclError:
+                        pass
+                for _combo, _val in (
+                        (getattr(self, "stage1_level_combo", None),
+                         self.stage1_upscale_level_var),
+                        (getattr(self, "stage2_level_combo", None),
+                         self.stage2_upscale_level_var)):
+                    if _combo is None:
+                        continue
+                    try:
+                        _selected = self._current_stage_selection(
+                            self.stage1_upscale_algo_var
+                            if _val is self.stage1_upscale_level_var
+                            else self.stage2_upscale_algo_var)
+                        _raw = str(_val.get() or "").strip()
+                        _label = (STAGE_UPSCALE_INHERIT_LABEL
+                                  if _raw == STAGE_UPSCALE_INHERIT
+                                  else stage_level_display(_raw, _selected))
+                        if _combo.get() != _label:
+                            _combo.set(_label)
+                    except tk.TclError:
+                        pass
+            finally:
+                self._combo_label_sync_active = False
+
+        try:
+            self.root.after_idle(_run)
+        except (AttributeError, tk.TclError):
+            _run()
+
+    def _sync_superres_mode_display(self, reassert=True):
+        """Show the descriptive label for the stored SuperRes mode."""
+        if not hasattr(self, "superres_mode_combo"):
+            return
+        raw = str(self.nvenc_superres_mode_var.get() or "").strip()
+        # Tolerate a label that leaked into a preset.
+        if raw not in NVVFX_SUPERRES_MODE_LABELS:
+            raw = stage_level_from_display(raw, "nvvfx-superres")
+            if raw == STAGE_UPSCALE_INHERIT or raw not in NVVFX_SUPERRES_MODE_LABELS:
+                raw = DEFAULT_NVENC_SUPERRES_MODE
+            if self.nvenc_superres_mode_var.get() != raw:
+                self.nvenc_superres_mode_var.set(raw)
+        label = NVVFX_SUPERRES_MODE_LABELS.get(raw, raw)
+        if self.superres_mode_combo.get() != label:
+            self.superres_mode_combo.set(label)
+        if reassert:
+            self._schedule_combo_label_sync()
+
+    def _sync_superres_strength_controls(self):
+        """Apply the Specify checkbox state to the strength entry.
+
+        When Specify is off the entry is disabled and the stored option is
+        forced back to "not specified", so the superres-strength token is
+        omitted. This is the only place that clears it.
+        """
+        enabled = bool(self.nvenc_superres_strength_specify_var.get())
+        if not enabled and self.nvenc_superres_strength_var.get() != "":
+            self.nvenc_superres_strength_var.set("")
+        if hasattr(self, "nvenc_superres_strength_entry"):
+            self.nvenc_superres_strength_entry.config(
+                state="normal" if enabled else "disabled")
+        if hasattr(self, "nvenc_superres_strength_specify_check"):
+            self.nvenc_superres_strength_specify_check.config(state="normal")
+
+    def _commit_main_strength(self):
+        """Validate and normalize the main superres-strength entry."""
+        if not self.nvenc_superres_strength_specify_var.get():
+            return
+        text = self.nvenc_superres_strength_var.get()
+        norm = normalize_strength_value(text)
+        if norm is None:
+            low, high = NVVFX_SUPERRES_STRENGTH_RANGE
+            messagebox.showwarning(
+                "Invalid SuperRes Strength",
+                f"Enter a number between {low:g} and {high:g}, for example 0.8.\n"
+                f"'{text}' was not applied; superres-strength will be omitted.")
+            self.nvenc_superres_strength_var.set("")
+            self._update_selected_jobs('nvenc_superres_strength')
+            return
+        if norm != text:
+            self.nvenc_superres_strength_var.set(norm)
+        self._update_selected_jobs('nvenc_superres_strength')
+
+    def _commit_stage_strength(self, specify_var, strength_var, job_key):
+        """Validate a per-stage strength entry.
+
+        Unticked Specify means "inherit the main strength" ("source").
+        Ticked with the word "off" means "send no strength for this hop"
+        even when the main control has one. Ticked with a value must be a
+        valid 0.0-1.0 float.
+        """
+        if not specify_var.get():
+            if strength_var.get() != STAGE_UPSCALE_INHERIT:
+                strength_var.set(STAGE_UPSCALE_INHERIT)
+            self._update_selected_jobs(job_key)
+            return
+        text = str(strength_var.get() or "").strip()
+        if text.lower() == STAGE_STRENGTH_OFF:
+            if strength_var.get() != STAGE_STRENGTH_OFF:
+                strength_var.set(STAGE_STRENGTH_OFF)
+            self._update_selected_jobs(job_key)
+            return
+        norm = normalize_strength_value(text)
+        if norm is None:
+            low, high = NVVFX_SUPERRES_STRENGTH_RANGE
+            messagebox.showwarning(
+                "Invalid SuperRes Strength",
+                f"Enter a number between {low:g} and {high:g} (for example 0.8), "
+                f"type {STAGE_STRENGTH_OFF} to send no strength for this hop, "
+                f"or untick Specify to inherit the main value.\n"
+                f"'{text}' was not applied.")
+            strength_var.set(STAGE_UPSCALE_INHERIT)
+            specify_var.set(False)
+            self._update_selected_jobs(job_key)
+            return
+        if strength_var.get() != norm:
+            strength_var.set(norm)
+        self._update_selected_jobs(job_key)
+
     def _update_upscale_algo_options(self):
         backend = self.encoder_backend_var.get()
         if backend in ["nvencc_with_ffmpeg", "nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
@@ -5957,6 +6873,147 @@ class VideoProcessorApp:
             self.upscale_algo_combo.config(values=values)
         if self.upscale_algo_var.get() not in values:
             self.upscale_algo_var.set(DEFAULT_UPSCALE_ALGO)
+
+    def _stage_algo_available(self):
+        """Algorithms the per-stage pickers may offer.
+
+        The AI upscalers need an NVEncC-backed encoder backend, exactly
+        like the main Upscale Algo dropdown.
+        """
+        backend = self.encoder_backend_var.get()
+        if backend in ("nvencc_with_ffmpeg", "nvencc_only",
+                       "nvencc_video_with_ffmpeg_audio"):
+            return tuple(STAGE_UPSCALE_ALGOS)
+        return tuple(CLASSICAL_UPSCALE_ALGOS)
+
+    def _current_stage_selection(self, var):
+        """Resolve a stage picker to a concrete algorithm for the UI.
+
+        "source" (Same as main control) is shown as the algorithm it
+        actually inherits, clamped to what the current backend supports.
+        """
+        raw = str(var.get() or "").strip()
+        if raw == STAGE_UPSCALE_INHERIT or not raw:
+            main = str(self.upscale_algo_var.get() or "").strip()
+            if main in self._stage_algo_available():
+                return main
+            return "lanczos" if "lanczos" in self._stage_algo_available() else "bicubic"
+        if raw in self._stage_algo_available():
+            return raw
+        return "lanczos" if "lanczos" in self._stage_algo_available() else "bicubic"
+
+    def _update_multi_stage_options(self):
+        """Sync the Multi-stage Upscaling box with the current state.
+
+        Runs on every backend / upscale-algo / stage-algo change. Keeps
+        the per-stage level dropdowns in step with their resolved
+        algorithm, and enables the checkbox on any NVEncC-backed encoder
+        so a preset can be checked ahead of choosing an AI upscaler.
+
+        v8.59 FIX: visibility follows the checkbox alone. Earlier the box
+        was gated on a second, stricter condition (NVEncC backend AND an
+        AI algorithm selected), so checking the box while the main algo
+        was still bicubic/lanczos -- or before switching the backend --
+        left it hidden and looked broken. The render path still decides
+        on its own whether a chain actually runs, and the stage algo
+        dropdowns are already limited to what the backend supports.
+        """
+        backend = self.encoder_backend_var.get()
+        nvencc_backend = backend in ("nvencc_with_ffmpeg", "nvencc_only",
+                                     "nvencc_video_with_ffmpeg_audio")
+        available = self._stage_algo_available()
+        # v8.59: the checkbox is enabled on any NVEncC-backed encoder,
+        # even while the current algorithm is classical, so the state can
+        # be prepared before switching to an AI upscaler.
+        if hasattr(self, "multi_stage_superres_check"):
+            self._set_widget_state_recursive(
+                self.multi_stage_superres_check,
+                "normal" if nvencc_backend else "disabled")
+        if hasattr(self, "multi_stage_frame"):
+            # Shown whenever the checkbox is on. Packed *before* the
+            # denoise row inside the Super Resolution group, so it renders
+            # directly under the NVVFX SuperRes Mode / NGX VSR Quality row
+            # and keeps the denoise row below it. Both are children of
+            # superres_frame, so the anchor has to be a sibling within
+            # that group.
+            if self.multi_stage_superres_var.get():
+                _before = getattr(self, "sres_denoise_row", None)
+                if _before is not None:
+                    self.multi_stage_frame.pack(fill=tk.X, pady=(5, 0),
+                                                before=_before)
+                else:
+                    self.multi_stage_frame.pack(fill=tk.X, pady=(5, 0))
+            else:
+                self.multi_stage_frame.pack_forget()
+        for (algo_var, level_var, algo_combo, level_combo,
+             str_spec_var, str_var, str_entry, str_check) in (
+                (self.stage1_upscale_algo_var, self.stage1_upscale_level_var,
+                 getattr(self, "stage1_algo_combo", None),
+                 getattr(self, "stage1_level_combo", None),
+                 self.stage1_upscale_strength_specify_var,
+                 self.stage1_upscale_strength_var,
+                 getattr(self, "stage1_strength_entry", None),
+                 getattr(self, "stage1_strength_specify_check", None)),
+                (self.stage2_upscale_algo_var, self.stage2_upscale_level_var,
+                 getattr(self, "stage2_algo_combo", None),
+                 getattr(self, "stage2_level_combo", None),
+                 self.stage2_upscale_strength_specify_var,
+                 self.stage2_upscale_strength_var,
+                 getattr(self, "stage2_strength_entry", None),
+                 getattr(self, "stage2_strength_specify_check", None))):
+            selected = self._current_stage_selection(algo_var)
+            if algo_combo is not None:
+                algo_combo.config(values=[STAGE_UPSCALE_INHERIT_LABEL] + list(available))
+            if level_combo is None:
+                continue
+            _lvl_vals = list(STAGE_UPSCALE_LEVELS.get(selected, []))
+            if _lvl_vals:
+                _main_level = (self.nvenc_superres_mode_var.get()
+                               if selected == "nvvfx-superres"
+                               else self.nvenc_ngx_vsr_quality_var.get())
+                if _main_level not in _lvl_vals:
+                    _main_level = _lvl_vals[0]
+                # v8.59: ngx-vsr entries carry their quality meaning and
+                # nvvfx-superres entries carry the mode priority, so the
+                # stored value is always shown as its descriptive label.
+                level_combo.config(values=stage_level_display_options(selected, True),
+                                   state="readonly")
+                _lvl_cur = str(level_var.get() or "").strip()
+                # PATCHED: normalize multi-stage level display values
+                _lvl_cur = stage_level_from_display(_lvl_cur, selected)
+                if _lvl_cur and _lvl_cur != STAGE_UPSCALE_INHERIT and _lvl_cur not in _lvl_vals:
+                    level_var.set(STAGE_UPSCALE_INHERIT)
+                    _lvl_cur = STAGE_UPSCALE_INHERIT
+                _lvl_display = (STAGE_UPSCALE_INHERIT_LABEL
+                                if _lvl_cur == STAGE_UPSCALE_INHERIT
+                                else stage_level_display(_lvl_cur, selected))
+                if level_combo.get() != _lvl_display:
+                    level_combo.set(_lvl_display)
+            else:
+                # Classical algorithms have no level anywhere in the pipeline.
+                level_combo.config(values=[STAGE_UPSCALE_INHERIT_LABEL],
+                                   state="disabled")
+                if level_var.get() != STAGE_UPSCALE_INHERIT:
+                    level_var.set(STAGE_UPSCALE_INHERIT)
+                if level_combo.get() != STAGE_UPSCALE_INHERIT_LABEL:
+                    level_combo.set(STAGE_UPSCALE_INHERIT_LABEL)
+            # v8.59: the strength control only means something for
+            # nvvfx-superres, so disable it for ngx-vsr and the
+            # classical algorithms. The backing variables are NOT
+            # reset here, so a strength value typed while nvvfx-superres
+            # was selected survives a temporary switch to another
+            # algorithm and is still written into the preset on Save.
+            # PATCHED: preserve multi-stage strength across algo changes
+            _str_ok = selected == "nvvfx-superres"
+            if str_entry is not None:
+                str_entry.config(
+                    state="normal" if (_str_ok and str_spec_var.get()) else "disabled")
+            if str_check is not None:
+                str_check.config(state="normal" if _str_ok else "disabled")
+        # Re-assert every labelled combobox text once Tk is idle, so a
+        # re-configured values list or a pending selection cannot leave a
+        # level/mode/quality entry blank.
+        self._schedule_combo_label_sync()
 
     def _toggle_superres_options(self):
         backend = self.encoder_backend_var.get()
@@ -5972,6 +7029,29 @@ class VideoProcessorApp:
             self.superres_mode_combo.config(state="readonly" if enable_superres else "disabled")
         if hasattr(self, "ngx_vsr_quality_combo"):
             self.ngx_vsr_quality_combo.config(state="readonly" if enable_ngx else "disabled")
+        # v8.59: the strength row is part of the nvvfx-superres block.
+        if hasattr(self, "nvenc_superres_strength_specify_check"):
+            self.nvenc_superres_strength_specify_check.config(
+                state="normal" if enable_superres else "disabled")
+        if hasattr(self, "nvenc_superres_strength_entry"):
+            self.nvenc_superres_strength_entry.config(
+                state="normal" if (enable_superres
+                                   and self.nvenc_superres_strength_specify_var.get())
+                else "disabled")
+        # Re-assert the descriptive labels whenever a selector becomes
+        # usable, in case they were populated before the widget existed
+        # (e.g. a preset loaded at startup).
+        if enable_ngx:
+            self._sync_ngx_quality_display()
+        if enable_superres:
+            self._sync_superres_mode_display()
+        # v8.59: the multi-stage toggle is meaningful only for the two AI
+        # upscalers on an NVEncC-backed backend.
+        if hasattr(self, "multi_stage_superres_check"):
+            self._set_widget_state_recursive(
+                self.multi_stage_superres_check,
+                "normal" if (enable_superres or enable_ngx) else "disabled")
+        self._update_multi_stage_options()
         if hasattr(self, "nvvfx_denoise_check"):
             self._set_widget_state_recursive(self.nvvfx_denoise_check,
                                              "normal" if enable_nvencc_features else "disabled")
@@ -6016,9 +7096,14 @@ class VideoProcessorApp:
         is_nvencc_only = backend == "nvencc_only"
         is_nvencc_video_audio = backend == "nvencc_video_with_ffmpeg_audio"
         is_nvencc_video_backend = is_nvencc_only or is_nvencc_video_audio
+        # v8.59: the final hop can be an AI upscaler even when the main
+        # Upscale Algo dropdown is classical, so consult the resolved
+        # stage-2 algorithm as well before deciding who owns the resize.
         use_nvencc_resize = is_nvencc_video_backend or (
             backend == "nvencc_with_ffmpeg" and
-            self.upscale_algo_var.get() in ["nvvfx-superres", "ngx-vsr"])
+            (self.upscale_algo_var.get() in AI_UPSCALE_ALGOS
+             or self._current_stage_selection(self.stage2_upscale_algo_var)
+             in AI_UPSCALE_ALGOS))
         if is_nvencc_video_backend:
             if self._cached_aspect_state is None:
                 self._cached_aspect_state = {
@@ -6267,8 +7352,30 @@ class VideoProcessorApp:
             "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(),
             "encoder_backend": self.encoder_backend_var.get(),
             "nvenc_nvvfx_denoise": self.nvenc_nvvfx_denoise_var.get(),
-            "nvenc_superres_mode": self.nvenc_superres_mode_var.get(),
-            "nvenc_ngx_vsr_quality": self.nvenc_ngx_vsr_quality_var.get(),
+            # v8.59: these two comboboxes display descriptive labels while
+            # the option must stay the bare code. Normalize on read so a
+            # label can never be persisted into a preset, job option, or
+            # the job hash.
+            "nvenc_superres_mode": option_value_from_label(
+                self.nvenc_superres_mode_var.get(), "nvvfx-superres",
+                DEFAULT_NVENC_SUPERRES_MODE),
+            "nvenc_superres_strength": self.nvenc_superres_strength_var.get(),
+            "multi_stage_superres": self.multi_stage_superres_var.get(),
+            "stage1_upscale_algo": self.stage1_upscale_algo_var.get(),
+            "stage1_upscale_level": option_value_from_label(
+                self.stage1_upscale_level_var.get(),
+                self._current_stage_selection(self.stage1_upscale_algo_var),
+                DEFAULT_STAGE_UPSCALE_LEVEL),
+            "stage1_upscale_strength": self.stage1_upscale_strength_var.get(),
+            "stage2_upscale_algo": self.stage2_upscale_algo_var.get(),
+            "stage2_upscale_level": option_value_from_label(
+                self.stage2_upscale_level_var.get(),
+                self._current_stage_selection(self.stage2_upscale_algo_var),
+                DEFAULT_STAGE_UPSCALE_LEVEL),
+            "stage2_upscale_strength": self.stage2_upscale_strength_var.get(),
+            "nvenc_ngx_vsr_quality": option_value_from_label(
+                self.nvenc_ngx_vsr_quality_var.get(), "ngx-vsr",
+                DEFAULT_NVENC_NGX_VSR_QUALITY),
             "fruc": self.fruc_var.get(), "fruc_fps": self.fruc_fps_var.get(),
             "generate_log": self.generate_log_var.get(),
             "close_gui_on_processing": self.close_gui_var.get(),
@@ -7021,7 +8128,37 @@ class VideoProcessorApp:
         self.encoder_backend_var.set(options.get("encoder_backend", DEFAULT_ENCODER_BACKEND))
         self.nvenc_nvvfx_denoise_var.set(options.get("nvenc_nvvfx_denoise", DEFAULT_NVENC_NVVFX_DENOISE))
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
+        self._sync_superres_mode_display()
+        # v8.59: a stored strength means the option was explicitly set, so
+        # reflect that in the Specify checkbox and entry state.
+        self.nvenc_superres_strength_var.set(
+            options.get("nvenc_superres_strength", DEFAULT_NVENC_SUPERRES_STRENGTH))
+        self.nvenc_superres_strength_specify_var.set(
+            str(self.nvenc_superres_strength_var.get() or "").strip() != "")
+        self.multi_stage_superres_var.set(
+            options.get("multi_stage_superres", DEFAULT_MULTI_STAGE_SUPERRES))
+        self.stage1_upscale_algo_var.set(
+            options.get("stage1_upscale_algo", DEFAULT_STAGE_UPSCALE_ALGO))
+        self.stage1_upscale_level_var.set(
+            options.get("stage1_upscale_level", DEFAULT_STAGE_UPSCALE_LEVEL))
+        self.stage1_upscale_strength_var.set(
+            options.get("stage1_upscale_strength", DEFAULT_STAGE_UPSCALE_STRENGTH))
+        self.stage1_upscale_strength_specify_var.set(
+            str(self.stage1_upscale_strength_var.get() or "").strip()
+            not in ("", STAGE_UPSCALE_INHERIT))
+        self.stage2_upscale_algo_var.set(
+            options.get("stage2_upscale_algo", DEFAULT_STAGE_UPSCALE_ALGO))
+        self.stage2_upscale_level_var.set(
+            options.get("stage2_upscale_level", DEFAULT_STAGE_UPSCALE_LEVEL))
+        self.stage2_upscale_strength_var.set(
+            options.get("stage2_upscale_strength", DEFAULT_STAGE_UPSCALE_STRENGTH))
+        self.stage2_upscale_strength_specify_var.set(
+            str(self.stage2_upscale_strength_var.get() or "").strip()
+            not in ("", STAGE_UPSCALE_INHERIT))
+        self._sync_superres_strength_controls()
         self.nvenc_ngx_vsr_quality_var.set(options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY))
+        # v8.59: the loaded value is the bare number; show its meaning.
+        self._sync_ngx_quality_display()
         self.chroma_subsampling_var.set(
             _normalize_chroma_code(options.get("chroma_subsampling", DEFAULT_CHROMA_SUBSAMPLING)))
         self.color_preset_sdr_var.set(options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
@@ -7316,6 +8453,9 @@ class VideoProcessorApp:
         self.toggle_fruc_fps()
         self._toggle_orientation_options()
         self._toggle_upscale_options()
+        # v8.59: sync the Multi-stage Upscaling box visibility with the
+        # checkbox state that was just loaded from the job/preset.
+        self._update_multi_stage_options()
         self._toggle_audio_norm_options()
         self._update_audio_options_ui()
         self._on_delivery_target_changed()
@@ -7832,38 +8972,82 @@ class VideoProcessorApp:
             return "original"
         return str(res_key)
 
-    def _multi_stage_superres_info(self, options, info, orientation):
-        """Return (needs_multi, intermediate_w, intermediate_h).
+    def _resolve_multi_stage_config(self, options, info, orientation):
+        """Resolve the multi-stage plan for one job.
 
-        When the requested upscale ratio exceeds ~2x, NVVFX SuperRes and
-        NGX VSR cannot handle it in a single pass. In that case we chain
-        two stages: an FFmpeg lanczos pre-scale up to exactly half the
-        final target, followed by an NVEncC superres pass for the final
-        2x. Returns (False, 0, 0) when a single superres pass suffices.
+        Returns a dict:
+            needs_chain (bool)  -- run the two-hop pipeline
+            inter_w/inter_h     -- intermediate (stage 1) target
+            tgt_w/tgt_h         -- final target
+            algo1/level1        -- stage 1 algorithm and its level
+            algo2/level2        -- stage 2 (final NVEncC hop) algorithm/level
+
+        v8.59: both hops can carry their own algorithm and level, held in
+        `stage1_upscale_algo` / `stage1_upscale_level` and
+        `stage2_upscale_algo` / `stage2_upscale_level`. Any value left on
+        "source" inherits the main Upscale Algo / NVVFX SuperRes Mode /
+        NGX VSR Quality controls, which is exactly the v8.28+ behavior.
+
+        The chain is only entered when it can do something a single pass
+        cannot: the requested upscale must exceed the AI upscalers' ~2x
+        single-pass ceiling, the layout must not be hybrid-stacked (the
+        prepass architecture cannot split it), and at least one hop must
+        be an AI upscaler (two classical scale passes add nothing).
         """
-        algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
-        if algo not in ("nvvfx-superres", "ngx-vsr"):
-            return False, 0, 0
+        result = {
+            "needs_chain": False,
+            "inter_w": 0, "inter_h": 0,
+            "tgt_w": 0, "tgt_h": 0,
+            "algo1": resolve_stage_upscale_algo(options, "stage1_upscale_algo"),
+            "algo2": resolve_stage_upscale_algo(options, "stage2_upscale_algo"),
+        }
+        result["level1"] = resolve_stage_upscale_level(
+            options, "stage1_upscale_level", result["algo1"])
+        result["level2"] = resolve_stage_upscale_level(
+            options, "stage2_upscale_level", result["algo2"])
+        # v8.59: NVVFX SuperRes strength per hop (None = omit the token).
+        result["strength1"] = resolve_stage_upscale_strength(
+            options, "stage1_upscale_strength", result["algo1"])
+        result["strength2"] = resolve_stage_upscale_strength(
+            options, "stage2_upscale_strength", result["algo2"])
+        # Only an AI hop can be split into two useful passes; if neither
+        # stage is an AI upscaler there is nothing to chain.
+        if (result["algo1"] not in AI_UPSCALE_ALGOS
+                and result["algo2"] not in AI_UPSCALE_ALGOS):
+            return result
         # v8.35 SUPERRES FULL FIX: hybrid-stacked (single source split
         # into two independently-scaled blocks) cannot be prepassed by
-        # the current architecture. Fall back to bicubic for the first
-        # hop rather than producing a half-superres composite.
+        # the current architecture. Fall back to a single hop rather
+        # than producing a half-superres composite.
         if orientation == "hybrid (stacked)":
-            return False, 0, 0
+            return result
         try:
             tgt_w, tgt_h = self.compute_target_resolution_for_options(
                 options, info, orientation)
         except Exception:
-            return False, 0, 0
+            return result
         if not tgt_w or not tgt_h:
-            return False, 0, 0
+            return result
+        result["tgt_w"], result["tgt_h"] = int(tgt_w), int(tgt_h)
         src_short = min(int(info.get("width", 0)), int(info.get("height", 0)))
         tgt_short = min(int(tgt_w), int(tgt_h))
         if src_short <= 0 or tgt_short <= 0:
-            return False, 0, 0
+            return result
         ratio = tgt_short / src_short
         if ratio <= 2.01:
-            return False, 0, 0
+            return result
+        # v8.59 MULTI-STAGE SUPERRES TOGGLE
+        # Checked (default) = chain the two-pass pipeline. Unchecked =
+        # let the single AI pass attempt the whole ratio. The ratio check
+        # above already ran so we can report exactly which jump is being
+        # left to one pass.
+        if not options.get("multi_stage_superres", DEFAULT_MULTI_STAGE_SUPERRES):
+            print(f"[INFO] Multi-stage superres disabled by preset: "
+                  f"single-pass {result['algo2']} "
+                  f"{int(info.get('width', 0))}x{int(info.get('height', 0))} "
+                  f"-> {tgt_w}x{tgt_h} ({ratio:.2f}x). Ratios "
+                  f"beyond ~2x may fail or degrade.")
+            return result
         # v8.57 SUPERRES INTERMEDIATE HEIGHT CAP
         # nvvfx-superres rejects any input taller than 2160 pixels.
         # The default half-target intermediate exceeds that for tall
@@ -7881,7 +9065,22 @@ class VideoProcessorApp:
             _scale = _SR_MAX_INPUT_HEIGHT / float(inter_h)
             inter_h = _SR_MAX_INPUT_HEIGHT
             inter_w = max(2, (int(round(inter_w * _scale)) // 2) * 2)
-        return True, inter_w, inter_h
+        result["needs_chain"] = True
+        result["inter_w"], result["inter_h"] = inter_w, inter_h
+        return result
+
+    def _multi_stage_superres_info(self, options, info, orientation):
+        """Return (needs_multi, intermediate_w, intermediate_h).
+
+        Thin backward-compatible wrapper around
+        `_resolve_multi_stage_config`, which is the single source of
+        truth for the multi-stage decision and now carries the v8.59
+        per-stage algorithm/level overrides as well.
+        """
+        cfg = self._resolve_multi_stage_config(options, info, orientation)
+        if not cfg["needs_chain"]:
+            return False, 0, 0
+        return True, cfg["inter_w"], cfg["inter_h"]
 
     def _compute_hybrid_block_dims(self, options, info_top, info_bot,
                                      orientation, target_w, target_h):
@@ -8101,32 +9300,33 @@ class VideoProcessorApp:
             info = get_video_info(job['video_path'])
             self._resolve_dv_auto_match(options, info)
 
-            # Multi-stage superres: when the requested upscale ratio
-            # exceeds the ~2x single-pass ceiling of NVVFX SuperRes /
-            # NGX VSR, promote the backend to nvencc_with_ffmpeg so
-            # FFmpeg can pre-scale to exactly half the final target
-            # (lanczos), leaving NVEncC to complete the final 2x pass.
-            _up_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
-            if _up_algo in ("nvvfx-superres", "ngx-vsr"):
-                _needs_multi, _inter_w, _inter_h = self._multi_stage_superres_info(
-                    options, info, orientation)
-                if _needs_multi:
-                    if encoder_backend in ("nvencc_only",
-                                            "nvencc_video_with_ffmpeg_audio"):
-                        print(f"[INFO] Multi-stage {_up_algo} requires FFmpeg "
-                              f"preprocessing. Promoting backend to "
-                              f"'nvencc_with_ffmpeg' for "
-                              f"'{job['display_name']}'.")
-                        encoder_backend = "nvencc_with_ffmpeg"
-                        options["encoder_backend"] = encoder_backend
-                    options["_preproc_scale_override"] = (_inter_w, _inter_h)
-                    _tgt_w, _tgt_h = self.compute_target_resolution_for_options(
-                        options, info, orientation)
-                    print(f"[INFO] Multi-stage {_up_algo}: NVEncC superres "
-                          f"prepass to {_inter_w}x{_inter_h}, then final "
-                          f"NVEncC superres to {_tgt_w}x{_tgt_h}.")
-                else:
-                    options.pop("_preproc_scale_override", None)
+            # v8.59 MULTI-STAGE PLAN
+            # Both hops can carry their own algorithm/level via the
+            # per-stage overrides. Whatever the combination, the chain
+            # still needs the FFmpeg preprocessor backend so the
+            # intermediate resolution can be targeted, and it always
+            # records its plan in _multi_stage_plan for the prepass and
+            # the final NVEncC pass to consume.
+            _stage_cfg = self._resolve_multi_stage_config(options, info, orientation)
+            options.pop("_multi_stage_plan", None)
+            if _stage_cfg["needs_chain"]:
+                if encoder_backend in ("nvencc_only",
+                                       "nvencc_video_with_ffmpeg_audio"):
+                    print(f"[INFO] Multi-stage upscaling requires FFmpeg "
+                          f"preprocessing. Promoting backend to "
+                          f"'nvencc_with_ffmpeg' for "
+                          f"'{job['display_name']}'.")
+                    encoder_backend = "nvencc_with_ffmpeg"
+                    options["encoder_backend"] = encoder_backend
+                options["_preproc_scale_override"] = (_stage_cfg["inter_w"],
+                                                      _stage_cfg["inter_h"])
+                options["_multi_stage_plan"] = _stage_cfg
+                print(f"[INFO] Multi-stage: stage1={_stage_cfg['algo1']} "
+                      f"-> {_stage_cfg['inter_w']}x{_stage_cfg['inter_h']}, "
+                      f"stage2={_stage_cfg['algo2']} "
+                      f"-> {_stage_cfg['tgt_w']}x{_stage_cfg['tgt_h']}.")
+            else:
+                options.pop("_preproc_scale_override", None)
 
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
             # v8.33 FROZEN TARGET FIX
@@ -8320,13 +9520,19 @@ class VideoProcessorApp:
                 # it (the preprocessor's color tags are corrected in
                 # construct_ffmpeg_command).
             if encoder_backend == "nvencc_with_ffmpeg":
-                # Multi-stage superres: run an NVEncC superres preprocessor
-                # first so EVERY upscale stage uses nvvfx-superres (not
-                # FFmpeg lanczos). The FFmpeg preprocessor then runs on
-                # the upscaled intermediate with the scale step reduced
-                # to a near-no-op (input already at target size).
+                # v8.59 MULTI-STAGE PREPASS DISPATCH
+                # When stage 1 is an AI upscaler, run an NVEncC superres
+                # prepass first and let the FFmpeg preprocessor follow at
+                # the intermediate size (its scale step becomes a
+                # near-no-op). When stage 1 is classical, the FFmpeg
+                # preprocessor performs that hop itself from
+                # _preproc_scale_override, so no prepass runs at all.
                 _sr_override = options.get("_preproc_scale_override")
-                if _sr_override:
+                _ms_plan = options.get("_multi_stage_plan") or {}
+                _stage1_algo = _ms_plan.get(
+                    "algo1", resolve_stage_upscale_algo(options, "stage1_upscale_algo"))
+                _stage1_ai = _stage1_algo in AI_UPSCALE_ALGOS
+                if _sr_override and _stage1_ai:
                     _sr_w, _sr_h = _sr_override
                     if orientation == "hybrid-duo (dual source)":
                         # v8.35 SUPERRES FULL FIX: both legs must be
@@ -8353,9 +9559,15 @@ class VideoProcessorApp:
                                   _bot_info["width"], _bot_info["height"],
                                   _bw_b, _bh_b))
                         _top_sr = self._nvvfx_superres_preprocess(
-                            _top_src, output_dir, options, _bw_t, _bh_t)
+                            _top_src, output_dir, options, _bw_t, _bh_t,
+                            algo=_stage1_algo,
+                            level=_ms_plan.get("level1"),
+                            strength=_ms_plan.get("strength1"))
                         _bot_sr = self._nvvfx_superres_preprocess(
-                            _bot_src, output_dir, options, _bw_b, _bh_b)
+                            _bot_src, output_dir, options, _bw_b, _bh_b,
+                            algo=_stage1_algo,
+                            level=_ms_plan.get("level1"),
+                            strength=_ms_plan.get("strength1"))
                         register_temp_file(_top_sr)
                         register_temp_file(_bot_sr)
                         options["hybrid_top_path"] = _top_sr
@@ -8364,17 +9576,29 @@ class VideoProcessorApp:
                     else:
                         _src_w = info["width"]
                         _src_h = info["height"]
-                        print("[INFO] Multi-stage superres: NVEncC superres "
+                        print("[INFO] Multi-stage: stage 1 {} NVEncC "
                               "preprocessor {}x{} -> {}x{} ...".format(
-                                  _src_w, _src_h, _sr_w, _sr_h))
+                                  _stage1_algo, _src_w, _src_h, _sr_w, _sr_h))
                         _sr_intermediate = self._nvvfx_superres_preprocess(
                             effective_job["video_path"], output_dir, options,
-                            _sr_w, _sr_h)
+                            _sr_w, _sr_h, algo=_stage1_algo,
+                            level=_ms_plan.get("level1"),
+                            strength=_ms_plan.get("strength1"))
                         register_temp_file(_sr_intermediate)
                         effective_job = dict(effective_job)
                         effective_job["video_path"] = _sr_intermediate
                         effective_info = get_video_info(_sr_intermediate)
                         options["_sr_prepass_source"] = _sr_intermediate
+                elif _sr_override:
+                    # v8.59 classical stage 1: no NVEncC prepass. The
+                    # FFmpeg preprocessor scales the source straight to
+                    # the intermediate target using the stage-1
+                    # algorithm (see construct_ffmpeg_command), and the
+                    # final NVEncC pass runs the stage-2 algorithm.
+                    print("[INFO] Multi-stage: stage 1 {} is classical, so "
+                          "the FFmpeg preprocessor scales to the "
+                          "intermediate {}x{}; no NVEncC prepass.".format(
+                              _stage1_algo, _sr_override[0], _sr_override[1]))
                 # v8.35 NVENCC MKV + AUDIO-COPY FIX
                 # The preprocessor writes Matroska, not MP4, because
                 # NVEncC's reader cannot parse AAC 5.1 channel layouts
@@ -8943,7 +10167,23 @@ class VideoProcessorApp:
                 dv_profile = color_info.get("dv_profile", "8.1")
                 cmd.extend(["--dolby-vision-profile", dv_profile])
                 cmd.extend(["--dolby-vision-rpu", rpu_path])
-        upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+        # v8.59 FINAL HOP ALGORITHM
+        # The final NVEncC pass is stage 2 of a multi-stage job. It uses
+        # stage2_upscale_algo / stage2_upscale_level when set, and falls
+        # back to the main Upscale Algo + its level otherwise. A job
+        # that is not chaining simply has no _multi_stage_plan and
+        # behaves exactly as before.
+        _ms_plan = options.get("_multi_stage_plan") or {}
+        upscale_algo = _ms_plan.get(
+            "algo2", resolve_stage_upscale_algo(options, "stage2_upscale_algo"))
+        _stage2_level = _ms_plan.get(
+            "level2",
+            resolve_stage_upscale_level(options, "stage2_upscale_level", upscale_algo))
+        # v8.59: stage-2 NVVFX SuperRes strength (None = omit the token).
+        _stage2_strength = _ms_plan.get(
+            "strength2",
+            resolve_stage_upscale_strength(options, "stage2_upscale_strength",
+                                           upscale_algo))
 
         # PATCH2_VID_PY - NVVFX SuperRes and NGX VSR only support ratio
         # >= 1.0. When a vertical crop makes the effective source frame
@@ -8963,6 +10203,13 @@ class VideoProcessorApp:
         if precrop:
             _eff_src_w = max(2, _eff_src_w - precrop[0] - precrop[2])
             _eff_src_h = max(2, _eff_src_h - precrop[1] - precrop[3])
+        # v8.59: a chained job hands NVEncC a frame that is already at
+        # the stage-1 intermediate geometry, so the original source dims
+        # no longer describe the input. Compare against the geometry the
+        # encode actually receives instead of the original source.
+        if _ms_plan.get("needs_chain"):
+            _eff_src_w = int(options.get("_preproc_scale_override", (0, 0))[0] or _eff_src_w)
+            _eff_src_h = int(options.get("_preproc_scale_override", (0, 0))[1] or _eff_src_h)
         if (upscale_algo in ("nvvfx-superres", "ngx-vsr")
                 and _eff_src_w > 0 and _eff_src_h > 0
                 and (target_w < _eff_src_w or target_h < _eff_src_h)):
@@ -8970,15 +10217,19 @@ class VideoProcessorApp:
                   f"({_eff_src_w}x{_eff_src_h} -> {target_w}x{target_h}); "
                   f"falling back to lanczos.")
             upscale_algo = "lanczos"
+            _stage2_level = None
+            _stage2_strength = None
 
         resize_algo = None
-        if upscale_algo == "nvvfx-superres":
-            mode = options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE)
-            resize_algo = f"nvvfx-superres,superres-mode={mode}"
-        elif upscale_algo == "ngx-vsr":
-            q = options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY)
-            resize_algo = f"ngx,vsr-quality={q}"
-        elif upscale_algo in ["nearest", "bilinear", "bicubic", "lanczos", "spline36"]:
+        if upscale_algo in ("nvvfx-superres", "ngx-vsr"):
+            resize_algo = format_stage_resize_algo(upscale_algo, _stage2_level,
+                                                   _stage2_strength)
+            if (upscale_algo == "nvvfx-superres" and _stage2_strength is not None
+                    and str(_stage2_level) == "1"):
+                print(f"[WARN] superres-mode=1 (Performance-priority) with "
+                      f"superres-strength={_stage2_strength}: strength is "
+                      f"documented for Quality-priority mode (mode 0).")
+        elif upscale_algo in CLASSICAL_UPSCALE_ALGOS:
             resize_algo = upscale_algo
         if precrop:
             cmd.extend(["--crop", f"{precrop[0]},{precrop[1]},{precrop[2]},{precrop[3]}"])
@@ -9566,7 +10817,8 @@ class VideoProcessorApp:
         return out_path
 
     def _nvvfx_superres_preprocess(self, input_file, work_dir, options,
-                                     target_w, target_h):
+                                     target_w, target_h,
+                                     algo=None, level=None, strength=None):
         """Run NVEncC nvvfx-superres (or ngx-vsr) to upscale the source
         to the target resolution. Video-only output; intended to be
         consumed by a subsequent FFmpeg preprocessor (filters, subs)
@@ -9576,18 +10828,31 @@ class VideoProcessorApp:
         do the first 2x hop, we run superres twice, once per stage,
         so every pixel of every upscale was touched by the AI
         upscaler.
+
+        v8.59: `algo` / `level` let the intermediate hop use its own
+        algorithm and level (stage1_upscale_algo / stage1_upscale_level)
+        instead of inheriting the main Upscale Algo controls, and
+        `strength` carries the hop's superres-strength (None = omit the
+        token entirely). The historical signature (no algo/level) still
+        works and keeps the v8.29 behavior.
         """
         safe_base = re.sub(r'[\\/*?:"<>|]', "",
                            os.path.splitext(os.path.basename(input_file))[0]).strip() or "sr"
         out_path = os.path.join(work_dir, f"{safe_base}_sr_intermediate.mkv")
 
-        upscale_algo = options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
-        if upscale_algo == "ngx-vsr":
-            q = options.get("nvenc_ngx_vsr_quality", DEFAULT_NVENC_NGX_VSR_QUALITY)
-            resize_algo = f"ngx,vsr-quality={q}"
-        else:
-            mode = options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE)
-            resize_algo = f"nvvfx-superres,superres-mode={mode}"
+        upscale_algo = algo or options.get("upscale_algo", DEFAULT_UPSCALE_ALGO)
+        if level is None:
+            level = resolve_stage_upscale_level(options, "stage1_upscale_level",
+                                                upscale_algo)
+        if strength is None:
+            strength = resolve_stage_upscale_strength(
+                options, "stage1_upscale_strength", upscale_algo)
+        resize_algo = format_stage_resize_algo(upscale_algo, level, strength)
+        if (upscale_algo == "nvvfx-superres" and strength is not None
+                and str(level) == "1"):
+            print(f"[WARN] superres-mode=1 (Performance-priority) with "
+                  f"superres-strength={strength}: strength is documented "
+                  f"for Quality-priority mode (mode 0).")
 
         aspect_mode = options.get("aspect_mode", "pad")
         output_res = f"{target_w}x{target_h}"
@@ -9825,17 +11090,37 @@ class VideoProcessorApp:
                 cuda_video_in_bot = "[v_cuda_in_bot]"
             else:
                 cuda_video_in_bot = "[1:v]"
+        # v8.59 MULTI-STAGE INTERMEDIATE ALGORITHM
+        # `upscale_algo` here stays the MAIN control: when one of the
+        # stages inherits it, that is exactly what the FFmpeg scale step
+        # must use. The multi-stage plan then refines it:
+        #   * stage 1 AI     -> FFmpeg only touches filtering, the
+        #                       intermediate size is already reached by
+        #                       the NVEncC prepass (v8.29 behavior).
+        #   * stage 1 class. -> FFmpeg performs that hop, so it must use
+        #                       stage1_upscale_algo instead of lanczos.
+        #   * stage 2 AI     -> NVEncC resizes; FFmpeg must not.
+        _ms_plan = options.get("_multi_stage_plan") or {}
+        _ms_algo1 = _ms_plan.get("algo1")
+        _ms_algo2 = _ms_plan.get("algo2")
         upscale_algo = options.get("upscale_algo")
         use_nvencc_resize = (encoder_backend == "preprocess" and
-                             upscale_algo in ["nvvfx-superres", "ngx-vsr"])
+                             (upscale_algo in ["nvvfx-superres", "ngx-vsr"]
+                              or _ms_algo2 in AI_UPSCALE_ALGOS))
         ffmpeg_upscale_algo = (upscale_algo if upscale_algo in
-                               ["nearest", "bilinear", "bicubic", "lanczos"]
+                               CLASSICAL_UPSCALE_ALGOS
                                else DEFAULT_UPSCALE_ALGO)
-        # Multi-stage intermediate: prefer lanczos for the FFmpeg pre-scale
-        # so the NVEncC superres pass starts from the cleanest possible
-        # input. Only active when the override is set (preprocessor path).
         if options.get("_preproc_scale_override"):
-            ffmpeg_upscale_algo = "lanczos"
+            if _ms_algo1 in CLASSICAL_UPSCALE_ALGOS:
+                # The FFmpeg pre-scale IS stage 1, so honor its choice.
+                ffmpeg_upscale_algo = _ms_algo1
+            elif _ms_algo1 in AI_UPSCALE_ALGOS:
+                # The NVEncC prepass already reached the intermediate
+                # size; this scale is a near-no-op. Lanczos keeps the
+                # historical v8.29 behavior for any residual resampling.
+                ffmpeg_upscale_algo = "lanczos"
+            else:
+                ffmpeg_upscale_algo = "lanczos"
         eff_w, eff_h = None, None
         video_out_tag = "0:v:0"
         audio_cmd_parts, audio_stream_groups = self.build_audio_segment(
@@ -11029,10 +12314,10 @@ class VideoProcessorApp:
                                                       "hybrid-duo (dual source)")):
             issues.append(
                 "FRUC cannot be combined with Dolby Vision + hybrid layouts.")
-        # Multi-stage superres (>2x ratios) is now handled automatically
-        # via FFmpeg pre-scale + final NVEncC superres. See
-        # _multi_stage_superres_info() and the promotion logic in
-        # _process_single_render_segment().
+        # Multi-stage upscaling (>2x ratios) is handled automatically via
+        # the per-stage algorithms and the backend promotion in
+        # _process_single_render_segment(). See
+        # _resolve_multi_stage_config() for the chain decision.
         if warnings and not issues:
             messagebox.showwarning("Warnings", "\n".join(f"• {w}" for w in warnings))
         if issues:
