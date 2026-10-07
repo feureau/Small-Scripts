@@ -1,17 +1,6 @@
-# 🛠️ Feureau's Small-Scripts & Configs
+# 🗺️ Master Repository Map: Feureau's Small-Scripts & Configs
 
-A massive curated collection of utility scripts, software configurations, and creative assets for high-end video processing, 3D modeling, AI generation, and text automation. This repository leverages **FFmpeg**, **NVEncC**, **ImageMagick**, **Blender**, **DaVinci Resolve**, and **Python** to automate complex professional media workflows.
-
----
-
-## 📑 Table of Contents
-- [🎥 Workstation 1: Video Engineering & Color Pipeline](#-workstation-1-video-engineering--color-pipeline)
-- [🤖 Workstation 2: AI Intelligence & Prompt Engineering](#-workstation-2-ai-intelligence--prompt-engineering)
-- [🖼️ Workstation 3: Image Manipulation & AI Vision](#-workstation-3-image-manipulation--ai-vision)
-- [📝 Workstation 4: Text, Data & Subtitle Engineering](#-workstation-4-text-data--subtitle-engineering)
-- [🧊 Workstation 5: 3D, Game Dev & Configs](#-workstation-5-3d-game-dev--configs)
-- [⚙️ Master Prerequisites Matrix](#-master-prerequisites-matrix)
-- [⚖️ License & Disclaimer](#-license--disclaimer)
+This document serves as the definitive functional map of the entire repository. Rather than a simple file list, it organizes the 3,200+ files into logical "Workstations" based on their actual purpose in a professional production workflow.
 
 ---
 
@@ -23,7 +12,6 @@ A massive curated collection of utility scripts, software configurations, and cr
 *   **Noise Reduction**: Specialized "NR" batches (`NR-hi`, `NR-lo`) for cleaning grainy footage.
 *   **AV1 Pipeline**: Latest versions of converters focusing on the high-efficiency AV1 codec.
 *   **Vertical Automation**: "Vert Cropper" scripts for converting wide footage to vertical formats.
-*   **GUI Tool (`ytvid.py`)**: Comprehensive interface for AI upscaling, HDR $\rightarrow$ SDR conversion, and Frame Rate Up Conversion (FRUC).
 
 ### 🎞️ FFmpeg Batch Processing
 *   **Resolution Suite (v1-v9)**: A massive library of scripts for rapid HD/4K/8K conversion.
@@ -127,10 +115,5 @@ A structured, multi-pass generation system for content creation:
 | **Gaming** | Magic Lantern (Hardware) | `pandas`, `matplotlib` |
 
 ---
-
-## ⚖️ License & Disclaimer
-
-- **License**: Open-source under **GPLv3**.
-- **Disclaimer**: Provided "as-is". Always backup original media before running batch scripts.
-
-*For support, pray to the AI god. Good luck.*
+*Last Updated: 2026-10-02*
+*Owner: Feureau*
