@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import platform
+import glob
 from pathlib import Path
 
 def generate_preview(svg_path):
@@ -76,8 +77,24 @@ def generate_preview(svg_path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python svgpreview.py \"YourFile.svg\"")
+        print("Usage: python svgpreview.py \"YourFile.svg\" or \"*.svg\"")
+        print("  - Single file: svgpreview.py filename.svg")
+        print("  - Wildcard:   svgpreview.py *.svg (scans current directory)")
         sys.exit(1)
     
-    target_svg = sys.argv[1]
-    generate_preview(target_svg)
+    target = sys.argv[1]
+    
+    # Check if it's a glob pattern with wildcards
+    if '*' in target or '?' in target:
+        print(f"Expanding pattern: {target}")
+        matches = glob.glob(target)
+        if not matches:
+            print(f"No files matched the pattern: {target}")
+            sys.exit(1)
+        
+        # Process all matching files
+        for svg_path in matches:
+            generate_preview(svg_path)
+    else:
+        # Single file mode (original behavior)
+        generate_preview(target)

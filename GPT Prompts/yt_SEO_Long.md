@@ -4,7 +4,7 @@ SOURCE OF TRUTH
 Use the conversation history above as your only source. The topic, facts, names, dates, quotes, and narrative beats all come from what was already discussed, including any SRT transcript, research notes, or back-and-forth in this thread. Do not invent facts. Do not pull from outside knowledge unless it was already established in the conversation. Do not ask me to paste anything again.
 
 OUTPUT LANGUAGE
-Detect the dominant language of the discussion and write everything in that language. If the discussion was in English, output English. If it was in Indonesian or Chinese, output that. Proper nouns stay as-is.
+Detect the dominant language of the discussion and write everything in that language. If the discussion was in English, output English. If the discussion was in Indonesian or Chinese, output that. Proper nouns stay as-is.
 
 WHAT TO PRODUCE
 1. Top 3 YouTube titles
@@ -12,10 +12,10 @@ WHAT TO PRODUCE
 3. A tags list
 
 TITLE RULES
-- Length: 40 to 60 characters total. The hook and primary keyword must land within the first 40 to 45 characters so it survives mobile truncation.
+- Length: 40 to 60 characters total. The hook and primary keyword must land within the first 25 to 40 characters so it survives mobile truncation. On mobile, titles are cut off after roughly 50 characters. Nothing important should appear after the cut.
 - Format: Title text followed by one emoji. No hashtags in the title.
 - No structural colons or pipes. No "Topic: Subtopic" format. Dashes are fine when they read naturally.
-- No ALL CAPS words.
+- No ALL CAPS words unless the gaming niche explicitly benefits from it. In Gaming, ALL CAPS can read as energy, but use sparingly.
 - Each title must be a single continuous thought.
 - Draw from these high-performing frames, ranked by measured performance multiplier (vidIQ 2026 study of 4M+ videos):
   Caught on Camera (4x+) witnessed footage or direct evidence
@@ -29,12 +29,13 @@ TITLE RULES
   Specific Superlative (1.5x+) meaningful extreme
   X Days, Hours, or Years (nearly 1.5x) bounded journey or countdown
 - Avoid these penalty patterns:
-  Question-ending titles (0.82x average, roughly 18 percent below average). Exception: purely instructional content may benefit from a question ending.
+  Question-ending titles (0.82x average, roughly 18 percent below average). Exception: purely instructional content may benefit from a question ending. Gaming is browse-dominant; avoid question endings.
   I-was-wrong confession titles (below half of average, worst performer in the study).
   Plain how-to with no twist (1.07x, effectively average).
-- Use at least one power element across the three titles where it fits naturally: a number or list, a year tag, or a bracket or parenthetical such as (Explained) or (2026 Update).
+- Use at least one power element across the three titles where it fits naturally: a number or list, a year tag, or a bracket or parenthetical such as (Explained) or (2026 Update). Brackets are least effective in Gaming; use only if they add format value.
 - The three titles must use three different frames and three different angles. No two titles should feel like variations of the same idea.
 - FRAME ROTATION: Maintain awareness of frames used in recent videos. Do not reuse the same lead frame (the first title) across consecutive videos. Rotate through the full list before repeating a lead frame. If a frame was used as lead in the previous video, choose a different lead frame for this one.
+- Title is a contract. It must promise something the video immediately delivers. A bad click is worse than no click.
 
 DESCRIPTION RULES
 - Length: 150 to 300 words, under 1,000 characters total. Count words before finalizing. If under 150, expand with more detail from the source. If over 300, trim.
@@ -55,11 +56,12 @@ TAG RULES
 - Total combined length of all tags including commas and spaces must stay under 480 characters.
 - Mix exact-match proper names, subject-specific terminology, and high-intent discovery phrases.
 - No repetitive variations of the same keyword. If two tags overlap heavily, keep only the stronger one.
+- Tags are a minor ranking signal. Focus on game name, character name, specific angles, and spelling variants. Avoid generic tags like "gaming" or "gamer."
 
 QUALITY CHECK
 Before returning output, verify:
 - Three titles use three different frames. Lead frame is different from the previous video's lead frame (if applicable).
-- Title lengths are 40 to 60 characters. Primary keyword is in the first 40 to 45 characters.
+- Title lengths are 40 to 60 characters. Primary keyword is in the first 25 to 40 characters.
 - No penalty patterns used.
 - At least one power element (number, year, bracket) appears across the three titles.
 - Description is 150 to 300 words. First 125 characters contain primary keyword and core hook.

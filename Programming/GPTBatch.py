@@ -35,6 +35,12 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
+### v26.24
+- ✅ **BUGFIX**: Retry cap no longer downgrades mid-job when error type changes (e.g. 503 → connection error). Once a job has seen a 503, it keeps the higher retry budget (20) for the rest of its attempts.
+- ✅ **IMPROVEMENT**: Replaced flat 60s 503 delay with exponential backoff (30s → 60s → 120s → 240s → 300s cap).
+- ✅ **FEATURE**: Stop is now immediate and graceful. Retry sleeps are interruptible, in-flight API calls are re-checked for cancellation on return, and cancelled jobs are labeled `Cancelled` (never `Failed`). No partial files, no `failed/` copies, no temp-dir leftovers on cancel.
+- ✅ **IMPROVEMENT**: `Retrying` status now shows the upcoming wait in seconds.
+
 ### v26.23
 - ✅ **BUGFIX**: Fixed missing API key error when creating and immediately running a new blank preset by preserving default API key environment mappings and setting a default model.
 - ✅ **IMPROVEMENT**: Ensured `load_preset()` configures engine credentials before fetching models and updates the main toolbar API key combobox.
@@ -593,7 +599,11 @@ FAILED_SUBFOLDER_NAME = "failed"
 MAX_BATCH_SIZE_MB = 15
 MAX_RETRIES = 3
 MAX_RETRIES_503 = 20
-RETRY_DELAY_503 = 60
+RETRY_DELAY_503 = 60            # kept for backward-compat / dialog reference
+RETRY_DELAY_503_BASE = 30       # first retry wait for transient errors (seconds)
+RETRY_DELAY_503_MAX = 300       # hard cap for 503 backoff (5 minutes)
+RETRY_BACKOFF_FACTOR = 2.0      # multiplier per retry
+RETRY_DELAY_DEFAULT = 5         # non-transient, non-503 retry wait
 
 
 def sanitize_filename(name):
@@ -882,6 +892,45 @@ def preview_text(text, max_chars=180):
         return ""
     one_line = re.sub(r"\s+", " ", str(text)).strip()
     return one_line if len(one_line) <= max_chars else one_line[:max_chars] + "..."
+
+
+def _interruptible_sleep(seconds, cancel_event, poll_interval=0.25):
+    """
+    Sleep for `seconds`, returning early if `cancel_event` is set.
+    Returns True if the full duration elapsed, False if cancelled.
+    """
+    if seconds <= 0:
+        return not (cancel_event and cancel_event.is_set())
+    end = time.monotonic() + float(seconds)
+    while True:
+        if cancel_event and cancel_event.is_set():
+            return False
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(poll_interval, remaining))
+
+
+def _compute_retry_delay(attempt, is_temp_unavailable, is_quota=False):
+    """
+    Exponential backoff for transient failures.
+
+      attempt=1 -> 30s
+      attempt=2 -> 60s
+      attempt=3 -> 120s
+      attempt=4 -> 240s
+      attempt>=5 -> 300s (cap)
+
+    Quota errors that somehow reach this point fall back to the base delay;
+    they normally route through the model-switch dialog and never reach here.
+    """
+    if is_temp_unavailable:
+        exponent = max(0, int(attempt) - 1)
+        delay = RETRY_DELAY_503_BASE * (RETRY_BACKOFF_FACTOR ** exponent)
+        return float(min(delay, RETRY_DELAY_503_MAX))
+    if is_quota:
+        return float(RETRY_DELAY_503_BASE)
+    return float(RETRY_DELAY_DEFAULT)
 
 
 def to_loggable(value):
@@ -1768,6 +1817,10 @@ def call_google_gemini_api(
             response = client.models.generate_content(
                 model=model_name, contents=contents, config=config
             )
+            if cancellation_event and cancellation_event.is_set():
+                raise CancellationError(
+                    "Cancelled after Google generation call."
+                )
 
         if stream_output:
             full_text = ""
@@ -2044,6 +2097,11 @@ def _call_openai_compatible_chat(
             timeout=600,
         )
         response.raise_for_status()
+
+        if cancellation_event and cancellation_event.is_set():
+            raise CancellationError(
+                f"Cancelled after {engine_label} request."
+            )
 
         if effective_stream:
             full_text = ""
@@ -3264,6 +3322,10 @@ def process_file_group(
         if response and str(response).strip().startswith("Error"):
             raise Exception(response)
 
+        # Final cancellation gate: never write a partial/abandoned result.
+        if cancellation_event and cancellation_event.is_set():
+            raise CancellationError("Cancelled before saving output.")
+
         if kwargs.get("clean_markdown", True):
             response = sanitize_api_response(response)
 
@@ -3781,10 +3843,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     STATUS_FAIL = "#4b2a2a"    # Dark Red
     STATUS_RETRY = "#4b442a"   # Dark Gold
     STATUS_WAIT = "#3a3a3a"    # Grey-Ish
+    STATUS_CANCEL = "#2a2a2a"  # Neutral grey for cancelled jobs
 
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v26.17 (GPTBatcher) - Dark Mode")
+        self.title("Multimodal AI Batch Processor v26.24 (GPTBatcher) - Dark Mode")
         self.configure(bg=self.DARK_BG)
         self.geometry("1400x820")
 
@@ -6813,6 +6876,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def stop_processing(self):
         if getattr(self, "worker_threads", None) and any(t.is_alive() for t in self.worker_threads):
             if tkinter.messagebox.askokcancel("Stop", "Cancel current processing?"):
+                console_log(
+                    "\u23f9\ufe0f Stop requested. Finishing current operations gracefully...",
+                    "WARN",
+                )
                 self.processing_cancelled.set()
                 self.stop_btn.config(state="disabled")
 
@@ -6994,18 +7061,21 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                         "success"
                         if status == "Completed"
                         else "fail"
-                        if status == "Failed"
+                        if status == "Failed" or status.startswith("Fail:")
                         else "retry"
                         if "Retrying" in status
                         else "wait"
                         if "Waiting" in status
+                        else "cancelled"
+                        if status == "Cancelled"
                         else ""
                     )
                     if tag:
-                        self.tree.tag_configure("success", background=self.STATUS_SUCCESS, foreground="#ccffcc")
-                        self.tree.tag_configure("fail", background=self.STATUS_FAIL, foreground="#ffcccc")
-                        self.tree.tag_configure("retry", background=self.STATUS_RETRY, foreground="#fff5cc")
-                        self.tree.tag_configure("wait", background=self.STATUS_WAIT, foreground="#ffe0b2")
+                        self.tree.tag_configure("success",   background=self.STATUS_SUCCESS, foreground="#ccffcc")
+                        self.tree.tag_configure("fail",      background=self.STATUS_FAIL,    foreground="#ffcccc")
+                        self.tree.tag_configure("retry",     background=self.STATUS_RETRY,   foreground="#fff5cc")
+                        self.tree.tag_configure("wait",      background=self.STATUS_WAIT,    foreground="#ffe0b2")
+                        self.tree.tag_configure("cancelled", background=self.STATUS_CANCEL,  foreground="#aaaaaa")
                     if tag:
                         self.tree.item(jid, tags=(tag,))
         except queue.Empty:
@@ -7252,6 +7322,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
             attempt = 0
             current_max_retries = MAX_RETRIES
+            seen_503 = False
             while attempt < current_max_retries:
                 attempt += 1
                 if self.processing_cancelled.is_set():
@@ -7279,6 +7350,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     self.result_queue.put({"job_id": jid, "status": "Cancelled"})
                     break
                 except Exception as e:
+                    # Cancellation wins over any error classification
+                    if self.processing_cancelled.is_set():
+                        console_log(f"\u23f9\ufe0f Job {jid} cancelled by user.", "WARN")
+                        self.result_queue.put({"job_id": jid, "status": "Cancelled"})
+                        break
+
                     if isinstance(e, FatalProcessingError) or "Fatal:" in str(e):
                         console_log(f"❌ Job {jid} Failed: {e}", "ERROR")
                         err_msg = str(e).replace("Fatal:", "").strip()
@@ -7348,7 +7425,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                     issue_detail=issue_detail,
                                 ),
                             )
-                            event_container["event"].wait()
+                            while not event_container["event"].is_set():
+                                if self.processing_cancelled.is_set():
+                                    event_container["result"] = None
+                                    break
+                                event_container["event"].wait(timeout=0.2)
                             user_result = event_container["result"]
                             if user_result:
                                 new_engine, new_model = user_result
@@ -7391,6 +7472,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                 attempt -= 1
                                 continue
                             else:
+                                if self.processing_cancelled.is_set():
+                                    console_log(
+                                        f"\u23f9\ufe0f Job {jid} cancelled while waiting for model switch.",
+                                        "WARN",
+                                    )
+                                    self.result_queue.put(
+                                        {"job_id": jid, "status": "Cancelled"}
+                                    )
+                                    break
                                 if is_model_unavailable:
                                     console_log(
                                         "User cancelled model switch for unavailable model. Marking job as failed.",
@@ -7418,23 +7508,36 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                                     self.processing_cancelled.set()
                                     break
 
+                    # Retry cap ratchets up only; never downgrades mid-job.
                     if is_temp_unavailable:
-                        current_max_retries = MAX_RETRIES_503
-                    else:
-                        current_max_retries = MAX_RETRIES
+                        seen_503 = True
+                    if seen_503:
+                        current_max_retries = max(current_max_retries, MAX_RETRIES_503)
 
                     console_log(
                         f"Job {jid} Error (Attempt {attempt}/{current_max_retries}): {e}",
                         "ERROR",
                     )
                     if attempt < current_max_retries:
-                        wait_time = (
-                            RETRY_DELAY_503 if (is_quota or is_temp_unavailable) else 5
+                        wait_time = _compute_retry_delay(
+                            attempt, is_temp_unavailable, is_quota
                         )
                         self.result_queue.put(
-                            {"job_id": jid, "status": f"Retrying ({attempt})"}
+                            {"job_id": jid, "status": f"Retrying ({attempt}, {int(wait_time)}s)"}
                         )
-                        time.sleep(wait_time)
+                        console_log(
+                            f"Job {jid}: retrying in {wait_time:.1f}s "
+                            f"(attempt {attempt}/{current_max_retries}).",
+                            "INFO",
+                        )
+                        if not _interruptible_sleep(wait_time, self.processing_cancelled):
+                            console_log(
+                                f"\u23f9\ufe0f Job {jid} cancelled during retry wait.", "WARN"
+                            )
+                            self.result_queue.put(
+                                {"job_id": jid, "status": "Cancelled"}
+                            )
+                            break
                     else:
                         console_log(
                             f"Job {jid} reached max retries ({current_max_retries}). Marking as failed.",
