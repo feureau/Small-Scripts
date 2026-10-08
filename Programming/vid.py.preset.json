@@ -13710,7 +13710,7 @@
             "hybrid_top_suffix": "-top",
             "hybrid_bot_suffix": "-bot",
             "subtitle_font": "HelveticaNeueLT Std Blk",
-            "subtitle_font_size": "48",
+            "subtitle_font_size": "192",
             "subtitle_alignment": "seam",
             "subtitle_bold": true,
             "subtitle_italic": false,

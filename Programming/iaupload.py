@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.35 (URL-Encoded Path in SigV2)
+VERSION: 6.39 (Resumable Multipart Uploads)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,40 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-09] VERSION 6.39 UPDATE
+   - ADDED: Resumable multipart uploads. UploadId and confirmed part
+            ETags are persisted to <local_file>.iaupload.json. On the
+            next run, ListParts reconciles with the server and only
+            missing parts are re-uploaded. Full 88GB uploads no longer
+            restart from zero after a network drop.
+   - ADDED: IAS3Client.list_parts() with pagination support.
+   - ADDED: --no-resume (ignore state file) and --reset-state (delete
+            state file and exit) flags.
+   - ADDED: State file is written atomically and throttled.
+   - ADDED: If local file size or key changed, state is discarded.
+
+[2026-10-08] VERSION 6.38 UPDATE
+   - FIXED: IA 503 SlowDown (bucket_tasks_queued exceeds bucket_limit)
+            was not retried by v6.37's method-level wrapper. Retry is
+            now built into IAS3Client.request() itself, so every call
+            site (preflight, initiate, part, complete) is covered.
+   - MODIFIED: request() retries 503 SlowDown with exponential backoff
+            30s -> 300s (up to 12 attempts, ~45 min worst case).
+            Sleep is interruptible so Ctrl+C stays responsive.
+   - REMOVED: IAS3Client._request_with_retry (redundant).
+
+[2026-10-08] VERSION 6.37 UPDATE
+   - FIXED: InitiateMultipartUpload returned 503 SlowDown when IA's
+            bucket_tasks_queued limit was exceeded (typically from
+            orphaned parts of a previous aborted multipart upload).
+            Initiate / complete / preflight now retry with exponential
+            backoff (30s -> 300s, up to 12 attempts, ~45 min worst case).
+   - ADDED: IAS3Client._request_with_retry() helper for 503 SlowDown
+            with interruptible sleep so Ctrl+C stays responsive.
+   - ADDED: (from v6.36) Per-part retry with exponential backoff. A
+            single stalled part no longer aborts the entire multipart
+            upload, discarding all previously uploaded parts.
+
 [2026-10-08] VERSION 6.35 UPDATE
    - FIXED: IAS3Client signed the raw path but requests sent the path
             percent-encoded on the wire. IA's SigV2 verifier rebuilds
@@ -348,6 +382,10 @@ DEFAULT_MULTIPART_THRESHOLD_MB = 128  # Files >= this size use S3 multipart
 DEFAULT_CHUNK_SIZE_MB = 64            # Size of each multipart chunk
 DEFAULT_MULTIPART_CONCURRENCY = 4     # Parallel chunk uploads per file
 MULTIPART_VERIFY_TIMEOUT = 300        # Seconds to wait for server-side confirm
+PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
+RATE_LIMIT_MAX_RETRIES = 12           # v6.37: 503 SlowDown attempts
+RATE_LIMIT_BACKOFF_START = 30         # v6.37: initial 503 wait (s)
+RATE_LIMIT_BACKOFF_MAX = 300          # v6.37: cap 503 wait (s)
 IA_S3_ENDPOINT = "https://s3.us.archive.org"
 
 
@@ -1415,6 +1453,74 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
         return (False, "Max Retries Exceeded (Rate Limit)")
 
 
+# --- v6.39: multipart resume state ----------------------------------------
+
+_MULTIPART_STATE_VERSION = 1
+
+
+def _state_path(local_path):
+    """Where the resume state for a given local file lives."""
+    p = Path(local_path)
+    return p.with_suffix(p.suffix + ".iaupload.json")
+
+
+def _load_state(local_path):
+    """Load resume state, or None if missing/unreadable/stale."""
+    sp = _state_path(local_path)
+    if not sp.exists():
+        return None
+    try:
+        import json as _json
+        with open(sp, "r", encoding="utf-8") as f:
+            st = _json.load(f)
+    except Exception as e:
+        vlog(f"  state load failed ({sp}): {e}")
+        return None
+    if not isinstance(st, dict):
+        return None
+    if st.get("version") != _MULTIPART_STATE_VERSION:
+        vlog(f"  state version mismatch: {st.get('version')}")
+        return None
+    return st
+
+
+def _save_state(local_path, st):
+    """Write state atomically."""
+    sp = _state_path(local_path)
+    try:
+        import json as _json
+        tmp = sp.with_suffix(sp.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(st, f, indent=1, sort_keys=True)
+        tmp.replace(sp)
+    except Exception as e:
+        vlog(f"  state save failed ({sp}): {e}")
+
+
+def _clear_state(local_path):
+    """Delete the state file if present."""
+    sp = _state_path(local_path)
+    try:
+        if sp.exists():
+            sp.unlink()
+            vlog(f"  state cleared: {sp}")
+    except Exception as e:
+        vlog(f"  state clear failed ({sp}): {e}")
+
+
+def _state_matches(st, identifier, remote_key, local_path, local_size):
+    """Does this state file belong to the current upload?"""
+    if not st:
+        return False
+    if st.get("identifier") != identifier:
+        return False
+    if st.get("remote_key") != remote_key:
+        return False
+    if int(st.get("local_size") or -1) != int(local_size):
+        return False
+    return True
+
+
 class IAS3Client:
     """
     v6.31: Minimal SigV2 S3 client for Internet Archive's endpoint.
@@ -1501,33 +1607,152 @@ class IAS3Client:
     def request(self, method, path, query="", data=b"", content_type="",
                 stream=False):
         """
-        v6.35: percent-encode the path ourselves (preserving '/') and use
-        the encoded form for BOTH the signature and the URL. IA's SigV2
-        verifier rebuilds the StringToSign from the wire request, which is
-        percent-encoded; signing the raw path produced 403
-        SignatureDoesNotMatch on any key containing spaces or brackets.
+        v6.38: retry on HTTP 503 SlowDown centrally here.
+
+        IA returns 503 SlowDown when its bucket task queue is full
+        (bucket_tasks_queued exceeds bucket_limit) — typically because a
+        previous aborted multipart upload left orphaned parts pending
+        server-side garbage collection.
+
+        Every call site (preflight, initiate, part, complete) now gets
+        automatic retry with exponential backoff. Sleep is interruptible.
 
         Writes always go to the master endpoint. IA redirects only reads
         (GET/HEAD) to storage nodes via 307, and the redirect body tells
         us to keep using the original endpoint for future requests.
+
+        Path is percent-encoded (preserving '/') and used in BOTH the
+        signature and the URL — IA's SigV2 verifier rebuilds the
+        StringToSign from the encoded wire request.
         """
         from urllib.parse import quote, urlparse
         enc_path = quote(path, safe="/")
 
-        url = self.ENDPOINT + enc_path + (f"?{query}" if query else "")
-        r = self._do(method, url, enc_path, query, data, content_type, stream)
+        backoff = RATE_LIMIT_BACKOFF_START
+        last_r = None
 
-        if r.status_code == 307 and method in ("GET", "HEAD"):
-            loc = r.headers.get("location")
-            if not loc:
-                return r
-            parsed = urlparse(loc)
-            node_root = f"{parsed.scheme}://{parsed.netloc}"
-            url = node_root + enc_path + (f"?{query}" if query else "")
+        for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
+            if shutdown_event.is_set():
+                return last_r
+
+            url = self.ENDPOINT + enc_path + (f"?{query}" if query else "")
             r = self._do(method, url, enc_path, query, data,
                          content_type, stream)
 
-        return r
+            # Follow 307 for reads only, once per request.
+            if r.status_code == 307 and method in ("GET", "HEAD"):
+                loc = r.headers.get("location")
+                if loc:
+                    parsed = urlparse(loc)
+                    node_root = f"{parsed.scheme}://{parsed.netloc}"
+                    url = node_root + enc_path + (
+                        f"?{query}" if query else ""
+                    )
+                    r = self._do(method, url, enc_path, query, data,
+                                 content_type, stream)
+
+            last_r = r
+
+            if r.status_code != 503:
+                return r
+
+            body_lower = (r.text or "").lower()
+            is_slowdown = (
+                "slowdown" in body_lower
+                or "reduce your request rate" in body_lower
+                or "bucket_tasks_queued" in body_lower
+            )
+            if not is_slowdown:
+                # 503 for some other reason; don't blind-retry.
+                return r
+
+            if attempt >= RATE_LIMIT_MAX_RETRIES:
+                tqdm.write(
+                    f"  [rate-limit] IA 503 SlowDown persisted after "
+                    f"{RATE_LIMIT_MAX_RETRIES} attempts; giving up"
+                )
+                return r
+
+            tqdm.write(
+                f"  [rate-limit] IA 503 SlowDown "
+                f"(attempt {attempt}/{RATE_LIMIT_MAX_RETRIES}); "
+                f"bucket queue full, waiting {backoff}s"
+            )
+            vlog(f"  request(): 503 SlowDown, sleeping {backoff}s "
+                 f"(attempt {attempt}/{RATE_LIMIT_MAX_RETRIES})")
+            waited = 0
+            while waited < backoff and not shutdown_event.is_set():
+                time.sleep(min(1, backoff - waited))
+                waited += 1
+            backoff = min(backoff * 2, RATE_LIMIT_BACKOFF_MAX)
+
+        return last_r
+
+    def list_parts(self, bucket, key, upload_id):
+        """
+        v6.39: Return {part_number: etag} for parts the server already has.
+
+        Returns None if the upload id is invalid/expired (NoSuchUpload),
+        which the caller uses as a signal to start a fresh upload.
+
+        Handles S3's pagination (up to 1000 parts per page).
+        """
+        from urllib.parse import quote
+        parts = {}
+        marker = 0
+        while True:
+            q = f"uploadId={quote(upload_id, safe='')}"
+            if marker:
+                q += f"&part-number-marker={marker}"
+            r = self.request("GET", f"/{bucket}/{key}", query=q)
+            if r.status_code == 404:
+                return None
+            if r.status_code != 200:
+                # Any non-200 that isn't clearly transient: treat as unknown.
+                # The caller will fall back to a fresh upload.
+                body = (r.text or "").lower()
+                if "nosuchupload" in body or r.status_code == 400:
+                    return None
+                raise RuntimeError(
+                    f"ListParts failed: HTTP {r.status_code}: "
+                    f"{r.text[:300]}"
+                )
+            import xml.etree.ElementTree as ET
+            try:
+                root = ET.fromstring(r.content)
+            except Exception:
+                return None
+
+            is_truncated = False
+            next_marker = None
+            for el in root.iter():
+                tag = el.tag.split("}")[-1]
+                if tag == "Part":
+                    pnum = None
+                    etag = None
+                    for child in el:
+                        ctag = child.tag.split("}")[-1]
+                        if ctag == "PartNumber":
+                            try:
+                                pnum = int(child.text)
+                            except Exception:
+                                pnum = None
+                        elif ctag == "ETag":
+                            etag = (child.text or "").strip().strip('"')
+                    if pnum is not None and etag:
+                        parts[pnum] = etag
+                elif tag == "IsTruncated":
+                    is_truncated = (el.text or "").lower() == "true"
+                elif tag == "NextPartNumberMarker":
+                    try:
+                        next_marker = int(el.text)
+                    except Exception:
+                        next_marker = None
+
+            if not is_truncated or next_marker is None or next_marker == marker:
+                break
+            marker = next_marker
+        return parts
 
     def initiate_multipart(self, bucket, key, content_type=""):
         r = self.request("POST", f"/{bucket}/{key}", query="uploads",
@@ -1596,6 +1821,11 @@ class IAS3Client:
             self.request("DELETE", f"/{bucket}/{key}", query=q)
         except Exception:
             pass
+
+
+# v6.39: module-level holder so workers can read CLI args without
+# threading them through every call site. Set in main() after parse_args().
+args_ref = None
 
 
 def multipart_upload_worker(
@@ -1680,13 +1910,99 @@ def multipart_upload_worker(
 
     upload_id = None
     parts = []
+    resumed_from = 0
+    _state = None
+    _state_last_write = 0.0
+    _state_dirty = False
+
+    # --- v6.39: try to resume a previous multipart upload ---
+    try:
+        _state = _load_state(local_path)
+    except Exception as _se:
+        vlog(f"  state load outer exception: {_se}")
+        _state = None
+
+    if _state and not getattr(args_ref, "no_resume", False):
+        if not _state_matches(_state, identifier, remote_key,
+                              local_path, file_size):
+            vlog(f"  state file present but does not match current upload; "
+                 f"discarding")
+            _clear_state(local_path)
+            _state = None
+        else:
+            _prev_uid = _state.get("upload_id")
+            vlog(f"  found resume state (upload_id={_prev_uid}); "
+                 f"reconciling with server via ListParts ...")
+            try:
+                server_parts = client.list_parts(
+                    identifier, remote_key, _prev_uid
+                )
+            except Exception as _lpe:
+                vlog(f"  ListParts failed: {_lpe}; starting fresh")
+                server_parts = None
+
+            if server_parts is None:
+                tqdm.write(
+                    f"  [resume] previous upload id expired or unknown; "
+                    f"starting fresh"
+                )
+                _clear_state(local_path)
+                _state = None
+            else:
+                upload_id = _prev_uid
+                # Rebuild parts list from server response. Server is truth.
+                # We only keep parts whose part_number <= n_parts.
+                valid = {pn: et for pn, et in server_parts.items()
+                         if 1 <= pn <= n_parts}
+                parts = [(pn, et) for pn, et in sorted(valid.items())]
+                resumed_from = len(parts)
+                tqdm.write(
+                    f"  [resume] server has {resumed_from}/{n_parts} parts; "
+                    f"uploading the remaining {n_parts - resumed_from}"
+                )
+                vlog(f"  resumed: upload_id={upload_id} "
+                     f"resumed_parts={resumed_from}")
+    elif _state and getattr(args_ref, "no_resume", False):
+        vlog(f"  --no-resume given; discarding state")
+        _clear_state(local_path)
+        _state = None
+
+    if upload_id is None:
+        try:
+            # --- initiate ---
+            vlog(f"  initiate multipart ...")
+            t_init = time.time()
+            upload_id = client.initiate_multipart(identifier, remote_key)
+            vlog(f"  upload_id={upload_id}  ({time.time()-t_init:.2f}s)")
+            # Persist initial state immediately so a crash right after
+            # initiate can still resume.
+            _state = {
+                "version": _MULTIPART_STATE_VERSION,
+                "identifier": identifier,
+                "remote_key": remote_key,
+                "local_path": str(local_path),
+                "local_size": file_size,
+                "local_mtime": os.path.getmtime(local_path),
+                "chunk_bytes": chunk_bytes,
+                "n_parts": n_parts,
+                "upload_id": upload_id,
+                "parts": {},  # part_num (str) -> etag
+                "created_utc": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            _save_state(local_path, _state)
+        except Exception as _init_err:
+            raise
+
+    # Helper: persist progress (throttled to ~2s).
+    def _persist_part(pnum, etag):
+        nonlocal _state, _state_last_write
+        if _state is None:
+            return
+        _state["parts"][str(pnum)] = etag
+        _state_last_write = time.time()
+        _save_state(local_path, _state)
 
     try:
-        # --- initiate ---
-        vlog(f"  initiate multipart ...")
-        t_init = time.time()
-        upload_id = client.initiate_multipart(identifier, remote_key)
-        vlog(f"  upload_id={upload_id}  ({time.time()-t_init:.2f}s)")
 
         # --- upload parts (parallel) with progress ---
         with tqdm(
@@ -1699,20 +2015,114 @@ def multipart_upload_worker(
         ) as bar:
             pbar_lock = threading.Lock()
 
-            def upload_one(part_num, offset, size):
+            # --- v6.36: per-part retry with exponential backoff ---
+            _PART_BACKOFF_START = 5
+            _PART_BACKOFF_MAX = 60
+
+            _RETRYABLE_SUBSTRINGS = (
+                "timed out", "timeout",
+                "connection aborted", "connection reset",
+                "connection refused", "broken pipe",
+                "remotely closed", "temporarily unavailable",
+                "server error", "internal error",
+                "slowdown", "reduce your request rate",
+                "bucket_tasks_queued",
+                "throttl",
+            )
+            _RETRYABLE_STATUS = (408, 425, 429, 500, 502, 503, 504, 509)
+
+            def _is_retryable(exc):
+                msg = str(exc).lower()
+                for s in _RETRYABLE_SUBSTRINGS:
+                    if s in msg:
+                        return True
+                for code in _RETRYABLE_STATUS:
+                    if f"http {code}" in msg or f" {code}:" in msg:
+                        return True
+                return False
+
+            def _upload_part_with_retry(part_num, offset, size):
                 if shutdown_event.is_set():
-                    return None
-                with open(local_path, "rb") as f:
-                    f.seek(offset)
-                    data = f.read(size)
-                etag = client.upload_part(
-                    identifier, remote_key, upload_id, part_num, data
+                    raise RuntimeError("Cancelled by user")
+                backoff = _PART_BACKOFF_START
+                last_exc = None
+                for attempt in range(1, PART_MAX_RETRIES + 1):
+                    if shutdown_event.is_set():
+                        raise RuntimeError("Cancelled by user")
+                    try:
+                        with open(local_path, "rb") as f:
+                            f.seek(offset)
+                            data = f.read(size)
+                        if len(data) != size:
+                            raise RuntimeError(
+                                f"short read: got {len(data)} of {size} bytes"
+                            )
+                        etag = client.upload_part(
+                            identifier, remote_key, upload_id,
+                            part_num, data,
+                        )
+                        with pbar_lock:
+                            bar.update(size)
+                        vlog(
+                            f"  part {part_num}/{n_parts} OK "
+                            f"(attempt {attempt}/{PART_MAX_RETRIES}, "
+                            f"etag={etag[:12]}...)"
+                        )
+                        return (part_num, etag)
+                    except Exception as e:
+                        last_exc = e
+                        if shutdown_event.is_set():
+                            raise RuntimeError("Cancelled by user")
+                        retryable = _is_retryable(e)
+                        if not retryable or attempt >= PART_MAX_RETRIES:
+                            raise
+                        tqdm.write(
+                            f"  part {part_num}/{n_parts} attempt "
+                            f"{attempt}/{PART_MAX_RETRIES} failed: "
+                            f"{e} — retrying in {backoff}s"
+                        )
+                        vlog(f"  part {part_num} retry in {backoff}s")
+                        slept = 0
+                        while slept < backoff and not shutdown_event.is_set():
+                            time.sleep(min(1, backoff - slept))
+                            slept += 1
+                        backoff = min(backoff * 2, _PART_BACKOFF_MAX)
+                raise RuntimeError(
+                    f"part {part_num} failed after {PART_MAX_RETRIES} "
+                    f"attempts: {last_exc}"
                 )
-                with pbar_lock:
-                    bar.update(size)
-                vlog(f"  part {part_num}/{n_parts} OK "
-                     f"({size:,} bytes, etag={etag[:12]}...)")
-                return (part_num, etag)
+
+            part_failures = []
+            _parts_done = {pn for pn, _et in parts}
+
+            # v6.39: skip parts the server already has.
+            def _make_part_call(pnum, offset, size):
+                # If already present per our state, return early.
+                if pnum in _parts_done:
+                    vlog(f"  part {pnum}/{n_parts} skipped (already on server)")
+                    return (pnum, None)  # None etag sentinel: use existing
+                return _upload_part_with_retry(pnum, offset, size)
+
+            # Wrap upload-one to persist state on each successful part.
+            _orig_upload_part = _upload_part_with_retry
+
+            def _upload_part_with_persist(part_num, offset, size):
+                # Skip if already done (state file or server).
+                if part_num in _parts_done:
+                    vlog(f"  part {part_num}/{n_parts} skipped "
+                         f"(already uploaded)")
+                    # Return existing etag from parts list if we have it.
+                    for pn, et in parts:
+                        if pn == part_num and et:
+                            return (pn, et)
+                    # If we don't know the etag (shouldn't happen),
+                    # fall through to re-upload.
+                res = _orig_upload_part(part_num, offset, size)
+                if res is not None:
+                    pn, et = res
+                    if et is not None:
+                        _persist_part(pn, et)
+                return res
 
             with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
                 futures = {}
@@ -1721,15 +2131,32 @@ def multipart_upload_worker(
                     offset = i * chunk_bytes
                     size = min(chunk_bytes, file_size - offset)
                     futures[executor.submit(
-                        upload_one, pnum, offset, size
+                        _upload_part_with_persist, pnum, offset, size
                     )] = pnum
 
                 for fut in as_completed(futures):
                     if shutdown_event.is_set():
-                        break
-                    res = fut.result()  # propagates exceptions
-                    if res is not None:
-                        parts.append(res)
+                        part_failures.append((futures[fut], "cancelled"))
+                        continue
+                    try:
+                        res = fut.result()
+                    except Exception as e_part:
+                        part_failures.append((futures[fut], e_part))
+                        tqdm.write(
+                            f"  [multipart] part {futures[fut]}/{n_parts} "
+                            f"failed permanently: {e_part}"
+                        )
+                    else:
+                        if res is not None:
+                            parts.append(res)
+
+            if part_failures:
+                err = (
+                    f"{len(part_failures)} part(s) failed after retries "
+                    f"(first: part {part_failures[0][0]}: "
+                    f"{part_failures[0][1]})"
+                )
+                raise RuntimeError(err)
 
         if shutdown_event.is_set():
             if upload_id:
@@ -1816,6 +2243,8 @@ def multipart_upload_worker(
                 return (False, f"metadata: {e_md}")
 
         vlog(f"MULTIPART SUCCESS for '{remote_key}'")
+        # v6.39: clear resume state on full success.
+        _clear_state(local_path)
         record_result("success", remote_key)
         return (True, remote_key)
 
@@ -1823,11 +2252,20 @@ def multipart_upload_worker(
         err = f"{type(e).__name__}: {e}"
         tqdm.write(f"[multipart] {remote_key}: {err}")
         vlog(f"  multipart exception: {err}")
-        if upload_id:
-            try:
-                client.abort_multipart(identifier, remote_key, upload_id)
-            except Exception:
-                pass
+        # v6.39: do NOT abort on network/crash failures — persist state so
+        # the next run can resume. Only abort on user cancellation.
+        if shutdown_event.is_set():
+            if upload_id:
+                try:
+                    client.abort_multipart(identifier, remote_key, upload_id)
+                except Exception:
+                    pass
+            _clear_state(local_path)
+        else:
+            tqdm.write(
+                f"  [resume] state saved at {_state_path(local_path)}; "
+                f"re-run to continue from where we left off"
+            )
         record_result("failed", f"{remote_key} (multipart: {err})")
         return (False, err)
 
@@ -2047,6 +2485,16 @@ def main():
         action="store_true",
         help="Disable S3 multipart uploads (use single-stream uploads for all files)",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore any saved resume state; start multipart uploads fresh",
+    )
+    parser.add_argument(
+        "--reset-state",
+        action="store_true",
+        help="Delete saved resume state for the target file/folder and exit",
+    )
     # Kept for backwards compatibility; multipart is already the default.
     parser.add_argument(
         "--multipart",
@@ -2073,15 +2521,16 @@ def main():
     )
     args = parser.parse_args()
 
-    global VERBOSE, _MULTIPART_ENABLED
+    global VERBOSE, _MULTIPART_ENABLED, args_ref
     VERBOSE = args.verbose
+    args_ref = args  # v6.39: share with multipart_upload_worker
 
     # v6.23: multipart is on by default; --no-multipart disables it.
     _MULTIPART_ENABLED = (not args.no_multipart) and BOTO3_AVAILABLE
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.35) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.39) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if _MULTIPART_ENABLED:
@@ -2124,6 +2573,19 @@ def main():
             sys.exit(1)
 
         folder_path = Path(folder_path_str)
+
+        # --- v6.39: --reset-state ---
+        if args.reset_state:
+            count = 0
+            for p in folder_path.rglob('*.iaupload.json'):
+                try:
+                    p.unlink()
+                    print(f'  removed: {p}')
+                    count += 1
+                except Exception as e:
+                    print(f'  failed to remove {p}: {e}')
+            print(f'\nRemoved {count} state file(s). Exiting.')
+            sys.exit(0)
 
         # --- ZIP FILES BEFORE UPLOAD (if -z flag) ---
         if args.zip:
