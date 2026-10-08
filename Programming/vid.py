@@ -75,6 +75,21 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.61 - Hybrid-duo dedup no longer swallows subtitle-triggered jobs (2026-10-08)
+    • FIX: _create_job_entry's hybrid-duo duplicate guard compared only
+      the resolved video path and the options hash, neither of which
+      contains subtitle_path. When a hybrid-duo preset matched two
+      subtitles for the same source (e.g. the default .srt and its
+      -cn sibling), the first job was created and the second was
+      silently discarded with "[INFO] Skipping duplicate Hybrid Duo
+      file". The guard now also compares subtitle_path, so distinct
+      subtitle attachments on the same resolved source are kept as
+      separate jobs while an actual repeat add of the same
+      video/options/subtitle triple is still suppressed.
+    • AFFECTED: every hybrid-duo preset with on_scan_subs enabled
+      that matches more than one suffix against the same pair.
+    • UNAFFECTED: non-hybrid-duo presets, which never had this guard;
+      they already created one job per detected subtitle.
 v8.60 - Correct ngx-vsr --vpp-resize token (2026-10-04)
     • FIX: format_stage_resize_algo() emitted an NVEncC --vpp-resize
       value of "ngx,vsr-quality=N" for the ngx-vsr algorithm. NVEncC's
@@ -7983,7 +7998,15 @@ class VideoProcessorApp:
                 existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
                 if existing_path_resolved == resolved_top:
                     existing_job_hash = get_job_hash(existing_job.get("options"))
-                    if existing_job_hash == new_job_hash:
+                    # v8.61 FIX: also compare subtitle_path. Without it, a
+                    # hybrid-duo preset that matches two subtitles for the
+                    # same resolved source (e.g. the default .srt and its
+                    # -cn sibling) creates only the first job and silently
+                    # discards the rest as "duplicates". subtitle_path is
+                    # deliberately NOT part of get_job_hash, so it has to be
+                    # compared here.
+                    if (existing_job_hash == new_job_hash
+                            and existing_job.get("subtitle_path") == subtitle_path):
                         print(f"[INFO] Skipping duplicate Hybrid Duo file for: "
                               f"{os.path.basename(video_path)}")
                         return
