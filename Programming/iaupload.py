@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.21 (Timeout Fix for get_item)
+VERSION: 6.35 (URL-Encoded Path in SigV2)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,127 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-08] VERSION 6.35 UPDATE
+   - FIXED: IAS3Client signed the raw path but requests sent the path
+            percent-encoded on the wire. IA's SigV2 verifier rebuilds
+            the StringToSign from the encoded wire request, so keys
+            containing spaces/brackets failed with 403 SignatureDoes
+            NotMatch (simple keys like `_s3v2diag.bin` happened to work).
+            The path is now percent-encoded (preserving '/') before
+            signing and before URL construction.
+   - IMPROVED: initiate/upload_part/complete errors now print the exact
+            StringToSign we sent and the full IA error body.
+
+[2026-10-08] VERSION 6.34 UPDATE
+   - FIXED: IAS3Client cached the 307 storage-node redirect from the
+            preflight HEAD and reused it for the initiate POST. IA's
+            redirect body explicitly says to keep using the original
+            endpoint for future requests. Writes now always go to the
+            master; only GET/HEAD follow the 307 (once, without caching).
+   - FIXED: preflight HEAD now treats 307 as success (bucket exists on
+            a storage node) instead of caching the node.
+
+[2026-10-08] VERSION 6.33 UPDATE
+   - FIXED: IAS3Client._sign_v2 sent both Date and x-amz-date headers,
+            but signed with an empty Date line (SigV2 rule: x-amz-date
+            supersedes Date). IA's verifier rebuilt the StringToSign with
+            the wire Date header and returned 403 SignatureDoesNotMatch.
+            The Date header is no longer sent; only x-amz-date is used.
+
+[2026-10-08] VERSION 6.32 UPDATE
+   - FIXED: v6.31 accidentally deleted _filter_ia_s3_dns (it lived between
+            multipart_upload_worker and handle_dji_lrf, and v6.31 replaced
+            that whole span). Function restored; DNS pinning active again.
+   - FIXED: IAS3Client doubled the path when following IA's 307 redirect,
+            because Location already contains the bucket path. Now only
+            scheme://host:port is extracted from Location.
+
+[2026-10-08] VERSION 6.31 UPDATE
+   - REWRITTEN: multipart_upload_worker no longer uses boto3/botocore.
+                IA's S3 endpoint requires SigV2 signatures (rejects SigV4),
+                and botocore's S3 region-redirect handler mishandled IA's
+                307 storage-node redirects, causing an infinite loop.
+   - ADDED: IAS3Client: minimal SigV2 signer + manual 307 follow with
+            per-bucket storage-node caching. Supports initiate/upload_part/
+            complete/abort. Parallel part uploads via ThreadPoolExecutor.
+   - ADDED: Automatic chunk-size scaling for S3's 10,000-part limit.
+   - ADDED: Post-upload server-side verification before recording success.
+   - MODIFIED: Progress bar tracks server-confirmed bytes, not local reads.
+
+[2026-10-08] VERSION 6.30 UPDATE
+   - FIXED: s3.us.archive.org occasionally resolves to a dead IP that
+            blackholes TCP/443. New startup DNS filter probes each IP
+            and monkey-patches socket.getaddrinfo to return only the
+            reachable ones. Self-heals as IA rotates IPs.
+   - FIXED: boto3 client now sets connect_timeout=30 and read_timeout=120
+            with retries max_attempts=2, so stuck connects fail in
+            seconds instead of hanging for many minutes.
+   - ADDED: Preflight list_objects_v2 before each multipart PUT to
+            surface unreachable endpoints at startup.
+   - FIXED: Ctrl+C could not interrupt blocked network calls on Windows.
+            socket.setdefaulttimeout(30) now applies at import time, and
+            a SIGINT handler sets shutdown_event immediately.
+   - ADDED: botocore debug logging when -v is passed.
+
+[2026-10-08] VERSION 6.27 UPDATE
+   - FIXED: TransferConfig was constructed with 'max_request_queue_size',
+            which is not a valid parameter; the real name is 'max_io_queue'.
+            This caused multipart uploads to fail immediately on v6.25/v6.26.
+   - MODIFIED: TransferConfig construction now introspects s3transfer at
+            runtime and only passes max_io_queue when the installed version
+            actually accepts it. Future parameter renames won't break us.
+
+[2026-10-08] VERSION 6.26 UPDATE
+   - FIXED: Main loop discarded future results, so a worker could return
+            success/failure without recording either. Every future is now
+            read, exceptions captured, and unrecorded failures logged.
+   - FIXED: multipart_upload_worker could return in <1s without uploading.
+            It now verifies (a) the reader consumed the full file, and
+            (b) the file appears on the server with the correct size.
+   - ADDED: MULTIPART_VERIFY_TIMEOUT (default 300s) for post-upload
+            server-side confirmation.
+   - ADDED: _SilentReader tracks bytes_read for sanity checks.
+   - ADDED: _progress_callback wrapped so a callback error cannot abort
+            the upload.
+
+[2026-10-08] VERSION 6.25 UPDATE
+   - FIXED: Multipart progress bar was tracking local disk read speed, not
+            network upload speed, because s3transfer's use_threads=True mode
+            runs the file reader ahead of the network uploaders.
+   - MODIFIED: Progress is now driven by the Callback= parameter of
+            s3.upload_fileobj, which fires after each part is confirmed
+            uploaded by the server.
+   - ADDED: max_request_queue_size capped at max_concurrency*2 to prevent
+            s3transfer from buffering many GB of read-ahead data in RAM.
+
+[2026-10-08] VERSION 6.24 UPDATE
+   - FIXED: 'S3Transfer' object has no attribute 'upload_fileobj' on
+            s3transfer >= 0.19.x. Switched to the stable client-level
+            s3.upload_fileobj() API, which is compatible across all boto3
+            versions and delegates to whichever transfer backend is current.
+
+[2026-10-08] VERSION 6.23 UPDATE
+   - MODIFIED: Multipart upload is now ON BY DEFAULT. Use --no-multipart to
+               disable it. --multipart is kept as a no-op for compatibility.
+   - MODIFIED: Default multipart threshold lowered 256 MB -> 128 MB.
+   - FIXED: New-item first file now honors multipart routing; previously it
+            was hard-coded to single-stream upload_worker even for huge files.
+   - FIXED: multipart_upload_worker now attaches full metadata via
+            item.modify_metadata() after the S3 PUT, so list-valued fields
+            (subject, format, relation) are preserved.
+   - ADDED: Automatic chunk-size scaling when file/chunk would exceed S3's
+            10,000-part limit (up to 5 GB per part).
+
+[2026-10-08] VERSION 6.22 UPDATE
+   - ADDED: S3 multipart upload path for large files (--multipart flag).
+           Large files are split into parallel chunks and reassembled into a
+           single object on Archive.org's servers.
+   - ADDED: --chunk-size MB flag (default 64 MB per part).
+   - ADDED: --multipart-threshold MB flag (default 256 MB).
+   - ADDED: --multipart-concurrency N flag (default 4 parallel parts/file).
+   - ADDED: multipart_upload_worker() using boto3 + IA's S3 API.
+   - MODIFIED: worker_wrapper now routes files by size.
+
 [2026-08-22] VERSION 6.21 UPDATE
    - FIXED: Added explicit timeout and try/except block to initial `get_item()` call to prevent crashes when Archive.org's metadata API is slow.
    - CLEANUP: Removed leftover unreachable GUI code inside the metadata collection block.
@@ -160,7 +281,22 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# --- v6.29: global socket timeout so blocked connects raise and can be
+# interrupted by Ctrl+C on Windows (which otherwise ignores SIGINT during
+# a blocking connect()). Must run before boto3/requests load.
+import socket as _socket
+_socket.setdefaulttimeout(30)
+
 from internetarchive import get_item, get_session, upload
+
+# --- OPTIONAL: boto3 for S3 multipart uploads (v6.22) ---
+try:
+    import boto3
+    from boto3.s3.transfer import TransferConfig, S3Transfer
+    from botocore.config import Config as BotoConfig
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
 
 # Import iazip's process_directory for -z/--zip flag integration
 try:
@@ -195,6 +331,7 @@ shutdown_event = threading.Event()
 results_lock = threading.Lock()
 final_results = {"success": [], "failed": [], "cancelled": []}
 VERBOSE = False  # Set by --verbose flag
+_MULTIPART_ENABLED = False  # v6.23: on by default; --no-multipart disables
 COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", "zxx"]
 _skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
 
@@ -205,6 +342,13 @@ RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
 CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 300
+
+# --- MULTIPART UPLOAD DEFAULTS (v6.23) ---
+DEFAULT_MULTIPART_THRESHOLD_MB = 128  # Files >= this size use S3 multipart
+DEFAULT_CHUNK_SIZE_MB = 64            # Size of each multipart chunk
+DEFAULT_MULTIPART_CONCURRENCY = 4     # Parallel chunk uploads per file
+MULTIPART_VERIFY_TIMEOUT = 300        # Seconds to wait for server-side confirm
+IA_S3_ENDPOINT = "https://s3.us.archive.org"
 
 
 def vlog(msg):
@@ -1271,6 +1415,493 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
         return (False, "Max Retries Exceeded (Rate Limit)")
 
 
+class IAS3Client:
+    """
+    v6.31: Minimal SigV2 S3 client for Internet Archive's endpoint.
+
+    - Signs with AWS SigV2 (IA does not accept SigV4).
+    - Follows the 307 storage-node redirect once per bucket, then caches it.
+    - Supports multipart uploads: initiate / upload_part / complete / abort.
+    - Depends only on `requests`, which is already imported by iaupload.
+
+    The canonical resource used in signing is path + query only; the host
+    is not signed. That's why the same Authorization header works on both
+    s3.us.archive.org and the storage node it redirects to.
+    """
+
+    ENDPOINT = "https://s3.us.archive.org"
+
+    def __init__(self, access_key, secret_key, timeout=(15, 300)):
+        import requests
+        from requests.adapters import HTTPAdapter
+
+        self.ak = access_key
+        self.sk = secret_key
+        self.timeout = timeout
+        self._node_cache = {}
+        self._session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
+    def _sign_v2(self, method, path, query="", content_md5="",
+                 content_type="", extra_amz=None):
+        import base64, hashlib, hmac
+        from email.utils import formatdate
+
+        date_str = formatdate(usegmt=True)
+        amz = dict(extra_amz or {})
+        amz["x-amz-date"] = date_str
+
+        canon_amz = "".join(
+            f"{k.lower()}:{v}\n" for k, v in sorted(amz.items())
+        )
+        canon_res = path + (f"?{query}" if query else "")
+
+        # SigV2 string-to-sign: Date line is EMPTY when x-amz-date is set.
+        string_to_sign = (
+            f"{method}\n"
+            f"{content_md5}\n"
+            f"{content_type}\n"
+            f"\n"
+            f"{canon_amz}"
+            f"{canon_res}"
+        )
+        # v6.35: stash the exact StringToSign for error reporting.
+        self._last_string_to_sign = string_to_sign
+
+        sig = base64.b64encode(
+            hmac.new(self.sk.encode(), string_to_sign.encode(),
+                     hashlib.sha1).digest()
+        ).decode()
+
+        # SigV2 rule: when x-amz-date is present, the Date header must be
+        # omitted, and the StringToSign's Date line must be empty (which it
+        # already is above). Sending both caused IA's verifier to rebuild a
+        # different StringToSign and reject with 403 SignatureDoesNotMatch.
+        headers = {
+            "Authorization": f"AWS {self.ak}:{sig}",
+        }
+        headers.update(amz)
+        if content_md5:
+            headers["Content-MD5"] = content_md5
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
+
+    def _do(self, method, url, path, query, data, content_type, stream):
+        headers = self._sign_v2(
+            method, path, query, content_type=content_type
+        )
+        return self._session.request(
+            method, url, headers=headers, data=data,
+            allow_redirects=False, timeout=self.timeout, stream=stream,
+        )
+
+    def request(self, method, path, query="", data=b"", content_type="",
+                stream=False):
+        """
+        v6.35: percent-encode the path ourselves (preserving '/') and use
+        the encoded form for BOTH the signature and the URL. IA's SigV2
+        verifier rebuilds the StringToSign from the wire request, which is
+        percent-encoded; signing the raw path produced 403
+        SignatureDoesNotMatch on any key containing spaces or brackets.
+
+        Writes always go to the master endpoint. IA redirects only reads
+        (GET/HEAD) to storage nodes via 307, and the redirect body tells
+        us to keep using the original endpoint for future requests.
+        """
+        from urllib.parse import quote, urlparse
+        enc_path = quote(path, safe="/")
+
+        url = self.ENDPOINT + enc_path + (f"?{query}" if query else "")
+        r = self._do(method, url, enc_path, query, data, content_type, stream)
+
+        if r.status_code == 307 and method in ("GET", "HEAD"):
+            loc = r.headers.get("location")
+            if not loc:
+                return r
+            parsed = urlparse(loc)
+            node_root = f"{parsed.scheme}://{parsed.netloc}"
+            url = node_root + enc_path + (f"?{query}" if query else "")
+            r = self._do(method, url, enc_path, query, data,
+                         content_type, stream)
+
+        return r
+
+    def initiate_multipart(self, bucket, key, content_type=""):
+        r = self.request("POST", f"/{bucket}/{key}", query="uploads",
+                         content_type=content_type)
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"initiate failed: HTTP {r.status_code}\n"
+                f"--- StringToSign sent ---\n"
+                f"{getattr(self, '_last_string_to_sign', '(none)')}\n"
+                f"--- IA response ---\n"
+                f"{r.text[:1200]}"
+            )
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(r.content)
+        except Exception as e:
+            raise RuntimeError(f"initiate parse failed: {e}")
+        for el in root.iter():
+            if el.tag.endswith("UploadId") and el.text:
+                return el.text
+        raise RuntimeError(f"no UploadId in response: {r.text[:200]}")
+
+    def upload_part(self, bucket, key, upload_id, part_number, data):
+        from urllib.parse import quote
+        q = f"partNumber={part_number}&uploadId={quote(upload_id, safe='')}"
+        r = self.request("PUT", f"/{bucket}/{key}", query=q, data=data)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(
+                f"part {part_number} failed: HTTP {r.status_code}\n"
+                f"--- StringToSign sent ---\n"
+                f"{getattr(self, '_last_string_to_sign', '(none)')}\n"
+                f"--- IA response ---\n"
+                f"{r.text[:1200]}"
+            )
+        etag = r.headers.get("etag") or r.headers.get("ETag")
+        if not etag:
+            raise RuntimeError(f"part {part_number} returned no ETag")
+        return etag.strip('"')
+
+    def complete_multipart(self, bucket, key, upload_id, parts):
+        from urllib.parse import quote
+        q = f"uploadId={quote(upload_id, safe='')}"
+        xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+               '<CompleteMultipartUpload>')
+        for pnum, etag in sorted(parts):
+            xml += (f"<Part><PartNumber>{pnum}</PartNumber>"
+                    f"<ETag>\"{etag}\"</ETag></Part>")
+        xml += "</CompleteMultipartUpload>"
+        r = self.request("POST", f"/{bucket}/{key}", query=q,
+                         data=xml.encode(),
+                         content_type="application/xml")
+        if r.status_code not in (200, 201):
+            raise RuntimeError(
+                f"complete failed: HTTP {r.status_code}\n"
+                f"--- StringToSign sent ---\n"
+                f"{getattr(self, '_last_string_to_sign', '(none)')}\n"
+                f"--- IA response ---\n"
+                f"{r.text[:1200]}"
+            )
+        return r
+
+    def abort_multipart(self, bucket, key, upload_id):
+        from urllib.parse import quote
+        q = f"uploadId={quote(upload_id, safe='')}"
+        try:
+            self.request("DELETE", f"/{bucket}/{key}", query=q)
+        except Exception:
+            pass
+
+
+def multipart_upload_worker(
+    identifier,
+    file_data,
+    metadata=None,
+    position=0,
+    session=None,
+    chunk_size_mb=DEFAULT_CHUNK_SIZE_MB,
+    max_concurrency=DEFAULT_MULTIPART_CONCURRENCY,
+):
+    """
+    v6.31: Upload a large file using IA's S3 multipart API with SigV2
+    signing and manual 307-follow, bypassing boto3/botocore entirely.
+
+    Same signature/return contract as upload_worker, so the caller's
+    thread-pool and result-recording logic works unchanged.
+    """
+    remote_key, local_path = file_data
+
+    if shutdown_event.is_set():
+        record_result("cancelled", remote_key)
+        return (False, "Cancelled by user")
+
+    file_size = os.path.getsize(local_path)
+    if file_size == 0:
+        record_result("cancelled", remote_key)
+        return (False, "Skipped empty file (0 bytes)")
+
+    # --- credentials (same fallback chain as before) ---
+    access_key = os.environ.get("IAS3_ACCESS_KEY")
+    secret_key = os.environ.get("IAS3_SECRET_KEY")
+    if not access_key and session is not None:
+        access_key = getattr(session, "access_key", None)
+    if not secret_key and session is not None:
+        secret_key = getattr(session, "secret_key", None)
+    if not access_key or not secret_key:
+        err = "missing IA S3 credentials (run 'ia configure')"
+        tqdm.write(f"[multipart] {remote_key}: {err}")
+        record_result("failed", f"{remote_key} ({err})")
+        return (False, err)
+
+    display_name = remote_key
+    if len(display_name) > 20:
+        display_name = "..." + display_name[-17:]
+
+    vlog(f"MULTIPART START for '{remote_key}' ({file_size:,} bytes, "
+         f"chunk={chunk_size_mb}MB, concurrency={max_concurrency})")
+
+    # --- auto-scale chunk size to respect S3's 10,000-part limit ---
+    MAX_S3_PARTS = 10000
+    chunk_bytes = max(5, chunk_size_mb) * 1024 * 1024
+    min_chunk_bytes = -(-file_size // MAX_S3_PARTS)  # ceil div
+    if chunk_bytes < min_chunk_bytes:
+        new_mb = -(-min_chunk_bytes // (1024 * 1024))
+        tqdm.write(
+            f"[multipart] {remote_key}: file is {file_size/1e9:.1f} GB; "
+            f"auto-scaling chunk {chunk_size_mb} MB -> {new_mb} MB"
+        )
+        chunk_bytes = new_mb * 1024 * 1024
+    n_parts = -(-file_size // chunk_bytes)  # ceil div
+    vlog(f"  chunk_bytes={chunk_bytes:,}  n_parts={n_parts}")
+
+    client = IAS3Client(access_key, secret_key)
+
+    # --- preflight: HEAD bucket (read; 307 is expected and OK) ---
+    try:
+        pf_t0 = time.time()
+        vlog(f"  preflight: HEAD /{identifier} ...")
+        pf = client.request("HEAD", f"/{identifier}")
+        # 200/204 = bucket answered directly.
+        # 307 = master redirected us to a storage node; request() followed it.
+        if pf.status_code not in (200, 204, 307):
+            raise RuntimeError(f"HTTP {pf.status_code}")
+        vlog(f"  preflight OK in {time.time()-pf_t0:.2f}s "
+             f"(status={pf.status_code})")
+    except Exception as e_pf:
+        err = f"preflight failed: {e_pf}"
+        tqdm.write(f"[multipart] {remote_key}: {err}")
+        record_result("failed", f"{remote_key} ({err})")
+        return (False, err)
+
+    upload_id = None
+    parts = []
+
+    try:
+        # --- initiate ---
+        vlog(f"  initiate multipart ...")
+        t_init = time.time()
+        upload_id = client.initiate_multipart(identifier, remote_key)
+        vlog(f"  upload_id={upload_id}  ({time.time()-t_init:.2f}s)")
+
+        # --- upload parts (parallel) with progress ---
+        with tqdm(
+            total=file_size, unit="B", unit_scale=True, unit_divisor=1024,
+            desc=display_name, position=position, leave=False,
+            dynamic_ncols=True,
+            bar_format=("{desc}: {percentage:3.0f}%|{bar}| "
+                        "{n_fmt}/{total_fmt} | Speed: {rate_fmt} | "
+                        "Time: {elapsed}<{remaining}"),
+        ) as bar:
+            pbar_lock = threading.Lock()
+
+            def upload_one(part_num, offset, size):
+                if shutdown_event.is_set():
+                    return None
+                with open(local_path, "rb") as f:
+                    f.seek(offset)
+                    data = f.read(size)
+                etag = client.upload_part(
+                    identifier, remote_key, upload_id, part_num, data
+                )
+                with pbar_lock:
+                    bar.update(size)
+                vlog(f"  part {part_num}/{n_parts} OK "
+                     f"({size:,} bytes, etag={etag[:12]}...)")
+                return (part_num, etag)
+
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                futures = {}
+                for i in range(n_parts):
+                    pnum = i + 1
+                    offset = i * chunk_bytes
+                    size = min(chunk_bytes, file_size - offset)
+                    futures[executor.submit(
+                        upload_one, pnum, offset, size
+                    )] = pnum
+
+                for fut in as_completed(futures):
+                    if shutdown_event.is_set():
+                        break
+                    res = fut.result()  # propagates exceptions
+                    if res is not None:
+                        parts.append(res)
+
+        if shutdown_event.is_set():
+            if upload_id:
+                client.abort_multipart(identifier, remote_key, upload_id)
+            record_result("cancelled", remote_key)
+            return (False, "Cancelled")
+
+        if len(parts) != n_parts:
+            raise RuntimeError(
+                f"only {len(parts)}/{n_parts} parts uploaded"
+            )
+
+        # --- complete ---
+        vlog(f"  completing multipart ({len(parts)} parts) ...")
+        t_complete = time.time()
+        client.complete_multipart(identifier, remote_key, upload_id, parts)
+        vlog(f"  complete returned ({time.time()-t_complete:.2f}s); "
+             f"server may still be reassembling")
+
+        # --- verify on the server before declaring success ---
+        tqdm.write(
+            f"[multipart] Data sent for {remote_key}; "
+            f"waiting for server-side confirmation "
+            f"(up to {MULTIPART_VERIFY_TIMEOUT}s)..."
+        )
+        deadline = time.time() + MULTIPART_VERIFY_TIMEOUT
+        last_seen_size = None
+        verified = False
+        attempt = 0
+        while time.time() < deadline:
+            if shutdown_event.is_set():
+                record_result("cancelled", remote_key)
+                return (False, "Cancelled")
+            attempt += 1
+            try:
+                vi = get_item(
+                    identifier, archive_session=session,
+                    request_kwargs={
+                        "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
+                    },
+                )
+                for _f in vi.files:
+                    if _f.get("name") == remote_key:
+                        last_seen_size = _f.get("size")
+                        if (last_seen_size is not None
+                                and str(last_seen_size) == str(file_size)):
+                            verified = True
+                            break
+                if verified:
+                    break
+            except Exception as e_v:
+                vlog(f"  verify attempt {attempt} exception: {e_v}")
+            vlog(f"  verify attempt {attempt}: last_seen_size="
+                 f"{last_seen_size} (expected {file_size})")
+            time.sleep(5)
+
+        if not verified:
+            err = (f"upload sent but file not visible after "
+                   f"{MULTIPART_VERIFY_TIMEOUT}s "
+                   f"(last size seen: {last_seen_size}, "
+                   f"expected: {file_size})")
+            tqdm.write(f"[multipart] {remote_key}: {err}")
+            record_result("failed", f"{remote_key} ({err})")
+            return (False, err)
+
+        vlog(f"MULTIPART VERIFIED on server for '{remote_key}'")
+
+        # --- metadata ---
+        if metadata:
+            try:
+                vlog(f"  applying metadata via modify_metadata() ...")
+                md_item = get_item(
+                    identifier, archive_session=session,
+                    request_kwargs={
+                        "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
+                    },
+                )
+                md_item.modify_metadata(metadata)
+            except Exception as e_md:
+                tqdm.write(f"[multipart] {remote_key}: data OK but "
+                           f"metadata failed: {e_md}")
+                record_result("failed",
+                              f"{remote_key} (metadata: {e_md})")
+                return (False, f"metadata: {e_md}")
+
+        vlog(f"MULTIPART SUCCESS for '{remote_key}'")
+        record_result("success", remote_key)
+        return (True, remote_key)
+
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        tqdm.write(f"[multipart] {remote_key}: {err}")
+        vlog(f"  multipart exception: {err}")
+        if upload_id:
+            try:
+                client.abort_multipart(identifier, remote_key, upload_id)
+            except Exception:
+                pass
+        record_result("failed", f"{remote_key} (multipart: {err})")
+        return (False, err)
+
+
+def _filter_ia_s3_dns(host="s3.us.archive.org", port=443, probe_timeout=3):
+    """
+    s3.us.archive.org sometimes resolves to multiple IPs, some of which
+    blackhole TCP/443. Probe each resolved IP and monkey-patch
+    socket.getaddrinfo to return only reachable ones for that host.
+
+    Idempotent. No-op if all IPs are reachable or none are.
+    """
+    import socket as _sock
+
+    try:
+        infos = _sock.getaddrinfo(host, port, proto=_sock.IPPROTO_TCP)
+    except Exception as e:
+        print(f"[dns-filter] {host}: resolution failed: {e}")
+        return
+
+    seen = set()
+    candidates = []
+    for info in infos:
+        ip = info[4][0]
+        if ip not in seen:
+            seen.add(ip)
+            candidates.append((ip, info))
+
+    good_infos = []
+    bad_ips = []
+    for ip, info in candidates:
+        try:
+            s = _sock.create_connection((ip, port), timeout=probe_timeout)
+            s.close()
+            good_infos.append(info)
+        except Exception:
+            bad_ips.append(ip)
+
+    good_ips = [i[4][0] for i in good_infos]
+
+    if not good_infos:
+        print(
+            f"[dns-filter] WARNING: no reachable IPs for {host} "
+            f"(probed: {[ip for ip, _ in candidates]})"
+        )
+        return
+
+    if not bad_ips:
+        return
+
+    print(
+        f"[dns-filter] {host}: pinning to reachable IP(s) {good_ips} "
+        f"(dropped dead: {bad_ips})"
+    )
+
+    _orig_gai = _sock.getaddrinfo
+    _good_set = set(good_ips)
+    _patched_marker = "_iaupload_v630_patched"
+
+    if getattr(_orig_gai, _patched_marker, False):
+        return
+
+    def _patched_gai(host_arg, port_arg, family=0, type=0, proto=0, flags=0):
+        results = _orig_gai(host_arg, port_arg, family, type, proto, flags)
+        if host_arg == host:
+            filtered = [r for r in results if r[4][0] in _good_set]
+            if filtered:
+                return filtered
+        return results
+
+    setattr(_patched_gai, _patched_marker, True)
+    _sock.getaddrinfo = _patched_gai
+
+
 def handle_dji_lrf(folder_path, auto_confirm=False):
     """
     Finds .LRF files, renames them to _s.MP4 for Archive.org compatibility.
@@ -1344,6 +1975,25 @@ def safe_rmtree(path, retries=5, delay=1.0):
 
 
 def main():
+    # --- v6.29: SIGINT handler ---
+    try:
+        import signal as _signal
+
+        def _sigint_handler(signum, frame):
+            print("\n\n!!! CTRL+C RECEIVED !!!")
+            print("Setting shutdown flag; in-flight calls will abort shortly...")
+            shutdown_event.set()
+
+        _signal.signal(_signal.SIGINT, _sigint_handler)
+    except Exception as _sig_err:
+        print(f"Warning: could not install SIGINT handler: {_sig_err}")
+
+    # --- v6.30: filter dead s3.us.archive.org IPs before any S3 call ---
+    try:
+        _filter_ia_s3_dns()
+    except Exception as _dns_err:
+        print(f"[dns-filter] setup error (continuing): {_dns_err}")
+
     # --- ARGUMENT PARSING ---
     parser = argparse.ArgumentParser(description="Archive.org Smart Uploader & Syncer")
     parser.add_argument("folder", nargs="?", help="Path to local folder")
@@ -1392,16 +2042,54 @@ def main():
         action="store_true",
         help="Enable detailed debug logging for each upload step",
     )
+    parser.add_argument(
+        "--no-multipart",
+        action="store_true",
+        help="Disable S3 multipart uploads (use single-stream uploads for all files)",
+    )
+    # Kept for backwards compatibility; multipart is already the default.
+    parser.add_argument(
+        "--multipart",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE_MB,
+        help=f"Chunk size in MB for multipart uploads (default: {DEFAULT_CHUNK_SIZE_MB})",
+    )
+    parser.add_argument(
+        "--multipart-threshold",
+        type=int,
+        default=DEFAULT_MULTIPART_THRESHOLD_MB,
+        help=f"Files >= this many MB use multipart (default: {DEFAULT_MULTIPART_THRESHOLD_MB})",
+    )
+    parser.add_argument(
+        "--multipart-concurrency",
+        type=int,
+        default=DEFAULT_MULTIPART_CONCURRENCY,
+        help=f"Parallel chunk uploads per large file (default: {DEFAULT_MULTIPART_CONCURRENCY})",
+    )
     args = parser.parse_args()
 
-    global VERBOSE
+    global VERBOSE, _MULTIPART_ENABLED
     VERBOSE = args.verbose
+
+    # v6.23: multipart is on by default; --no-multipart disables it.
+    _MULTIPART_ENABLED = (not args.no_multipart) and BOTO3_AVAILABLE
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.21) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.35) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
+    if _MULTIPART_ENABLED:
+        print(f"--- Multipart: ON  (threshold {args.multipart_threshold} MB, chunk {args.chunk_size} MB, {args.multipart_concurrency} parts/file) ---")
+    elif args.no_multipart:
+        print(f"--- Multipart: OFF (--no-multipart) ---")
+    else:
+        print(f"--- Multipart: OFF (boto3 not installed; run: pip install boto3) ---")
     if VERBOSE:
         print(f"--- Verbose: ON ---")
     if args.sync:
@@ -1790,9 +2478,32 @@ def main():
                 # Upload the first (smallest) file to initialize the item
                 first_file = files_to_upload[0]
                 vlog(f"Creating new item with first file: '{first_file[0]}'")
-                success, msg = upload_worker(
-                    identifier, first_file, metadata, position=1, session=custom_session
-                )
+
+                # --- v6.23: honor multipart for the first file of a new item too ---
+                first_size = os.path.getsize(first_file[1])
+                _first_threshold = args.multipart_threshold * 1024 * 1024
+                _first_use_mp = _MULTIPART_ENABLED and first_size >= _first_threshold
+
+                if _first_use_mp:
+                    vlog(
+                        f"Creating new item via MULTIPART with first file: "
+                        f"'{first_file[0]}' ({first_size:,} bytes)"
+                    )
+                    success, msg = multipart_upload_worker(
+                        identifier,
+                        first_file,
+                        metadata,
+                        position=1,
+                        session=custom_session,
+                        chunk_size_mb=args.chunk_size,
+                        max_concurrency=args.multipart_concurrency,
+                    )
+                else:
+                    success, msg = upload_worker(
+                        identifier, first_file, metadata,
+                        position=1, session=custom_session,
+                    )
+
                 main_bar.update(1)
                 if not success:
                     main_bar.close()
@@ -1814,6 +2525,24 @@ def main():
                     slot = slot_queue.get()
                     vlog(f"worker_wrapper: got slot {slot} for '{f_data[0]}'")
                     try:
+                        # --- v6.23: multipart is on by default ---
+                        f_size = os.path.getsize(f_data[1])
+                        threshold_bytes = args.multipart_threshold * 1024 * 1024
+                        use_multipart = _MULTIPART_ENABLED and f_size >= threshold_bytes
+                        if use_multipart:
+                            vlog(
+                                f"worker_wrapper: routing '{f_data[0]}' "
+                                f"({f_size:,} bytes) to multipart_upload_worker"
+                            )
+                            return multipart_upload_worker(
+                                identifier,
+                                f_data,
+                                None,
+                                position=slot,
+                                session=custom_session,
+                                chunk_size_mb=args.chunk_size,
+                                max_concurrency=args.multipart_concurrency,
+                            )
                         return upload_worker(
                             identifier,
                             f_data,
@@ -1850,16 +2579,46 @@ def main():
                                 done_batch.add(future)
                                 completed_count += 1
                                 fdata = future_to_file[future]
+
+                                # --- v6.26: read result; surface silent failures ---
+                                try:
+                                    res = future.result(timeout=0.1)
+                                except Exception as e_fut:
+                                    tqdm.write(
+                                        f"[error] Worker raised for {fdata[0]}: {e_fut}"
+                                    )
+                                    record_result(
+                                        "failed",
+                                        f"{fdata[0]} (worker exception: {e_fut})",
+                                    )
+                                else:
+                                    if isinstance(res, tuple) and len(res) == 2:
+                                        ok, msg = res
+                                        if not ok:
+                                            already = (
+                                                any(
+                                                    fdata[0] in x
+                                                    for x in final_results["failed"]
+                                                )
+                                                or any(
+                                                    fdata[0] in x
+                                                    for x in final_results["cancelled"]
+                                                )
+                                            )
+                                            if not already:
+                                                record_result(
+                                                    "failed",
+                                                    f"{fdata[0]} ({msg})",
+                                                )
+
                                 vlog(
-                                    f"Future completed for '{fdata[0]}' ({completed_count}/{len(future_to_file)})"
+                                    f"Future completed for '{fdata[0]}' "
+                                    f"({completed_count}/{len(future_to_file)})"
                                 )
                                 main_bar.update(1)
-                                # Break out after processing done ones to re-check liveness
                                 if time.time() - last_liveness >= 60:
                                     break
                         except TimeoutError:
-                            # Timeout fired with no new completions — this is expected,
-                            # fall through to liveness reporting below
                             pass
 
                         pending -= done_batch
