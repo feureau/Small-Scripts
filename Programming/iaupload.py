@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.39 (Resumable Multipart Uploads)
+VERSION: 6.44 (Two-Stage Ctrl+C)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,53 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-09] VERSION 6.44 UPDATE
+   - FIXED: Ctrl+C could not close the script while worker threads
+            were stuck inside blocking socket calls. Added two-stage
+            Ctrl+C: first press = graceful, second press within 3s =
+            os._exit(1) bypassing thread joins.
+   - MODIFIED: (if v6.43 semaphore present) _inflight_slot() now
+            polls shutdown_event with 1s timeout instead of blocking
+            on sem.acquire() indefinitely.
+
+[2026-10-09] VERSION 6.43 UPDATE
+   - ADDED: Global in-flight request semaphore. All HTTP requests to
+            archive.org pass through a single shared cap, preventing
+            stacked concurrency (-t N * --multipart-concurrency M)
+            from tripping IA's per-account rate limit
+            (accesskey_tasks_queued).
+   - ADDED: --max-inflight N flag (default 4).
+   - MODIFIED: DEFAULT_THREADS 6 -> 4.
+   - MODIFIED: DEFAULT_MULTIPART_CONCURRENCY 4 -> 2.
+   - MODIFIED: Banner shows the in-flight cap.
+
+[2026-10-09] VERSION 6.41 UPDATE
+   - FIXED: Scan and orphan-detection now skip *.iaupload.json and
+            *.iaupload.json.tmp resume-state files. Previously these
+            were queued as new uploads on the next run, hit IA's
+            per-account rate limit, and stalled all real uploads.
+   - FIXED: IAS3Client.request() now recognizes accesskey_tasks_queued
+            and 'rationed' as rate-limit indicators (was only matching
+            bucket_tasks_queued and 'reduce your request rate').
+   - FIXED: Multipart uploads that complete successfully (HTTP 200 on
+            CompleteMultipartUpload) are now recorded as success
+            immediately. Removed the 300s server-side visibility poll
+            which was falsely failing genuinely-uploaded files and
+            causing full re-uploads on the next run.
+   - MODIFIED: _MULTIPART_ENABLED is no longer gated on boto3 presence
+            (multipart has used raw requests since v6.31).
+   - MODIFIED: Banner string for boto3-not-installed removed.
+
+[2026-10-09] VERSION 6.40 UPDATE
+   - ADDED: Automatic chunk-size selection based on file size and
+            concurrency (~40 parts per thread, clamped 8 MB - 2 GB,
+            rounded up to a power-of-two MB). --chunk-size N overrides.
+   - ADDED: SliceReader streams each part from disk. Peak memory per
+            thread drops from chunk_size (~1 GB) to ~8 KB, so large
+            chunks are safe on any machine.
+   - MODIFIED: --chunk-size default is now None (auto). Banner shows
+            'chunk auto' when omitted.
+
 [2026-10-09] VERSION 6.39 UPDATE
    - ADDED: Resumable multipart uploads. UploadId and confirmed part
             ETags are persisted to <local_file>.iaupload.json. On the
@@ -300,6 +347,7 @@ CHANGE LOG
 """
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import io
@@ -370,7 +418,7 @@ COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", 
 _skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
 
 # --- CONFIGURATION DEFAULTS ---
-DEFAULT_THREADS = 6
+DEFAULT_THREADS = 4  # v6.43: lowered from 6
 MAX_RETRIES = 20
 RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
@@ -379,14 +427,59 @@ READ_TIMEOUT = 300
 
 # --- MULTIPART UPLOAD DEFAULTS (v6.23) ---
 DEFAULT_MULTIPART_THRESHOLD_MB = 128  # Files >= this size use S3 multipart
-DEFAULT_CHUNK_SIZE_MB = 64            # Size of each multipart chunk
-DEFAULT_MULTIPART_CONCURRENCY = 4     # Parallel chunk uploads per file
+DEFAULT_CHUNK_SIZE_MB = None          # v6.40: None = auto-size
+DEFAULT_MULTIPART_CONCURRENCY = 2     # v6.43: lowered from 4
 MULTIPART_VERIFY_TIMEOUT = 300        # Seconds to wait for server-side confirm
 PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
 RATE_LIMIT_MAX_RETRIES = 12           # v6.37: 503 SlowDown attempts
 RATE_LIMIT_BACKOFF_START = 30         # v6.37: initial 503 wait (s)
 RATE_LIMIT_BACKOFF_MAX = 300          # v6.37: cap 503 wait (s)
 IA_S3_ENDPOINT = "https://s3.us.archive.org"
+
+# --- v6.43: global in-flight request cap --------------------------------
+# Every HTTP call to archive.org goes through this semaphore. The goal is
+# to keep concurrent requests under IA's per-account rate limit, no matter
+# how many file/part threads the user configured. Retries do not hold a
+# slot while sleeping, so backoffs don't starve other requests.
+DEFAULT_MAX_INFLIGHT = 4
+_MAX_INFLIGHT = DEFAULT_MAX_INFLIGHT
+_inflight_sem = threading.BoundedSemaphore(_MAX_INFLIGHT)
+
+
+def _reset_inflight(max_n):
+    """v6.43: called from main() after arg parsing."""
+    global _inflight_sem, _MAX_INFLIGHT
+    try:
+        max_n = max(1, int(max_n))
+    except Exception:
+        max_n = DEFAULT_MAX_INFLIGHT
+    _MAX_INFLIGHT = max_n
+    _inflight_sem = threading.BoundedSemaphore(max_n)
+
+
+@contextlib.contextmanager
+def _inflight_slot():
+    """
+    Acquire a global wire slot for one HTTP request.
+
+    v6.44: uses a timeout so we can notice shutdown_event while waiting.
+    Without this, a thread blocked on sem.acquire() would ignore Ctrl+C
+    until a slot freed.
+    """
+    sem = _inflight_sem
+    if sem is None:
+        yield
+        return
+    got = False
+    while not got:
+        if shutdown_event.is_set():
+            raise RuntimeError("Cancelled by user (waiting for wire slot)")
+        got = sem.acquire(timeout=1.0)
+    try:
+        yield
+    finally:
+        sem.release()
+
 
 
 def vlog(msg):
@@ -1338,31 +1431,35 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
 
                 r = None
                 upload_start = time.time()
-                # Use the passed session if available to recycle connections
-                if session:
-                    # We must use the Item-level API to pass the session
-                    # 'session' here is expected to be an ArchiveSession
-                    vlog(f"  get_item('{identifier}') via session...")
-                    item = get_item(identifier, archive_session=session)
-                    vlog(f"  Calling item.upload() for '{remote_key}'...")
-                    r = item.upload(
-                        files=files_arg,
-                        metadata=metadata,
-                        verbose=False,
-                        retries=3,
-                        request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
-                    )
-                else:
-                    # Fallback to default global upload
-                    vlog(f"  Calling upload() (no session) for '{remote_key}'...")
-                    r = upload(
-                        identifier,
-                        files=files_arg,
-                        metadata=metadata,
-                        verbose=False,
-                        retries=3,
-                        request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
-                    )
+                # v6.43: single-stream upload holds ONE global in-flight slot.
+                # (Its internal HTTP is one long-lived connection, so treating
+                # the whole call as one slot matches actual wire usage.)
+                with _inflight_slot():
+                    # Use the passed session if available to recycle connections
+                    if session:
+                        # We must use the Item-level API to pass the session
+                        # 'session' here is expected to be an ArchiveSession
+                        vlog(f"  get_item('{identifier}') via session...")
+                        item = get_item(identifier, archive_session=session)
+                        vlog(f"  Calling item.upload() for '{remote_key}'...")
+                        r = item.upload(
+                            files=files_arg,
+                            metadata=metadata,
+                            verbose=False,
+                            retries=3,
+                            request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
+                        )
+                    else:
+                        # Fallback to default global upload
+                        vlog(f"  Calling upload() (no session) for '{remote_key}'...")
+                        r = upload(
+                            identifier,
+                            files=files_arg,
+                            metadata=metadata,
+                            verbose=False,
+                            retries=3,
+                            request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)},
+                        )
 
                 upload_elapsed = time.time() - upload_start
                 vlog(f"  upload() returned for '{remote_key}' in {upload_elapsed:.1f}s")
@@ -1599,10 +1696,12 @@ class IAS3Client:
         headers = self._sign_v2(
             method, path, query, content_type=content_type
         )
-        return self._session.request(
-            method, url, headers=headers, data=data,
-            allow_redirects=False, timeout=self.timeout, stream=stream,
-        )
+        # v6.43: acquire a global in-flight slot for the wire call.
+        with _inflight_slot():
+            return self._session.request(
+                method, url, headers=headers, data=data,
+                allow_redirects=False, timeout=self.timeout, stream=stream,
+            )
 
     def request(self, method, path, query="", data=b"", content_type="",
                 stream=False):
@@ -1657,11 +1756,16 @@ class IAS3Client:
                 return r
 
             body_lower = (r.text or "").lower()
-            is_slowdown = (
-                "slowdown" in body_lower
-                or "reduce your request rate" in body_lower
-                or "bucket_tasks_queued" in body_lower
-            )
+            # v6.41: IA uses several rate-limit phrasings. bucket_tasks_queued
+            # is per-bucket; accesskey_tasks_queued is per-account.
+            is_slowdown = any(s in body_lower for s in (
+                "slowdown",
+                "reduce your request rate",
+                "bucket_tasks_queued",
+                "accesskey_tasks_queued",
+                "rationed",
+                "too many requests",
+            ))
             if not is_slowdown:
                 # 503 for some other reason; don't blind-retry.
                 return r
@@ -1828,6 +1932,84 @@ class IAS3Client:
 args_ref = None
 
 
+def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=40,
+                  min_mb=8, max_mb=2048):
+    """
+    v6.40: pick a chunk size that balances three pressures:
+      - Few parts per file: keeps IA's bucket_tasks_queued counter happy.
+      - Short tail: with N threads, the last part per thread should be a
+        small fraction of total runtime.
+      - S3 hard limit: <= 10,000 parts per upload.
+
+    Aim for `concurrency * target_parts_per_thread` total parts, then
+    round up to the next power-of-two MB within [min_mb, max_mb].
+    """
+    try:
+        concurrency = max(1, int(concurrency))
+    except Exception:
+        concurrency = 1
+    try:
+        file_size = max(1, int(file_size))
+    except Exception:
+        return min_mb
+
+    target_total = max(1, concurrency * max(1, int(target_parts_per_thread)))
+    raw_mb = file_size // (target_total * 1024 * 1024)
+
+    if raw_mb <= min_mb:
+        return min_mb
+    if raw_mb >= max_mb:
+        return max_mb
+    # Round up to next power-of-two MB for tidiness.
+    mb = 1 << (int(raw_mb) - 1).bit_length()
+    return min(mb, max_mb)
+
+
+class SliceReader:
+    """
+    v6.40: file-like object exposing a bounded slice [offset, offset+size)
+    of a local file for streaming multipart PUTs.
+
+    When passed to requests, requests sees __len__ and sets Content-Length;
+    http.client then calls read(blocksize) in ~8 KB blocks. Peak memory
+    per thread is a few KB, so chunk_size can be large without OOM risk.
+
+    No tell() — we want requests to use __len__ and not try to compute
+    remaining bytes via tell().
+    """
+    def __init__(self, path, offset, size):
+        self._f = open(path, "rb")
+        try:
+            self._f.seek(offset)
+        except Exception:
+            self._f.close()
+            raise
+        self._remaining = int(size)
+        self._size = int(size)
+
+    def __len__(self):
+        return self._size
+
+    def read(self, n=-1):
+        if self._remaining <= 0:
+            return b""
+        if n is None or n < 0 or n > self._remaining:
+            n = self._remaining
+        data = self._f.read(n)
+        if not data:
+            # Unexpected EOF; return what we have and mark exhausted.
+            self._remaining = 0
+            return b""
+        self._remaining -= len(data)
+        return data
+
+    def close(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+
+
 def multipart_upload_worker(
     identifier,
     file_data,
@@ -1875,16 +2057,27 @@ def multipart_upload_worker(
     vlog(f"MULTIPART START for '{remote_key}' ({file_size:,} bytes, "
          f"chunk={chunk_size_mb}MB, concurrency={max_concurrency})")
 
-    # --- auto-scale chunk size to respect S3's 10,000-part limit ---
+    # --- v6.40: resolve chunk size (auto if --chunk-size not given) ---
     MAX_S3_PARTS = 10000
+    if not chunk_size_mb:
+        chunk_size_mb = auto_chunk_mb(file_size, max_concurrency)
+        tqdm.write(
+            f"[multipart] {remote_key}: auto chunk = "
+            f"{chunk_size_mb} MB "
+            f"(file {file_size/1e9:.2f} GB, {max_concurrency} threads)"
+        )
     chunk_bytes = max(5, chunk_size_mb) * 1024 * 1024
+    # Safety: if the resulting part count exceeds S3's 10,000 limit, scale
+    # the chunk size up until it fits.
     min_chunk_bytes = -(-file_size // MAX_S3_PARTS)  # ceil div
     if chunk_bytes < min_chunk_bytes:
         new_mb = -(-min_chunk_bytes // (1024 * 1024))
         tqdm.write(
             f"[multipart] {remote_key}: file is {file_size/1e9:.1f} GB; "
-            f"auto-scaling chunk {chunk_size_mb} MB -> {new_mb} MB"
+            f"scaling chunk {chunk_size_mb} MB -> {new_mb} MB "
+            f"(S3 10,000-part limit)"
         )
+        chunk_size_mb = new_mb
         chunk_bytes = new_mb * 1024 * 1024
     n_parts = -(-file_size // chunk_bytes)  # ceil div
     vlog(f"  chunk_bytes={chunk_bytes:,}  n_parts={n_parts}")
@@ -2049,17 +2242,13 @@ def multipart_upload_worker(
                 for attempt in range(1, PART_MAX_RETRIES + 1):
                     if shutdown_event.is_set():
                         raise RuntimeError("Cancelled by user")
+                    _reader = None
                     try:
-                        with open(local_path, "rb") as f:
-                            f.seek(offset)
-                            data = f.read(size)
-                        if len(data) != size:
-                            raise RuntimeError(
-                                f"short read: got {len(data)} of {size} bytes"
-                            )
+                        # v6.40: stream the part from disk (no RAM buffering).
+                        _reader = SliceReader(local_path, offset, size)
                         etag = client.upload_part(
                             identifier, remote_key, upload_id,
-                            part_num, data,
+                            part_num, _reader,
                         )
                         with pbar_lock:
                             bar.update(size)
@@ -2087,6 +2276,12 @@ def multipart_upload_worker(
                             time.sleep(min(1, backoff - slept))
                             slept += 1
                         backoff = min(backoff * 2, _PART_BACKOFF_MAX)
+                    finally:
+                        if _reader is not None:
+                            try:
+                                _reader.close()
+                            except Exception:
+                                pass
                 raise RuntimeError(
                     f"part {part_num} failed after {PART_MAX_RETRIES} "
                     f"attempts: {last_exc}"
@@ -2176,65 +2371,25 @@ def multipart_upload_worker(
         vlog(f"  complete returned ({time.time()-t_complete:.2f}s); "
              f"server may still be reassembling")
 
-        # --- verify on the server before declaring success ---
-        tqdm.write(
-            f"[multipart] Data sent for {remote_key}; "
-            f"waiting for server-side confirmation "
-            f"(up to {MULTIPART_VERIFY_TIMEOUT}s)..."
-        )
-        deadline = time.time() + MULTIPART_VERIFY_TIMEOUT
-        last_seen_size = None
-        verified = False
-        attempt = 0
-        while time.time() < deadline:
-            if shutdown_event.is_set():
-                record_result("cancelled", remote_key)
-                return (False, "Cancelled")
-            attempt += 1
-            try:
-                vi = get_item(
-                    identifier, archive_session=session,
-                    request_kwargs={
-                        "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
-                    },
-                )
-                for _f in vi.files:
-                    if _f.get("name") == remote_key:
-                        last_seen_size = _f.get("size")
-                        if (last_seen_size is not None
-                                and str(last_seen_size) == str(file_size)):
-                            verified = True
-                            break
-                if verified:
-                    break
-            except Exception as e_v:
-                vlog(f"  verify attempt {attempt} exception: {e_v}")
-            vlog(f"  verify attempt {attempt}: last_seen_size="
-                 f"{last_seen_size} (expected {file_size})")
-            time.sleep(5)
-
-        if not verified:
-            err = (f"upload sent but file not visible after "
-                   f"{MULTIPART_VERIFY_TIMEOUT}s "
-                   f"(last size seen: {last_seen_size}, "
-                   f"expected: {file_size})")
-            tqdm.write(f"[multipart] {remote_key}: {err}")
-            record_result("failed", f"{remote_key} ({err})")
-            return (False, err)
-
-        vlog(f"MULTIPART VERIFIED on server for '{remote_key}'")
+        # v6.41: complete_multipart returned HTTP 200, which means IA has
+        # accepted the multipart upload. Reassembly happens server-side and
+        # can take minutes for large items; polling get_item().files was
+        # marking genuinely-uploaded files as failed and forcing full
+        # re-uploads on the next run. We trust the 200.
 
         # --- metadata ---
         if metadata:
             try:
                 vlog(f"  applying metadata via modify_metadata() ...")
-                md_item = get_item(
-                    identifier, archive_session=session,
-                    request_kwargs={
-                        "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
-                    },
-                )
-                md_item.modify_metadata(metadata)
+                # v6.43: metadata calls also go through the in-flight cap.
+                with _inflight_slot():
+                    md_item = get_item(
+                        identifier, archive_session=session,
+                        request_kwargs={
+                            "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
+                        },
+                    )
+                    md_item.modify_metadata(metadata)
             except Exception as e_md:
                 tqdm.write(f"[multipart] {remote_key}: data OK but "
                            f"metadata failed: {e_md}")
@@ -2413,14 +2568,44 @@ def safe_rmtree(path, retries=5, delay=1.0):
 
 
 def main():
-    # --- v6.29: SIGINT handler ---
+    # --- v6.44: two-stage SIGINT handler ---
+    # First Ctrl+C: graceful shutdown (sets the flag).
+    # Second Ctrl+C within 3s: hard exit. Necessary because blocking
+    # socket calls on Windows don't respond to Python signals, so worker
+    # threads and ThreadPoolExecutor.join can hang for minutes.
     try:
         import signal as _signal
+        import os as _os
+        import time as _time
+
+        _sigint_state = {"count": 0, "last": 0.0}
 
         def _sigint_handler(signum, frame):
-            print("\n\n!!! CTRL+C RECEIVED !!!")
-            print("Setting shutdown flag; in-flight calls will abort shortly...")
-            shutdown_event.set()
+            try:
+                now = _time.time()
+                if now - _sigint_state["last"] > 3.0:
+                    _sigint_state["count"] = 0
+                _sigint_state["count"] += 1
+                _sigint_state["last"] = now
+
+                if _sigint_state["count"] >= 2:
+                    # Hard exit from the signal handler. Kills all threads
+                    # including any stuck in uninterruptible C calls.
+                    print("\n\n!!! SECOND CTRL+C — FORCE EXIT !!!",
+                          flush=True)
+                    _os._exit(1)
+
+                print("\n\n!!! CTRL+C RECEIVED !!!", flush=True)
+                print("Shutting down gracefully. "
+                      "Press Ctrl+C again within 3s to force exit.",
+                      flush=True)
+                shutdown_event.set()
+            except Exception:
+                # Never let the handler itself raise.
+                try:
+                    _os._exit(1)
+                except Exception:
+                    pass
 
         _signal.signal(_signal.SIGINT, _sigint_handler)
     except Exception as _sig_err:
@@ -2504,8 +2689,10 @@ def main():
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=DEFAULT_CHUNK_SIZE_MB,
-        help=f"Chunk size in MB for multipart uploads (default: {DEFAULT_CHUNK_SIZE_MB})",
+        default=None,
+        help=("Chunk size in MB for multipart uploads. Omit to auto-size "
+              "from file size and concurrency (~40 parts per thread, "
+              "clamped 8 MB - 2 GB)."),
     )
     parser.add_argument(
         "--multipart-threshold",
@@ -2519,26 +2706,43 @@ def main():
         default=DEFAULT_MULTIPART_CONCURRENCY,
         help=f"Parallel chunk uploads per large file (default: {DEFAULT_MULTIPART_CONCURRENCY})",
     )
+    parser.add_argument(
+        "--max-inflight",
+        type=int,
+        default=DEFAULT_MAX_INFLIGHT,
+        help=(f"Global cap on concurrent HTTP requests to archive.org, "
+              f"across all threads. Guards against IA's per-account rate "
+              f"limit. (default: {DEFAULT_MAX_INFLIGHT})"),
+    )
     args = parser.parse_args()
 
     global VERBOSE, _MULTIPART_ENABLED, args_ref
     VERBOSE = args.verbose
     args_ref = args  # v6.39: share with multipart_upload_worker
 
-    # v6.23: multipart is on by default; --no-multipart disables it.
-    _MULTIPART_ENABLED = (not args.no_multipart) and BOTO3_AVAILABLE
+    # v6.43: apply the in-flight request cap now that we have args
+    try:
+        _reset_inflight(args.max_inflight)
+    except Exception as _ri_err:
+        print(f"Warning: could not set in-flight cap: {_ri_err}")
+
+    # v6.41: multipart no longer depends on boto3 (raw requests since v6.31)
+    _MULTIPART_ENABLED = not args.no_multipart
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.39) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.44) ---")
     print(f"--- Threads: {max_workers} ---")
+    print(f"--- Max in-flight requests: {getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT)} ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
     if _MULTIPART_ENABLED:
-        print(f"--- Multipart: ON  (threshold {args.multipart_threshold} MB, chunk {args.chunk_size} MB, {args.multipart_concurrency} parts/file) ---")
-    elif args.no_multipart:
-        print(f"--- Multipart: OFF (--no-multipart) ---")
+        if args.chunk_size:
+            _chunk_disp = f"{args.chunk_size} MB"
+        else:
+            _chunk_disp = "auto"
+        print(f"--- Multipart: ON  (threshold {args.multipart_threshold} MB, chunk {_chunk_disp}, {args.multipart_concurrency} parts/file) ---")
     else:
-        print(f"--- Multipart: OFF (boto3 not installed; run: pip install boto3) ---")
+        print(f"--- Multipart: OFF (--no-multipart) ---")
     if VERBOSE:
         print(f"--- Verbose: ON ---")
     if args.sync:
@@ -2642,11 +2846,12 @@ def main():
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")
         try:
-            item = get_item(
-                identifier, 
-                archive_session=session, 
-                request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)}
-            )
+            with _inflight_slot():
+                item = get_item(
+                    identifier,
+                    archive_session=session,
+                    request_kwargs={"timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)}
+                )
         except Exception as e:
             print(f"\n[!] Network Error while checking item: {e}")
             print("Archive.org's API is currently slow or unavailable. Please try again in a few minutes.")
@@ -2692,10 +2897,17 @@ def main():
         print("Indexing local files...")
         local_file_map = {}  # normalized_path -> Path obj
         for p in folder_path.rglob("*"):
-            if p.is_file() and p.name != script_name:
-                rel_path = p.relative_to(folder_path).as_posix()
-                norm = normalize_path(rel_path)
-                local_file_map[norm] = {"path": p, "rel_path": rel_path}
+            if not p.is_file():
+                continue
+            if p.name == script_name:
+                continue
+            # v6.41: skip our own resume-state files
+            if p.name.endswith(".iaupload.json") or \
+               p.name.endswith(".iaupload.json.tmp"):
+                continue
+            rel_path = p.relative_to(folder_path).as_posix()
+            norm = normalize_path(rel_path)
+            local_file_map[norm] = {"path": p, "rel_path": rel_path}
 
         # 3b. Index Remote Files
         remote_map = {}  # normalized_path -> dict with md5 and size
@@ -2804,6 +3016,10 @@ def main():
         if item.exists:
             for f in item.files:
                 if f["source"] == "original" and f["name"] != script_name:
+                    # v6.41: never treat leaked resume-state files as orphans
+                    if f["name"].endswith(".iaupload.json") or \
+                       f["name"].endswith(".iaupload.json.tmp"):
+                        continue
                     norm = normalize_path(f["name"])
 
                     if norm in local_file_map:
