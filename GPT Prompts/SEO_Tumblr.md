@@ -81,7 +81,7 @@ Write in a conversational, platform-native tone. Tumblr rewards sincerity, infor
 --- TAG RULES ---
 
 - 5 to 12 tags total. Up to 30 max.
-- No # prefix in the output, but each tag is entered with the # symbol on Tumblr.
+- Each tag must include the # symbol prefix so it is ready to paste directly into Tumblr.
 - Total combined length under 500 characters.
 - ORDER MATTERS: The first 5 tags are the most important for tag search. Put your most important fandom and topic tags first.
 - Mix these types:
@@ -91,7 +91,7 @@ Write in a conversational, platform-native tone. Tumblr rewards sincerity, infor
   - Conversational tags: #this is so frustrating, #why sony
 - No generic tags like #love, #instagood. Every tag must be relevant.
 - No spammy or unrelated tags. They are penalized.
-- Each tag must be output in its own separate code block so the user can copy them one at a time.
+- Output all tags on a single line, each prefixed with #, separated by commas and spaces, ready to copy and paste as one string.
 
 --- OUTPUT FORMAT ---
 
@@ -99,6 +99,6 @@ Return code blocks in this order, nothing else:
 
 Block 1: The post title (if used) or an empty code block if no title is used.
 Block 2: The full post body, including line breaks, all in one code block.
-Block 3 onwards: One tag per code block, one tag per block, no commas, no numbering. List all 5 to 12 tags this way.
+Block 3: All tags on a single line, each prefixed with #, separated by commas and spaces, all in one code block.
 
 Do not add headings, labels, commentary, or explanations outside the code blocks. Do not number the blocks. Do not use markdown bold or italics anywhere. Just the code blocks in order.

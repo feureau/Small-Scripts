@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.44 (Two-Stage Ctrl+C)
+VERSION: 6.58 (Safe Splitting)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -37,6 +37,144 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-09] VERSION 6.58 UPDATE
+   - FIXED: Split parts and sidecar meta were keyed on path.stem, so
+            foo.mp4 and foo.mkv in the same directory collided.
+            The second do_split() deleted the first file's volumes,
+            and both originals looked "covered" by whichever .001
+            survived. Parts/meta are now keyed on the FULL filename:
+              foo.mp4.zip.001, foo.mp4.zip.meta.json
+   - FIXED: has_valid_split() only checked that at least one part
+            existed. A split interrupted after .001 (but before .002)
+            was treated as complete, so missing volumes were never
+            regenerated and IA got a truncated set. Part numbers must
+            now be contiguous 1..N and match the part_count recorded
+            in the meta sidecar.
+   - FIXED: Split parts were not bounded by IA's 230-byte path-
+            component limit. A long original filename produced
+            "<long>.zip.001" which IA rejected with HTTP 400.
+            split_stem_for() now truncates the stem with a short
+            MD5 hash suffix so the final component always fits.
+   - FIXED: do_split() captured all of 7z's output, so a multi-hour
+            split showed nothing. 7z output is now streamed live to
+            the terminal.
+   - ADDED: meta sidecar now writes "version": 2 and "split_stem"
+            so future readers can reconstruct the naming scheme.
+   - MODIFIED: --no-split now prints a deprecation notice; splitting
+            remains opt-in via --split. Default is still OFF.
+   - COMPAT: Legacy .zip.001 sets (v6.57 and earlier) are still
+            detected via the meta's "original" field, so upgrading
+            does not orphan existing volumes or force a re-split.
+
+[2026-10-09] VERSION 6.57 UPDATE
+   - MODIFIED: internetarchive.upload() is now the DEFAULT upload path
+               for small/medium files. Files under --multipart-threshold
+               go through upload_worker() instead of the built-in S3
+               single PUT.
+   - ADDED: --use-s3-put flag to opt back into the built-in SigV2 S3
+            single-PUT path for small/medium files.
+   - MODIFIED: --use-ia-library kept for CLI compatibility; it is now
+               a no-op because its behavior is the default. The two
+               flags are mutually exclusive.
+   - MODIFIED: Banner text "Small-file path: internetarchive library"
+               no longer implies a flag was passed.
+   - FIXED: --no-multipart --use-s3-put now correctly routes through
+            s3_upload_worker() instead of upload_worker(). Previously
+            --no-multipart unconditionally forced the IA library path.
+
+[2026-10-09] VERSION 6.56 UPDATE
+   - FIXED: HTTP 411 Length Required on every single-PUT upload.
+            requests was falling back to chunked encoding for
+            file-like bodies; IA's Apache front-end rejects those.
+            Content-Length is now set explicitly in IAS3Client._do().
+   - FIXED: HTTP 403 RequestTimeTooSkewed. _sign_v2() ran before
+            _inflight_slot(), so x-amz-date was stale after long
+            cooldowns. Signing now happens inside the slot.
+   - FIXED: 503 SlowDown with accesskey_tasks_queued (per-account
+            quota) is now treated as fatal: the run aborts with a
+            clear message instead of retrying for 45 minutes.
+            bucket_tasks_queued still uses the shared cooldown.
+   - ADDED: Startup HEAD probe. Aborts before scanning if the
+            account is already over quota.
+   - ADDED: Distinct account-quota banner in the final report.
+   - MODIFIED: Default parallelism raised: THREADS 4 -> 8,
+               MULTIPART_CONCURRENCY 2 -> 4, MAX_INFLIGHT 4 -> 8.
+
+[2026-10-09] VERSION 6.55 UPDATE
+   - MODIFIED: DEFAULT_MULTIPART_CONCURRENCY 2 -> 4
+   - MODIFIED: DEFAULT_MAX_INFLIGHT 4 -> 8
+   - MODIFIED: DEFAULT_THREADS was already 8; left as-is.
+               Raise all three together; -t alone is capped by
+               --max-inflight, and multipart chunks are capped by
+               --multipart-concurrency.
+
+[2026-10-09] VERSION 6.54 UPDATE
+   - ADDED: --max-rpm N. Global cap on HTTP requests per minute to
+            archive.org, shared across all threads. Default 30.
+            The previous v6.53 cooldown only pauses threads after a
+            503 is seen; this rate limiter keeps us under IA's queue
+            depth in the first place.
+   - ADDED: Live HTTP counters. [LIVENESS] lines now report in-flight
+            request count and rolling requests-per-minute.
+   - ADDED: _reset_rate_limiter(), _current_rate_stats().
+   - MODIFIED: _inflight_slot() now gates on the rate limiter in
+               addition to the shared cooldown and semaphore.
+
+[2026-10-09] VERSION 6.53 UPDATE
+   - FIXED: Parallel multipart uploads triggered 503 SlowDown
+            (bucket_tasks_queued exceeds bucket_limit). The
+            --max-inflight cap limits concurrency, not request RATE,
+            so several concurrent multipart uploads could still
+            flood IA's per-bucket task queue.
+   - ADDED: Shared global cooldown. When any thread sees a 503
+            SlowDown, ALL threads pause together until the queue
+            drains. Cooldown escalates 30s -> 300s.
+   - FIXED: datetime.utcnow() deprecation warning (use timezone-aware).
+
+[2026-10-09] VERSION 6.52 UPDATE
+   - MODIFIED: auto_chunk_mb() now aims for ~8 parts per thread
+               instead of ~40. Produces coarser chunks: a 5 GB file
+               at concurrency 2 gets 512 MB chunks (10 parts) instead
+               of 64 MB chunks (80 parts). Fewer round trips, less
+               pressure on IA's bucket queue, same total runtime.
+   - MODIFIED: --chunk-size help text updated.
+
+[2026-10-09] VERSION 6.51 UPDATE
+   - MODIFIED: File splitting is now OPT-IN. Default is OFF; pass
+               --split to enable. Previously splitting was on by
+               default with --no-split to disable.
+   - MODIFIED: --no-split kept as a hidden no-op for compatibility.
+   - MODIFIED: Banner shows 'Splitting: OFF (use --split to enable)'
+               when disabled.
+   (Includes v6.50: S3 single PUT by default, --use-ia-library,
+    s3_upload_worker, 7z auto-detect, Ctrl+C EOFError fix.)
+
+[2026-10-09] VERSION 6.50 UPDATE
+   - ADDED: s3_upload_worker() — single PUT via SigV2 IAS3Client,
+            streaming from disk. Retries on transient errors.
+            Metadata attached via modify_metadata() after success.
+   - MODIFIED: S3 single PUT is now the DEFAULT for files under the
+            multipart threshold. internetarchive.upload() is available
+            via --use-ia-library.
+   - ADDED: --use-ia-library flag.
+   - MODIFIED: Effective multipart threshold clamped to S3's ~5 GB
+            single-PUT limit when S3 path is active.
+   - ADDED: Banner shows the small-file path (S3 PUT / IA library).
+   - FIXED: _find_7z() checks standard Windows install locations
+            (Program Files / Program Files x86) when 7z is not on PATH.
+   - FIXED: get_input() catches EOFError too, so Ctrl+C during a
+            metadata prompt exits cleanly instead of raising.
+
+[2026-10-09] VERSION 6.48 UPDATE
+   - Consolidated release: bundles features from v6.45-v6.47.
+   - MODIFIED: Multipart default threshold 128 MB -> 15 GB.
+   - ADDED: Built-in small-file bundling (texts.zip / images.zip).
+   - ADDED: Built-in large-file splitting via 7z (video.zip.001...).
+   - ADDED: Scan skips files covered by an existing bundle or split.
+   - ADDED: --delete-originals-after-upload with IA verification.
+   - ADDED: New flags --no-zip, --no-split, --split-size, --bundle-min,
+            --delete-originals-after-upload, --verify-timeout.
+
 [2026-10-09] VERSION 6.44 UPDATE
    - FIXED: Ctrl+C could not close the script while worker threads
             were stuck inside blocking socket calls. Added two-stage
@@ -356,10 +494,12 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -418,7 +558,7 @@ COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", 
 _skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
 
 # --- CONFIGURATION DEFAULTS ---
-DEFAULT_THREADS = 4  # v6.43: lowered from 6
+DEFAULT_THREADS = 8 
 MAX_RETRIES = 20
 RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
@@ -426,9 +566,9 @@ CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 300
 
 # --- MULTIPART UPLOAD DEFAULTS (v6.23) ---
-DEFAULT_MULTIPART_THRESHOLD_MB = 128  # Files >= this size use S3 multipart
+DEFAULT_MULTIPART_THRESHOLD_MB = 15 * 1024  # v6.48: 15 GB (was 128 MB)
 DEFAULT_CHUNK_SIZE_MB = None          # v6.40: None = auto-size
-DEFAULT_MULTIPART_CONCURRENCY = 2     # v6.43: lowered from 4
+DEFAULT_MULTIPART_CONCURRENCY = 4     # v6.55: raised from 2
 MULTIPART_VERIFY_TIMEOUT = 300        # Seconds to wait for server-side confirm
 PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
 RATE_LIMIT_MAX_RETRIES = 12           # v6.37: 503 SlowDown attempts
@@ -436,12 +576,554 @@ RATE_LIMIT_BACKOFF_START = 30         # v6.37: initial 503 wait (s)
 RATE_LIMIT_BACKOFF_MAX = 300          # v6.37: cap 503 wait (s)
 IA_S3_ENDPOINT = "https://s3.us.archive.org"
 
+# --- v6.48: bundling, splitting, verified cleanup ------------------------
+
+BUNDLE_GROUPS = {
+    "texts": {
+        ".txt", ".md", ".srt", ".csv", ".json", ".html", ".htm",
+        ".xml", ".yaml", ".yml", ".log", ".rtf", ".ini", ".cfg",
+    },
+    "images": {
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
+        ".tiff", ".tif",
+    },
+}
+DEFAULT_BUNDLE_MIN = 3
+DEFAULT_SPLIT_SIZE_STR = "4480M"
+
+_BUNDLE_EXCLUDE_NAMES = {"metadata.json", "metadata.xml", "_meta.xml"}
+
+
+def parse_size_mb(s):
+    if s is None:
+        return 0
+    if isinstance(s, (int, float)):
+        return int(s)
+    txt = str(s).strip().lower()
+    if txt in ("off", "none", "no", "0"):
+        return 0
+    aliases = {"cd": 700, "dvd": 4480, "dvd5": 4480, "dvd9": 8500,
+               "bd": 25600, "bd25": 25600, "bd50": 51200}
+    if txt in aliases:
+        return aliases[txt]
+    m = re.match(r"^\s*([\d.]+)\s*([kmgt]?)\s*b?\s*$", txt)
+    if not m:
+        raise ValueError(f"Cannot parse size: {s!r}")
+    n = float(m.group(1))
+    unit = m.group(2) or "m"
+    factor = {"k": 1 / 1024, "m": 1, "g": 1024, "t": 1024 * 1024}[unit]
+    return int(n * factor)
+
+
+def _find_7z():
+    """Locate 7z on PATH or in standard Windows install locations."""
+    for name in ("7z", "7za", "7z.exe", "7za.exe", "7zz", "7zz.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+    if sys.platform == "win32":
+        import os as _os
+        candidates = []
+        for env_var in ("ProgramFiles", "ProgramFiles(x86)",
+                        "ProgramW6432", "LOCALAPPDATA"):
+            base = _os.environ.get(env_var)
+            if not base:
+                continue
+            candidates.extend([
+                _os.path.join(base, "7-Zip", "7z.exe"),
+                _os.path.join(base, "7-Zip", "7za.exe"),
+                _os.path.join(base, "chocolatey", "bin", "7z.exe"),
+                _os.path.join(base, "scoop", "shims", "7z.exe"),
+            ])
+        candidates.extend([
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ])
+        for c in candidates:
+            if _os.path.isfile(c):
+                return c
+    return None
+
+
+# v6.58: split parts and sidecar meta are keyed on the FULL filename,
+# not path.stem. This prevents foo.mp4 / foo.mkv collisions and lets us
+# truncate over-long stems while keeping the ".zip.NNN" suffix intact.
+
+_SPLIT_RESERVED_BYTES = 16   # room for ".zip.99999" and a few bytes slack
+
+
+def split_stem_for(path):
+    """
+    v6.58: return the stem used for `path`'s split parts and meta.
+
+    The stem is the full filename (including extension), truncated with
+    a short MD5 suffix only when necessary to keep
+    "<stem>.zip.NNNNN" within IA's 230-byte path-component limit.
+
+    Examples:
+        clip.mp4                  -> "clip.mp4"
+        <228-byte name>.mp4       -> "<truncated>_<hash>.mp4"
+    """
+    name = path.name
+    encoded = name.encode("utf-8")
+    budget = IA_MAX_PATH_COMPONENT_BYTES - _SPLIT_RESERVED_BYTES
+    if len(encoded) <= budget:
+        return name
+
+    short_hash = hashlib.md5(encoded).hexdigest()[:8]
+    suffix = f"_{short_hash}"
+
+    dot_idx = name.rfind(".")
+    if dot_idx > 0:
+        stem, ext = name[:dot_idx], name[dot_idx:]
+    else:
+        stem, ext = name, ""
+
+    avail = (
+        budget
+        - len(suffix.encode("utf-8"))
+        - len(ext.encode("utf-8"))
+    )
+    if avail < 1:
+        avail = 1
+    trunc = (
+        stem.encode("utf-8")[:avail]
+        .decode("utf-8", errors="ignore")
+        .rstrip()
+    )
+    return trunc + suffix + ext
+
+
+def split_meta_path(path):
+    return path.parent / f"{split_stem_for(path)}.zip.meta.json"
+
+
+def _find_split_parts(directory, stem):
+    pat = re.compile(rf"^{re.escape(stem)}\.zip\.(\d+)$")
+    found = []
+    try:
+        for p in directory.iterdir():
+            if not p.is_file():
+                continue
+            m = pat.match(p.name)
+            if m:
+                found.append((int(m.group(1)), p))
+    except Exception:
+        return []
+    return [p for _, p in sorted(found)]
+
+
+def _split_part_numbers(parts):
+    """v6.58: sorted numeric suffixes of a list of part paths."""
+    nums = []
+    for p in parts:
+        m = re.search(r"\.zip\.(\d+)$", p.name)
+        if m:
+            nums.append(int(m.group(1)))
+    return sorted(nums)
+
+
+def _has_valid_split_with_stem(path, stem):
+    """v6.58: validate one candidate stem (new or legacy)."""
+    meta_path = path.parent / f"{stem}.zip.meta.json"
+    if not meta_path.exists():
+        return False
+
+    parts = _find_split_parts(path.parent, stem)
+    if not parts:
+        return False
+
+    # Part numbers must be contiguous 1..N. This catches an interrupted
+    # split that wrote .001 but not .002, which the old code accepted.
+    nums = _split_part_numbers(parts)
+    if nums != list(range(1, len(nums) + 1)):
+        return False
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        return False
+
+    # The meta's `original` field is the only unambiguous way to tell
+    # foo.mp4's legacy split apart from foo.mkv's. Require a match.
+    if meta.get("original") != path.name:
+        return False
+
+    try:
+        st = path.stat()
+        if int(meta.get("original_size", -1)) != st.st_size:
+            return False
+        if abs(float(meta.get("original_mtime", 0)) - st.st_mtime) > 1.0:
+            return False
+    except Exception:
+        return False
+
+    # v6.58: declared part count must match what's on disk.
+    declared = meta.get("part_count")
+    if declared is None:
+        return False
+    try:
+        if int(declared) != len(nums):
+            return False
+    except Exception:
+        return False
+
+    return True
+
+
+def _candidate_split_stems(path):
+    """v6.58: try the new full-filename stem first, then the legacy
+    path.stem stem for backward compatibility."""
+    new_stem = split_stem_for(path)
+    yield new_stem
+    if path.stem != new_stem:
+        yield path.stem
+
+
+def has_valid_split(path):
+    for stem in _candidate_split_stems(path):
+        if _has_valid_split_with_stem(path, stem):
+            return True
+    return False
+
+
+def do_split(path, size_mb):
+    dir_ = path.parent
+    stem = split_stem_for(path)
+    zip_base = dir_ / f"{stem}.zip"
+    meta_path = dir_ / f"{stem}.zip.meta.json"
+
+    # Clean up any previous parts/meta, including legacy-scheme artifacts.
+    for old_stem in {stem, path.stem}:
+        for p in _find_split_parts(dir_, old_stem):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        old_meta = dir_ / f"{old_stem}.zip.meta.json"
+        if old_meta.exists():
+            try:
+                old_meta.unlink()
+            except Exception:
+                pass
+
+    sevenzip = _find_7z()
+    if not sevenzip:
+        raise RuntimeError("7z not found on PATH")
+
+    cmd = [sevenzip, "a", f"-v{int(size_mb)}m", "-mx=0", "-tzip",
+           str(zip_base), path.name]
+
+    # v6.58: stream 7z's output live so the user sees progress during
+    # long splits, and cap the run with an out-of-band watchdog.
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(dir_),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+    except Exception as e_spawn:
+        raise RuntimeError(f"could not launch 7z: {e_spawn}")
+
+    def _kill_on_timeout():
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    watchdog = threading.Timer(3600.0, _kill_on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+
+    tail = bytearray()
+    try:
+        # v6.58: use os.read() on the raw fd. BufferedReader.read(n)
+        # blocks until n bytes or EOF, which can stall on 7z's
+        # intermittent output. os.read returns as soon as data is
+        # available.
+        fd = proc.stdout.fileno()
+        while True:
+            try:
+                chunk = os.read(fd, 8192)
+            except OSError:
+                break
+            if not chunk:
+                break
+            try:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            except Exception:
+                try:
+                    sys.stdout.write(
+                        chunk.decode("utf-8", errors="replace")
+                    )
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+            tail.extend(chunk)
+            if len(tail) > 4096:
+                del tail[:-4096]
+        rc = proc.wait()
+    finally:
+        watchdog.cancel()
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+
+    if rc != 0:
+        # Roll back partial output so the next run doesn't think the
+        # split succeeded.
+        for old_stem in {stem, path.stem}:
+            for p in _find_split_parts(dir_, old_stem):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            old_meta = dir_ / f"{old_stem}.zip.meta.json"
+            if old_meta.exists():
+                try:
+                    old_meta.unlink()
+                except Exception:
+                    pass
+        raise RuntimeError(
+            f"7z exit {rc}: "
+            f"{tail.decode('utf-8', 'replace').strip()[:400]}"
+        )
+
+    parts = _find_split_parts(dir_, stem)
+    if not parts:
+        raise RuntimeError(f"7z produced no parts for {path.name}")
+
+    nums = _split_part_numbers(parts)
+    if nums != list(range(1, len(nums) + 1)):
+        raise RuntimeError(
+            f"7z produced non-contiguous parts for {path.name}: {nums}"
+        )
+
+    st = path.stat()
+    meta = {
+        "version": 2,                  # v6.58
+        "original": path.name,
+        "split_stem": stem,            # v6.58: naming scheme record
+        "original_size": st.st_size,
+        "original_mtime": st.st_mtime,
+        "part_count": len(parts),
+        "part_size_mb": int(size_mb),
+        "created_utc": datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
+    }
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=1, sort_keys=True)
+    except Exception:
+        pass
+    return parts
+
+
+def bundle_dir(directory, min_files=DEFAULT_BUNDLE_MIN):
+    created = []
+    try:
+        files = [f for f in directory.iterdir() if f.is_file()]
+    except Exception:
+        return created
+    for group_name, exts in BUNDLE_GROUPS.items():
+        bundle_path = directory / f"{group_name}.zip"
+        if bundle_path.exists():
+            continue
+        candidates = []
+        for f in files:
+            if f.suffix.lower() not in exts:
+                continue
+            if f.name in _BUNDLE_EXCLUDE_NAMES:
+                continue
+            if f.name.endswith(".iaupload.json"):
+                continue
+            if f.suffix.lower() == ".zip":
+                continue
+            candidates.append(f)
+        if len(candidates) < min_files:
+            continue
+        try:
+            with zipfile.ZipFile(bundle_path, "w",
+                                 zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(candidates, key=lambda x: x.name):
+                    zf.write(f, arcname=f.name)
+        except Exception as e:
+            print(f"  [bundle] Failed to write {bundle_path.name}: {e}")
+            try:
+                bundle_path.unlink()
+            except Exception:
+                pass
+            continue
+        created.append((bundle_path, [f.name for f in candidates]))
+    return created
+
+
+def _is_covered_by_bundle(p, sibling_names):
+    ext = p.suffix.lower()
+    for group_name, exts in BUNDLE_GROUPS.items():
+        if ext in exts and f"{group_name}.zip" in sibling_names:
+            return True
+    return False
+
+
+def _is_covered_by_split(p, sibling_names):
+    # v6.58: new scheme keys on the full filename.
+    new_stem = split_stem_for(p)
+    if f"{new_stem}.zip.001" in sibling_names:
+        return True
+
+    # Legacy scheme (v6.57 and earlier) used path.stem. Because two
+    # files can share a stem (foo.mp4 / foo.mkv), only trust the legacy
+    # part if the sidecar meta confirms the same original name.
+    if p.stem != new_stem:
+        legacy_part = f"{p.stem}.zip.001"
+        if legacy_part in sibling_names:
+            legacy_meta = p.parent / f"{p.stem}.zip.meta.json"
+            if legacy_meta.exists():
+                try:
+                    with open(legacy_meta, "r", encoding="utf-8") as f:
+                        m = json.load(f)
+                    if m.get("original") == p.name:
+                        return True
+                except Exception:
+                    pass
+
+    return False
+
+
+def build_cleanup_plan(folder_path):
+    plan = {}
+    try:
+        for group_name, exts in BUNDLE_GROUPS.items():
+            for bundle in folder_path.rglob(f"{group_name}.zip"):
+                if not bundle.is_file():
+                    continue
+                try:
+                    bundle_rel = str(bundle.relative_to(folder_path))
+                except Exception:
+                    continue
+                try:
+                    siblings = [f for f in bundle.parent.iterdir()
+                                if f.is_file()]
+                except Exception:
+                    continue
+                for sib in siblings:
+                    if sib == bundle:
+                        continue
+                    if sib.suffix.lower() not in exts:
+                        continue
+                    if sib.name in _BUNDLE_EXCLUDE_NAMES:
+                        continue
+                    if sib.name.endswith(".iaupload.json"):
+                        continue
+                    if sib.name.endswith(".zip.meta.json"):
+                        continue
+                    plan.setdefault(sib, set()).add(bundle_rel)
+    except Exception as e:
+        vlog(f"  build_cleanup_plan: bundle scan failed: {e}")
+    try:
+        for meta in folder_path.rglob("*.zip.meta.json"):
+            if not meta.is_file():
+                continue
+            try:
+                with open(meta, "r", encoding="utf-8") as f:
+                    m = json.load(f)
+                orig_name = m.get("original")
+                if not orig_name:
+                    continue
+            except Exception:
+                continue
+            orig = meta.parent / orig_name
+            if not orig.exists():
+                continue
+
+            # v6.58: prefer the stem recorded in the meta; fall back to
+            # the current scheme, then the legacy path.stem scheme.
+            stems = []
+            recorded = m.get("split_stem")
+            if isinstance(recorded, str) and recorded:
+                stems.append(recorded)
+            stems.append(split_stem_for(orig))
+            if orig.stem not in stems:
+                stems.append(orig.stem)
+
+            parts = []
+            for stem in stems:
+                parts = _find_split_parts(meta.parent, stem)
+                if parts:
+                    break
+            if not parts:
+                continue
+
+            for p in parts:
+                try:
+                    p_rel = str(p.relative_to(folder_path))
+                except Exception:
+                    continue
+                plan.setdefault(orig, set()).add(p_rel)
+    except Exception as e:
+        vlog(f"  build_cleanup_plan: split scan failed: {e}")
+    return plan
+
+
+def verify_archives_on_ia(identifier, expected, session, timeout_s=180,
+                          poll_interval=5.0):
+    if not expected:
+        return {}, {}
+    deadline = time.time() + float(timeout_s)
+    verified = {}
+    missing = dict((k, (v, None)) for k, v in expected.items())
+    while True:
+        if shutdown_event.is_set():
+            return verified, missing
+        try:
+            with _inflight_slot():
+                it = get_item(
+                    identifier, archive_session=session,
+                    request_kwargs={
+                        "timeout": (CONNECT_TIMEOUT, READ_TIMEOUT)
+                    },
+                )
+            listing = {}
+            for f in getattr(it, "files", []):
+                name = f.get("name")
+                size = f.get("size")
+                if not name or size is None:
+                    continue
+                try:
+                    listing[normalize_path(name)] = int(size)
+                except Exception:
+                    pass
+            verified = {}
+            missing = {}
+            for remote_path, want in expected.items():
+                key = normalize_path(remote_path)
+                got = listing.get(key)
+                if got is not None and int(got) == int(want):
+                    verified[remote_path] = got
+                else:
+                    missing[remote_path] = (want, got)
+            if not missing:
+                return verified, missing
+        except Exception as e:
+            vlog(f"  verify_archives_on_ia poll failed: {e}")
+        if time.time() >= deadline:
+            return verified, missing
+        time.sleep(poll_interval)
+
+
+# --- v6.48 end -----------------------------------------------------------
+
+
 # --- v6.43: global in-flight request cap --------------------------------
 # Every HTTP call to archive.org goes through this semaphore. The goal is
 # to keep concurrent requests under IA's per-account rate limit, no matter
 # how many file/part threads the user configured. Retries do not hold a
 # slot while sleeping, so backoffs don't starve other requests.
-DEFAULT_MAX_INFLIGHT = 4
+DEFAULT_MAX_INFLIGHT = 8  # v6.55: raised from 4
 _MAX_INFLIGHT = DEFAULT_MAX_INFLIGHT
 _inflight_sem = threading.BoundedSemaphore(_MAX_INFLIGHT)
 
@@ -457,27 +1139,161 @@ def _reset_inflight(max_n):
     _inflight_sem = threading.BoundedSemaphore(max_n)
 
 
+# v6.54: shared global cooldown + global rate limiter.
+#
+# Cooldown: when any thread sees a 503 SlowDown, it sets
+# _rate_limit_until = now + backoff. Every other thread checks this
+# before acquiring a semaphore slot. The whole fleet pauses together,
+# giving IA's per-bucket task queue time to drain.
+#
+# Rate limiter: caps requests-per-minute across all threads so that
+# under normal operation we never flood the queue in the first place.
+DEFAULT_MAX_RPM = 30
+
+_rate_limit_lock = threading.Lock()
+_rate_limit_until = 0.0            # epoch seconds; 0 means no cooldown
+_rate_limit_backoff = 30.0         # escalates on successive 503s
+_rate_limit_last_hit = 0.0         # last time a 503 was seen
+_RATE_LIMIT_RESET_AFTER = 30.0     # clean seconds before we reset backoff
+
+# v6.54 rate-limiter state
+_rate_lock = threading.Lock()
+_rate_min_interval = 60.0 / DEFAULT_MAX_RPM
+_rate_last_request = 0.0
+_rate_inflight = 0
+_rate_recent = []                  # timestamps of last N request starts
+_RATE_RECENT_WINDOW = 60.0
+
+
+def _reset_rate_limiter(max_rpm):
+    """v6.54: called from main() after arg parsing."""
+    global _rate_min_interval
+    try:
+        max_rpm = max(1, int(max_rpm))
+    except Exception:
+        max_rpm = DEFAULT_MAX_RPM
+    _rate_min_interval = 60.0 / max_rpm
+
+
+def _current_rate_stats():
+    """v6.54: return (inflight_count, rpm_in_last_60s)."""
+    with _rate_lock:
+        now = time.time()
+        recent = [t for t in _rate_recent if now - t <= _RATE_RECENT_WINDOW]
+        _rate_recent[:] = recent
+        return _rate_inflight, len(recent)
+
+
+def _note_rate_limit():
+    """
+    Called by IAS3Client.request() when a 503 SlowDown is received.
+    Sets a global cooldown and escalates the backoff window.
+    """
+    global _rate_limit_until, _rate_limit_backoff, _rate_limit_last_hit
+    with _rate_limit_lock:
+        now = time.time()
+        # Reset backoff if we've had a clean streak.
+        if now - _rate_limit_last_hit > _RATE_LIMIT_RESET_AFTER:
+            _rate_limit_backoff = 30.0
+        _rate_limit_last_hit = now
+        _rate_limit_until = max(_rate_limit_until, now + _rate_limit_backoff)
+        # Escalate for next time.
+        _rate_limit_backoff = min(_rate_limit_backoff * 2, 300.0)
+
+
+# v6.56: account-level quota (accesskey_tasks_queued) is different from
+# bucket-level rate limiting (bucket_tasks_queued). The former is
+# persistent server-side state that must drain before ANY upload works.
+# Retrying just adds failed attempts to the queue.
+_account_quota_event = threading.Event()
+
+
+def _note_account_quota():
+    """
+    Called when IA returns accesskey_tasks_queued. This is per-account
+    and cannot be worked around client-side. Abort the entire run.
+    """
+    if not _account_quota_event.is_set():
+        _account_quota_event.set()
+        try:
+            tqdm.write("")
+            tqdm.write("=" * 64)
+            tqdm.write("!! ACCOUNT QUOTA EXHAUSTED  (accesskey_tasks_queued)")
+            tqdm.write("=" * 64)
+            tqdm.write("IA is rejecting ALL new tasks for your account.")
+            tqdm.write("This is server-side state, not a client rate limit:")
+            tqdm.write("orphaned multipart parts from earlier aborted runs")
+            tqdm.write("are still counted against your account's queue.")
+            tqdm.write("")
+            tqdm.write("No amount of client-side retrying can fix this.")
+            tqdm.write("IA's garbage collector must drain the queue first.")
+            tqdm.write("")
+            tqdm.write("Recommended action:")
+            tqdm.write("  - Stop the script now.")
+            tqdm.write("  - Wait 4 to 24 hours.")
+            tqdm.write("  - Retry with smaller concurrency, e.g.:")
+            tqdm.write('      iaupload.py "FOLDER" -t 4 \\')
+            tqdm.write("          --multipart-concurrency 2 \\")
+            tqdm.write("          --max-inflight 4 --max-rpm 20")
+            tqdm.write("=" * 64)
+            tqdm.write("")
+        except Exception:
+            pass
+        shutdown_event.set()
+
+
 @contextlib.contextmanager
 def _inflight_slot():
     """
-    Acquire a global wire slot for one HTTP request.
+    v6.54: acquire a global wire slot for one HTTP request.
 
-    v6.44: uses a timeout so we can notice shutdown_event while waiting.
-    Without this, a thread blocked on sem.acquire() would ignore Ctrl+C
-    until a slot freed.
+    Order of gates:
+      1. Global cooldown (set on 503 by any thread)
+      2. Global rate limiter (--max-rpm)
+      3. Concurrency semaphore (--max-inflight)
+
+    Sleeps are interruptible so Ctrl+C stays responsive.
     """
+    global _rate_inflight, _rate_last_request
+
     sem = _inflight_sem
     if sem is None:
         yield
         return
+
     got = False
     while not got:
         if shutdown_event.is_set():
             raise RuntimeError("Cancelled by user (waiting for wire slot)")
+
+        # 1. Global cooldown.
+        with _rate_limit_lock:
+            wait = _rate_limit_until - time.time()
+        if wait > 0:
+            time.sleep(min(wait, 1.0))
+            continue
+
+        # 2. Global rate limiter.
+        with _rate_lock:
+            since_last = time.time() - _rate_last_request
+            pacer_wait = _rate_min_interval - since_last
+        if pacer_wait > 0:
+            time.sleep(min(pacer_wait, 1.0))
+            continue
+
+        # 3. Concurrency semaphore.
         got = sem.acquire(timeout=1.0)
+
+    with _rate_lock:
+        _rate_last_request = time.time()
+        _rate_inflight += 1
+        _rate_recent.append(_rate_last_request)
+
     try:
         yield
     finally:
+        with _rate_lock:
+            _rate_inflight = max(0, _rate_inflight - 1)
         sem.release()
 
 
@@ -657,7 +1473,7 @@ def get_input(prompt_text, required=False, default=None, valid_options=None):
         )
         try:
             val = input(display).strip()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             sys.exit(1)
 
         # '!!' triggers skip-to-defaults for this and all remaining prompts
@@ -1375,6 +2191,15 @@ def print_report():
 
     print("=" * 60)
 
+    # v6.56: distinct banner if the run was aborted by account quota.
+    if _account_quota_event.is_set():
+        print("")
+        print("!" * 60)
+        print("RUN WAS ABORTED BY IA ACCOUNT QUOTA (accesskey_tasks_queued)")
+        print("Wait 4-24 hours, then retry with lower concurrency.")
+        print("!" * 60)
+        print("")
+
 
 try:
     import requests
@@ -1693,11 +2518,27 @@ class IAS3Client:
         return headers
 
     def _do(self, method, url, path, query, data, content_type, stream):
-        headers = self._sign_v2(
-            method, path, query, content_type=content_type
-        )
-        # v6.43: acquire a global in-flight slot for the wire call.
+        # v6.56: sign INSIDE the slot so x-amz-date is fresh even after
+        # a long cooldown. Also set Content-Length explicitly for any
+        # body we can measure: IA's Apache front-end rejects chunked
+        # PUTs with HTTP 411.
         with _inflight_slot():
+            headers = self._sign_v2(
+                method, path, query, content_type=content_type
+            )
+            if data is not None:
+                length = None
+                if isinstance(data, (bytes, bytearray)):
+                    length = len(data)
+                elif isinstance(data, str):
+                    length = len(data.encode("utf-8"))
+                else:
+                    try:
+                        length = len(data)
+                    except (TypeError, AttributeError):
+                        length = None
+                if length is not None:
+                    headers["Content-Length"] = str(length)
             return self._session.request(
                 method, url, headers=headers, data=data,
                 allow_redirects=False, timeout=self.timeout, stream=stream,
@@ -1756,8 +2597,13 @@ class IAS3Client:
                 return r
 
             body_lower = (r.text or "").lower()
-            # v6.41: IA uses several rate-limit phrasings. bucket_tasks_queued
-            # is per-bucket; accesskey_tasks_queued is per-account.
+
+            # v6.56: distinguish per-account quota (fatal) from per-bucket
+            # rate limit (transient, backed off).
+            is_account_quota = (
+                "accesskey_tasks_queued" in body_lower
+                or "rationed" in body_lower
+            )
             is_slowdown = any(s in body_lower for s in (
                 "slowdown",
                 "reduce your request rate",
@@ -1767,8 +2613,15 @@ class IAS3Client:
                 "too many requests",
             ))
             if not is_slowdown:
-                # 503 for some other reason; don't blind-retry.
                 return r
+
+            if is_account_quota:
+                # Abort the run; do not retry.
+                _note_account_quota()
+                return r
+
+            # Bucket-level rate limit — shared cooldown + retry.
+            _note_rate_limit()
 
             if attempt >= RATE_LIMIT_MAX_RETRIES:
                 tqdm.write(
@@ -1932,10 +2785,10 @@ class IAS3Client:
 args_ref = None
 
 
-def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=40,
+def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=8,
                   min_mb=8, max_mb=2048):
     """
-    v6.40: pick a chunk size that balances three pressures:
+    v6.52: pick a chunk size that balances three pressures:
       - Few parts per file: keeps IA's bucket_tasks_queued counter happy.
       - Short tail: with N threads, the last part per thread should be a
         small fraction of total runtime.
@@ -1943,6 +2796,11 @@ def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=40,
 
     Aim for `concurrency * target_parts_per_thread` total parts, then
     round up to the next power-of-two MB within [min_mb, max_mb].
+
+    The 8-per-thread target produces coarser chunks than earlier versions
+    (which used 40). A 5 GB file at concurrency 2 gets 512 MB chunks
+    (10 parts) instead of 64 MB chunks (80 parts). Same total runtime,
+    fewer round trips to IA.
     """
     try:
         concurrency = max(1, int(concurrency))
@@ -2008,6 +2866,170 @@ class SliceReader:
             self._f.close()
         except Exception:
             pass
+
+
+def s3_upload_worker(identifier, file_data, metadata=None, position=0,
+                     session=None):
+    """
+    v6.50: Single-stream upload via IA's S3 endpoint.
+
+    - SigV2 signed PUT via IAS3Client
+    - 307 storage-node redirect handled by the client
+    - Streams from disk through ProgressWrapper (no full-file buffering)
+    - Retries on transient network errors with exponential backoff
+    - Metadata attached via modify_metadata() after the PUT succeeds
+    """
+    remote_key, local_path = file_data
+
+    if shutdown_event.is_set():
+        record_result("cancelled", remote_key)
+        return (False, "Cancelled by user")
+
+    file_size = os.path.getsize(local_path)
+    if file_size == 0:
+        tqdm.write(f"Skipping empty file: {remote_key}")
+        record_result("cancelled", remote_key)
+        return (False, "Skipped empty file (0 bytes)")
+
+    access_key = os.environ.get("IAS3_ACCESS_KEY")
+    secret_key = os.environ.get("IAS3_SECRET_KEY")
+    if not access_key and session is not None:
+        access_key = getattr(session, "access_key", None)
+    if not secret_key and session is not None:
+        secret_key = getattr(session, "secret_key", None)
+    if not access_key or not secret_key:
+        err = "missing IA S3 credentials (run 'ia configure')"
+        tqdm.write(f"[s3] {remote_key}: {err}")
+        record_result("failed", f"{remote_key} ({err})")
+        return (False, err)
+
+    display_name = remote_key
+    if len(display_name) > 20:
+        display_name = "..." + display_name[-17:]
+
+    vlog(f"S3 SINGLE PUT START for '{remote_key}' ({file_size:,} bytes)")
+
+    client = IAS3Client(access_key, secret_key)
+
+    try:
+        pf = client.request("HEAD", f"/{identifier}")
+        if pf.status_code not in (200, 204, 307):
+            err = f"preflight failed: HTTP {pf.status_code}"
+            tqdm.write(f"[s3] {remote_key}: {err}")
+            record_result("failed", f"{remote_key} ({err})")
+            return (False, err)
+    except Exception as e_pf:
+        err = f"preflight failed: {e_pf}"
+        tqdm.write(f"[s3] {remote_key}: {err}")
+        record_result("failed", f"{remote_key} ({err})")
+        return (False, err)
+
+    max_retries = 5
+    backoff = 30
+
+    with tqdm(
+        total=file_size, unit="B", unit_scale=True, unit_divisor=1024,
+        desc=display_name, position=position, leave=False,
+        dynamic_ncols=True,
+        bar_format=("{desc}: {percentage:3.0f}%|{bar}| "
+                    "{n_fmt}/{total_fmt} | Speed: {rate_fmt} | "
+                    "Time: {elapsed}<{remaining}"),
+    ) as bar:
+        for attempt in range(1, max_retries + 1):
+            if shutdown_event.is_set():
+                record_result("cancelled", remote_key)
+                return (False, "Cancelled")
+
+            reader = None
+            try:
+                reader = ProgressWrapper(local_path, bar)
+                vlog(f"  attempt {attempt}/{max_retries}: PUT "
+                     f"/{identifier}/{remote_key}")
+                r = client.request(
+                    "PUT",
+                    f"/{identifier}/{remote_key}",
+                    data=reader,
+                )
+            except Exception as e:
+                if shutdown_event.is_set():
+                    record_result("cancelled", remote_key)
+                    return (False, "Cancelled")
+                err_str = str(e).lower()
+                retryable = any(s in err_str for s in (
+                    "timed out", "timeout",
+                    "connection aborted", "connection reset",
+                    "remotely closed", "connection refused",
+                    "broken pipe",
+                ))
+                if retryable and attempt < max_retries:
+                    tqdm.write(
+                        f"[s3] {display_name}: attempt {attempt}/"
+                        f"{max_retries} failed ({e}); retrying in "
+                        f"{backoff}s"
+                    )
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_BACKOFF_TIME)
+                    bar.reset()
+                    continue
+                tqdm.write(f"[s3] {remote_key}: {e}")
+                record_result("failed", f"{remote_key} ({e})")
+                return (False, str(e))
+            finally:
+                if reader is not None:
+                    try:
+                        reader.close()
+                    except Exception:
+                        pass
+
+            if shutdown_event.is_set():
+                record_result("cancelled", remote_key)
+                return (False, "Cancelled")
+
+            if r.status_code in (200, 201):
+                vlog(f"  S3 PUT SUCCESS for '{remote_key}'")
+                if metadata:
+                    try:
+                        with _inflight_slot():
+                            md_item = get_item(
+                                identifier, archive_session=session,
+                                request_kwargs={
+                                    "timeout": (CONNECT_TIMEOUT,
+                                                READ_TIMEOUT)
+                                },
+                            )
+                            md_item.modify_metadata(metadata)
+                    except Exception as e_md:
+                        tqdm.write(
+                            f"[s3] {remote_key}: data OK but metadata "
+                            f"failed: {e_md}"
+                        )
+                        record_result(
+                            "failed",
+                            f"{remote_key} (metadata: {e_md})",
+                        )
+                        return (False, f"metadata: {e_md}")
+                record_result("success", remote_key)
+                return (True, remote_key)
+
+            code = r.status_code
+            body = (r.text or "")[:200]
+            if code in (429, 503, 509) and attempt < max_retries:
+                tqdm.write(
+                    f"[s3] {display_name}: HTTP {code} (rate limit); "
+                    f"retrying in {backoff}s"
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_TIME)
+                bar.reset()
+                continue
+
+            tqdm.write(f"[s3] {display_name}: FAILED HTTP {code} {body}")
+            record_result("failed", f"{remote_key} (S3 {code})")
+            return (False, f"S3 {code}")
+
+    tqdm.write(f"[s3] {display_name}: max retries exceeded")
+    record_result("failed", f"{remote_key} (S3 Max Retries)")
+    return (False, "S3 Max Retries Exceeded")
 
 
 def multipart_upload_worker(
@@ -2180,7 +3202,9 @@ def multipart_upload_worker(
                 "n_parts": n_parts,
                 "upload_id": upload_id,
                 "parts": {},  # part_num (str) -> etag
-                "created_utc": datetime.datetime.utcnow().isoformat() + "Z",
+                "created_utc": datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
             }
             _save_state(local_path, _state)
         except Exception as _init_err:
@@ -2657,7 +3681,39 @@ def main():
         "-z",
         "--zip",
         action="store_true",
-        help="Run iazip.py packaging on the folder before uploading (keeps originals, processes all types)",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-zip",
+        action="store_true",
+        help="Disable automatic small-file bundling (texts.zip/images.zip).",
+    )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        help=("Enable automatic large-file splitting into multi-volume "
+              "zips (requires 7z). Off by default; use this flag to "
+              "opt in."),
+    )
+    parser.add_argument(
+        "--no-split",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--split-size",
+        type=str,
+        default=DEFAULT_SPLIT_SIZE_STR,
+        help=("Volume size for split archives: '4480M', '4G', 'dvd', "
+              "'dvd9', 'bd', or 'off'. "
+              f"Default: {DEFAULT_SPLIT_SIZE_STR}."),
+    )
+    parser.add_argument(
+        "--bundle-min",
+        type=int,
+        default=DEFAULT_BUNDLE_MIN,
+        help=("Min same-directory files before bundling into "
+              f"texts.zip/images.zip. Default: {DEFAULT_BUNDLE_MIN}."),
     )
     parser.add_argument(
         "-v",
@@ -2680,19 +3736,19 @@ def main():
         action="store_true",
         help="Delete saved resume state for the target file/folder and exit",
     )
-    # Kept for backwards compatibility; multipart is already the default.
     parser.add_argument(
         "--multipart",
         action="store_true",
-        help=argparse.SUPPRESS,
+        help=("Force multipart for every file >= 1 MB. Default is auto: "
+              "multipart only for files >= 15 GB."),
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
         default=None,
         help=("Chunk size in MB for multipart uploads. Omit to auto-size "
-              "from file size and concurrency (~40 parts per thread, "
-              "clamped 8 MB - 2 GB)."),
+              "from file size and concurrency (~8 parts per thread, "
+              "rounded up to a power-of-two MB, clamped 8 MB - 2 GB)."),
     )
     parser.add_argument(
         "--multipart-threshold",
@@ -2711,10 +3767,51 @@ def main():
         type=int,
         default=DEFAULT_MAX_INFLIGHT,
         help=(f"Global cap on concurrent HTTP requests to archive.org, "
-              f"across all threads. Guards against IA's per-account rate "
-              f"limit. (default: {DEFAULT_MAX_INFLIGHT})"),
+              f"across all threads. (default: {DEFAULT_MAX_INFLIGHT})"),
     )
+    parser.add_argument(
+        "--max-rpm",
+        type=int,
+        default=DEFAULT_MAX_RPM,
+        help=(f"Global cap on HTTP requests per minute to archive.org, "
+              f"across all threads. Lower this if you see frequent 503 "
+              f"SlowDown. (default: {DEFAULT_MAX_RPM})"),
+    )
+    parser.add_argument(
+        "--delete-originals-after-upload",
+        action="store_true",
+        help=("After bundles/split parts upload, verify visible on IA, "
+              "then delete the source files they replace. Off by default."),
+    )
+    parser.add_argument(
+        "--verify-timeout",
+        type=int,
+        default=180,
+        help="Seconds to wait for IA listing refresh during verification.",
+    )
+    _upload_path = parser.add_mutually_exclusive_group()
+    _upload_path.add_argument(
+        "--use-ia-library",
+        dest="use_ia_library",
+        action="store_true",
+        help=("Route small/medium files through internetarchive.upload() "
+              "(this is the default)."),
+    )
+    _upload_path.add_argument(
+        "--use-s3-put",
+        dest="use_ia_library",
+        action="store_false",
+        help=("Route small/medium files through the built-in SigV2 S3 "
+              "single PUT instead of internetarchive.upload()."),
+    )
+    parser.set_defaults(use_ia_library=True)
     args = parser.parse_args()
+
+    # v6.58: --no-split is a compatibility no-op. Splitting is already
+    # opt-in via --split; warn so users don't think it did something.
+    if getattr(args, "no_split", False):
+        print("Note: --no-split is deprecated; splitting is off by "
+              "default. Use --split to enable it.")
 
     global VERBOSE, _MULTIPART_ENABLED, args_ref
     VERBOSE = args.verbose
@@ -2726,23 +3823,74 @@ def main():
     except Exception as _ri_err:
         print(f"Warning: could not set in-flight cap: {_ri_err}")
 
-    # v6.41: multipart no longer depends on boto3 (raw requests since v6.31)
-    _MULTIPART_ENABLED = not args.no_multipart
+    # v6.54: apply the rate limiter
+    try:
+        _reset_rate_limiter(args.max_rpm)
+    except Exception as _rr_err:
+        print(f"Warning: could not set rate limit: {_rr_err}")
+
+    # v6.48: three-way multipart mode.
+    if args.no_multipart:
+        _MULTIPART_ENABLED = False
+    elif args.multipart:
+        _MULTIPART_ENABLED = True
+        args.multipart_threshold = 1
+    else:
+        _MULTIPART_ENABLED = True
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.44) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.58) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- Max in-flight requests: {getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT)} ---")
+    print(f"--- Max request rate: {getattr(args, 'max_rpm', DEFAULT_MAX_RPM)} req/min ---")
     print(f"--- MD5 Verify: {'ON' if args.md5_verify else 'OFF (Path-only)'} ---")
-    if _MULTIPART_ENABLED:
-        if args.chunk_size:
-            _chunk_disp = f"{args.chunk_size} MB"
-        else:
-            _chunk_disp = "auto"
-        print(f"--- Multipart: ON  (threshold {args.multipart_threshold} MB, chunk {_chunk_disp}, {args.multipart_concurrency} parts/file) ---")
-    else:
+    if not _MULTIPART_ENABLED:
         print(f"--- Multipart: OFF (--no-multipart) ---")
+    else:
+        _chunk_disp = (
+            f"{args.chunk_size} MB" if args.chunk_size else "auto"
+        )
+        if args.multipart:
+            print(
+                f"--- Multipart: FORCED ON "
+                f"(chunk {_chunk_disp}, "
+                f"{args.multipart_concurrency} parts/file, "
+                f"all files >= 1 MB) ---"
+            )
+        else:
+            _thresh = args.multipart_threshold
+            _S3_PUT_MAX_MB = 5 * 1024
+            if not args.no_multipart and not args.use_ia_library:
+                if _thresh > _S3_PUT_MAX_MB:
+                    _thresh = _S3_PUT_MAX_MB
+            if _thresh >= 1024 and _thresh % 1024 == 0:
+                _thresh_disp = f"{_thresh // 1024} GB"
+            elif _thresh >= 1024:
+                _thresh_disp = f"{_thresh / 1024:.1f} GB"
+            else:
+                _thresh_disp = f"{_thresh} MB"
+            print(
+                f"--- Multipart: AUTO "
+                f"(threshold {_thresh_disp}, chunk {_chunk_disp}, "
+                f"{args.multipart_concurrency} parts/file) ---"
+            )
+    if args.no_multipart or args.use_ia_library:
+        print(f"--- Small-file path: internetarchive library ---")
+    else:
+        print(f"--- Small-file path: S3 single PUT (built-in) ---")
+    if args.no_zip:
+        print(f"--- Bundling: OFF (--no-zip) ---")
+    else:
+        print(f"--- Bundling: ON  (texts/images, min {args.bundle_min} files/group) ---")
+    if not args.split:
+        print(f"--- Splitting: OFF (use --split to enable) ---")
+    else:
+        _split_disp = args.split_size
+        if _find_7z() is None:
+            print(f"--- Splitting: REQUESTED but 7z not found on PATH ---")
+        else:
+            print(f"--- Splitting: ON  (volume size {_split_disp}) ---")
     if VERBOSE:
         print(f"--- Verbose: ON ---")
     if args.sync:
@@ -2843,6 +3991,108 @@ def main():
         # --- PRE-UPLOAD FIXES ---
         handle_dji_lrf(folder_path, auto_confirm=args.fix_lrf)
 
+        # --- v6.48 PHASE 0: bundle small files + split large files ---
+        if not args.no_zip:
+            print("\n--- PHASE 0a: Bundling small files ---")
+            try:
+                dirs = set()
+                for f in folder_path.rglob("*"):
+                    if f.is_file():
+                        dirs.add(f.parent)
+                made_total = 0
+                for d in sorted(dirs):
+                    created = bundle_dir(d, min_files=args.bundle_min)
+                    for bundle_path, srcs in created:
+                        rel = bundle_path.relative_to(folder_path)
+                        print(f"  [bundle] {rel}  ({len(srcs)} files)")
+                        made_total += 1
+                if made_total == 0:
+                    print("  (no new bundles needed)")
+                else:
+                    print(f"  Created {made_total} bundle(s).")
+            except Exception as e_b:
+                print(f"  Bundling error (continuing): {e_b}")
+
+        try:
+            _split_size_mb = parse_size_mb(args.split_size)
+        except Exception as e_sp:
+            print(f"WARNING: could not parse --split-size "
+                  f"{args.split_size!r}: {e_sp}")
+            _split_size_mb = 0
+
+        if args.split and _split_size_mb > 0:
+            sevenzip = _find_7z()
+            if sevenzip is None:
+                print(f"\n--- PHASE 0b: Splitting skipped "
+                      f"(7z not found on PATH) ---")
+            else:
+                print(f"\n--- PHASE 0b: Splitting files > "
+                      f"{_split_size_mb} MB ---")
+                threshold_bytes = _split_size_mb * 1024 * 1024
+                made_total = 0
+                try:
+                    for f in folder_path.rglob("*"):
+                        if not f.is_file():
+                            continue
+                        if f.name.endswith(".iaupload.json") or \
+                           f.name.endswith(".iaupload.json.tmp"):
+                            continue
+                        if f.name.endswith(".zip.meta.json"):
+                            continue
+                        if re.search(r"\.zip\.\d+$", f.name):
+                            continue
+                        if f.suffix.lower() == ".zip":
+                            continue
+                        try:
+                            if f.stat().st_size < threshold_bytes:
+                                continue
+                        except Exception:
+                            continue
+                        if has_valid_split(f):
+                            continue
+                        try:
+                            parts = do_split(f, _split_size_mb)
+                            rel = f.relative_to(folder_path)
+                            print(f"  [split] {rel} -> {len(parts)} parts")
+                            made_total += 1
+                        except Exception as e_sp2:
+                            print(f"  [split] FAILED for "
+                                  f"{f.relative_to(folder_path)}: {e_sp2}")
+                except Exception as e_s:
+                    print(f"  Splitting error (continuing): {e_s}")
+                if made_total == 0:
+                    print("  (no new splits needed)")
+                else:
+                    print(f"  Split {made_total} file(s).")
+
+        # 2a. v6.56: startup account-quota probe.
+        # Send a lightweight HEAD to the S3 endpoint before doing any
+        # real work. If the account is over quota, exit immediately
+        # instead of running the scan and then failing every upload.
+        if _MULTIPART_ENABLED or not args.use_ia_library:
+            try:
+                _probe_ak = os.environ.get("IAS3_ACCESS_KEY")
+                _probe_sk = os.environ.get("IAS3_SECRET_KEY")
+                if not _probe_ak:
+                    _probe_ak = getattr(session, "access_key", None)
+                if not _probe_sk:
+                    _probe_sk = getattr(session, "secret_key", None)
+                if _probe_ak and _probe_sk:
+                    _probe_client = IAS3Client(_probe_ak, _probe_sk)
+                    _probe = _probe_client.request(
+                        "HEAD", f"/{identifier}"
+                    )
+                    if _probe.status_code == 503:
+                        _pb = (_probe.text or "").lower()
+                        if ("accesskey_tasks_queued" in _pb
+                                or "rationed" in _pb):
+                            _note_account_quota()
+                            sys.exit(2)
+            except SystemExit:
+                raise
+            except Exception as _probe_err:
+                vlog(f"  startup probe skipped: {_probe_err}")
+
         # 2. Remote Check
         print(f"\nChecking '{identifier}'...")
         try:
@@ -2895,15 +4145,33 @@ def main():
 
         # 3a. Index Local Files
         print("Indexing local files...")
-        local_file_map = {}  # normalized_path -> Path obj
+        local_file_map = {}
+        _dir_name_cache = {}
+
+        def _names_in_dir(d):
+            if d not in _dir_name_cache:
+                try:
+                    _dir_name_cache[d] = set(
+                        x.name for x in d.iterdir() if x.is_file()
+                    )
+                except Exception:
+                    _dir_name_cache[d] = set()
+            return _dir_name_cache[d]
+
         for p in folder_path.rglob("*"):
             if not p.is_file():
                 continue
             if p.name == script_name:
                 continue
-            # v6.41: skip our own resume-state files
             if p.name.endswith(".iaupload.json") or \
                p.name.endswith(".iaupload.json.tmp"):
+                continue
+            if p.name.endswith(".zip.meta.json"):
+                continue
+            siblings = _names_in_dir(p.parent)
+            if _is_covered_by_bundle(p, siblings):
+                continue
+            if _is_covered_by_split(p, siblings):
                 continue
             rel_path = p.relative_to(folder_path).as_posix()
             norm = normalize_path(rel_path)
@@ -3016,9 +4284,10 @@ def main():
         if item.exists:
             for f in item.files:
                 if f["source"] == "original" and f["name"] != script_name:
-                    # v6.41: never treat leaked resume-state files as orphans
                     if f["name"].endswith(".iaupload.json") or \
                        f["name"].endswith(".iaupload.json.tmp"):
+                        continue
+                    if f["name"].endswith(".zip.meta.json"):
                         continue
                     norm = normalize_path(f["name"])
 
@@ -3157,30 +4426,59 @@ def main():
                 first_file = files_to_upload[0]
                 vlog(f"Creating new item with first file: '{first_file[0]}'")
 
-                # --- v6.23: honor multipart for the first file of a new item too ---
+                # --- v6.50: route the first file of a new item ---
                 first_size = os.path.getsize(first_file[1])
-                _first_threshold = args.multipart_threshold * 1024 * 1024
-                _first_use_mp = _MULTIPART_ENABLED and first_size >= _first_threshold
+                _S3_PUT_MAX = 5 * 1024 * 1024 * 1024
 
-                if _first_use_mp:
-                    vlog(
-                        f"Creating new item via MULTIPART with first file: "
-                        f"'{first_file[0]}' ({first_size:,} bytes)"
-                    )
-                    success, msg = multipart_upload_worker(
-                        identifier,
-                        first_file,
-                        metadata,
-                        position=1,
-                        session=custom_session,
-                        chunk_size_mb=args.chunk_size,
-                        max_concurrency=args.multipart_concurrency,
-                    )
+                if not _MULTIPART_ENABLED:
+                    if args.use_ia_library:
+                        success, msg = upload_worker(
+                            identifier, first_file, metadata,
+                            position=1, session=custom_session,
+                        )
+                    else:
+                        success, msg = s3_upload_worker(
+                            identifier, first_file, metadata,
+                            position=1, session=custom_session,
+                        )
                 else:
-                    success, msg = upload_worker(
-                        identifier, first_file, metadata,
-                        position=1, session=custom_session,
-                    )
+                    _first_threshold = args.multipart_threshold * 1024 * 1024
+                    if not args.use_ia_library and _first_threshold > _S3_PUT_MAX:
+                        _first_threshold = _S3_PUT_MAX
+                    _first_use_mp = first_size >= _first_threshold
+
+                    if _first_use_mp:
+                        vlog(
+                            f"Creating new item via MULTIPART with first "
+                            f"file: '{first_file[0]}' ({first_size:,} bytes)"
+                        )
+                        success, msg = multipart_upload_worker(
+                            identifier,
+                            first_file,
+                            metadata,
+                            position=1,
+                            session=custom_session,
+                            chunk_size_mb=args.chunk_size,
+                            max_concurrency=args.multipart_concurrency,
+                        )
+                    elif args.use_ia_library:
+                        vlog(
+                            f"Creating new item via IA library with first "
+                            f"file: '{first_file[0]}' ({first_size:,} bytes)"
+                        )
+                        success, msg = upload_worker(
+                            identifier, first_file, metadata,
+                            position=1, session=custom_session,
+                        )
+                    else:
+                        vlog(
+                            f"Creating new item via S3 PUT with first file: "
+                            f"'{first_file[0]}' ({first_size:,} bytes)"
+                        )
+                        success, msg = s3_upload_worker(
+                            identifier, first_file, metadata,
+                            position=1, session=custom_session,
+                        )
 
                 main_bar.update(1)
                 if not success:
@@ -3203,10 +4501,33 @@ def main():
                     slot = slot_queue.get()
                     vlog(f"worker_wrapper: got slot {slot} for '{f_data[0]}'")
                     try:
-                        # --- v6.23: multipart is on by default ---
+                        # --- v6.50: S3 single PUT by default ---
                         f_size = os.path.getsize(f_data[1])
+                        _S3_PUT_MAX = 5 * 1024 * 1024 * 1024
+
+                        if not _MULTIPART_ENABLED:
+                            if args.use_ia_library:
+                                return upload_worker(
+                                    identifier,
+                                    f_data,
+                                    None,
+                                    position=slot,
+                                    session=custom_session,
+                                )
+                            return s3_upload_worker(
+                                identifier,
+                                f_data,
+                                None,
+                                position=slot,
+                                session=custom_session,
+                            )
+
                         threshold_bytes = args.multipart_threshold * 1024 * 1024
-                        use_multipart = _MULTIPART_ENABLED and f_size >= threshold_bytes
+                        if not args.use_ia_library and threshold_bytes > _S3_PUT_MAX:
+                            threshold_bytes = _S3_PUT_MAX
+
+                        use_multipart = f_size >= threshold_bytes
+
                         if use_multipart:
                             vlog(
                                 f"worker_wrapper: routing '{f_data[0]}' "
@@ -3221,7 +4542,26 @@ def main():
                                 chunk_size_mb=args.chunk_size,
                                 max_concurrency=args.multipart_concurrency,
                             )
-                        return upload_worker(
+
+                        if args.use_ia_library:
+                            vlog(
+                                f"worker_wrapper: routing '{f_data[0]}' "
+                                f"({f_size:,} bytes) to upload_worker "
+                                f"(--use-ia-library)"
+                            )
+                            return upload_worker(
+                                identifier,
+                                f_data,
+                                None,
+                                position=slot,
+                                session=custom_session,
+                            )
+
+                        vlog(
+                            f"worker_wrapper: routing '{f_data[0]}' "
+                            f"({f_size:,} bytes) to s3_upload_worker"
+                        )
+                        return s3_upload_worker(
                             identifier,
                             f_data,
                             None,
@@ -3305,13 +4645,22 @@ def main():
                         if pending and time.time() - last_liveness >= 60:
                             last_liveness = time.time()
                             in_flight = [future_to_file[f][0] for f in pending]
+                            _http_n, _rpm = _current_rate_stats()
+                            _rate_str = (
+                                f"HTTP: {_http_n} in-flight, "
+                                f"{_rpm} req in last 60s"
+                            )
                             if len(in_flight) <= 5:
                                 tqdm.write(
-                                    f"  [LIVENESS] {len(in_flight)} file(s) still in-flight: {in_flight}"
+                                    f"  [LIVENESS] {len(in_flight)} file(s) "
+                                    f"still in-flight: {in_flight} | "
+                                    f"{_rate_str}"
                                 )
                             else:
                                 tqdm.write(
-                                    f"  [LIVENESS] {len(in_flight)} file(s) still in-flight (showing first 5): {in_flight[:5]}"
+                                    f"  [LIVENESS] {len(in_flight)} file(s) "
+                                    f"still in-flight (showing first 5): "
+                                    f"{in_flight[:5]} | {_rate_str}"
                                 )
 
             main_bar.close()
@@ -3357,12 +4706,105 @@ def main():
 
         print_report()
 
-        # --- POST-UPLOAD: Offer to delete local folder on full success ---
-        if (
+        # --- v6.48: verified cleanup of replaced originals ---
+        full_success = (
             not shutdown_event.is_set()
             and len(final_results["failed"]) == 0
             and len(final_results["cancelled"]) == 0
-        ):
+        )
+
+        if full_success and args.delete_originals_after_upload:
+            print("\n" + "=" * 60)
+            print("VERIFYING ARCHIVES BEFORE DELETING ORIGINALS")
+            print("=" * 60)
+
+            plan = build_cleanup_plan(folder_path)
+
+            if not plan:
+                print("No bundles or split sets found; nothing to clean up.")
+            else:
+                all_archives = set()
+                for arch_set in plan.values():
+                    all_archives.update(arch_set)
+
+                expected = {}
+                for rel_archive in all_archives:
+                    local_archive = folder_path / rel_archive
+                    if not local_archive.exists():
+                        continue
+                    try:
+                        safe_rel, _ = truncate_path_components(rel_archive)
+                    except Exception:
+                        safe_rel = rel_archive
+                    try:
+                        expected[safe_rel] = local_archive.stat().st_size
+                    except Exception:
+                        pass
+
+                print(f"Checking {len(expected)} archive(s) on IA "
+                      f"(up to {args.verify_timeout}s)...")
+
+                verified, missing = verify_archives_on_ia(
+                    identifier, expected, session,
+                    timeout_s=args.verify_timeout,
+                )
+
+                if missing:
+                    print(f"\n[!] {len(missing)} archive(s) NOT confirmed:")
+                    for k, (want, got) in sorted(missing.items()):
+                        got_disp = "not listed" if got is None else f"{got} bytes"
+                        print(f"    {k}  (expected {want}, IA: {got_disp})")
+                    print("\nOriginals NOT deleted. Re-run to retry.")
+                else:
+                    print(f"\nAll {len(verified)} archive(s) confirmed on IA.")
+                    print("--- Deleting replaced originals ---")
+
+                    verified_norm = set()
+                    for k in verified.keys():
+                        verified_norm.add(normalize_path(k))
+
+                    removed = 0
+                    skipped = 0
+                    for original, archives in sorted(
+                            plan.items(), key=lambda kv: str(kv[0])):
+                        if not original.exists():
+                            continue
+                        all_ok = True
+                        for a in archives:
+                            try:
+                                safe_a, _ = truncate_path_components(a)
+                            except Exception:
+                                safe_a = a
+                            if normalize_path(safe_a) not in verified_norm:
+                                all_ok = False
+                                break
+                        if not all_ok:
+                            skipped += 1
+                            print(f"  [keep]  "
+                                  f"{original.relative_to(folder_path)} "
+                                  f"(some archives unverified)")
+                            continue
+                        try:
+                            original.unlink()
+                            print(f"  [removed] "
+                                  f"{original.relative_to(folder_path)}")
+                            removed += 1
+                        except Exception as e_del:
+                            print(f"  [failed]  "
+                                  f"{original.relative_to(folder_path)}: "
+                                  f"{e_del}")
+
+                    for meta in folder_path.rglob("*.zip.meta.json"):
+                        try:
+                            meta.unlink()
+                        except Exception:
+                            pass
+
+                    print(f"  Removed {removed} original(s), "
+                          f"kept {skipped}.")
+
+        # --- POST-UPLOAD: Offer to delete local folder on full success ---
+        if full_success:
             try:
                 answer = (
                     input(
