@@ -4236,6 +4236,19 @@ def main():
                 except KeyboardInterrupt:
                     args.keep_folder_on_success = True
                     print("\nKeeping folders by default.")
+            if not getattr(args, "fix_lrf", False):
+                has_lrf = False
+                for d in subdirs:
+                    if next(d.rglob("*.[lL][rR][fF]"), None) is not None:
+                        has_lrf = True
+                        break
+                if has_lrf:
+                    try:
+                        ans = input("\nDetected DJI LRF files in the batch. Automatically rename them to .mp4 across all folders? (y/n) [y]: ").strip().lower()
+                        if ans in ("", "y", "yes"):
+                            args.fix_lrf = True
+                    except KeyboardInterrupt:
+                        print("\nSkipping LRF renaming by default.")
             
             if getattr(args, "delete_folder_on_success", False): child_flags.append("--delete-folder-on-success")
             if getattr(args, "keep_folder_on_success", False): child_flags.append("--keep-folder-on-success")
