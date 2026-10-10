@@ -4251,7 +4251,15 @@ def main():
                     ident = sanitize_identifier(d.name)
                     
                 cmd = [sys.executable, sys.argv[0]] + child_flags + [str(d), ident]
-                res = subprocess.run(cmd)
+                try:
+                    res = subprocess.run(cmd)
+                except KeyboardInterrupt:
+                    shutdown_event.set()
+
+                if shutdown_event.is_set():
+                    print("\nBatch processing aborted by user.")
+                    break
+
                 if res.returncode == 0:
                     success_count += 1
                     
