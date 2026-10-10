@@ -604,6 +604,7 @@ VERBOSE = False  # Set by --verbose flag
 _MULTIPART_ENABLED = False  # v6.23: on by default; --no-multipart disables
 COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", "zxx"]
 _skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
+_force_defaults_global = False # Set by --force-defaults to never reset _skip_to_defaults
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_THREADS = 12 
@@ -1668,8 +1669,9 @@ def collect_metadata(
     suggested_date=None,
     suggested_period=None,
 ):
-    global _skip_to_defaults
-    _skip_to_defaults = False  # Reset at the start of each metadata collection
+    global _skip_to_defaults, _force_defaults_global
+    if not _force_defaults_global:
+        _skip_to_defaults = False  # Reset at the start of each metadata collection
 
     print("\n--- METADATA PREPARATION ---")
     print("Required: Title, Mediatype.")
@@ -3917,6 +3919,21 @@ def main():
         help="Disable automatic small-file bundling (texts.zip/images.zip).",
     )
     parser.add_argument(
+        "--batch-dirs",
+        action="store_true",
+        help="Process all subdirectories in 'folder' sequentially as separate items.",
+    )
+    parser.add_argument(
+        "--batch-prompt",
+        action="store_true",
+        help="When using --batch-dirs, prompt for metadata for each directory instead of auto-accepting defaults.",
+    )
+    parser.add_argument(
+        "--force-defaults",
+        action="store_true",
+        help=argparse.SUPPRESS,  # Hidden flag for internal batch use
+    )
+    parser.add_argument(
         "--split",
         action="store_true",
         help=("Enable automatic large-file splitting into multi-volume "
@@ -4153,6 +4170,67 @@ def main():
             sys.exit(1)
 
         folder_path = Path(folder_path_str)
+
+        # --- BATCH DIRS LOGIC ---
+        global _force_defaults_global, _skip_to_defaults
+        if getattr(args, "force_defaults", False):
+            _force_defaults_global = True
+            _skip_to_defaults = True
+
+        if getattr(args, "batch_dirs", False):
+            subdirs = sorted([d for d in folder_path.iterdir() if d.is_dir()])
+            if not subdirs:
+                print(f"No subdirectories found in '{folder_path_str}'. Exiting.")
+                sys.exit(0)
+            
+            print(f"\n=== BATCH MODE: Found {len(subdirs)} folders to process ===")
+            
+            child_flags = []
+            if getattr(args, 'threads', DEFAULT_THREADS) != DEFAULT_THREADS: child_flags.extend(["-t", str(args.threads)])
+            if getattr(args, 'sync', False): child_flags.append("-s")
+            if getattr(args, 'orphan_deletion', False): child_flags.append("-o")
+            if getattr(args, 'metadata', False): child_flags.append("-m")
+            if getattr(args, 'md5_verify', False): child_flags.append("--md5-verify")
+            if getattr(args, 'fix_lrf', False): child_flags.append("--fix-lrf")
+            if getattr(args, 'no_zip', False): child_flags.append("--no-zip")
+            if getattr(args, 'split', False): child_flags.append("--split")
+            if getattr(args, 'split_size', DEFAULT_SPLIT_SIZE_STR) != DEFAULT_SPLIT_SIZE_STR: child_flags.extend(["--split-size", args.split_size])
+            if getattr(args, 'bundle_min', DEFAULT_BUNDLE_MIN) != DEFAULT_BUNDLE_MIN: child_flags.extend(["--bundle-min", str(args.bundle_min)])
+            if getattr(args, 'verbose', False): child_flags.append("-v")
+            if getattr(args, 'no_multipart', False): child_flags.append("--no-multipart")
+            if getattr(args, 'no_resume', False): child_flags.append("--no-resume")
+            if getattr(args, 'multipart', False): child_flags.append("--multipart")
+            if getattr(args, 'chunk_size', None): child_flags.extend(["--chunk-size", str(args.chunk_size)])
+            if getattr(args, 'multipart_threshold', DEFAULT_MULTIPART_THRESHOLD_MB) != DEFAULT_MULTIPART_THRESHOLD_MB: child_flags.extend(["--multipart-threshold", str(args.multipart_threshold)])
+            if getattr(args, 'multipart_concurrency', DEFAULT_MULTIPART_CONCURRENCY) != DEFAULT_MULTIPART_CONCURRENCY: child_flags.extend(["--multipart-concurrency", str(args.multipart_concurrency)])
+            if getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT) != DEFAULT_MAX_INFLIGHT: child_flags.extend(["--max-inflight", str(args.max_inflight)])
+            if getattr(args, 'max_rpm', DEFAULT_MAX_RPM) != DEFAULT_MAX_RPM: child_flags.extend(["--max-rpm", str(args.max_rpm)])
+            if getattr(args, 'delete_originals_after_upload', False): child_flags.append("--delete-originals-after-upload")
+            if getattr(args, 'verify_timeout', 60) != 60: child_flags.extend(["--verify-timeout", str(args.verify_timeout)])
+            if not getattr(args, 'use_ia_library', True): child_flags.append("--use-s3-put")
+            
+            if not getattr(args, 'batch_prompt', False):
+                child_flags.append("--force-defaults")
+            
+            import subprocess
+            success_count = 0
+            for i, d in enumerate(subdirs):
+                print(f"\n{'='*60}")
+                print(f"BATCH {i+1}/{len(subdirs)}: Processing '{d.name}'")
+                print(f"{'='*60}")
+                
+                metadata_prefills = load_metadata_prefills(d)
+                ident = metadata_prefills.get("identifier") if metadata_prefills else None
+                if not ident:
+                    ident = sanitize_identifier(d.name)
+                    
+                cmd = [sys.executable, sys.argv[0]] + child_flags + [str(d), ident]
+                res = subprocess.run(cmd)
+                if res.returncode == 0:
+                    success_count += 1
+                    
+            print(f"\n=== BATCH COMPLETE: {success_count}/{len(subdirs)} successful ===")
+            sys.exit(0 if success_count == len(subdirs) else 1)
 
         # --- v6.39: --reset-state ---
         if args.reset_state:
