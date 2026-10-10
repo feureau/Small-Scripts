@@ -4157,6 +4157,9 @@ def main():
         folder_path_str = args.folder
         identifier = args.identifier
 
+        if not folder_path_str and getattr(args, "batch_dirs", False):
+            folder_path_str = "."
+
         if folder_path_str:
             folder_path_str = folder_path_str.strip('"').strip("'")
         else:
