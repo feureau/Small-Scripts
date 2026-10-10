@@ -7,9 +7,7 @@ OUTPUT LANGUAGE
 Detect the dominant language of the discussion and write everything in that language. If the discussion was in English, output English. If the discussion was in Indonesian or Chinese, output that. Proper nouns stay as-is.
 
 WHAT TO PRODUCE
-1. One TikTok caption (the strongest possible version)
-2. One hashtag set
-3. On-screen text and spoken keyword guidance for the first 3 seconds
+1. One TikTok caption (the strongest possible version), including the hashtag set at the end on its own line.
 
 --- CAPTION VOICE AND STYLE ---
 
@@ -80,20 +78,6 @@ Write in a conversational, platform-native tone. TikTok captions are shorter and
 - Use emojis sparingly but include at least one per caption. Place it naturally, not at the end as an afterthought.
 - Write in short paragraphs separated by line breaks. TikTok captions with line breaks get higher completion rates.
 
---- SPOKEN AND ON-SCREEN KEYWORD RULES ---
-
-TikTok's algorithm weights spoken audio and on-screen text heavily. These must be included in the output.
-
-SPOKEN KEYWORD
-- The primary keyword must be said aloud within the first 3 seconds of the video.
-- Format: [SPOKEN: primary keyword phrase, spoken in first 3 seconds]
-
-ON-SCREEN TEXT
-- The primary keyword must appear as visible on-screen text within the first 3 seconds.
-- Format: [ON-SCREEN: primary keyword phrase, displayed in first 3 seconds]
-
-The caption, spoken keyword, and on-screen text must all reinforce the same topic. The algorithm triangulates these three signals to determine search ranking.
-
 --- HASHTAG RULES ---
 
 - 3 to 5 hashtags total. TikTok's algorithm prioritizes keywords over hashtags, but tags still support categorization.
@@ -117,17 +101,9 @@ Before returning output, verify:
 - Caption passes the FAIRNESS check if a counterargument exists in the source.
 - Caption passes the INTENT check (motive claims are first-person).
 - Caption passes the LOGIC check (each sentence follows from the one before).
-- Spoken keyword and on-screen text are included and appear within the first 3 seconds.
 - Hashtag set is 3 to 5 tags, each with # prefix, mixing niche + branded + topic-specific. No generic tags. No #fyp or #viral.
 - Caption uses line breaks for readability.
 
 --- OUTPUT FORMAT ---
 
-Return exactly four code blocks in this order, nothing else:
-
-Block 1: The TikTok caption alone in a code block.
-Block 2: The hashtag set as a single line, each hashtag prefixed with #, separated by spaces, all in one code block.
-Block 3: The spoken keyword guidance in a code block. Format: [SPOKEN: primary keyword phrase, spoken in first 3 seconds]
-Block 4: The on-screen text guidance in a code block. Format: [ON-SCREEN: primary keyword phrase, displayed in first 3 seconds]
-
-Do not add headings, labels, commentary, or explanations outside the code blocks. Do not number the blocks. Do not use markdown bold or italics anywhere. Just the four code blocks in order.
+Return exactly one code block containing the caption followed by a line with the hashtags. Do not add headings, labels, commentary, or explanations outside the code block. Do not number the block. Do not use markdown bold or italics anywhere. Just the code block.

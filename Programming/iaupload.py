@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.58 (Safe Splitting)
+VERSION: 6.60 (Comprehensive Reliability & Integrity Fix)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -23,20 +23,77 @@ ARCHITECTURE & DESIGN RATIONALE
    - LOGIC: We use 'argparse' to handle positional arguments (folder, id) optionally,
      while adding flagged arguments for settings (threads).
 
-2. CUSTOM THREADING
-   - REASON: Different users have different bandwidths. 5 threads might be too slow
-     for a Gigabit connection, or too fast for a weak CPU.
-   - LOGIC: The user can now override MAX_WORKERS via the '-t' flag.
+2. CUSTOM THREADING & RATE LIMITING
+   - REASON: Different users have different bandwidths, while IA enforces per-account
+     and per-bucket rate limits.
+   - LOGIC: Uploads use bounded worker threads with a global rate-limiter and
+     in-flight request slot (_inflight_slot) to prevent 503 SlowDown throttling.
 
-3. CORE LOGIC (Inherited)
-   - Graceful Shutdown (Event-based).
-   - MD5 Verification (Content-based sync).
-   - ProgressWrapper (Seek/Tell compliant).
-   - Visual Dashboard (tqdm).
+3. CORE LOGIC & RESILIENT S3 / MULTIPART
+   - Resumable SigV2 multipart uploads with exact chunk reconciliation.
+   - Graceful Shutdown (two-stage Ctrl+C preserving resume state).
+   - Content and path verification before upload.
+   - Visual Dashboard (tqdm) with true progress tracking.
 
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-10] VERSION 6.60 UPDATE
+   - FIXED: Multipart resume chunk boundary desynchronization. If concurrency
+            or chunk arguments changed between runs, auto-chunking computed
+            different boundaries while keeping parts from server ListParts,
+            causing silent file corruption on reassembly. Resumed uploads
+            now validate mtime and adopt the exact chunk_bytes / n_parts from
+            the saved state.
+   - FIXED: Orphan deletion (-o / --orphan-deletion) called non-existent
+            `item.delete_file()`. Now properly calls `item.get_file(name).delete()`
+            routed through `_inflight_slot()` with rate limiting.
+   - FIXED: Path truncation collision with orphan deletion. Files exceeding
+            IA's 230-byte path limit were indexed under their original name
+            but uploaded under truncated names; on subsequent runs they were
+            falsely flagged as new files and their remote counterparts were
+            deleted as orphans. Local indexing now indexes by safe_rel_path.
+   - FIXED: Small-file bundling & cleanup false positives. Previously, any file
+            matching a bundle group's extensions in a folder with texts.zip /
+            images.zip was assumed covered and omitted from upload, then deleted
+            by --delete-originals-after-upload even if not actually inside the
+            archive. Now checks actual zip contents before marking covered or
+            planning deletion.
+   - FIXED: S3 503 SlowDown retries sent empty bodies. Streaming file readers
+            were not rewound to offset 0 before retrying the request in
+            IAS3Client.request(). Added seek() support to SliceReader and
+            rewind before retry.
+   - FIXED: First file upload on new item creation failed when routed through
+            S3 / multipart workers due to 404 preflight and missing metadata
+            headers. New item creation now always routes the first file through
+            upload_worker with full metadata.
+   - FIXED: Metadata updates via -m for existing items were discarded if files
+            were queued for upload. Now applies immediately via modify_metadata().
+   - FIXED: Ctrl+C prematurely aborted multipart uploads and deleted saved
+            resume state, discarding tens of gigabytes of uploaded parts. State
+            is now preserved on interrupt so re-running resumes seamlessly.
+   - FIXED: Metadata questionnaire lost defaults (language, date, coverage,
+            temporal) when prefills existed but lacked those specific keys.
+   - FIXED: 7z watchdog in do_split() killed splits longer than 1 hour. Timer
+            now resets on streaming output activity.
+   - FIXED: Global rate limiter (--max-rpm) race condition in _inflight_slot().
+   - FIXED: Resumed multipart progress bar started at 0% instead of accounting
+            for already-confirmed bytes.
+   - CLEANUP: Removed unused boto3 imports and dead constants.
+
+[2026-10-10] VERSION 6.59 UPDATE
+   - FIXED: Multipart resume double-counted already-uploaded parts.
+            When a run resumed from state (e.g. "server has 2/32
+            parts"), the 2 resumed parts were seeded into `parts` AND
+            re-returned by their executor task, so `parts` ended up
+            with 34 entries for a 32-part file. The final sanity check
+            `len(parts) != n_parts` then aborted with the misleading
+            message "only 34/32 parts uploaded", and the file was
+            never completed. Parts are now tracked in a dict keyed
+            by part number, so resumed and freshly-uploaded parts
+            merge idempotently. Re-running after the crash now
+            completes the upload instead of growing the count.
+
 [2026-10-09] VERSION 6.58 UPDATE
    - FIXED: Split parts and sidecar meta were keyed on path.stem, so
             foo.mp4 and foo.mkv in the same directory collided.
@@ -511,15 +568,6 @@ _socket.setdefaulttimeout(30)
 
 from internetarchive import get_item, get_session, upload
 
-# --- OPTIONAL: boto3 for S3 multipart uploads (v6.22) ---
-try:
-    import boto3
-    from boto3.s3.transfer import TransferConfig, S3Transfer
-    from botocore.config import Config as BotoConfig
-    BOTO3_AVAILABLE = True
-except ImportError:
-    BOTO3_AVAILABLE = False
-
 # Import iazip's process_directory for -z/--zip flag integration
 try:
     from iazip import process_directory as iazip_process
@@ -558,7 +606,7 @@ COMMON_LANGUAGES = ["en", "de", "fr", "es", "it", "ja", "zh", "pt", "ru", "ar", 
 _skip_to_defaults = False  # Set to True when user types '!!' at any metadata prompt
 
 # --- CONFIGURATION DEFAULTS ---
-DEFAULT_THREADS = 8 
+DEFAULT_THREADS = 12 
 MAX_RETRIES = 20
 RETRY_BACKOFF_START = 30
 MAX_BACKOFF_TIME = 300
@@ -569,12 +617,10 @@ READ_TIMEOUT = 300
 DEFAULT_MULTIPART_THRESHOLD_MB = 15 * 1024  # v6.48: 15 GB (was 128 MB)
 DEFAULT_CHUNK_SIZE_MB = None          # v6.40: None = auto-size
 DEFAULT_MULTIPART_CONCURRENCY = 4     # v6.55: raised from 2
-MULTIPART_VERIFY_TIMEOUT = 300        # Seconds to wait for server-side confirm
 PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
 RATE_LIMIT_MAX_RETRIES = 12           # v6.37: 503 SlowDown attempts
 RATE_LIMIT_BACKOFF_START = 30         # v6.37: initial 503 wait (s)
 RATE_LIMIT_BACKOFF_MAX = 300          # v6.37: cap 503 wait (s)
-IA_S3_ENDPOINT = "https://s3.us.archive.org"
 
 # --- v6.48: bundling, splitting, verified cleanup ------------------------
 
@@ -831,6 +877,9 @@ def do_split(path, size_mb):
         except Exception:
             pass
 
+    # v6.60: watchdog resets on output activity so multi-hour splits
+    # of massive files don't get killed after 1 hour of active work.
+    # Kills only if 7z hangs with zero output for an hour.
     watchdog = threading.Timer(3600.0, _kill_on_timeout)
     watchdog.daemon = True
     watchdog.start()
@@ -849,6 +898,10 @@ def do_split(path, size_mb):
                 break
             if not chunk:
                 break
+            watchdog.cancel()
+            watchdog = threading.Timer(3600.0, _kill_on_timeout)
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.buffer.flush()
@@ -961,11 +1014,69 @@ def bundle_dir(directory, min_files=DEFAULT_BUNDLE_MIN):
     return created
 
 
+_bundle_namelist_cache = {}
+
+
+def _get_bundle_members(bundle_path):
+    """
+    v6.60: return {member_name: (file_size, CRC32)} for a bundle zip.
+    Empty dict if the zip is missing or unreadable.
+    """
+    if not bundle_path.is_file():
+        return {}
+    try:
+        b_stat = bundle_path.stat()
+        cache_key = (str(bundle_path), b_stat.st_mtime, b_stat.st_size)
+        if cache_key in _bundle_namelist_cache:
+            return _bundle_namelist_cache[cache_key]
+        with zipfile.ZipFile(bundle_path, "r") as zf:
+            members = {
+                zi.filename: (zi.file_size, zi.CRC)
+                for zi in zf.infolist() if not zi.is_dir()
+            }
+        _bundle_namelist_cache[cache_key] = members
+        return members
+    except Exception:
+        return {}
+
+
+def _file_crc32(path, block_size=1024 * 1024):
+    import zlib
+    crc = 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(block_size), b""):
+            crc = zlib.crc32(chunk, crc)
+    return crc & 0xFFFFFFFF
+
+
+def _bundle_entry_matches(p, members, check_crc=False):
+    """v6.60: is local file `p` stored, unchanged, inside the bundle?"""
+    entry = members.get(p.name)
+    if entry is None:
+        return False
+    zsize, zcrc = entry
+    try:
+        if p.stat().st_size != zsize:
+            return False
+        if check_crc and _file_crc32(p) != zcrc:
+            return False
+    except Exception:
+        return False
+    return True
+
+
 def _is_covered_by_bundle(p, sibling_names):
+    # v6.60: only consider covered if p is ACTUALLY inside the bundle with
+    # the same size. Files added after the bundle was created, files edited
+    # since, or files merely sharing an extension with an unrelated zip are
+    # uploaded individually instead of being silently skipped.
     ext = p.suffix.lower()
     for group_name, exts in BUNDLE_GROUPS.items():
-        if ext in exts and f"{group_name}.zip" in sibling_names:
-            return True
+        bundle_name = f"{group_name}.zip"
+        if ext in exts and bundle_name in sibling_names:
+            members = _get_bundle_members(p.parent / bundle_name)
+            if _bundle_entry_matches(p, members):
+                return True
     return False
 
 
@@ -1010,6 +1121,7 @@ def build_cleanup_plan(folder_path):
                                 if f.is_file()]
                 except Exception:
                     continue
+                members = _get_bundle_members(bundle)
                 for sib in siblings:
                     if sib == bundle:
                         continue
@@ -1017,11 +1129,15 @@ def build_cleanup_plan(folder_path):
                         continue
                     if sib.name in _BUNDLE_EXCLUDE_NAMES:
                         continue
-                    if sib.name.endswith(".iaupload.json"):
+                    if sib.name.endswith(".iaupload.json") or \
+                       sib.name.endswith(".iaupload.json.tmp"):
                         continue
                     if sib.name.endswith(".zip.meta.json"):
                         continue
-                    plan.setdefault(sib, set()).add(bundle_rel)
+                    # v6.60: only plan deletion if the original is inside
+                    # the archive AND byte-identical (size + CRC32).
+                    if _bundle_entry_matches(sib, members, check_crc=True):
+                        plan.setdefault(sib, set()).add(bundle_rel)
     except Exception as e:
         vlog(f"  build_cleanup_plan: bundle scan failed: {e}")
     try:
@@ -1123,7 +1239,7 @@ def verify_archives_on_ia(identifier, expected, session, timeout_s=180,
 # to keep concurrent requests under IA's per-account rate limit, no matter
 # how many file/part threads the user configured. Retries do not hold a
 # slot while sleeping, so backoffs don't starve other requests.
-DEFAULT_MAX_INFLIGHT = 8  # v6.55: raised from 4
+DEFAULT_MAX_INFLIGHT = 12  # raised from 8
 _MAX_INFLIGHT = DEFAULT_MAX_INFLIGHT
 _inflight_sem = threading.BoundedSemaphore(_MAX_INFLIGHT)
 
@@ -1273,21 +1389,26 @@ def _inflight_slot():
             time.sleep(min(wait, 1.0))
             continue
 
-        # 2. Global rate limiter.
-        with _rate_lock:
-            since_last = time.time() - _rate_last_request
-            pacer_wait = _rate_min_interval - since_last
-        if pacer_wait > 0:
-            time.sleep(min(pacer_wait, 1.0))
-            continue
-
-        # 3. Concurrency semaphore.
+        # 2. Concurrency semaphore.
         got = sem.acquire(timeout=1.0)
 
-    with _rate_lock:
-        _rate_last_request = time.time()
-        _rate_inflight += 1
-        _rate_recent.append(_rate_last_request)
+    # 3. Global rate limiter (synchronized pacing once wire slot is held)
+    pacing_done = False
+    while not pacing_done:
+        if shutdown_event.is_set():
+            sem.release()
+            raise RuntimeError("Cancelled by user (waiting for wire slot)")
+        with _rate_lock:
+            now = time.time()
+            since_last = now - _rate_last_request
+            pacer_wait = _rate_min_interval - since_last
+            if pacer_wait <= 0:
+                _rate_last_request = now
+                _rate_inflight += 1
+                _rate_recent.append(now)
+                pacing_done = True
+                break
+        time.sleep(min(pacer_wait, 0.5))
 
     try:
         yield
@@ -1680,9 +1801,9 @@ def collect_metadata(
     if subjects:
         metadata["subject"] = subjects
 
-    # Additional optional fields from prefills
-    language_default = prefills.get("language") if prefills else "en"
-    date_default = prefills.get("date") if prefills else suggested_date
+    # Additional optional fields from prefills (preserving default fallbacks if key is absent)
+    language_default = (prefills.get("language") if prefills else None) or "en"
+    date_default = (prefills.get("date") if prefills else None) or suggested_date
     publisher_default = prefills.get("publisher") if prefills else None
     rights_default = prefills.get("rights") if prefills else None
     contributor_default = prefills.get("contributor") if prefills else None
@@ -1692,8 +1813,8 @@ def collect_metadata(
     if choice in license_options and not rights_default:
         rights_default = license_options[choice][0]
 
-    coverage_default = prefills.get("coverage") if prefills else suggested_period
-    temporal_default = prefills.get("temporal") if prefills else suggested_period
+    coverage_default = (prefills.get("coverage") if prefills else None) or suggested_period
+    temporal_default = (prefills.get("temporal") if prefills else None) or suggested_period
     spatial_default = prefills.get("spatial") if prefills else None
     citation_default = prefills.get("citation") if prefills else None
     type_default = prefills.get("type") if prefills else None
@@ -2430,8 +2551,9 @@ def _clear_state(local_path):
         vlog(f"  state clear failed ({sp}): {e}")
 
 
-def _state_matches(st, identifier, remote_key, local_path, local_size):
-    """Does this state file belong to the current upload?"""
+def _state_matches(st, identifier, remote_key, local_path, local_size,
+                   chunk_bytes=None):
+    """v6.60: Does this state file belong to the current upload?"""
     if not st:
         return False
     if st.get("identifier") != identifier:
@@ -2440,6 +2562,19 @@ def _state_matches(st, identifier, remote_key, local_path, local_size):
         return False
     if int(st.get("local_size") or -1) != int(local_size):
         return False
+    try:
+        cur_mtime = os.path.getmtime(local_path)
+        saved_mtime = float(st.get("local_mtime") or 0)
+        if saved_mtime and abs(cur_mtime - saved_mtime) > 1.0:
+            vlog(f"  state mtime mismatch (saved={saved_mtime}, cur={cur_mtime})")
+            return False
+    except Exception:
+        return False
+    if chunk_bytes is not None:
+        saved_chunk = int(st.get("chunk_bytes") or -1)
+        if saved_chunk != int(chunk_bytes):
+            vlog(f"  state chunk_bytes mismatch (saved={saved_chunk}, req={chunk_bytes})")
+            return False
     return True
 
 
@@ -2574,6 +2709,16 @@ class IAS3Client:
         for attempt in range(1, RATE_LIMIT_MAX_RETRIES + 1):
             if shutdown_event.is_set():
                 return last_r
+
+            # v6.60: rewind streaming file readers before retry so we don't
+            # send an empty body with a non-zero Content-Length!
+            if attempt > 1 and hasattr(data, "seek"):
+                try:
+                    data.seek(0)
+                    if hasattr(data, "_bar") and hasattr(data._bar, "reset"):
+                        data._bar.reset()
+                except Exception as e_rewind:
+                    vlog(f"  could not rewind data before retry: {e_rewind}")
 
             url = self.ENDPOINT + enc_path + (f"?{query}" if query else "")
             r = self._do(method, url, enc_path, query, data,
@@ -2823,6 +2968,26 @@ def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=8,
     return min(mb, max_mb)
 
 
+MAX_S3_PARTS = 10000
+
+
+def _resolve_chunk_bytes(file_size, chunk_size_mb, concurrency):
+    """
+    v6.60: single source of truth for multipart chunk sizing.
+    Returns (chunk_bytes, n_parts). Applies auto-sizing when
+    chunk_size_mb is falsy, a 5 MB floor, and upscaling to stay
+    within S3's 10,000-part limit.
+    """
+    if not chunk_size_mb:
+        chunk_size_mb = auto_chunk_mb(file_size, concurrency)
+    chunk_bytes = max(5, int(chunk_size_mb)) * 1024 * 1024
+    min_chunk_bytes = -(-int(file_size) // MAX_S3_PARTS)  # ceil div
+    if chunk_bytes < min_chunk_bytes:
+        chunk_bytes = -(-min_chunk_bytes // (1024 * 1024)) * 1024 * 1024
+    n_parts = max(1, -(-int(file_size) // chunk_bytes))
+    return chunk_bytes, n_parts
+
+
 class SliceReader:
     """
     v6.40: file-like object exposing a bounded slice [offset, offset+size)
@@ -2836,6 +3001,8 @@ class SliceReader:
     remaining bytes via tell().
     """
     def __init__(self, path, offset, size):
+        self._path = path
+        self._offset = int(offset)
         self._f = open(path, "rb")
         try:
             self._f.seek(offset)
@@ -2847,6 +3014,26 @@ class SliceReader:
 
     def __len__(self):
         return self._size
+
+    def seek(self, offset=0, whence=0):
+        """v6.60: allow rewinding the slice for request retries."""
+        if whence == 0:
+            target = self._offset + offset
+            self._f.seek(target)
+            self._remaining = self._size - offset
+            return offset
+        elif whence == 1:
+            current_pos = self._size - self._remaining
+            target_pos = current_pos + offset
+            self._f.seek(self._offset + target_pos)
+            self._remaining = self._size - target_pos
+            return target_pos
+        elif whence == 2:
+            target_pos = self._size + offset
+            self._f.seek(self._offset + target_pos)
+            self._remaining = self._size - target_pos
+            return target_pos
+        raise ValueError(f"Invalid whence: {whence}")
 
     def read(self, n=-1):
         if self._remaining <= 0:
@@ -2860,6 +3047,12 @@ class SliceReader:
             return b""
         self._remaining -= len(data)
         return data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def close(self):
         try:
@@ -3079,32 +3272,80 @@ def multipart_upload_worker(
     vlog(f"MULTIPART START for '{remote_key}' ({file_size:,} bytes, "
          f"chunk={chunk_size_mb}MB, concurrency={max_concurrency})")
 
-    # --- v6.40: resolve chunk size (auto if --chunk-size not given) ---
-    MAX_S3_PARTS = 10000
-    if not chunk_size_mb:
-        chunk_size_mb = auto_chunk_mb(file_size, max_concurrency)
-        tqdm.write(
-            f"[multipart] {remote_key}: auto chunk = "
-            f"{chunk_size_mb} MB "
-            f"(file {file_size/1e9:.2f} GB, {max_concurrency} threads)"
-        )
-    chunk_bytes = max(5, chunk_size_mb) * 1024 * 1024
-    # Safety: if the resulting part count exceeds S3's 10,000 limit, scale
-    # the chunk size up until it fits.
-    min_chunk_bytes = -(-file_size // MAX_S3_PARTS)  # ceil div
-    if chunk_bytes < min_chunk_bytes:
-        new_mb = -(-min_chunk_bytes // (1024 * 1024))
-        tqdm.write(
-            f"[multipart] {remote_key}: file is {file_size/1e9:.1f} GB; "
-            f"scaling chunk {chunk_size_mb} MB -> {new_mb} MB "
-            f"(S3 10,000-part limit)"
-        )
-        chunk_size_mb = new_mb
-        chunk_bytes = new_mb * 1024 * 1024
-    n_parts = -(-file_size // chunk_bytes)  # ceil div
-    vlog(f"  chunk_bytes={chunk_bytes:,}  n_parts={n_parts}")
-
+    # --- v6.60: resolve chunk size and check resume state ---
     client = IAS3Client(access_key, secret_key)
+
+    _state = None
+    _state_last_write = 0.0
+    try:
+        _state = _load_state(local_path)
+    except Exception as _se:
+        vlog(f"  state load outer exception: {_se}")
+        _state = None
+
+    # Effective chunk size for an EXPLICIT --chunk-size, computed exactly
+    # like a fresh upload would (5 MB floor, 10,000-part scaling), so it
+    # is comparable with the chunk_bytes stored in the state file.
+    req_chunk_bytes = None
+    if chunk_size_mb:
+        req_chunk_bytes, _ = _resolve_chunk_bytes(
+            file_size, chunk_size_mb, max_concurrency
+        )
+
+    def _discard_state(reason):
+        nonlocal _state
+        vlog(f"  discarding resume state: {reason}")
+        # v6.60: abort the stale server-side upload so its parts don't
+        # linger and count against the account's task quota.
+        _old_uid = _state.get("upload_id") if _state else None
+        if _old_uid:
+            try:
+                client.abort_multipart(
+                    _state.get("identifier") or identifier,
+                    _state.get("remote_key") or remote_key,
+                    _old_uid,
+                )
+            except Exception:
+                pass
+        _clear_state(local_path)
+        _state = None
+
+    if _state and getattr(args_ref, "no_resume", False):
+        _discard_state("--no-resume given")
+    elif _state and not _state_matches(
+        _state, identifier, remote_key, local_path, file_size,
+        chunk_bytes=req_chunk_bytes,
+    ):
+        _discard_state("state does not match current file/settings")
+
+    if _state and _state.get("chunk_bytes") and _state.get("n_parts"):
+        chunk_bytes = int(_state["chunk_bytes"])
+        n_parts = int(_state["n_parts"])
+        if n_parts != -(-file_size // chunk_bytes):
+            _discard_state("n_parts inconsistent with chunk_bytes")
+    if _state and _state.get("chunk_bytes") and _state.get("n_parts"):
+        tqdm.write(
+            f"[multipart] {remote_key}: adopting resumed chunk size = "
+            f"{chunk_bytes // (1024 * 1024)} MB ({n_parts} parts)"
+        )
+    else:
+        if not chunk_size_mb:
+            tqdm.write(
+                f"[multipart] {remote_key}: auto chunk = "
+                f"{auto_chunk_mb(file_size, max_concurrency)} MB "
+                f"(file {file_size/1e9:.2f} GB, {max_concurrency} threads)"
+            )
+        chunk_bytes, n_parts = _resolve_chunk_bytes(
+            file_size, chunk_size_mb, max_concurrency
+        )
+        if chunk_size_mb and chunk_bytes != max(5, chunk_size_mb) * 1024 * 1024:
+            tqdm.write(
+                f"[multipart] {remote_key}: file is {file_size/1e9:.1f} GB; "
+                f"scaling chunk {chunk_size_mb} MB -> "
+                f"{chunk_bytes // (1024 * 1024)} MB (S3 10,000-part limit)"
+            )
+
+    vlog(f"  chunk_bytes={chunk_bytes:,}  n_parts={n_parts}")
 
     # --- preflight: HEAD bucket (read; 307 is expected and OK) ---
     try:
@@ -3126,61 +3367,40 @@ def multipart_upload_worker(
     upload_id = None
     parts = []
     resumed_from = 0
-    _state = None
-    _state_last_write = 0.0
-    _state_dirty = False
-
-    # --- v6.39: try to resume a previous multipart upload ---
-    try:
-        _state = _load_state(local_path)
-    except Exception as _se:
-        vlog(f"  state load outer exception: {_se}")
-        _state = None
 
     if _state and not getattr(args_ref, "no_resume", False):
-        if not _state_matches(_state, identifier, remote_key,
-                              local_path, file_size):
-            vlog(f"  state file present but does not match current upload; "
-                 f"discarding")
+        _prev_uid = _state.get("upload_id")
+        vlog(f"  found resume state (upload_id={_prev_uid}); "
+             f"reconciling with server via ListParts ...")
+        try:
+            server_parts = client.list_parts(
+                identifier, remote_key, _prev_uid
+            )
+        except Exception as _lpe:
+            vlog(f"  ListParts failed: {_lpe}; starting fresh")
+            server_parts = None
+
+        if server_parts is None:
+            tqdm.write(
+                f"  [resume] previous upload id expired or unknown; "
+                f"starting fresh"
+            )
             _clear_state(local_path)
             _state = None
         else:
-            _prev_uid = _state.get("upload_id")
-            vlog(f"  found resume state (upload_id={_prev_uid}); "
-                 f"reconciling with server via ListParts ...")
-            try:
-                server_parts = client.list_parts(
-                    identifier, remote_key, _prev_uid
-                )
-            except Exception as _lpe:
-                vlog(f"  ListParts failed: {_lpe}; starting fresh")
-                server_parts = None
-
-            if server_parts is None:
-                tqdm.write(
-                    f"  [resume] previous upload id expired or unknown; "
-                    f"starting fresh"
-                )
-                _clear_state(local_path)
-                _state = None
-            else:
-                upload_id = _prev_uid
-                # Rebuild parts list from server response. Server is truth.
-                # We only keep parts whose part_number <= n_parts.
-                valid = {pn: et for pn, et in server_parts.items()
-                         if 1 <= pn <= n_parts}
-                parts = [(pn, et) for pn, et in sorted(valid.items())]
-                resumed_from = len(parts)
-                tqdm.write(
-                    f"  [resume] server has {resumed_from}/{n_parts} parts; "
-                    f"uploading the remaining {n_parts - resumed_from}"
-                )
-                vlog(f"  resumed: upload_id={upload_id} "
-                     f"resumed_parts={resumed_from}")
-    elif _state and getattr(args_ref, "no_resume", False):
-        vlog(f"  --no-resume given; discarding state")
-        _clear_state(local_path)
-        _state = None
+            upload_id = _prev_uid
+            # Rebuild parts list from server response. Server is truth.
+            # We only keep parts whose part_number <= n_parts.
+            valid = {pn: et for pn, et in server_parts.items()
+                     if 1 <= pn <= n_parts}
+            parts = [(pn, et) for pn, et in sorted(valid.items())]
+            resumed_from = len(parts)
+            tqdm.write(
+                f"  [resume] server has {resumed_from}/{n_parts} parts; "
+                f"uploading the remaining {n_parts - resumed_from}"
+            )
+            vlog(f"  resumed: upload_id={upload_id} "
+                 f"resumed_parts={resumed_from}")
 
     if upload_id is None:
         try:
@@ -3210,7 +3430,7 @@ def multipart_upload_worker(
         except Exception as _init_err:
             raise
 
-    # Helper: persist progress (throttled to ~2s).
+    # Helper: persist progress.
     def _persist_part(pnum, etag):
         nonlocal _state, _state_last_write
         if _state is None:
@@ -3231,6 +3451,15 @@ def multipart_upload_worker(
                         "Time: {elapsed}<{remaining}"),
         ) as bar:
             pbar_lock = threading.Lock()
+
+            # v6.60: initialize progress bar with already-confirmed resumed bytes!
+            if resumed_from > 0:
+                resumed_bytes = sum(
+                    min(chunk_bytes, file_size - (pn - 1) * chunk_bytes)
+                    for pn, et in parts
+                )
+                if resumed_bytes > 0:
+                    bar.update(resumed_bytes)
 
             # --- v6.36: per-part retry with exponential backoff ---
             _PART_BACKOFF_START = 5
@@ -3314,13 +3543,13 @@ def multipart_upload_worker(
             part_failures = []
             _parts_done = {pn for pn, _et in parts}
 
-            # v6.39: skip parts the server already has.
-            def _make_part_call(pnum, offset, size):
-                # If already present per our state, return early.
-                if pnum in _parts_done:
-                    vlog(f"  part {pnum}/{n_parts} skipped (already on server)")
-                    return (pnum, None)  # None etag sentinel: use existing
-                return _upload_part_with_retry(pnum, offset, size)
+            # v6.59: track parts by number, not by list-append. Previously
+            # resumed parts were seeded into `parts` AND re-returned by
+            # their executor task, so `parts` ended up longer than
+            # n_parts (e.g. 34 entries for a 32-part file) and the final
+            # sanity check aborted with "only 34/32 parts uploaded".
+            # A dict keyed on part number makes resume idempotent.
+            parts_by_num = {pn: et for pn, et in parts if et}
 
             # Wrap upload-one to persist state on each successful part.
             _orig_upload_part = _upload_part_with_retry
@@ -3330,12 +3559,10 @@ def multipart_upload_worker(
                 if part_num in _parts_done:
                     vlog(f"  part {part_num}/{n_parts} skipped "
                          f"(already uploaded)")
-                    # Return existing etag from parts list if we have it.
-                    for pn, et in parts:
-                        if pn == part_num and et:
-                            return (pn, et)
-                    # If we don't know the etag (shouldn't happen),
-                    # fall through to re-upload.
+                    # v6.59: return None. The ETag is already recorded in
+                    # parts_by_num from the resume; re-returning it would
+                    # double-count it in the collector below.
+                    return None
                 res = _orig_upload_part(part_num, offset, size)
                 if res is not None:
                     pn, et = res
@@ -3367,7 +3594,12 @@ def multipart_upload_worker(
                         )
                     else:
                         if res is not None:
-                            parts.append(res)
+                            pn, et = res
+                            parts_by_num[pn] = et
+
+            # v6.59: rebuild `parts` from the dict so resumed parts are
+            # included exactly once and the length check below is honest.
+            parts = sorted(parts_by_num.items())
 
             if part_failures:
                 err = (
@@ -3378,8 +3610,9 @@ def multipart_upload_worker(
                 raise RuntimeError(err)
 
         if shutdown_event.is_set():
-            if upload_id:
-                client.abort_multipart(identifier, remote_key, upload_id)
+            tqdm.write(
+                f"  [resume] upload paused; state preserved at {_state_path(local_path)}"
+            )
             record_result("cancelled", remote_key)
             return (False, "Cancelled")
 
@@ -3431,20 +3664,15 @@ def multipart_upload_worker(
         err = f"{type(e).__name__}: {e}"
         tqdm.write(f"[multipart] {remote_key}: {err}")
         vlog(f"  multipart exception: {err}")
-        # v6.39: do NOT abort on network/crash failures — persist state so
-        # the next run can resume. Only abort on user cancellation.
+        # v6.60: do NOT abort on user cancellation / Ctrl+C either — preserve state
+        # so re-running resumes from where it stopped. Only --reset-state wipes state.
+        tqdm.write(
+            f"  [resume] state saved at {_state_path(local_path)}; "
+            f"re-run to continue from where we left off"
+        )
         if shutdown_event.is_set():
-            if upload_id:
-                try:
-                    client.abort_multipart(identifier, remote_key, upload_id)
-                except Exception:
-                    pass
-            _clear_state(local_path)
-        else:
-            tqdm.write(
-                f"  [resume] state saved at {_state_path(local_path)}; "
-                f"re-run to continue from where we left off"
-            )
+            record_result("cancelled", remote_key)
+            return (False, "Cancelled by user")
         record_result("failed", f"{remote_key} (multipart: {err})")
         return (False, err)
 
@@ -3840,7 +4068,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.58) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.59) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- Max in-flight requests: {getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT)} ---")
     print(f"--- Max request rate: {getattr(args, 'max_rpm', DEFAULT_MAX_RPM)} req/min ---")
@@ -4174,8 +4402,14 @@ def main():
             if _is_covered_by_split(p, siblings):
                 continue
             rel_path = p.relative_to(folder_path).as_posix()
-            norm = normalize_path(rel_path)
-            local_file_map[norm] = {"path": p, "rel_path": rel_path}
+            safe_rel_path, was_truncated = truncate_path_components(rel_path)
+            norm = normalize_path(safe_rel_path)
+            local_file_map[norm] = {
+                "path": p,
+                "rel_path": safe_rel_path,
+                "orig_rel_path": rel_path,
+                "was_truncated": was_truncated,
+            }
 
         # 3b. Index Remote Files
         remote_map = {}  # normalized_path -> dict with md5 and size
@@ -4219,15 +4453,17 @@ def main():
 
                 local_file = info["path"]
                 rel_path = info["rel_path"]
+                orig_rel_path = info.get("orig_rel_path", rel_path)
+                was_truncated = info.get("was_truncated", False)
                 local_size = os.path.getsize(local_file)
 
                 if local_size == 0:
                     skipped_empty_count += 1
-                    tqdm.write(f"[SKIP EMPTY]  {rel_path}")
+                    tqdm.write(f"[SKIP EMPTY]  {orig_rel_path}")
                     scan_bar.update(1)
                     continue
 
-                disp = rel_path if len(rel_path) < 30 else "..." + rel_path[-27:]
+                disp = orig_rel_path if len(orig_rel_path) < 30 else "..." + orig_rel_path[-27:]
                 scan_bar.set_description(f"Check: {disp}")
 
                 should_upload = False
@@ -4236,7 +4472,7 @@ def main():
                 if norm_name not in remote_map:
                     # New path: no MD5 or size needed because there is no same-path remote file to compare against.
                     should_upload = True
-                    status_msg = f"[NEW]         {rel_path}"
+                    status_msg = f"[NEW]         {orig_rel_path}"
                     upload_new_count += 1
 
                 else:
@@ -4246,7 +4482,7 @@ def main():
                     # Fast size check first
                     if remote_size is not None and str(local_size) != str(remote_size):
                         should_upload = True
-                        status_msg = f"[UPDATE SIZE] {rel_path}"
+                        status_msg = f"[UPDATE SIZE] {orig_rel_path}"
                         upload_update_count += 1
                     else:
                         if args.md5_verify:
@@ -4257,7 +4493,7 @@ def main():
 
                             if local_md5 != remote_md5:
                                 should_upload = True
-                                status_msg = f"[UPDATE MD5]  {rel_path}"
+                                status_msg = f"[UPDATE MD5]  {orig_rel_path}"
                                 upload_update_count += 1
                             else:
                                 matched_count += 1
@@ -4266,14 +4502,12 @@ def main():
                             matched_count += 1
 
                 if should_upload:
-                    # Truncate path components that exceed IA's 230-byte limit
-                    safe_rel_path, was_truncated = truncate_path_components(rel_path)
                     if was_truncated:
                         tqdm.write(
-                            f"[TRUNCATED]   '{rel_path}'\n"
-                            f"           -> '{safe_rel_path}'"
+                            f"[TRUNCATED]   '{orig_rel_path}'\n"
+                            f"           -> '{rel_path}'"
                         )
-                    files_to_upload.append((safe_rel_path, local_file))
+                    files_to_upload.append((rel_path, local_file))
                     tqdm.write(status_msg)
 
                 scan_bar.update(1)
@@ -4334,12 +4568,18 @@ def main():
                 print("\n[!] Orphaned files found on remote (not in local folder).")
                 print("    Use -o / --orphan-deletion to remove them.")
 
+        # v6.60: if existing item had metadata updated via -m, apply it now!
+        if not is_new_item and metadata:
+            print("\nUpdating item metadata...")
+            try:
+                with _inflight_slot():
+                    item.modify_metadata(metadata)
+                print("Metadata updated successfully.")
+            except Exception as e_md:
+                print(f"Warning: Failed to update metadata: {e_md}")
+            metadata = None
+
         if upload_count == 0 and len(files_to_delete) == 0:
-            if metadata:
-                print("\nUpdating metadata only...")
-                item.modify_metadata(metadata)
-                print("Metadata updated.")
-                sys.exit(0)
             print("\nSync complete. No changes needed.")
             sys.exit(0)
 
@@ -4424,61 +4664,22 @@ def main():
             if is_new_item:
                 # Upload the first (smallest) file to initialize the item
                 first_file = files_to_upload[0]
-                vlog(f"Creating new item with first file: '{first_file[0]}'")
-
-                # --- v6.50: route the first file of a new item ---
                 first_size = os.path.getsize(first_file[1])
-                _S3_PUT_MAX = 5 * 1024 * 1024 * 1024
+                vlog(
+                    f"Creating new item with first file: '{first_file[0]}' "
+                    f"({first_size:,} bytes) via IA library"
+                )
 
-                if not _MULTIPART_ENABLED:
-                    if args.use_ia_library:
-                        success, msg = upload_worker(
-                            identifier, first_file, metadata,
-                            position=1, session=custom_session,
-                        )
-                    else:
-                        success, msg = s3_upload_worker(
-                            identifier, first_file, metadata,
-                            position=1, session=custom_session,
-                        )
-                else:
-                    _first_threshold = args.multipart_threshold * 1024 * 1024
-                    if not args.use_ia_library and _first_threshold > _S3_PUT_MAX:
-                        _first_threshold = _S3_PUT_MAX
-                    _first_use_mp = first_size >= _first_threshold
-
-                    if _first_use_mp:
-                        vlog(
-                            f"Creating new item via MULTIPART with first "
-                            f"file: '{first_file[0]}' ({first_size:,} bytes)"
-                        )
-                        success, msg = multipart_upload_worker(
-                            identifier,
-                            first_file,
-                            metadata,
-                            position=1,
-                            session=custom_session,
-                            chunk_size_mb=args.chunk_size,
-                            max_concurrency=args.multipart_concurrency,
-                        )
-                    elif args.use_ia_library:
-                        vlog(
-                            f"Creating new item via IA library with first "
-                            f"file: '{first_file[0]}' ({first_size:,} bytes)"
-                        )
-                        success, msg = upload_worker(
-                            identifier, first_file, metadata,
-                            position=1, session=custom_session,
-                        )
-                    else:
-                        vlog(
-                            f"Creating new item via S3 PUT with first file: "
-                            f"'{first_file[0]}' ({first_size:,} bytes)"
-                        )
-                        success, msg = s3_upload_worker(
-                            identifier, first_file, metadata,
-                            position=1, session=custom_session,
-                        )
+                # v6.60: Always route the first file of a new item through upload_worker.
+                # internetarchive.Item.upload attaches all metadata and bucket-creation
+                # headers (x-archive-auto-make-bucket), avoiding S3 404 preflight failures.
+                success, msg = upload_worker(
+                    identifier,
+                    first_file,
+                    metadata,
+                    position=1,
+                    session=custom_session,
+                )
 
                 main_bar.update(1)
                 if not success:
@@ -4666,6 +4867,7 @@ def main():
             main_bar.close()
 
         # --- DELETIONS ---
+        _delete_failures = []
         if len(files_to_delete) > 0 and not shutdown_event.is_set():
             print("\nStarting Deletions...")
             # Deletes are fast but we can thread them too
@@ -4678,14 +4880,21 @@ def main():
                 dynamic_ncols=True,
             )
 
+            # v6.60: internetarchive's File.delete() mounts and then
+            # `del`s a retry adapter on the SHARED session; concurrent
+            # calls race on that dict (KeyError after a successful delete).
+            # Serialize the library call; deletes are quick.
+            _delete_lock = threading.Lock()
+
             def delete_worker(fname):
                 if shutdown_event.is_set():
                     return
                 try:
-                    # item.delete_file is synchronous
-                    item.delete_file(fname)
-                    # We might want to record success??
+                    with _delete_lock, _inflight_slot():
+                        item.get_file(fname).delete()
+                    vlog(f"Deleted remote orphan: {fname}")
                 except Exception as e:
+                    _delete_failures.append(fname)
                     tqdm.write(f"Failed to delete {fname}: {e}")
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -4706,11 +4915,19 @@ def main():
 
         print_report()
 
+        if _delete_failures:
+            print("-" * 60)
+            print("ORPHAN DELETION FAILURES:")
+            for fname in _delete_failures:
+                print(f" [x] {fname}")
+            print("-" * 60)
+
         # --- v6.48: verified cleanup of replaced originals ---
         full_success = (
             not shutdown_event.is_set()
             and len(final_results["failed"]) == 0
             and len(final_results["cancelled"]) == 0
+            and len(_delete_failures) == 0
         )
 
         if full_success and args.delete_originals_after_upload:

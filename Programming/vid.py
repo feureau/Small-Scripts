@@ -427,6 +427,7 @@ from collections import Counter, deque
 import signal
 
 # -------------------------- Configuration / Constants --------------------------
+SUPPORTED_VIDEO_EXTS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.mts'}
 FFMPEG_CMD = os.environ.get("FFMPEG_PATH", "ffmpeg")
 FFPROBE_CMD = os.environ.get("FFPROBE_PATH", "ffprobe")
 NVENCC_CMD = os.environ.get("NVENCC_PATH", "NVEncC64")
@@ -5962,7 +5963,7 @@ class VideoProcessorApp:
             return detected_subs
         prefixes = [video_basename]
         all_video_basenames = set()
-        supported_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv'}
+        supported_exts = SUPPORTED_VIDEO_EXTS
         try:
             for item in os.listdir(dir_name):
                 if os.path.splitext(item)[1].lower() in supported_exts:
@@ -6157,9 +6158,9 @@ class VideoProcessorApp:
         self._toggle_hdr_metadata_visibility()
 
     def _browse_hybrid_file(self, position):
+        ext_str = ";".join([f"*{ext}" for ext in SUPPORTED_VIDEO_EXTS])
         file_path = filedialog.askopenfilename(title=f"Select {position.capitalize()} Video",
-                                               filetypes=[("Video Files",
-                                                           "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"),
+                                               filetypes=[("Video Files", ext_str),
                                                           ("All Files", "*.*")])
         if file_path:
             if position == 'top':
@@ -7789,12 +7790,25 @@ class VideoProcessorApp:
                 self.current_preset_var.set("")
 
     def process_added_files(self, file_paths):
-        for video_path in file_paths:
-            video_path = os.path.abspath(video_path)
-            if video_path not in self.input_files:
-                self.input_files.append(video_path)
+        added = []
+        for p in file_paths:
+            p = os.path.abspath(p)
+            if os.path.isdir(p):
+                for root_dir, _, filenames in os.walk(p):
+                    for filename in filenames:
+                        if os.path.splitext(filename)[1].lower() in SUPPORTED_VIDEO_EXTS:
+                            full_path = os.path.abspath(os.path.join(root_dir, filename))
+                            if full_path not in self.input_files:
+                                self.input_files.append(full_path)
+                                added.append(full_path)
+            elif os.path.isfile(p):
+                if os.path.splitext(p)[1].lower() in SUPPORTED_VIDEO_EXTS:
+                    if p not in self.input_files:
+                        self.input_files.append(p)
+                        added.append(p)
         self.refresh_input_listbox()
-        self.promote_input_files_auto(only_for_paths=file_paths)
+        if added:
+            self.promote_input_files_auto(only_for_paths=added)
 
     def refresh_input_listbox(self):
         search_term = self.input_filter_var.get().lower()
@@ -7825,6 +7839,8 @@ class VideoProcessorApp:
         files_processed_count = 0
         for video_path in targets:
             video_path = os.path.abspath(video_path)
+            if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
+                continue
             video_basename = os.path.splitext(os.path.basename(video_path))[0]
             detected_subs = self._detect_subtitles_for_video(video_path)
             try:
@@ -7953,6 +7969,8 @@ class VideoProcessorApp:
         for index in selected_indices:
             actual_index = self.filtered_input_indices[index]
             video_path = self.input_files[actual_index]
+            if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
+                continue
             detected_subs = self._detect_subtitles_for_video(video_path)
             preferred_sub = self._pick_preferred_subtitle(detected_subs)
             if preferred_sub:
@@ -12558,8 +12576,9 @@ class VideoProcessorApp:
             print(f"[ERROR] Loudness measurement failed: {e}")
 
     def add_files(self):
+        ext_pattern = ";".join(f"*{ext}" for ext in sorted(SUPPORTED_VIDEO_EXTS))
         files = filedialog.askopenfilenames(
-            filetypes=[("Video Files", "*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.wmv"),
+            filetypes=[("Video Files", ext_pattern),
                        ("All Files", "*.*")])
         if files:
             self.process_added_files(files)
@@ -12665,13 +12684,14 @@ if __name__ == "__main__":
     initial_files = []
     if args.input_files:
         for pattern in args.input_files:
-            initial_files.extend(glob.glob(pattern))
+            for matched_file in glob.glob(pattern):
+                if os.path.splitext(matched_file)[1].lower() in SUPPORTED_VIDEO_EXTS:
+                    initial_files.append(matched_file)
     else:
-        supported_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv'}
         print(f"[INFO] Scanning {os.getcwd()} and subdirectories...")
         for root_dir, _, filenames in os.walk(os.getcwd()):
             for filename in filenames:
-                if os.path.splitext(filename)[1].lower() in supported_exts:
+                if os.path.splitext(filename)[1].lower() in SUPPORTED_VIDEO_EXTS:
                     initial_files.append(os.path.join(root_dir, filename))
         print(f"[INFO] Found {len(initial_files)} files.")
 
