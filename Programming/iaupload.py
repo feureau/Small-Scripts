@@ -3934,6 +3934,16 @@ def main():
         help=argparse.SUPPRESS,  # Hidden flag for internal batch use
     )
     parser.add_argument(
+        "--delete-folder-on-success",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--keep-folder-on-success",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--split",
         action="store_true",
         help=("Enable automatic large-file splitting into multi-volume "
@@ -4189,6 +4199,19 @@ def main():
             print(f"\n=== BATCH MODE: Found {len(subdirs)} folders to process ===")
             
             child_flags = []
+            if not getattr(args, "delete_folder_on_success", False) and not getattr(args, "keep_folder_on_success", False):
+                try:
+                    ans = input("\nAutomatically delete each local folder after it uploads successfully? (y/n) [n]: ").strip().lower()
+                    if ans == "y":
+                        args.delete_folder_on_success = True
+                    else:
+                        args.keep_folder_on_success = True
+                except KeyboardInterrupt:
+                    args.keep_folder_on_success = True
+                    print("\nKeeping folders by default.")
+            
+            if getattr(args, "delete_folder_on_success", False): child_flags.append("--delete-folder-on-success")
+            if getattr(args, "keep_folder_on_success", False): child_flags.append("--keep-folder-on-success")
             if getattr(args, 'threads', DEFAULT_THREADS) != DEFAULT_THREADS: child_flags.extend(["-t", str(args.threads)])
             if getattr(args, 'sync', False): child_flags.append("-s")
             if getattr(args, 'orphan_deletion', False): child_flags.append("-o")
@@ -5103,24 +5126,33 @@ def main():
 
         # --- POST-UPLOAD: Offer to delete local folder on full success ---
         if full_success:
-            try:
-                answer = (
-                    input(
-                        f"\nAll files uploaded successfully. Delete local folder '{folder_path}'? (y/n) [n]: "
+            answer = "n"
+            if getattr(args, "delete_folder_on_success", False):
+                answer = "y"
+            elif getattr(args, "keep_folder_on_success", False):
+                answer = "n"
+            else:
+                try:
+                    answer = (
+                        input(
+                            f"\nAll files uploaded successfully. Delete local folder '{folder_path}'? (y/n) [n]: "
+                        )
+                        .strip()
+                        .lower()
                     )
-                    .strip()
-                    .lower()
-                )
-                if answer == "y":
-                    try:
-                        safe_rmtree(folder_path)
-                        print(f"Deleted: {folder_path}")
-                    except Exception as e:
-                        print(f"Error deleting folder: {e}")
-                else:
+                except KeyboardInterrupt:
+                    print("\nSkipped deletion.")
+                    answer = "n"
+
+            if answer == "y":
+                try:
+                    safe_rmtree(folder_path)
+                    print(f"Deleted: {folder_path}")
+                except Exception as e:
+                    print(f"Error deleting folder: {e}")
+            else:
+                if not getattr(args, "keep_folder_on_success", False):
                     print("Local folder kept.")
-            except KeyboardInterrupt:
-                print("\nSkipped deletion.")
 
     except KeyboardInterrupt:
         print("\n\n!!! KEYBOARD INTERRUPT DETECTED !!!")
