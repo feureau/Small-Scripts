@@ -4174,9 +4174,36 @@ def main():
             folder_path_str = folder_path_str.strip('"').strip("'")
         else:
             print_requirements()
-            folder_path_str = (
-                get_input("Target Folder", required=True).strip('"').strip("'")
-            )
+            
+            # Interactive Menu for Target Folder
+            local_dirs = sorted([d for d in os.listdir(".") if os.path.isdir(d) and not d.startswith(".")])
+            if local_dirs:
+                print("\nAvailable Folders in Current Directory:")
+                print("  [0] (BATCH MODE) Upload ALL folders listed below")
+                for i, d in enumerate(local_dirs, start=1):
+                    # Show up to 50 folders to prevent massive terminal spam
+                    if i > 50:
+                        print(f"  ... and {len(local_dirs) - 50} more folders.")
+                        break
+                    print(f"  [{i}] {d}")
+                print()
+            
+            while True:
+                val = input("Target Folder (Type number, or paste full path): ").strip().strip('"').strip("'")
+                if not val:
+                    print("  Error: Required.")
+                    continue
+                
+                if local_dirs and val == "0":
+                    args.batch_dirs = True
+                    folder_path_str = "."
+                    break
+                elif local_dirs and val.isdigit() and 1 <= int(val) <= len(local_dirs):
+                    folder_path_str = local_dirs[int(val)-1]
+                    break
+                else:
+                    folder_path_str = val
+                    break
 
         if not os.path.isdir(folder_path_str):
             print("Error: Folder not found.")
