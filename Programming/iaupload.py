@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.60 (Comprehensive Reliability & Integrity Fix)
+VERSION: 6.61 (DVD-Size Multipart Threshold & Batch Enhancements)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -38,6 +38,12 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-12] VERSION 6.61 UPDATE
+   - MODIFIED: Default multipart threshold changed from 15 GB to 4480 MB (DVD disk size).
+               Files exceeding standard DVD capacity automatically trigger S3 multipart.
+   - ADDED: Batch processing enhancements (--batch-dirs, pre-batch prompts for deletion
+            and DJI LRF conversion, interactive numbered folder picker menu).
+
 [2026-10-10] VERSION 6.60 UPDATE
    - FIXED: Multipart resume chunk boundary desynchronization. If concurrency
             or chunk arguments changed between runs, auto-chunking computed
@@ -615,7 +621,7 @@ CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 300
 
 # --- MULTIPART UPLOAD DEFAULTS (v6.23) ---
-DEFAULT_MULTIPART_THRESHOLD_MB = 15 * 1024  # v6.48: 15 GB (was 128 MB)
+DEFAULT_MULTIPART_THRESHOLD_MB = 4480  # v6.61: DVD size (4480 MB / ~4.37 GiB)
 DEFAULT_CHUNK_SIZE_MB = None          # v6.40: None = auto-size
 DEFAULT_MULTIPART_CONCURRENCY = 4     # v6.55: raised from 2
 PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
@@ -3995,7 +4001,7 @@ def main():
         "--multipart",
         action="store_true",
         help=("Force multipart for every file >= 1 MB. Default is auto: "
-              "multipart only for files >= 15 GB."),
+              f"multipart only for files >= {DEFAULT_MULTIPART_THRESHOLD_MB} MB (DVD size)."),
     )
     parser.add_argument(
         "--chunk-size",
