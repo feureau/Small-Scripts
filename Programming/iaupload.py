@@ -3,7 +3,7 @@ SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
 DATE: 2026-08-22
-VERSION: 6.61 (DVD-Size Multipart Threshold & Batch Enhancements)
+VERSION: 6.62 (Individual Multipart Thread Progress Bars)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -31,6 +31,7 @@ ARCHITECTURE & DESIGN RATIONALE
 
 3. CORE LOGIC & RESILIENT S3 / MULTIPART
    - Resumable SigV2 multipart uploads with exact chunk reconciliation.
+   - Live multi-threaded progress dashboard with dedicated thread chunk sub-bars.
    - Graceful Shutdown (two-stage Ctrl+C preserving resume state).
    - Content and path verification before upload.
    - Visual Dashboard (tqdm) with true progress tracking.
@@ -38,6 +39,17 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-10-12] VERSION 6.62 UPDATE
+   - ADDED: Live individual progress bars for each concurrent multipart upload thread.
+            Each active thread gets its own progress bar showing part number, chunk
+            size, live byte transfer via SliceReader callbacks, upload speed, and ETA.
+   - ADDED: --no-part-bars flag to disable thread sub-bars if a compact single-line
+            progress display is preferred.
+   - ADDED: Automatic terminal height detection; falls back to single-bar mode on short
+            terminals (< 16 lines) to avoid vertical scrolling.
+   - ADDED: _multipart_active_lock to ensure large multipart files upload sequentially,
+            preventing progress bar collisions and ensuring full 12-thread saturation.
+
 [2026-10-12] VERSION 6.61 UPDATE
    - MODIFIED: Default multipart threshold changed from 15 GB to 4480 MB (DVD disk size).
                Files exceeding standard DVD capacity automatically trigger S3 multipart.
@@ -609,6 +621,7 @@ except ImportError:
 # --- GLOBALS ---
 shutdown_event = threading.Event()
 results_lock = threading.Lock()
+_multipart_active_lock = threading.Lock()
 final_results = {"success": [], "failed": [], "cancelled": []}
 VERBOSE = False  # Set by --verbose flag
 _MULTIPART_ENABLED = False  # v6.23: on by default; --no-multipart disables
@@ -3012,7 +3025,7 @@ class SliceReader:
     No tell() — we want requests to use __len__ and not try to compute
     remaining bytes via tell().
     """
-    def __init__(self, path, offset, size):
+    def __init__(self, path, offset, size, on_read=None, on_reset=None):
         self._path = path
         self._offset = int(offset)
         self._f = open(path, "rb")
@@ -3023,6 +3036,8 @@ class SliceReader:
             raise
         self._remaining = int(size)
         self._size = int(size)
+        self._on_read = on_read
+        self._on_reset = on_reset
 
     def __len__(self):
         return self._size
@@ -3033,6 +3048,11 @@ class SliceReader:
             target = self._offset + offset
             self._f.seek(target)
             self._remaining = self._size - offset
+            if offset == 0 and self._on_reset is not None:
+                try:
+                    self._on_reset()
+                except Exception:
+                    pass
             return offset
         elif whence == 1:
             current_pos = self._size - self._remaining
@@ -3057,7 +3077,13 @@ class SliceReader:
             # Unexpected EOF; return what we have and mark exhausted.
             self._remaining = 0
             return b""
-        self._remaining -= len(data)
+        chunk_len = len(data)
+        self._remaining -= chunk_len
+        if self._on_read is not None:
+            try:
+                self._on_read(chunk_len)
+            except Exception:
+                pass
         return data
 
     def __enter__(self):
@@ -3499,58 +3525,102 @@ def multipart_upload_worker(
                         return True
                 return False
 
+            import shutil
+            term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+            show_part_bars = (
+                not getattr(args_ref, "no_part_bars", False)
+                and term_lines >= (max_concurrency + 4)
+            )
+
+            thread_slot_queue = queue.Queue()
+            for s in range(1, max_concurrency + 1):
+                thread_slot_queue.put(s)
+
             def _upload_part_with_retry(part_num, offset, size):
                 if shutdown_event.is_set():
                     raise RuntimeError("Cancelled by user")
                 backoff = _PART_BACKOFF_START
                 last_exc = None
-                for attempt in range(1, PART_MAX_RETRIES + 1):
-                    if shutdown_event.is_set():
-                        raise RuntimeError("Cancelled by user")
-                    _reader = None
-                    try:
-                        # v6.40: stream the part from disk (no RAM buffering).
-                        _reader = SliceReader(local_path, offset, size)
-                        etag = client.upload_part(
-                            identifier, remote_key, upload_id,
-                            part_num, _reader,
-                        )
-                        with pbar_lock:
-                            bar.update(size)
-                        vlog(
-                            f"  part {part_num}/{n_parts} OK "
-                            f"(attempt {attempt}/{PART_MAX_RETRIES}, "
-                            f"etag={etag[:12]}...)"
-                        )
-                        return (part_num, etag)
-                    except Exception as e:
-                        last_exc = e
+                slot = thread_slot_queue.get()
+                part_bar = None
+                if show_part_bars:
+                    part_bar = tqdm(
+                        total=size,
+                        unit="B",
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        desc=f"  [Thread {slot:02d}] Part {part_num:03d}/{n_parts}",
+                        position=position + slot,
+                        leave=False,
+                        dynamic_ncols=True,
+                        bar_format=("{desc}: {percentage:3.0f}%|{bar}| "
+                                    "{n_fmt}/{total_fmt} | {rate_fmt} | "
+                                    "{elapsed}<{remaining}"),
+                    )
+
+                try:
+                    for attempt in range(1, PART_MAX_RETRIES + 1):
                         if shutdown_event.is_set():
                             raise RuntimeError("Cancelled by user")
-                        retryable = _is_retryable(e)
-                        if not retryable or attempt >= PART_MAX_RETRIES:
-                            raise
-                        tqdm.write(
-                            f"  part {part_num}/{n_parts} attempt "
-                            f"{attempt}/{PART_MAX_RETRIES} failed: "
-                            f"{e} — retrying in {backoff}s"
-                        )
-                        vlog(f"  part {part_num} retry in {backoff}s")
-                        slept = 0
-                        while slept < backoff and not shutdown_event.is_set():
-                            time.sleep(min(1, backoff - slept))
-                            slept += 1
-                        backoff = min(backoff * 2, _PART_BACKOFF_MAX)
-                    finally:
-                        if _reader is not None:
-                            try:
-                                _reader.close()
-                            except Exception:
-                                pass
-                raise RuntimeError(
-                    f"part {part_num} failed after {PART_MAX_RETRIES} "
-                    f"attempts: {last_exc}"
-                )
+                        if part_bar is not None and attempt > 1:
+                            part_bar.reset()
+                        _reader = None
+                        try:
+                            # v6.40: stream the part from disk (no RAM buffering).
+                            # v6.62: live thread bar updates via SliceReader on_read callback.
+                            on_read_cb = part_bar.update if part_bar is not None else None
+                            on_reset_cb = part_bar.reset if part_bar is not None else None
+                            _reader = SliceReader(
+                                local_path, offset, size,
+                                on_read=on_read_cb, on_reset=on_reset_cb,
+                            )
+                            etag = client.upload_part(
+                                identifier, remote_key, upload_id,
+                                part_num, _reader,
+                            )
+                            with pbar_lock:
+                                bar.update(size)
+                            vlog(
+                                f"  part {part_num}/{n_parts} OK "
+                                f"(attempt {attempt}/{PART_MAX_RETRIES}, "
+                                f"etag={etag[:12]}...)"
+                            )
+                            return (part_num, etag)
+                        except Exception as e:
+                            last_exc = e
+                            if shutdown_event.is_set():
+                                raise RuntimeError("Cancelled by user")
+                            retryable = _is_retryable(e)
+                            if not retryable or attempt >= PART_MAX_RETRIES:
+                                raise
+                            tqdm.write(
+                                f"  part {part_num}/{n_parts} attempt "
+                                f"{attempt}/{PART_MAX_RETRIES} failed: "
+                                f"{e} — retrying in {backoff}s"
+                            )
+                            vlog(f"  part {part_num} retry in {backoff}s")
+                            slept = 0
+                            while slept < backoff and not shutdown_event.is_set():
+                                time.sleep(min(1, backoff - slept))
+                                slept += 1
+                            backoff = min(backoff * 2, _PART_BACKOFF_MAX)
+                        finally:
+                            if _reader is not None:
+                                try:
+                                    _reader.close()
+                                except Exception:
+                                    pass
+                    raise RuntimeError(
+                        f"part {part_num} failed after {PART_MAX_RETRIES} "
+                        f"attempts: {last_exc}"
+                    )
+                finally:
+                    if part_bar is not None:
+                        try:
+                            part_bar.close()
+                        except Exception:
+                            pass
+                    thread_slot_queue.put(slot)
 
             part_failures = []
             _parts_done = {pn for pn, _et in parts}
@@ -4028,6 +4098,11 @@ def main():
         help=f"Parallel chunk uploads per large file (default: {DEFAULT_MULTIPART_CONCURRENCY})",
     )
     parser.add_argument(
+        "--no-part-bars",
+        action="store_true",
+        help="Disable individual thread progress bars for multipart uploads (show only file-level bar).",
+    )
+    parser.add_argument(
         "--max-inflight",
         type=int,
         default=DEFAULT_MAX_INFLIGHT,
@@ -4105,7 +4180,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.59) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.62) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- Max in-flight requests: {getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT)} ---")
     print(f"--- Max request rate: {getattr(args, 'max_rpm', DEFAULT_MAX_RPM)} req/min ---")
@@ -4116,11 +4191,12 @@ def main():
         _chunk_disp = (
             f"{args.chunk_size} MB" if args.chunk_size else "auto"
         )
+        _tb_disp = "thread bars OFF" if getattr(args, "no_part_bars", False) else "thread bars ON"
         if args.multipart:
             print(
                 f"--- Multipart: FORCED ON "
                 f"(chunk {_chunk_disp}, "
-                f"{args.multipart_concurrency} parts/file, "
+                f"{args.multipart_concurrency} parts/file, {_tb_disp}, "
                 f"all files >= 1 MB) ---"
             )
         else:
@@ -4138,7 +4214,7 @@ def main():
             print(
                 f"--- Multipart: AUTO "
                 f"(threshold {_thresh_disp}, chunk {_chunk_disp}, "
-                f"{args.multipart_concurrency} parts/file) ---"
+                f"{args.multipart_concurrency} parts/file, {_tb_disp}) ---"
             )
     if args.no_multipart or args.use_ia_library:
         print(f"--- Small-file path: internetarchive library ---")
@@ -4283,6 +4359,7 @@ def main():
             if getattr(args, 'max_rpm', DEFAULT_MAX_RPM) != DEFAULT_MAX_RPM: child_flags.extend(["--max-rpm", str(args.max_rpm)])
             if getattr(args, 'delete_originals_after_upload', False): child_flags.append("--delete-originals-after-upload")
             if getattr(args, 'verify_timeout', 60) != 60: child_flags.extend(["--verify-timeout", str(args.verify_timeout)])
+            if getattr(args, 'no_part_bars', False): child_flags.append("--no-part-bars")
             if not getattr(args, 'use_ia_library', True): child_flags.append("--use-s3-put")
             
             if not getattr(args, 'batch_prompt', False):
@@ -4897,15 +4974,16 @@ def main():
                                 f"worker_wrapper: routing '{f_data[0]}' "
                                 f"({f_size:,} bytes) to multipart_upload_worker"
                             )
-                            return multipart_upload_worker(
-                                identifier,
-                                f_data,
-                                None,
-                                position=slot,
-                                session=custom_session,
-                                chunk_size_mb=args.chunk_size,
-                                max_concurrency=args.multipart_concurrency,
-                            )
+                            with _multipart_active_lock:
+                                return multipart_upload_worker(
+                                    identifier,
+                                    f_data,
+                                    None,
+                                    position=slot,
+                                    session=custom_session,
+                                    chunk_size_mb=args.chunk_size,
+                                    max_concurrency=args.multipart_concurrency,
+                                )
 
                         if args.use_ia_library:
                             vlog(
