@@ -41,6 +41,10 @@ CHANGE LOG
 [2026-10-12] VERSION 6.61 UPDATE
    - MODIFIED: Default multipart threshold changed from 15 GB to 4480 MB (DVD disk size).
                Files exceeding standard DVD capacity automatically trigger S3 multipart.
+   - MODIFIED: DEFAULT_MULTIPART_CONCURRENCY raised from 4 to 12. Multipart uploads
+               now upload 12 chunks concurrently per large file.
+   - MODIFIED: DEFAULT_MAX_INFLIGHT raised from 12 to 16. The global HTTP semaphore
+               now permits up to 16 simultaneous in-flight requests across all threads.
    - ADDED: Batch processing enhancements (--batch-dirs, pre-batch prompts for deletion
             and DJI LRF conversion, interactive numbered folder picker menu).
 
@@ -623,7 +627,7 @@ READ_TIMEOUT = 300
 # --- MULTIPART UPLOAD DEFAULTS (v6.23) ---
 DEFAULT_MULTIPART_THRESHOLD_MB = 4480  # v6.61: DVD size (4480 MB / ~4.37 GiB)
 DEFAULT_CHUNK_SIZE_MB = None          # v6.40: None = auto-size
-DEFAULT_MULTIPART_CONCURRENCY = 4     # v6.55: raised from 2
+DEFAULT_MULTIPART_CONCURRENCY = 12    # v6.61: raised to 12 (was 4)
 PART_MAX_RETRIES = 5                  # v6.36: per-part retry attempts
 RATE_LIMIT_MAX_RETRIES = 12           # v6.37: 503 SlowDown attempts
 RATE_LIMIT_BACKOFF_START = 30         # v6.37: initial 503 wait (s)
@@ -1246,7 +1250,7 @@ def verify_archives_on_ia(identifier, expected, session, timeout_s=180,
 # to keep concurrent requests under IA's per-account rate limit, no matter
 # how many file/part threads the user configured. Retries do not hold a
 # slot while sleeping, so backoffs don't starve other requests.
-DEFAULT_MAX_INFLIGHT = 12  # raised from 8
+DEFAULT_MAX_INFLIGHT = 16  # v6.61: raised to 16 (was 12)
 _MAX_INFLIGHT = DEFAULT_MAX_INFLIGHT
 _inflight_sem = threading.BoundedSemaphore(_MAX_INFLIGHT)
 
@@ -4781,10 +4785,11 @@ def main():
                     ],
                 )
 
-                # Pool size must handle all threads + extra for overhead
+                # Pool size must handle all threads + in-flight slots + overhead
+                _pool_size = max(max_workers, getattr(args, "max_inflight", DEFAULT_MAX_INFLIGHT)) + 5
                 adapter = HTTPAdapter(
-                    pool_connections=max_workers + 5,
-                    pool_maxsize=max_workers + 5,
+                    pool_connections=_pool_size,
+                    pool_maxsize=_pool_size,
                     max_retries=retry_strategy,
                 )
 
