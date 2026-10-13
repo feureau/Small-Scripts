@@ -3055,23 +3055,30 @@ def _resolve_chunk_bytes(file_size, chunk_size_mb, concurrency,
 
     chunk_bytes = max(5, int(chunk_size_mb)) * 1024 * 1024
 
-    # [patch] Never exceed S3's single-part ceiling, even on explicit
-    # --chunk-size. Without this, --chunk-size 8000 fails at PUT time
-    # with EntityTooLarge.
+    # v6.65 FIX: apply constraints in priority order so S3's per-part
+    # ceiling is the LAST word. Previously the 10,000-part upscale ran
+    # after the per-part clamp and could silently undo it for very
+    # large files, producing a chunk larger than S3 accepts. The part
+    # PUT would then fail with EntityTooLarge on the first request.
+    #
+    #   1. upscale for S3's 10,000-part rule
+    #   2. clamp to S3's ~5 GB per-part ceiling
+    min_chunk_bytes = -(-int(file_size) // MAX_S3_PARTS)  # ceil div
+    if chunk_bytes < min_chunk_bytes:
+        chunk_bytes = -(-min_chunk_bytes // (1024 * 1024)) * 1024 * 1024
+
     s3_max_bytes = S3_MAX_PART_MB * 1024 * 1024
     if chunk_bytes > s3_max_bytes:
         try:
             tqdm.write(
-                f"  [multipart] chunk {chunk_size_mb} MB exceeds S3's "
-                f"{S3_MAX_PART_MB} MB per-part ceiling; clamping"
+                f"  [multipart] chunk {chunk_bytes // (1024*1024)} MB "
+                f"exceeds S3's {S3_MAX_PART_MB} MB per-part ceiling; "
+                f"clamping"
             )
         except Exception:
             pass
         chunk_bytes = s3_max_bytes
 
-    min_chunk_bytes = -(-int(file_size) // MAX_S3_PARTS)  # ceil div
-    if chunk_bytes < min_chunk_bytes:
-        chunk_bytes = -(-min_chunk_bytes // (1024 * 1024)) * 1024 * 1024
     n_parts = max(1, -(-int(file_size) // chunk_bytes))
     return chunk_bytes, n_parts
 
@@ -3354,6 +3361,23 @@ def multipart_upload_worker(
         record_result("cancelled", remote_key)
         return (False, "Skipped empty file (0 bytes)")
 
+    # v6.65: hard ceiling for S3 multipart. Even at the maximum per-part
+    # size, S3 cannot represent a file larger than
+    # MAX_S3_PARTS * S3_MAX_PART_MB (~44 TiB). Fail fast with a clear
+    # message instead of starting a multipart upload that would die on
+    # part 10,001. Use --split to break the file into volumes first.
+    _hard_max_bytes = MAX_S3_PARTS * S3_MAX_PART_MB * 1024 * 1024
+    if file_size > _hard_max_bytes:
+        err = (
+            f"file too large for S3 multipart: {file_size:,} bytes "
+            f"exceeds the {MAX_S3_PARTS}-part x {S3_MAX_PART_MB} MB "
+            f"ceiling (~{_hard_max_bytes / (1024**4):.1f} TiB). "
+            f"Use --split to break the file into smaller volumes."
+        )
+        tqdm.write(f"[multipart] {remote_key}: {err}")
+        record_result("failed", f"{remote_key} ({err})")
+        return (False, err)
+
     # --- credentials (same fallback chain as before) ---
     access_key = os.environ.get("IAS3_ACCESS_KEY")
     secret_key = os.environ.get("IAS3_SECRET_KEY")
@@ -3371,8 +3395,15 @@ def multipart_upload_worker(
     if len(display_name) > 20:
         display_name = "..." + display_name[-17:]
 
+    # v6.64: default parts_per_file to one-wave (= concurrency) so the
+    # whole file uploads in a single batch with no tail wave.
+    # Pass --parts-per-file 0 to restore the legacy auto_chunk_mb path.
+    if parts_per_file is None:
+        parts_per_file = max_concurrency
+
     vlog(f"MULTIPART START for '{remote_key}' ({file_size:,} bytes, "
-         f"chunk={chunk_size_mb}MB, concurrency={max_concurrency})")
+         f"chunk={chunk_size_mb}MB, concurrency={max_concurrency}, "
+         f"parts_per_file={parts_per_file})")
 
     # --- v6.60: resolve chunk size and check resume state ---
     client = IAS3Client(access_key, secret_key)
@@ -3385,15 +3416,18 @@ def multipart_upload_worker(
         vlog(f"  state load outer exception: {_se}")
         _state = None
 
-    # Effective chunk size for an EXPLICIT --chunk-size, computed exactly
-    # like a fresh upload would (5 MB floor, 10,000-part scaling), so it
-    # is comparable with the chunk_bytes stored in the state file.
-    req_chunk_bytes = None
-    if chunk_size_mb:
-        req_chunk_bytes, _ = _resolve_chunk_bytes(
-            file_size, chunk_size_mb, max_concurrency,
-            parts_per_file=parts_per_file,
-        )
+    # Effective chunk size, computed exactly like a fresh upload would
+    # (5 MB floor, 10,000-part scaling, one-wave default) so it is
+    # comparable with the chunk_bytes stored in the state file.
+    #
+    # v6.64: compute this unconditionally. Previously it was only set
+    # when --chunk-size was passed, which meant a state file created
+    # under one default could be silently adopted after the default
+    # changed, causing a chunk-boundary mismatch on reassembly.
+    req_chunk_bytes, _ = _resolve_chunk_bytes(
+        file_size, chunk_size_mb, max_concurrency,
+        parts_per_file=parts_per_file,
+    )
 
     def _discard_state(reason):
         nonlocal _state
@@ -3432,16 +3466,21 @@ def multipart_upload_worker(
             f"{chunk_bytes // (1024 * 1024)} MB ({n_parts} parts)"
         )
     else:
-        if not chunk_size_mb:
-            tqdm.write(
-                f"[multipart] {remote_key}: auto chunk = "
-                f"{auto_chunk_mb(file_size, max_concurrency)} MB "
-                f"(file {file_size/1e9:.2f} GB, {max_concurrency} threads)"
-            )
         chunk_bytes, n_parts = _resolve_chunk_bytes(
             file_size, chunk_size_mb, max_concurrency,
             parts_per_file=parts_per_file,
         )
+        if not chunk_size_mb:
+            if parts_per_file:
+                _mode = f"one-wave ({parts_per_file} parts/file)"
+            else:
+                _mode = "legacy auto"
+            tqdm.write(
+                f"[multipart] {remote_key}: {_mode} chunk = "
+                f"{chunk_bytes // (1024 * 1024)} MB "
+                f"({n_parts} parts, file {file_size/1e9:.2f} GB, "
+                f"{max_concurrency} threads)"
+            )
         if chunk_size_mb and chunk_bytes != max(5, chunk_size_mb) * 1024 * 1024:
             tqdm.write(
                 f"[multipart] {remote_key}: file is {file_size/1e9:.1f} GB; "
@@ -4155,9 +4194,10 @@ def main():
         "--parts-per-file",
         type=int,
         default=None,
-        help=("Target exactly N parts per multipart upload (overrides "
-              "auto sizing). Set equal to --multipart-concurrency for a "
-              "single-wave upload. Subject to S3's ~5 GB per-part "
+        help=("Target exactly N parts per multipart upload. DEFAULT is "
+              "to match --multipart-concurrency (single wave, no tail). "
+              "Pass 0 to restore legacy auto sizing (~8 parts per "
+              "thread, power-of-two MB). Subject to S3's ~5 GB per-part "
               "ceiling."),
     )
     parser.add_argument(
