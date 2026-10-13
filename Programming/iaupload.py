@@ -2968,6 +2968,30 @@ class IAS3Client:
 args_ref = None
 
 
+# v6.67: share threads across files
+# Global slot pool for multipart part progress bars. With multiple files
+# uploading concurrently, per-file slot queues all start at 1 and part
+# bars collide on the same terminal row. This queue hands out slot
+# numbers globally so every active part bar has a unique row.
+_part_bar_slots_lock = threading.Lock()
+_part_bar_slots = None  # initialized on first use
+
+
+def _acquire_part_bar_slot(max_slots):
+    global _part_bar_slots
+    with _part_bar_slots_lock:
+        if _part_bar_slots is None:
+            _part_bar_slots = queue.Queue()
+            for s in range(1, max(1, int(max_slots)) + 1):
+                _part_bar_slots.put(s)
+    return _part_bar_slots.get()
+
+
+def _release_part_bar_slot(slot):
+    if _part_bar_slots is not None and slot is not None:
+        _part_bar_slots.put(slot)
+
+
 def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=8,
                   min_mb=8, max_mb=2048):
     """
@@ -3632,21 +3656,28 @@ def multipart_upload_worker(
 
             import shutil
             term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+            # v6.67: worst case is max_workers file bars + max_concurrency
+            # part bars. Require enough rows for that plus a few lines of
+            # slack; otherwise fall back to single-bar mode.
+            _bar_rows_needed = (
+                getattr(args_ref, "threads", max_concurrency)
+                + max_concurrency + 4
+            )
             show_part_bars = (
                 not getattr(args_ref, "no_part_bars", False)
-                and term_lines >= (max_concurrency + 4)
+                and term_lines >= _bar_rows_needed
             )
 
-            thread_slot_queue = queue.Queue()
-            for s in range(1, max_concurrency + 1):
-                thread_slot_queue.put(s)
-
+            # v6.67: bar slots come from a GLOBAL pool so multiple files
+            # uploading concurrently don't draw their part bars on the
+            # same terminal rows. Position range is 20+slot, well clear
+            # of the file-level bars (positions 1..max_workers).
             def _upload_part_with_retry(part_num, offset, size):
                 if shutdown_event.is_set():
                     raise RuntimeError("Cancelled by user")
                 backoff = _PART_BACKOFF_START
                 last_exc = None
-                slot = thread_slot_queue.get()
+                slot = _acquire_part_bar_slot(max_concurrency)
                 part_bar = None
                 if show_part_bars:
                     part_bar = tqdm(
@@ -3654,8 +3685,8 @@ def multipart_upload_worker(
                         unit="B",
                         unit_scale=True,
                         unit_divisor=1024,
-                        desc=f"  [Thread {slot:02d}] Part {part_num:03d}/{n_parts}",
-                        position=position + slot,
+                        desc=f"  [Part {part_num:03d}/{n_parts}]",
+                        position=20 + slot,
                         leave=False,
                         dynamic_ncols=True,
                         bar_format=("{desc}: {percentage:3.0f}%|{bar}| "
@@ -3725,7 +3756,7 @@ def multipart_upload_worker(
                             part_bar.close()
                         except Exception:
                             pass
-                    thread_slot_queue.put(slot)
+                    _release_part_bar_slot(slot)
 
             part_failures = []
             _parts_done = {pn for pn, _et in parts}
@@ -5092,17 +5123,20 @@ def main():
                                 f"worker_wrapper: routing '{f_data[0]}' "
                                 f"({f_size:,} bytes) to multipart_upload_worker"
                             )
-                            with _multipart_active_lock:
-                                return multipart_upload_worker(
-                                    identifier,
-                                    f_data,
-                                    None,
-                                    position=slot,
-                                    session=custom_session,
-                                    chunk_size_mb=args.chunk_size,
-                                    max_concurrency=args.multipart_concurrency,
-                                    parts_per_file=args.parts_per_file,
-                                )
+                            # v6.67: no _multipart_active_lock. All queued
+                            # multipart files run concurrently; the global
+                            # _inflight_slot semaphore (--max-inflight) caps
+                            # total concurrent HTTP uploads across files.
+                            return multipart_upload_worker(
+                                identifier,
+                                f_data,
+                                None,
+                                position=slot,
+                                session=custom_session,
+                                chunk_size_mb=args.chunk_size,
+                                max_concurrency=args.multipart_concurrency,
+                                parts_per_file=args.parts_per_file,
+                            )
 
                         if args.use_ia_library:
                             vlog(
