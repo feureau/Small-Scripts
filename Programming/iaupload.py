@@ -2770,10 +2770,23 @@ class IAS3Client:
 
             # v6.56: distinguish per-account quota (fatal) from per-bucket
             # rate limit (transient, backed off).
-            is_account_quota = (
-                "accesskey_tasks_queued" in body_lower
-                or "rationed" in body_lower
-            )
+            #
+            # v6.63 FIX: match ONLY accesskey_tasks_queued.
+            #
+            # IA's bucket-level 503 body reads:
+            #   <Resource>bucket_tasks_queued exceeds rationed amount</Resource>
+            # which contains the word "rationed". The prior check that
+            # also treated "rationed" as an account-quota signal matched
+            # a transient bucket-level 503 and mis-promoted it to fatal
+            # account-quota exhaustion, aborting the entire run before
+            # the retry/backoff path could fire.
+            #
+            # The two conditions are mutually exclusive and IA names the
+            # offending counter explicitly, so match the counter name and
+            # nothing else. The word "rationed" remains in the is_slowdown
+            # list below, where it correctly identifies BOTH variants as
+            # rate-limit responses.
+            is_account_quota = "accesskey_tasks_queued" in body_lower
             is_slowdown = any(s in body_lower for s in (
                 "slowdown",
                 "reduce your request rate",
@@ -4615,8 +4628,9 @@ def main():
                     )
                     if _probe.status_code == 503:
                         _pb = (_probe.text or "").lower()
-                        if ("accesskey_tasks_queued" in _pb
-                                or "rationed" in _pb):
+                        # v6.63 FIX: match ONLY accesskey_tasks_queued.
+                        # See IAS3Client.request() for rationale.
+                        if "accesskey_tasks_queued" in _pb:
                             _note_account_quota()
                             sys.exit(2)
             except SystemExit:
