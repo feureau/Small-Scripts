@@ -1,0 +1,177 @@
+//Maya Preference 2017 (Release 1)
+//
+//
+
+//
+// The runtime commands referenced by the hotkeys
+//
+runTimeCommand
+	-annotation "time_Slider_Paste_Key"
+	-category "Custom Scripts"
+	-hotkeyCtx ""
+	-commandLanguage "mel"
+	-command ("timeSliderPasteKey false;")
+	time_Slider_Paste_Key;
+
+runTimeCommand
+	-annotation "timeSliderCopyKey"
+	-category "Custom Scripts"
+	-hotkeyCtx ""
+	-commandLanguage "mel"
+	-command ("timeSliderCopyKey;\n")
+	timeSliderCopyKey;
+
+runTimeCommand
+	-annotation "timeSliderCutKey"
+	-category "Custom Scripts"
+	-hotkeyCtx ""
+	-commandLanguage "mel"
+	-command ("timeSliderCutKey;")
+	timeSliderCutKey;
+
+//
+// The name commands referenced by the hotkeys
+//
+nameCommand
+	-annotation "PlaybackToggleNameCommand"
+	-sourceType "mel"
+	-command ("PlaybackToggle")
+	PlaybackToggleNameCommand;
+
+nameCommand
+	-annotation "NextFrameNameCommand"
+	-sourceType "mel"
+	-command ("NextFrame")
+	NextFrameNameCommand;
+
+nameCommand
+	-annotation "PreviousFrameNameCommand"
+	-sourceType "mel"
+	-command ("PreviousFrame")
+	PreviousFrameNameCommand;
+
+nameCommand
+	-annotation "NextKeyNameCommand"
+	-sourceType "mel"
+	-command ("NextKey")
+	NextKeyNameCommand;
+
+nameCommand
+	-annotation "PreviousKeyNameCommand"
+	-sourceType "mel"
+	-command ("PreviousKey")
+	PreviousKeyNameCommand;
+
+nameCommand
+	-annotation "TimeDraggerToolActivateNameCommand"
+	-sourceType "mel"
+	-command ("TimeDraggerToolActivate")
+	TimeDraggerToolActivateNameCommand;
+
+nameCommand
+	-annotation "TimeDraggerToolDeactivateNameCommand"
+	-sourceType "mel"
+	-command ("TimeDraggerToolDeactivate")
+	TimeDraggerToolDeactivateNameCommand;
+
+nameCommand
+	-annotation "RenderIntoNewWindowNameCommand"
+	-sourceType "mel"
+	-command ("RenderIntoNewWindow")
+	RenderIntoNewWindowNameCommand;
+
+nameCommand
+	-annotation "timeSliderCutKeyNameCommand"
+	-sourceType "mel"
+	-command ("timeSliderCutKey")
+	timeSliderCutKeyNameCommand;
+
+nameCommand
+	-annotation "timeSliderCopyKeyNameCommand"
+	-sourceType "mel"
+	-command ("timeSliderCopyKey")
+	timeSliderCopyKeyNameCommand;
+
+nameCommand
+	-annotation "timeSliderPasteKeyNameCommand"
+	-sourceType "mel"
+	-command ("time_Slider_Paste_Key")
+	timeSliderPasteKeyNameCommand;
+
+nameCommand
+	-annotation "PlaybackBackwardNameCommand"
+	-sourceType "mel"
+	-command ("PlaybackBackward")
+	PlaybackBackwardNameCommand;
+
+nameCommand
+	-annotation "MediumQualityDisplayNameCommand"
+	-sourceType "mel"
+	-command ("MediumQualityDisplay")
+	MediumQualityDisplayNameCommand;
+
+nameCommand
+	-annotation "HighQualityDisplayNameCommand"
+	-sourceType "mel"
+	-command ("HighQualityDisplay")
+	HighQualityDisplayNameCommand;
+
+nameCommand
+	-annotation "ToggleDisplacementNameCommand"
+	-sourceType "mel"
+	-command ("ToggleDisplacement")
+	ToggleDisplacementNameCommand;
+
+//
+// The user hotkeys
+//
+//
+// The hotkey set
+//
+hotkeySet -source "Maya_Default" -current Maya_Hotkey_Feureau1;
+//
+// The hotkey contexts and hotkeys
+//
+hotkey -keyShortcut "`" -name ("TimeDraggerToolActivateNameCommand");
+hotkey -keyShortcut "`" -releaseName ("TimeDraggerToolDeactivateNameCommand");
+hotkey -keyShortcut "2" -ctl -name ("timeSliderCopyKeyNameCommand");
+hotkey -keyShortcut "2" -name ("NextFrameNameCommand");
+hotkey -keyShortcut "1" -ctl -name ("timeSliderCutKeyNameCommand");
+hotkey -keyShortcut "1" -releaseName ("");
+hotkey -keyShortcut "1" -name ("PreviousFrameNameCommand");
+hotkey -keyShortcut "y" -name ("RenderIntoNewWindowNameCommand");
+hotkey -keyShortcut "k" -releaseName ("");
+hotkey -keyShortcut "3" -name ("PlaybackToggleNameCommand");
+hotkey -keyShortcut "k" -name ("");
+hotkey -keyShortcut "2" -alt -name ("NextKeyNameCommand");
+hotkey -keyShortcut "1" -alt -name ("PreviousKeyNameCommand");
+hotkey -keyShortcut "3" -alt -name ("PlaybackBackwardNameCommand");
+hotkey -keyShortcut "9" -name ("HighQualityDisplayNameCommand");
+hotkey -keyShortcut "," -name ("");
+hotkey -keyShortcut "8" -name ("MediumQualityDisplayNameCommand");
+hotkey -keyShortcut "," -alt -name ("");
+hotkey -keyShortcut "v" -alt -name ("");
+hotkey -keyShortcut "3" -ctl -name ("timeSliderPasteKeyNameCommand");
+hotkey -keyShortcut "." -name ("");
+hotkey -keyShortcut "9" -alt -name ("ToggleDisplacementNameCommand");
+hotkey -keyShortcut "." -alt -name ("");
+hotkeyCtx -type "Editor" -addClient "timeEditorPanel";
+hotkey -keyShortcut "`" -name ("TimeEditorToggleTimeCursorPressNameCommand");
+hotkey -keyShortcut "`" -releaseName ("TimeEditorToggleTimeCursorReleaseNameCommand");
+hotkey -keyShortcut "k" -releaseName ("") -ctxClient "timeEditorPanel";
+hotkey -keyShortcut "k" -name ("") -ctxClient "timeEditorPanel";
+hotkeyCtx -type "Editor" -addClient "posePanel";
+hotkeyCtx -type "Editor" -addClient "outlinerPanel";
+hotkeyCtx -type "Editor" -addClient "profilerPanel";
+hotkeyCtx -type "Editor" -addClient "graphEditor";
+hotkeyCtx -type "Editor" -addClient "hyperShadePanel";
+hotkeyCtx -type "Editor" -addClient "nodeEditorPanel";
+hotkeyCtx -type "Editor" -addClient "shapePanel";
+hotkeyCtx -type "Editor" -addClient "polyTexturePlacementPanel";
+hotkeyCtx -type "Editor" -addClient "hyperGraphPanel";
+hotkeyCtx -type "Tool" -addClient "texCutContext";
+hotkeyCtx -type "Tool" -addClient "sculptMeshCache";
+hotkeyCtx -type "Tool" -addClient "texSculptCacheContext";
+hotkeyCtx -type "Tool" -addClient "polyCutUV";
+hotkeyCtx -type "Tool" -addClient "SymmetrizeUVBrush";
+hotkeyCtx -type "Tool" -addClient "Unfold3DBrush";

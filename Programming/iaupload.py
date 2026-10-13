@@ -2993,19 +2993,69 @@ def auto_chunk_mb(file_size, concurrency, target_parts_per_thread=8,
     return min(mb, max_mb)
 
 
+
+
+
+# --- patch: --parts-per-file support -------------------------------------
+# S3 rejects any single part larger than 5 GB. 4600 MB leaves headroom
+# for the multipart envelope and per-request overhead.
+S3_MAX_PART_MB = 4600
+
+
+def chunk_mb_for_parts(file_size, n_parts_target,
+                       min_mb=8, max_mb=S3_MAX_PART_MB):
+    """
+    Chunk size in MiB that splits file_size into ~n_parts_target parts.
+
+    Set n_parts_target == --multipart-concurrency to upload the whole
+    file in a single wave (one part per worker, no tail).
+
+    Subject to S3's ~5 GB per-part ceiling; files above
+    ~n_parts_target * 5 GB still need more than one wave.
+    """
+    file_size = max(1, int(file_size))
+    n_parts_target = max(1, int(n_parts_target))
+    raw_mb = -(-file_size // (n_parts_target * 1024 * 1024))  # ceil
+    return max(min_mb, min(max_mb, int(raw_mb)))
+# --- end patch -----------------------------------------------------------
+
+
 MAX_S3_PARTS = 10000
 
 
-def _resolve_chunk_bytes(file_size, chunk_size_mb, concurrency):
+def _resolve_chunk_bytes(file_size, chunk_size_mb, concurrency,
+                         parts_per_file=None):
     """
     v6.60: single source of truth for multipart chunk sizing.
     Returns (chunk_bytes, n_parts). Applies auto-sizing when
     chunk_size_mb is falsy, a 5 MB floor, and upscaling to stay
     within S3's 10,000-part limit.
+
+    [patch] parts_per_file overrides auto sizing: pick a chunk that
+    splits file_size into ~parts_per_file pieces. Also enforces S3's
+    ~5 GB per-part ceiling on any explicit --chunk-size value.
     """
-    if not chunk_size_mb:
+    if parts_per_file:
+        chunk_size_mb = chunk_mb_for_parts(file_size, parts_per_file)
+    elif not chunk_size_mb:
         chunk_size_mb = auto_chunk_mb(file_size, concurrency)
+
     chunk_bytes = max(5, int(chunk_size_mb)) * 1024 * 1024
+
+    # [patch] Never exceed S3's single-part ceiling, even on explicit
+    # --chunk-size. Without this, --chunk-size 8000 fails at PUT time
+    # with EntityTooLarge.
+    s3_max_bytes = S3_MAX_PART_MB * 1024 * 1024
+    if chunk_bytes > s3_max_bytes:
+        try:
+            tqdm.write(
+                f"  [multipart] chunk {chunk_size_mb} MB exceeds S3's "
+                f"{S3_MAX_PART_MB} MB per-part ceiling; clamping"
+            )
+        except Exception:
+            pass
+        chunk_bytes = s3_max_bytes
+
     min_chunk_bytes = -(-int(file_size) // MAX_S3_PARTS)  # ceil div
     if chunk_bytes < min_chunk_bytes:
         chunk_bytes = -(-min_chunk_bytes // (1024 * 1024)) * 1024 * 1024
@@ -3271,6 +3321,7 @@ def multipart_upload_worker(
     session=None,
     chunk_size_mb=DEFAULT_CHUNK_SIZE_MB,
     max_concurrency=DEFAULT_MULTIPART_CONCURRENCY,
+    parts_per_file=None,
 ):
     """
     v6.31: Upload a large file using IA's S3 multipart API with SigV2
@@ -3327,7 +3378,8 @@ def multipart_upload_worker(
     req_chunk_bytes = None
     if chunk_size_mb:
         req_chunk_bytes, _ = _resolve_chunk_bytes(
-            file_size, chunk_size_mb, max_concurrency
+            file_size, chunk_size_mb, max_concurrency,
+            parts_per_file=parts_per_file,
         )
 
     def _discard_state(reason):
@@ -3374,7 +3426,8 @@ def multipart_upload_worker(
                 f"(file {file_size/1e9:.2f} GB, {max_concurrency} threads)"
             )
         chunk_bytes, n_parts = _resolve_chunk_bytes(
-            file_size, chunk_size_mb, max_concurrency
+            file_size, chunk_size_mb, max_concurrency,
+            parts_per_file=parts_per_file,
         )
         if chunk_size_mb and chunk_bytes != max(5, chunk_size_mb) * 1024 * 1024:
             tqdm.write(
@@ -4086,6 +4139,15 @@ def main():
               "rounded up to a power-of-two MB, clamped 8 MB - 2 GB)."),
     )
     parser.add_argument(
+        "--parts-per-file",
+        type=int,
+        default=None,
+        help=("Target exactly N parts per multipart upload (overrides "
+              "auto sizing). Set equal to --multipart-concurrency for a "
+              "single-wave upload. Subject to S3's ~5 GB per-part "
+              "ceiling."),
+    )
+    parser.add_argument(
         "--multipart-threshold",
         type=int,
         default=DEFAULT_MULTIPART_THRESHOLD_MB,
@@ -4216,6 +4278,8 @@ def main():
                 f"(threshold {_thresh_disp}, chunk {_chunk_disp}, "
                 f"{args.multipart_concurrency} parts/file, {_tb_disp}) ---"
             )
+    if getattr(args, "parts_per_file", None):
+        print(f"--- Multipart: {args.parts_per_file} parts/file target ---")
     if args.no_multipart or args.use_ia_library:
         print(f"--- Small-file path: internetarchive library ---")
     else:
@@ -4983,6 +5047,7 @@ def main():
                                     session=custom_session,
                                     chunk_size_mb=args.chunk_size,
                                     max_concurrency=args.multipart_concurrency,
+                                    parts_per_file=args.parts_per_file,
                                 )
 
                         if args.use_ia_library:
