@@ -75,24 +75,32 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
-v8.62 - Auto-enable burn_subtitles on subtitle jobs + prevent hybrid path preset leak (2026-10-19)
-    • FIX: Presets such as "Hybrid Duo Horz 4K - HDR" had on_scan_subs
-      enabled in triggers while burn_subtitles was saved as False in
-      options. Jobs created with a matched subtitle displayed the
-      subtitle tag in the queue but skipped ASS generation at render
-      time because options["burn_subtitles"] was False. _create_job_entry
-      and _apply_subtitle_to_job now automatically set
-      options["burn_subtitles"] = True whenever a subtitle_path is
-      attached to a job.
+v8.63 - Respect saved burn_subtitles=False in presets and sync queued jobs on preset save (2026-10-19)
+    • FIX: v8.62 forced options["burn_subtitles"] = True in
+      _create_job_entry and _apply_subtitle_to_job whenever a
+      subtitle_path was present. Because promote_input_files_manual,
+      promote_input_files_auto (when on_scan_subs is enabled), and
+      auto_detect_subs attach a detected .srt path to newly created
+      jobs, any job created for a preset with burn_subtitles=False had
+      burn_subtitles overwritten back to True. Selecting that job in the
+      queue (on_job_select -> update_gui_from_job_options) then re-checked
+      "Enable Subtitle Burning" in the GUI. Removed the automatic
+      override so options["burn_subtitles"] strictly respects the
+      preset/checkbox state.
+    • FIX: _save_preset_internal now also updates job["options"] on any
+      already-queued jobs in self.processing_jobs that use the saved
+      preset name (while preserving per-job hybrid paths and title
+      overrides), so clicking a queued job after saving a preset no
+      longer reloads stale pre-save options into the GUI.
+v8.62 - Prevent hybrid path preset leak + enable burn_subtitles on subtitle presets (2026-10-19)
     • FIX: _create_job_entry mutated the caller's options dict in-place
       with resolved hybrid_top_path and hybrid_bottom_path before
       copy.deepcopy(options), causing per-job file paths to leak into
       vid.py.preset.json when presets were saved. _create_job_entry now
       deep-copies options upfront, and WorkflowPresetManager strips
       per-job hybrid_top_path / hybrid_bottom_path on load and save.
-    • PRESETS: Enabled burn_subtitles on Hybrid Duo Horz presets, set
-      auto_detect_subs on "Hybrid Duo Horz 4K - HDR", and cleared
-      leaked hybrid_top_path / hybrid_bottom_path entries in
+    • PRESETS: Enabled burn_subtitles on Hybrid Duo Horz subtitle presets
+      and cleared leaked hybrid_top_path / hybrid_bottom_path entries in
       vid.py.preset.json.
 v8.61 - Hybrid-duo dedup no longer swallows subtitle-triggered jobs (2026-10-08)
     • FIX: _create_job_entry's hybrid-duo duplicate guard compared only
@@ -5995,10 +6003,6 @@ class VideoProcessorApp:
     def _apply_subtitle_to_job(self, index, subtitle_path, display_tag):
         job = self.processing_jobs[index]
         job["subtitle_path"] = subtitle_path
-        if subtitle_path:
-            job["options"]["burn_subtitles"] = True
-            if hasattr(self, "burn_subtitles_var"):
-                self.burn_subtitles_var.set(True)
         self._autofill_title_for_job(job, force=False)
         job["display_tag"] = display_tag
         base_name = os.path.basename(job["video_path"])
@@ -7863,6 +7867,19 @@ class VideoProcessorApp:
                 self.trigger_source_hdr_filter_var.get(), "any"),
         }
         self.preset_manager.save_preset(name, options, triggers)
+        for job in self.processing_jobs:
+            if job.get("preset_name") == name:
+                top_p = job["options"].get("hybrid_top_path", "")
+                bot_p = job["options"].get("hybrid_bottom_path", "")
+                mismatch = job["options"].get("_duo_color_mismatch", False)
+                job["options"] = copy.deepcopy(options)
+                if top_p:
+                    job["options"]["hybrid_top_path"] = top_p
+                if bot_p:
+                    job["options"]["hybrid_bottom_path"] = bot_p
+                if mismatch:
+                    job["options"]["_duo_color_mismatch"] = True
+                self._autofill_title_for_job(job, force=False)
         messagebox.showinfo("Saved", f"Preset '{name}' saved successfully.")
 
     def create_new_preset(self):
@@ -8162,8 +8179,6 @@ class VideoProcessorApp:
                 if preferred:
                     subtitle_path = preferred.get("path")
                     display_tag = preferred.get("display_tag", display_tag)
-        if subtitle_path:
-            options["burn_subtitles"] = True
         if orientation == "hybrid-duo (dual source)":
             new_job_hash = get_job_hash(options)
             for existing_job in self.processing_jobs:
