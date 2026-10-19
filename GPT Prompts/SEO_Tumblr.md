@@ -11,6 +11,37 @@ WHAT TO PRODUCE
 2. One Tumblr post body
 3. A tags list
 
+--- TUMBLR SEO REQUIREMENTS ---
+
+These are non-negotiable platform-specific rules. They override any conflicting instinct from other platforms.
+
+ORIGINAL POST RULE
+Only original posts appear in Tumblr tag search results. Reblogs, even with added commentary, do not help you get discovered by new users. The output must read as an original post, not a reblog or a reply.
+
+TAG PLACEMENT RULE
+Only tags placed in the dedicated tag field work for discovery. Typing # in the post body does nothing. The tags list you output is assumed to go into that field. Do not put hashtags in the body.
+
+TAG ORDER RULE
+The first 5 tags are the most important for tag search. Put your most important fandom and topic tags first. Only the first 30 tags are indexed for general tag search, and the first 20 for in-blog search. Order matters.
+
+TAG REALISM RULE
+Use real words with spaces, not smushed-together words. Clever or joke tags do not help with discovery. Tags that accurately describe the post are what connect it to searchers.
+
+KEYWORD PLACEMENT RULE
+The primary keyword must appear in the post title (if used) and in the first line of the body. This is the closest equivalent to an H1 on Tumblr.
+
+NO KEYWORD STUFFING RULE
+Write naturally. Google and Tumblr both penalize unnatural keyword repetition.
+
+CUSTOM URL NOTE
+When publishing, the user should edit the post URL to include the primary keyword. Mention this only if it fits naturally in the body or as a separate note; do not force it.
+
+ALT TEXT NOTE
+If the post includes an image, describe it with relevant keywords in the alt text field. The prompt output can include an alt text suggestion if the post references a specific visual.
+
+TIMESTAMP RULE
+Timestamps are optional and are not an SEO factor on Tumblr. Use them only if they serve the joke or the close-read structure. Do not include them by default. If the source is an SRT, you may reference one or two key moments without listing every timestamp.
+
 --- TITLE RULES (OPTIONAL) ---
 
 - If you use a title, keep it under 60 characters.
@@ -84,6 +115,7 @@ Write in a conversational, platform-native tone. Tumblr rewards sincerity, infor
 - Each tag must include the # symbol prefix so it is ready to paste directly into Tumblr.
 - Total combined length under 500 characters.
 - ORDER MATTERS: The first 5 tags are the most important for tag search. Put your most important fandom and topic tags first.
+- Use real words with spaces. No smushed-together words.
 - Mix these types:
   - Fandom tags: #TheLastOfUs, #TLOU2, #Sony
   - Topic tags: #gaming, #gaming commentary, #modding
@@ -92,6 +124,24 @@ Write in a conversational, platform-native tone. Tumblr rewards sincerity, infor
 - No generic tags like #love, #instagood. Every tag must be relevant.
 - No spammy or unrelated tags. They are penalized.
 - Output all tags on a single line, each prefixed with #, separated by commas and spaces, ready to copy and paste as one string.
+
+--- QUALITY CHECK ---
+
+Before returning output, verify:
+- The post reads as an original post, not a reblog.
+- No hashtags appear in the body. Tags are only in the tags list.
+- The first 5 tags are the most important fandom and topic tags.
+- The primary keyword appears in the first line of the body and in the title (if used).
+- Timestamps are used sparingly or not at all.
+- The post passes the ANTI-LITERAL check (no structural announcements).
+- The post passes the STACCATO check (no more than one fragment per paragraph, no parallel triplets).
+- The post passes the CASUALNESS check (at least three casualness techniques used).
+- The post passes the SASS check (at least one rhetorical question, direct address, or absurd exaggeration).
+- The post passes the FAIRNESS check if a counterargument exists in the source.
+- The post passes the INTENT check (motive claims are first-person).
+- The post passes the LOGIC check (each sentence follows from the one before).
+- The post ends with a specific, debatable question.
+- Tags are 5 to 12, under 500 characters, with no heavy repetition, and use real words with spaces.
 
 --- OUTPUT FORMAT ---
 

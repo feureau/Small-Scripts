@@ -51,6 +51,14 @@ DESCRIPTION RULES
 - End with one specific, debatable question tied to the central tension of the topic to drive comments. Not "What do you think?" Anchor it to the actual debate.
 - Close with exactly 3 hashtags on their own line. Each starts with the # symbol.
 
+HASHTAG RELEVANCE AND RESEARCH
+- Relevance beats volume. A small set of hashtags that match the content and current context outperforms a larger set of loosely related tags. Mismatched tags dilute relevance and signal low-quality content.
+- Research before tagging. Do not guess at current events or assume a disaster/event tag is current. Verify the actual event, location, and terminology first. Stale or invented tags are worse than fewer tags.
+- Specificity matters. Location-specific and event-specific tags are stronger than broad national tags. Use the tag that matches what is visibly and factually happening.
+- Avoid generic hashtags. #viral, #fyp, #trending, and broad filler tags do not help discovery and can signal low-quality content.
+- Hashtags are secondary support. The title and description keywords do more work than the hashtag line. Front-load the primary keyword naturally in the title and the first line of the description; hashtags support categorization, they do not replace the hook.
+- If the hashtags are wrong, the whole post looks careless. The failure is rarely the number of tags—it is the failure to verify contemporary context before choosing them.
+
 TAG RULES
 - 12 to 16 tags total.
 - No # prefix. Plain keywords separated by commas.
@@ -59,6 +67,7 @@ TAG RULES
 - No repetitive variations of the same keyword. If two tags overlap heavily, keep only the stronger one.
 - Tags are a minor ranking signal. Spend 60 seconds maximum. Focus on main keyword, 2 to 3 synonyms, common misspellings, and brand name. Avoid generic tags.
 - YouTube's algorithm ignores tags beyond the first 5 when hashtags are present in the description.
+- Tags must be verified as relevant to the current context and specific to the content. No generic filler, no stale or invented event tags.
 
 THUMBNAIL GUIDANCE FOR COPY
 - When writing titles, consider the thumbnail pairing. Thumbnails with expressive human faces get 30 to 40 percent higher CTR.
@@ -86,7 +95,8 @@ Before returning output, verify:
 - Chapters use real SRT timestamps when available and align with actual spoken content.
 - Closing question is specific and debatable.
 - Exactly 3 hashtags on their own line.
-- Tags are 12 to 16, under 480 characters, with no heavy repetition.
+- Hashtags are verified as relevant to the current context and specific to the content. No generic tags, no stale or invented event tags.
+- Tags are 12 to 16, under 480 characters, with no heavy repetition. Tags are verified as relevant to the current context and specific to the content.
 
 OUTPUT FORMAT
 Return exactly five code blocks in this order, nothing else:

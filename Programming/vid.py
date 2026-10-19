@@ -75,6 +75,25 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.62 - Auto-enable burn_subtitles on subtitle jobs + prevent hybrid path preset leak (2026-10-19)
+    • FIX: Presets such as "Hybrid Duo Horz 4K - HDR" had on_scan_subs
+      enabled in triggers while burn_subtitles was saved as False in
+      options. Jobs created with a matched subtitle displayed the
+      subtitle tag in the queue but skipped ASS generation at render
+      time because options["burn_subtitles"] was False. _create_job_entry
+      and _apply_subtitle_to_job now automatically set
+      options["burn_subtitles"] = True whenever a subtitle_path is
+      attached to a job.
+    • FIX: _create_job_entry mutated the caller's options dict in-place
+      with resolved hybrid_top_path and hybrid_bottom_path before
+      copy.deepcopy(options), causing per-job file paths to leak into
+      vid.py.preset.json when presets were saved. _create_job_entry now
+      deep-copies options upfront, and WorkflowPresetManager strips
+      per-job hybrid_top_path / hybrid_bottom_path on load and save.
+    • PRESETS: Enabled burn_subtitles on Hybrid Duo Horz presets, set
+      auto_detect_subs on "Hybrid Duo Horz 4K - HDR", and cleared
+      leaked hybrid_top_path / hybrid_bottom_path entries in
+      vid.py.preset.json.
 v8.61 - Hybrid-duo dedup no longer swallows subtitle-triggered jobs (2026-10-08)
     • FIX: _create_job_entry's hybrid-duo duplicate guard compared only
       the resolved video path and the options hash, neither of which
@@ -443,6 +462,10 @@ IAMF_STREAM_BITRATE_K = 128
 
 DEFAULT_LUT_PATH = ""
 DEFAULT_SOFA_PATH = r"C:\Users\Feureau\AppData\Roaming\mpv\D1_48K_24bit_256tap_FIR_SOFA.sofa"
+DEFAULT_SOFA_GAIN = "0.0"
+DEFAULT_SOFA_NORMALIZE = True
+DEFAULT_SOFA_LIMITER = True
+DEFAULT_SOFA_LIMITER_LIMIT = "-0.5"
 
 DEFAULT_SOFA_SPEAKER_AZIMUTHS = {
     "FL": "30",  "FR": "330", "FC": "0",
@@ -2390,6 +2413,10 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('loudness_apply_eclipsa', True)),
         str(job_options.get('normalize_audio', False)),
         job_options.get('sofa_file', ''),
+        job_options.get('sofa_gain', DEFAULT_SOFA_GAIN),
+        str(job_options.get('sofa_normalize', DEFAULT_SOFA_NORMALIZE)),
+        str(job_options.get('sofa_limiter', DEFAULT_SOFA_LIMITER)),
+        job_options.get('sofa_limiter_limit', DEFAULT_SOFA_LIMITER_LIMIT),
         job_options.get('sofa_speakers', ''),
         job_options.get('subtitle_alignment', ''),
         job_options.get('hybrid_top_aspect', ''),
@@ -2800,11 +2827,13 @@ class WorkflowPresetManager:
         self.filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
         self.presets = {}
         self.MASTER_OPTIONS = {
+            "output_mode": "local",
             "resolution": DEFAULT_RESOLUTION,
             "upscale_algo": DEFAULT_UPSCALE_ALGO,
             "output_format": DEFAULT_OUTPUT_FORMAT,
             "video_codec": DEFAULT_VIDEO_CODEC,
             "encoder_backend": DEFAULT_ENCODER_BACKEND,
+            "nvenc_nvvfx_denoise": DEFAULT_NVENC_NVVFX_DENOISE,
             "nvenc_superres_mode": DEFAULT_NVENC_SUPERRES_MODE,
             "nvenc_superres_strength": DEFAULT_NVENC_SUPERRES_STRENGTH,
             "multi_stage_superres": DEFAULT_MULTI_STAGE_SUPERRES,
@@ -2823,10 +2852,15 @@ class WorkflowPresetManager:
             "manual_bitrate": "0",
             "override_bitrate": False,
             "aspect_mode": DEFAULT_ASPECT_MODE,
+            "aspect_blur": False,
+            "aspect_pixelate": False,
+            "aspect_ambient": False,
+            "pad_color": DEFAULT_PAD_COLOR,
             "video_offset_x": DEFAULT_VIDEO_OFFSET_X,
             "video_offset_y": DEFAULT_VIDEO_OFFSET_Y,
             "video_offset_units": DEFAULT_VIDEO_OFFSET_UNITS,
             "pixelate_multiplier": DEFAULT_PIXELATE_MULTIPLIER,
+            "ambient_spread": DEFAULT_AMBIENT_SPREAD,
             "pixelate_brightness": DEFAULT_PIXELATE_BRIGHTNESS,
             "pixelate_saturation": DEFAULT_PIXELATE_SATURATION,
             "blur_sigma": DEFAULT_BLUR_SIGMA,
@@ -2834,6 +2868,7 @@ class WorkflowPresetManager:
             "ambient_engine": DEFAULT_AMBIENT_ENGINE,
             "horizontal_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "vertical_aspect": DEFAULT_VERTICAL_ASPECT,
+            "merged_aspect": DEFAULT_HORIZONTAL_ASPECT,
             "hybrid_top_aspect": "16:9",
             "hybrid_block_offset_units": DEFAULT_HYBRID_BLOCK_OFFSET_UNITS,
             "hybrid_top_mode": DEFAULT_HYBRID_TOP_MODE,
@@ -2865,6 +2900,7 @@ class WorkflowPresetManager:
             "hibernate_when_done": False,
             "burn_subtitles": DEFAULT_BURN_SUBTITLES,
             "use_sharpening": DEFAULT_USE_SHARPENING,
+            "ffmpeg_denoise_vulkan": DEFAULT_FFMPEG_DENOISE_VULKAN,
             "sharpening_algo": DEFAULT_SHARPENING_ALGO,
             "sharpening_strength": DEFAULT_SHARPENING_STRENGTH,
             "subfolder_mode": DEFAULT_SUBFOLDER_MODE,
@@ -2903,6 +2939,10 @@ class WorkflowPresetManager:
             "audio_passthrough": DEFAULT_AUDIO_PASSTHROUGH,
             "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
             "sofa_file": DEFAULT_SOFA_PATH,
+            "sofa_gain": DEFAULT_SOFA_GAIN,
+            "sofa_normalize": DEFAULT_SOFA_NORMALIZE,
+            "sofa_limiter": DEFAULT_SOFA_LIMITER,
+            "sofa_limiter_limit": DEFAULT_SOFA_LIMITER_LIMIT,
             "sofa_speakers": DEFAULT_SOFA_SPEAKERS,
             "lut_file": DEFAULT_LUT_PATH,
             "subtitle_font": DEFAULT_SUBTITLE_FONT,
@@ -3034,6 +3074,8 @@ class WorkflowPresetManager:
         preset_opts = preset.get('options', {})
         for k, v in preset_opts.items():
             if v is not None:
+                if k in ("hybrid_top_path", "hybrid_bottom_path"):
+                    continue
                 if k == "sofa_file" and not str(v).strip():
                     continue
                 if k == "sofa_speakers" and not str(v).strip():
@@ -3045,6 +3087,9 @@ class WorkflowPresetManager:
 
     def save_preset(self, name, options, triggers):
         clean_options = copy.deepcopy(options)
+        clean_options["hybrid_top_path"] = ""
+        clean_options["hybrid_bottom_path"] = ""
+        clean_options.pop("_duo_color_mismatch", None)
         if "chroma_subsampling" in clean_options:
             clean_options["chroma_subsampling"] = _normalize_chroma_code(clean_options["chroma_subsampling"])
         self.presets[name] = {"options": clean_options, "triggers": triggers}
@@ -3068,9 +3113,9 @@ class WorkflowPresetManager:
         h_clean_opts = {
             "orientation": "horizontal + vertical",
             "merged_aspect": "16:9",
-            "resolution": "4k",
+            "resolution": "2160p",
             "normalize_audio": True,
-            "audio_type": "surround_51",
+            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
             "burn_subtitles": False,
         }
         h_clean = {"options": h_clean_opts,
@@ -3079,7 +3124,8 @@ class WorkflowPresetManager:
                                 "suffix_filter": None, "exclude_suffix_filter": None}}
         v_hybrid_opts = {
             "orientation": "hybrid (stacked)",
-            "resolution": "4k", "normalize_audio": True, "audio_type": "mono",
+            "resolution": "2160p", "normalize_audio": True,
+            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
             "burn_subtitles": True, "subtitle_alignment": "seam",
         }
         v_hybrid = {"options": v_hybrid_opts,
@@ -3389,6 +3435,14 @@ class VideoProcessorApp:
 
         self.sofa_file_var = tk.StringVar(value=DEFAULT_SOFA_PATH)
         self.sofa_file_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_file'))
+        self.sofa_gain_var = tk.StringVar(value=DEFAULT_SOFA_GAIN)
+        self.sofa_gain_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_gain'))
+        self.sofa_normalize_var = tk.BooleanVar(value=DEFAULT_SOFA_NORMALIZE)
+        self.sofa_normalize_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_normalize'))
+        self.sofa_limiter_var = tk.BooleanVar(value=DEFAULT_SOFA_LIMITER)
+        self.sofa_limiter_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_limiter'))
+        self.sofa_limiter_limit_var = tk.StringVar(value=DEFAULT_SOFA_LIMITER_LIMIT)
+        self.sofa_limiter_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('sofa_limiter_limit'))
         self._sofa_speaker_defaults = self._parse_sofa_speakers(DEFAULT_SOFA_SPEAKERS)
 
         self.sofa_spk_vars = {}
@@ -5351,6 +5405,38 @@ class VideoProcessorApp:
         self.sofa_browse_btn = ttk.Button(sofa_frame, text="...", command=self.browse_sofa_file, width=4)
         self.sofa_browse_btn.pack(side=tk.LEFT)
 
+        sofa_opts_frame = ttk.Frame(tracks_group)
+        sofa_opts_frame.pack(fill=tk.X, padx=(20, 0), pady=(2, 2))
+        ttk.Label(sofa_opts_frame, text="Gain (dB):").pack(side=tk.LEFT)
+        self.sofa_gain_entry = ttk.Entry(sofa_opts_frame, textvariable=self.sofa_gain_var, width=5)
+        self.sofa_gain_entry.pack(side=tk.LEFT, padx=(5, 15))
+        ToolTip(self.sofa_gain_entry,
+                "Pre-gain applied in sofalizer (dB, from -20 to 40).\n"
+                "When 'Normalize SOFA IRs' is enabled, negative gain (e.g. -6.0)\n"
+                "or enabling 'Limit Output (alimiter)' prevents multi-channel clipping.")
+        self.sofa_norm_cb = ttk.Checkbutton(
+            sofa_opts_frame, text="Normalize SOFA IRs", variable=self.sofa_normalize_var)
+        self.sofa_norm_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.sofa_norm_cb,
+                "Normalizes the HRIR impulse responses inside the .sofa file (sofalizer normalize=1).\n"
+                "Note: This boosts IR gain (~8 dB) rather than peak-limiting the output audio,\n"
+                "so summed surround channels can exceed 0 dBFS unless 'Limit Output' is enabled.")
+        self.sofa_limiter_cb = ttk.Checkbutton(
+            sofa_opts_frame, text="Limit Output (alimiter)",
+            variable=self.sofa_limiter_var, command=self._update_audio_options_ui)
+        self.sofa_limiter_cb.pack(side=tk.LEFT, padx=(0, 8))
+        ToolTip(self.sofa_limiter_cb,
+                "Chains a lookahead limiter (alimiter=limit=<X>dB:level=false:asc=true)\n"
+                "immediately after sofalizer to catch 32-bit float multi-channel sums\n"
+                "exceeding 0 dBFS before downstream filters or AAC encoding.")
+        ttk.Label(sofa_opts_frame, text="Limit (dB):").pack(side=tk.LEFT)
+        self.sofa_limiter_limit_entry = ttk.Entry(
+            sofa_opts_frame, textvariable=self.sofa_limiter_limit_var, width=5)
+        self.sofa_limiter_limit_entry.pack(side=tk.LEFT, padx=(5, 0))
+        ToolTip(self.sofa_limiter_limit_entry,
+                "True ceiling in dBFS (e.g. -0.5 or -1.0) for the post-sofalizer limiter.\n"
+                "Uses level=false so the output is not auto-boosted back to 0 dBFS.")
+
         sofa_speakers_outer = ttk.LabelFrame(tracks_group, text="Speaker Directions (HRTF Angles)")
         sofa_speakers_outer.pack(fill=tk.X, padx=(20, 0), pady=(2, 4))
         spk_grid = ttk.Frame(sofa_speakers_outer)
@@ -5909,6 +5995,10 @@ class VideoProcessorApp:
     def _apply_subtitle_to_job(self, index, subtitle_path, display_tag):
         job = self.processing_jobs[index]
         job["subtitle_path"] = subtitle_path
+        if subtitle_path:
+            job["options"]["burn_subtitles"] = True
+            if hasattr(self, "burn_subtitles_var"):
+                self.burn_subtitles_var.set(True)
         self._autofill_title_for_job(job, force=False)
         job["display_tag"] = display_tag
         base_name = os.path.basename(job["video_path"])
@@ -5940,10 +6030,10 @@ class VideoProcessorApp:
                 if sub_sfx == "":
                     return True
                 continue
+            core = pat.lstrip('-_ .')
             candidates = {pat}
-            if not pat.startswith(('-', '_')):
-                candidates.add(f"-{pat}")
-                candidates.add(f"_{pat}")
+            if core:
+                candidates.update({core, f"-{core}", f"_{core}", f".{core}"})
             for p in candidates:
                 if sub_sfx == p or sub_sfx.endswith(p):
                     return True
@@ -6495,6 +6585,13 @@ class VideoProcessorApp:
             "seam_x": target_w // 2, "seam_y": top_h,
         })
         return result
+
+    def _on_hybrid_aspect_change(self, block):
+        """Handle changes to Top or Bottom hybrid video aspect ratio radio buttons."""
+        key = "hybrid_top_aspect" if block == "top" else "hybrid_bottom_aspect"
+        self._update_selected_jobs(key)
+        self._update_hybrid_block_states()
+        self._update_hybrid_ui_labels()
 
     def _update_hybrid_block_states(self):
         """Enable/disable per-block settings based on the current mode."""
@@ -7266,12 +7363,23 @@ class VideoProcessorApp:
         if target_code != "custom":
             archival = (target_code == "archival")
             sofa_state = "disabled" if archival else "normal"
+            sofa_limit_state = "normal" if (not archival and self.sofa_limiter_var.get()) else "disabled"
             if hasattr(self, "sofa_entry"):
                 self.sofa_entry.config(state=sofa_state)
             if hasattr(self, "sofa_browse_btn"):
                 self.sofa_browse_btn.config(state=sofa_state)
+            if hasattr(self, "sofa_gain_entry"):
+                self.sofa_gain_entry.config(state=sofa_state)
+            if hasattr(self, "sofa_norm_cb"):
+                self.sofa_norm_cb.config(state=sofa_state)
+            if hasattr(self, "sofa_limiter_cb"):
+                self.sofa_limiter_cb.config(state=sofa_state)
+            if hasattr(self, "sofa_limiter_limit_entry"):
+                self.sofa_limiter_limit_entry.config(state=sofa_limit_state)
             for e in getattr(self, "sofa_spk_entries", {}).values():
                 e.config(state=sofa_state)
+            self._update_selected_jobs("sofa_file", "sofa_gain", "sofa_normalize",
+                                       "sofa_limiter", "sofa_limiter_limit", "sofa_speakers")
             return
         backend = self.encoder_backend_var.get()
         is_nvencc_only = (backend == "nvencc_only")
@@ -7280,6 +7388,10 @@ class VideoProcessorApp:
             self.audio_cb_sofa.config(state="disabled")
             self.sofa_entry.config(state="disabled")
             self.sofa_browse_btn.config(state="disabled")
+            self.sofa_gain_entry.config(state="disabled")
+            self.sofa_norm_cb.config(state="disabled")
+            self.sofa_limiter_cb.config(state="disabled")
+            self.sofa_limiter_limit_entry.config(state="disabled")
             for e in self.sofa_spk_entries.values():
                 e.config(state="disabled")
             if hasattr(self, 'loudness_war_checkbox'):
@@ -7348,12 +7460,18 @@ class VideoProcessorApp:
         if hasattr(self, 'render_by_chapters_var') and not self.render_by_chapters_var.get():
             self.audio_cb_passthrough.config(state="disabled" if any_proc_selected else "normal")
         sofa_state = "normal" if is_sofalizer and not is_passthrough else "disabled"
+        sofa_limit_state = "normal" if (sofa_state == "normal" and self.sofa_limiter_var.get()) else "disabled"
         self.sofa_entry.config(state=sofa_state)
         self.sofa_browse_btn.config(state=sofa_state)
+        self.sofa_gain_entry.config(state=sofa_state)
+        self.sofa_norm_cb.config(state=sofa_state)
+        self.sofa_limiter_cb.config(state=sofa_state)
+        self.sofa_limiter_limit_entry.config(state=sofa_limit_state)
         for e in self.sofa_spk_entries.values():
             e.config(state=sofa_state)
         self._update_selected_jobs("audio_mono", "audio_stereo_downmix", "audio_stereo_sofalizer",
-                                   "audio_surround_51", "audio_passthrough", "sofa_file", "sofa_speakers")
+                                   "audio_surround_51", "audio_passthrough", "sofa_file", "sofa_gain",
+                                   "sofa_normalize", "sofa_limiter", "sofa_limiter_limit", "sofa_speakers")
 
     def update_status(self, message):
         self.status_var.set(message)
@@ -7457,6 +7575,10 @@ class VideoProcessorApp:
             "audio_delivery_target": DELIVERY_TARGET_LOOKUP.get(
                 self.audio_delivery_target_var.get(), DEFAULT_DELIVERY_TARGET),
             "sofa_file": self.sofa_file_var.get(),
+            "sofa_gain": self.sofa_gain_var.get(),
+            "sofa_normalize": self.sofa_normalize_var.get(),
+            "sofa_limiter": self.sofa_limiter_var.get(),
+            "sofa_limiter_limit": self.sofa_limiter_limit_var.get(),
             "sofa_speakers": self._build_sofa_speakers_string(),
             "lut_file": self.lut_file_var.get(),
             "hybrid_top_aspect": self.hybrid_top_aspect_var.get(),
@@ -7879,14 +8001,15 @@ class VideoProcessorApp:
                                          if not self._matches_suffix_pattern(s, exclude_patterns)]
                                         if exclude_patterns else detected_subs)
                 has_preset_subs = len(preset_detected_subs) > 0
-                # Exclude suffix also gates the "Always" video trigger:
+                # Exclude suffix gates all triggers for this video:
                 # a video whose own base name matches an excluded suffix
-                # is skipped, matching the way the exclude list already
-                # filters subtitles. Reuses _matches_suffix_pattern by
-                # passing an empty suffix and the video base name.
+                # is completely skipped for this preset.
                 video_excluded = bool(exclude_patterns) and self._matches_suffix_pattern(
                     {'suffix': '', 'basename': video_basename}, exclude_patterns)
-                if not video_excluded and video_trigger == "Always (Clean/Backup)":
+                if video_excluded:
+                    continue
+
+                if video_trigger == "Always (Clean/Backup)":
                     self._create_job_entry(video_path, None, preset['options'],
                                            preset_name, "[No Subtitles]")
                     files_processed_count += 1
@@ -7907,21 +8030,16 @@ class VideoProcessorApp:
                                     if sub['suffix'] == "":
                                         is_claimed_specifically = True
                                 else:
-                                    if sub['basename'] and sub['basename'].endswith(specific):
-                                        is_claimed_specifically = True
-                                    elif sub['suffix'] == specific:
+                                    if self._matches_suffix_pattern(sub, [specific]):
                                         is_claimed_specifically = True
                             if not is_claimed_specifically:
                                 match = True
                         elif filter_mode == 'include':
                             is_specific_match = False
                             if filter_suffix:
-                                valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
-                                for vs in valid_suffixes:
-                                    if sub['basename'] and sub['basename'].endswith(vs):
-                                        is_specific_match = True
-                                    elif sub['suffix'] == vs:
-                                        is_specific_match = True
+                                valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()]
+                                if self._matches_suffix_pattern(sub, valid_patterns):
+                                    is_specific_match = True
                             if is_specific_match:
                                 match = True
                             else:
@@ -7931,9 +8049,7 @@ class VideoProcessorApp:
                                         if sub['suffix'] == "":
                                             is_claimed_specifically = True
                                     else:
-                                        if sub['basename'] and sub['basename'].endswith(specific):
-                                            is_claimed_specifically = True
-                                        elif sub['suffix'] == specific:
+                                        if self._matches_suffix_pattern(sub, [specific]):
                                             is_claimed_specifically = True
                                 if not is_claimed_specifically:
                                     match = True
@@ -7941,13 +8057,10 @@ class VideoProcessorApp:
                             if filter_suffix == "":
                                 if sub['suffix'] == "":
                                     match = True
-                            else:
-                                valid_suffixes = [s.strip() for s in filter_suffix.split(',')]
-                                for vs in valid_suffixes:
-                                    if sub['basename'] and sub['basename'].endswith(vs):
-                                        match = True
-                                    elif sub['suffix'] == vs:
-                                        match = True
+                            elif filter_suffix is not None:
+                                valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()]
+                                if self._matches_suffix_pattern(sub, valid_patterns):
+                                    match = True
                         if match:
                             self._create_job_entry(video_path, sub['path'], preset['options'],
                                                    preset_name, sub['display_tag'])
@@ -7966,12 +8079,27 @@ class VideoProcessorApp:
         preset = self.preset_manager.get_preset(preset_name)
         if not preset:
             return
+        triggers = preset.get('triggers', {})
+        exclude_suffix = triggers.get('exclude_suffix_filter')
+        exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()] if exclude_suffix else None
+        suffix_val = triggers.get('suffix_filter')
+        suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
+
         for index in selected_indices:
             actual_index = self.filtered_input_indices[index]
             video_path = self.input_files[actual_index]
             if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
                 continue
             detected_subs = self._detect_subtitles_for_video(video_path)
+            if exclude_patterns:
+                detected_subs = [s for s in detected_subs
+                                 if not self._matches_suffix_pattern(s, exclude_patterns)]
+            if suffix_val and suffix_mode in ('restrict', 'include'):
+                valid_patterns = [s.strip() for s in suffix_val.split(',') if s.strip()]
+                matching_subs = [s for s in detected_subs
+                                 if self._matches_suffix_pattern(s, valid_patterns)]
+                if matching_subs:
+                    detected_subs = matching_subs
             preferred_sub = self._pick_preferred_subtitle(detected_subs)
             if preferred_sub:
                 self._create_job_entry(video_path, preferred_sub["path"], preset['options'],
@@ -8008,9 +8136,35 @@ class VideoProcessorApp:
             self.job_listbox.delete(index)
 
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
+        options = copy.deepcopy(options)
         orientation = options.get("orientation", DEFAULT_ORIENTATION)
+        resolved_top = (self._resolve_to_top_sibling(video_path)
+                        if orientation == "hybrid-duo (dual source)" else video_path)
+        if subtitle_path is None:
+            preset = self.preset_manager.get_preset(preset_name) if preset_name else None
+            triggers = preset.get('triggers', {}) if preset else {}
+            if triggers.get('auto_detect_subs'):
+                detected_subs = self._detect_subtitles_for_video(resolved_top)
+                exclude_suffix = triggers.get('exclude_suffix_filter')
+                if exclude_suffix:
+                    exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()]
+                    detected_subs = [s for s in detected_subs
+                                     if not self._matches_suffix_pattern(s, exclude_patterns)]
+                suffix_val = triggers.get('suffix_filter')
+                suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
+                if suffix_val and suffix_mode in ('restrict', 'include'):
+                    valid_patterns = [s.strip() for s in suffix_val.split(',') if s.strip()]
+                    matching_subs = [s for s in detected_subs
+                                     if self._matches_suffix_pattern(s, valid_patterns)]
+                    if matching_subs:
+                        detected_subs = matching_subs
+                preferred = self._pick_preferred_subtitle(detected_subs)
+                if preferred:
+                    subtitle_path = preferred.get("path")
+                    display_tag = preferred.get("display_tag", display_tag)
+        if subtitle_path:
+            options["burn_subtitles"] = True
         if orientation == "hybrid-duo (dual source)":
-            resolved_top = self._resolve_to_top_sibling(video_path)
             new_job_hash = get_job_hash(options)
             for existing_job in self.processing_jobs:
                 existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
@@ -8065,25 +8219,11 @@ class VideoProcessorApp:
                               f"bottom={bot_info.get('color_transfer')}")
             except Exception as e:
                 print(f"[WARN] Could not probe hybrid-duo pair: {e}")
-        if subtitle_path is None:
-            preset = self.preset_manager.get_preset(preset_name) if preset_name else None
-            triggers = preset.get('triggers', {}) if preset else {}
-            if triggers.get('auto_detect_subs'):
-                detected_subs = self._detect_subtitles_for_video(video_path)
-                exclude_suffix = triggers.get('exclude_suffix_filter')
-                if exclude_suffix:
-                    exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()]
-                    detected_subs = [s for s in detected_subs
-                                     if not self._matches_suffix_pattern(s, exclude_patterns)]
-                preferred = self._pick_preferred_subtitle(detected_subs)
-                if preferred:
-                    subtitle_path = preferred.get("path")
-                    display_tag = preferred.get("display_tag", display_tag)
         new_job = {
             "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
             "video_path": video_path,
             "subtitle_path": subtitle_path,
-            "options": copy.deepcopy(options),
+            "options": options,
             "preset_name": preset_name,
             "display_tag": display_tag,
         }
@@ -8327,6 +8467,10 @@ class VideoProcessorApp:
         self.loudness_range_var.set(options.get("loudness_range", DEFAULT_LOUDNESS_RANGE))
         self.true_peak_var.set(options.get("true_peak", DEFAULT_TRUE_PEAK))
         self.sofa_file_var.set(options.get("sofa_file") or DEFAULT_SOFA_PATH)
+        self.sofa_gain_var.set(options.get("sofa_gain", DEFAULT_SOFA_GAIN))
+        self.sofa_normalize_var.set(options.get("sofa_normalize", DEFAULT_SOFA_NORMALIZE))
+        self.sofa_limiter_var.set(options.get("sofa_limiter", DEFAULT_SOFA_LIMITER))
+        self.sofa_limiter_limit_var.set(options.get("sofa_limiter_limit", DEFAULT_SOFA_LIMITER_LIMIT))
         spk_str = options.get("sofa_speakers") or DEFAULT_SOFA_SPEAKERS
         spk = self._parse_sofa_speakers(spk_str)
         for name in SOFA_SPEAKER_ORDER:
@@ -8548,13 +8692,15 @@ class VideoProcessorApp:
             a = options.get("comp_attack"); re_val = options.get("comp_release")
             m = options.get("comp_makeup"); l = options.get("limit_limit")
             af_parts.append(f"acompressor=threshold={t}dB:ratio={r}:attack={a}:release={re_val}:makeup={m}")
-            af_parts.append(f"alimiter=limit={l}dB")
+            af_parts.append(f"alimiter=limit={l}dB:level=false")
         if options.get("use_dynaudnorm", False):
             f = options.get("dyn_frame_len"); g = options.get("dyn_gauss_win")
             p = options.get("dyn_peak"); m = options.get("dyn_max_gain")
             af_parts.append(f"dynaudnorm=f={f}:g={g}:p={p}:m={m}")
-        lt = options.get("loudness_target"); tp = options.get("true_peak")
-        af_parts.append(f"loudnorm=I={lt}:LRA=1:tp={tp}:print_format=json")
+        lt = options.get("loudness_target")
+        lra = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
+        tp = options.get("true_peak")
+        af_parts.append(f"loudnorm=I={lt}:LRA={lra}:tp={tp}:print_format=json")
         af_string = ",".join(af_parts)
         cmd = [FFMPEG_CMD, "-hide_banner"]
         seek_start = options.get("seek_start")
@@ -8567,9 +8713,9 @@ class VideoProcessorApp:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
             output = (result.stdout or "") + (result.stderr or "")
-            json_match = re.search(r'\{[\s\S]*?"target_offset"[\s\S]*?\}', output)
+            json_match = re.search(r'\{[^{}]*"input_i"[^{}]*\}', output)
             if not json_match:
-                json_match = re.search(r'\{[\s\S]*?\}', output)
+                json_match = re.search(r'\{[\s\S]*?"target_offset"[\s\S]*?\}', output)
             if json_match:
                 stats = json.loads(json_match.group(0))
                 measured = {
@@ -8661,7 +8807,7 @@ class VideoProcessorApp:
                 f":release={options.get('comp_release')}"
                 f":makeup={options.get('comp_makeup')}"
             )
-            chain.append(f"alimiter=limit={options.get('limit_limit')}dB")
+            chain.append(f"alimiter=limit={options.get('limit_limit')}dB:level=false")
         if options.get("use_dynaudnorm", False):
             chain.append(
                 f"dynaudnorm=f={options.get('dyn_frame_len')}"
@@ -8671,9 +8817,33 @@ class VideoProcessorApp:
             )
         if options.get("normalize_audio", False):
             lt = options.get("loudness_target")
+            lra = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
             tp = options.get("true_peak")
-            chain.append(f"loudnorm=I={lt}:LRA=1:tp={tp}:linear=true")
+            if loudnorm_stats:
+                chain.append(
+                    f"loudnorm=I={lt}:LRA={lra}:tp={tp}:linear=true"
+                    f":measured_I={loudnorm_stats['input_i']}"
+                    f":measured_tp={loudnorm_stats['input_tp']}"
+                    f":measured_LRA={loudnorm_stats['input_lra']}"
+                    f":measured_thresh={loudnorm_stats['input_thresh']}"
+                    f":offset={loudnorm_stats['target_offset']}"
+                )
+            else:
+                chain.append(f"loudnorm=I={lt}:LRA={lra}:tp={tp}:linear=true")
         return chain
+
+    def _build_sofalizer_filter_str(self, options, safe_sofa):
+        speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
+                    or DEFAULT_SOFA_SPEAKERS)
+        sofa_gain = (str(options.get("sofa_gain", DEFAULT_SOFA_GAIN)).strip()
+                     or DEFAULT_SOFA_GAIN)
+        sofa_norm = 1 if options.get("sofa_normalize", DEFAULT_SOFA_NORMALIZE) else 0
+        expr = f"sofalizer=sofa={safe_sofa}:gain={sofa_gain}:normalize={sofa_norm}:speakers='{speakers}'"
+        if options.get("sofa_limiter", DEFAULT_SOFA_LIMITER):
+            sofa_limit = (str(options.get("sofa_limiter_limit", DEFAULT_SOFA_LIMITER_LIMIT)).strip()
+                          or DEFAULT_SOFA_LIMITER_LIMIT)
+            expr += f",alimiter=limit={sofa_limit}dB:level=false:asc=true"
+        return expr
 
     def _surround_tag_filter(self, src_idx, src_channels, out_label):
         if src_channels >= 8:
@@ -8705,12 +8875,9 @@ class VideoProcessorApp:
                     raise VideoProcessingError(
                         f"Sofalizer required for surround source, but SOFA file not found: {sofa_path}")
                 safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-                speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
-                            or DEFAULT_SOFA_SPEAKERS)
+                sofa_expr = self._build_sofalizer_filter_str(options, safe_sofa)
                 fc_parts.append(self._surround_tag_filter(src_idx, src_channels, "a_tagged"))
-                fc_parts.append(
-                    f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'[a_proc]"
-                )
+                fc_parts.append(f"[a_tagged]{sofa_expr}[a_proc]")
             else:
                 fc_parts.append(
                     f"[0:{src_idx}]asetpts=PTS-STARTPTS,"
@@ -8738,8 +8905,7 @@ class VideoProcessorApp:
             raise VideoProcessingError(
                 f"Sofalizer required for 'YouTube: Stereo + 5.1', but SOFA file not found: {sofa_path}")
         safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-        speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
-                    or DEFAULT_SOFA_SPEAKERS)
+        sofa_expr = self._build_sofalizer_filter_str(options, safe_sofa)
 
         # === v8.25: separate chains per family ===
         stereo_chain = self._auto_loudness_chain(options, "stereo", loudnorm_stats)
@@ -8755,7 +8921,7 @@ class VideoProcessorApp:
             sofa_layout, sofa_map = "5.1(side)", "0|1|2|3|4|5"
         fc.append(f"[a_sofa_src]channelmap={sofa_map}:{sofa_layout}[a_tagged]")
         fc.append(
-            f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'"
+            f"[a_tagged]{sofa_expr}"
             f"{ln_stereo},aresample={AUDIO_SAMPLE_RATE}[stereo_final]"
         )
         fc.append(
@@ -8789,8 +8955,7 @@ class VideoProcessorApp:
             raise VideoProcessingError(
                 f"Sofalizer required for 'YouTube: Stereo + Eclipsa', but SOFA file not found: {sofa_path}")
         safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-        speakers = (options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
-                    or DEFAULT_SOFA_SPEAKERS)
+        sofa_expr = self._build_sofalizer_filter_str(options, safe_sofa)
 
         has_heights = (src_channels >= 8)
 
@@ -8834,9 +8999,10 @@ class VideoProcessorApp:
             sofa_layout, sofa_map = "5.1.2", "0|1|2|3|4|5|6|7"
         else:
             sofa_layout, sofa_map = "5.1(side)", "0|1|2|3|4|5"
+
         fc.append(f"[src_sofa_in]channelmap={sofa_map}:{sofa_layout}[a_tagged]")
         fc.append(
-            f"[a_tagged]sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'"
+            f"[a_tagged]{sofa_expr}"
             f"{ln_stereo},aresample={AUDIO_SAMPLE_RATE}[a_stereo]"
         )
 
@@ -8948,12 +9114,14 @@ class VideoProcessorApp:
                 if not sofa_path or not os.path.exists(sofa_path):
                     raise VideoProcessingError(f"Sofalizer enabled, but SOFA file not found: {sofa_path}")
                 safe_sofa = escape_ffmpeg_filter_path(sofa_path, base_dir=base_dir)
-                speakers = options.get("sofa_speakers", DEFAULT_SOFA_SPEAKERS).strip()
-                if not speakers:
-                    speakers = DEFAULT_SOFA_SPEAKERS
+                sofa_expr = self._build_sofalizer_filter_str(options, safe_sofa)
+                if track['source_channels'] >= 8:
+                    sofa_layout, sofa_map = "5.1.2", "0|1|2|3|4|5|6|7"
+                else:
+                    sofa_layout, sofa_map = "5.1(side)", "0|1|2|3|4|5"
                 fc_parts.append(
                     f"{input_tag}asetpts=PTS-STARTPTS,"
-                    f"sofalizer=sofa={safe_sofa}:normalize=1:speakers='{speakers}'{proc_tag}")
+                    f"channelmap={sofa_map}:{sofa_layout},{sofa_expr}{proc_tag}")
             elif track_type == "surround_51":
                 if track['source_channels'] >= 6:
                     fc_parts.append(
@@ -8965,12 +9133,12 @@ class VideoProcessorApp:
             # === v8.25: guard the three chain blocks with _apply_loudness ===
             if _apply_loudness and options.get("use_loudness_war", False):
                 t = options.get("comp_threshold"); r = options.get("comp_ratio")
-                a = options.get("comp_attack"); re = options.get("comp_release")
+                a = options.get("comp_attack"); re_val = options.get("comp_release")
                 m = options.get("comp_makeup"); l = options.get("limit_limit")
                 lw_tag = f"[{track_type}_lw]"
                 fc_parts.append(
                     f"{proc_tag}acompressor=threshold={t}dB:ratio={r}:attack={a}"
-                    f":release={re}:makeup={m},alimiter=limit={l}dB{lw_tag}")
+                    f":release={re_val}:makeup={m},alimiter=limit={l}dB:level=false{lw_tag}")
                 proc_tag = lw_tag
             if _apply_loudness and options.get("use_dynaudnorm", False):
                 f = options.get("dyn_frame_len"); g = options.get("dyn_gauss_win")
@@ -8979,18 +9147,20 @@ class VideoProcessorApp:
                 fc_parts.append(f"{proc_tag}dynaudnorm=f={f}:g={g}:p={p}:m={m}{dyn_tag}")
                 proc_tag = dyn_tag
             if _apply_loudness and options.get("normalize_audio", False):
-                lt = options.get("loudness_target"); tp = options.get("true_peak")
+                lt = options.get("loudness_target")
+                lra = options.get("loudness_range", DEFAULT_LOUDNESS_RANGE)
+                tp = options.get("true_peak")
                 ln_tag = f"[{track_type}_ln]"
                 if loudnorm_stats:
                     fc_parts.append(
-                        f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true"
+                        f"{proc_tag}loudnorm=I={lt}:LRA={lra}:tp={tp}:linear=true"
                         f":measured_I={loudnorm_stats['input_i']}"
                         f":measured_tp={loudnorm_stats['input_tp']}"
                         f":measured_LRA={loudnorm_stats['input_lra']}"
                         f":measured_thresh={loudnorm_stats['input_thresh']}"
                         f":offset={loudnorm_stats['target_offset']}{ln_tag}")
                 else:
-                    fc_parts.append(f"{proc_tag}loudnorm=I={lt}:LRA=1:tp={tp}:linear=true{ln_tag}")
+                    fc_parts.append(f"{proc_tag}loudnorm=I={lt}:LRA={lra}:tp={tp}:linear=true{ln_tag}")
                 proc_tag = ln_tag
             resample_tag = f"[{track_type}_final]"
             fc_parts.append(f"{proc_tag}aresample={AUDIO_SAMPLE_RATE}{resample_tag}")
@@ -9529,6 +9699,9 @@ class VideoProcessorApp:
                     effective_info = get_video_info(truehdr_intermediate)
                     effective_job = dict(job)
                     effective_job['video_path'] = truehdr_intermediate
+                    # _truehdr_preprocess already trimmed to [seek_start, seek_start + seek_duration]
+                    options.pop("seek_start", None)
+                    seek_start = None
                     options["_force_pq_tags"] = True
                     if encoder_backend == "nvencc_with_ffmpeg":
                         encoder_backend = "nvencc_only"
@@ -9566,6 +9739,9 @@ class VideoProcessorApp:
                 effective_info = get_video_info(truehdr_intermediate)
                 effective_job = dict(job)
                 effective_job['video_path'] = truehdr_intermediate
+                # _truehdr_preprocess already trimmed to [seek_start, seek_start + seek_duration]
+                options.pop("seek_start", None)
+                seek_start = None
                 options["_force_pq_tags"] = True
                 options["_truehdr_preprocessed"] = True
                 # All three NVEncC-backed encoders (nvencc_only,
@@ -9748,7 +9924,8 @@ class VideoProcessorApp:
                 register_temp_file(temp_audio)
                 audio_cmd = self.construct_ffmpeg_audio_prepass(
                     effective_job['video_path'], temp_audio, options,
-                    seek_start=seek_start, seek_duration=seek_duration)
+                    seek_start=seek_start, seek_duration=seek_duration,
+                    base_dir=base_dir)
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
@@ -9762,7 +9939,7 @@ class VideoProcessorApp:
                     raise VideoProcessingError(
                         f"Error encoding {job['video_path']} with NVEncC")
             else:
-                cmd = self.construct_ffmpeg_command(job, output_file, orientation, ass_burn_path,
+                cmd = self.construct_ffmpeg_command(effective_job, output_file, orientation, ass_burn_path,
                                                     options, title_ass_path, base_dir=base_dir)
                 if self.run_ffmpeg_command(cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error encoding {job['video_path']}")
@@ -9842,16 +10019,6 @@ class VideoProcessorApp:
         if max_size_mb > 0:
             total_bits = max_size_mb * 8 * 1024 * 1024
             audio_deduction_kbps = 0
-            if options.get("audio_mono"):
-                audio_deduction_kbps += MONO_BITRATE_K
-            if options.get("audio_stereo_downmix"):
-                audio_deduction_kbps += STEREO_BITRATE_K
-            if options.get("audio_stereo_sofalizer"):
-                audio_deduction_kbps += STEREO_BITRATE_K
-            if options.get("audio_surround_51"):
-                audio_deduction_kbps += SURROUND_BITRATE_K
-            if options.get("audio_passthrough"):
-                audio_deduction_kbps += 384
             target_code = options.get("audio_delivery_target", DEFAULT_DELIVERY_TARGET)
             if target_code == "youtube_stereo":
                 audio_deduction_kbps += STEREO_BITRATE_K
@@ -9859,6 +10026,20 @@ class VideoProcessorApp:
                 audio_deduction_kbps += STEREO_BITRATE_K + SURROUND_BITRATE_K
             elif target_code == "youtube_stereo_eclipsa":
                 audio_deduction_kbps += STEREO_BITRATE_K + 5 * IAMF_STREAM_BITRATE_K
+            elif target_code == "archival":
+                audio_deduction_kbps += 384
+            else:
+                if options.get("audio_passthrough"):
+                    audio_deduction_kbps += 384
+                else:
+                    if options.get("audio_mono"):
+                        audio_deduction_kbps += MONO_BITRATE_K
+                    if options.get("audio_stereo_downmix"):
+                        audio_deduction_kbps += STEREO_BITRATE_K
+                    if options.get("audio_stereo_sofalizer"):
+                        audio_deduction_kbps += STEREO_BITRATE_K
+                    if options.get("audio_surround_51"):
+                        audio_deduction_kbps += SURROUND_BITRATE_K
             audio_bits = audio_deduction_kbps * 1000 * calc_duration
             available_video_bits = total_bits - audio_bits
             if available_video_bits > 0 and calc_duration > 0:
@@ -10978,7 +11159,8 @@ class VideoProcessorApp:
         return out_path
 
     def construct_ffmpeg_audio_prepass(self, input_file, output_audio, options,
-                                         seek_start=None, seek_duration=None):
+                                         seek_start=None, seek_duration=None,
+                                         base_dir=None):
         cmd = [FFMPEG_CMD, "-y"]
         if seek_start is not None:
             cmd.extend(["-ss", str(seek_start)])
@@ -10987,7 +11169,8 @@ class VideoProcessorApp:
             cmd.extend(["-t", str(seek_duration)])
         cmd.extend(["-vn", "-sn", "-dn"])
         audio_cmd_parts, stream_groups = self.build_audio_segment(
-            input_file, options, loudnorm_stats=options.get("_loudnorm_stats"))
+            input_file, options, base_dir=base_dir,
+            loudnorm_stats=options.get("_loudnorm_stats"))
         cmd.extend(audio_cmd_parts)
         if stream_groups:
             cmd.extend(stream_groups)
@@ -12546,7 +12729,9 @@ class VideoProcessorApp:
                    "-af", "loudnorm=print_format=json", "-f", "null", "-"]
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             output = (result.stdout or "") + (result.stderr or "")
-            json_match = re.search(r'\{[\s\S]*?\}', output)
+            json_match = re.search(r'\{[^{}]*"input_i"[^{}]*\}', output)
+            if not json_match:
+                json_match = re.search(r'\{[\s\S]*?"target_offset"[\s\S]*?\}', output)
             if json_match:
                 raw_data = json.loads(json_match.group(0))
                 measured_i = float(raw_data.get('input_i', 0))
@@ -12599,25 +12784,25 @@ class VideoProcessorApp:
 
     def select_all_files(self):
         self.job_listbox.select_set(0, tk.END)
-        self.on_input_file_select(None)
+        self.on_job_select(None)
 
     def clear_file_selection(self):
         self.job_listbox.select_clear(0, tk.END)
-        self.on_input_file_select(None)
+        self.on_job_select(None)
 
     def select_all_no_sub(self):
         self.job_listbox.selection_clear(0, tk.END)
         for i, job in enumerate(self.processing_jobs):
             if job.get('subtitle_path') is None:
                 self.job_listbox.selection_set(i)
-        self.on_input_file_select(None)
+        self.on_job_select(None)
 
     def select_all_subbed(self):
         self.job_listbox.selection_clear(0, tk.END)
         for i, job in enumerate(self.processing_jobs):
             if job.get('subtitle_path') is not None:
                 self.job_listbox.selection_set(i)
-        self.on_input_file_select(None)
+        self.on_job_select(None)
 
     def select_jobs_by_current_preset(self):
         target_preset = self.current_preset_var.get()
@@ -12629,7 +12814,7 @@ class VideoProcessorApp:
             if job.get('preset_name') == target_preset:
                 self.job_listbox.selection_set(i)
                 count += 1
-        self.on_input_file_select(None)
+        self.on_job_select(None)
         if count:
             self.update_status(f"Selected {count} jobs with preset '{target_preset}'")
         else:
@@ -12642,7 +12827,7 @@ class VideoProcessorApp:
                 self.job_listbox.selection_clear(i)
             else:
                 self.job_listbox.selection_set(i)
-        self.on_input_file_select(None)
+        self.on_job_select(None)
 
     def toggle_fruc_fps(self):
         self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")

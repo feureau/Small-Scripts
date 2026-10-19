@@ -35,6 +35,15 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 
 ## 📜 Recent Changelog
 
+### v26.25
+- ✅ **FEATURE**: Preset toolbar is now a multi-select Listbox. Ctrl/Shift-click multiple presets, then use "Add Sel" / "Add All" to fan-out a single file selection across every selected preset (Cartesian product: N files × M presets).
+- ✅ **IMPROVEMENT**: Save / Save As / Rename / Delete buttons grey out intelligently based on preset-listbox selection (0, 1, or 2+ selected).
+- ✅ **IMPROVEMENT**: Live status line under the preset listbox shows how many presets are selected and how many files are staged.
+- ✅ **IMPROVEMENT**: Jobs created via multi-preset fan-out are tagged with their source preset name in the queue list (e.g. `[Transcribe] file_001`).
+- ✅ **IMPROVEMENT**: Single-preset workflow preserves existing behavior — loading one preset, tweaking the GUI, and adding files still uses the edited GUI state.
+- ✅ **INTERNAL**: Added `chain_id` / `chain_index` fields to job dicts (dormant scaffolding for an upcoming chained-pipeline mode).
+- ✅ **INTERNAL**: Refactored `_build_base_job_data()` to accept a settings dict instead of reading GUI vars directly; added `_settings_dict_from_preset()`, `_get_resolved_api_key_for()`, and `_enqueue_jobs_for_settings()` helpers.
+
 ### v26.24
 - ✅ **BUGFIX**: Retry cap no longer downgrades mid-job when error type changes (e.g. 503 → connection error). Once a job has seen a 503, it keeps the higher retry budget (20) for the rest of its attempts.
 - ✅ **IMPROVEMENT**: Replaced flat 60s 503 delay with exponential backoff (30s → 60s → 120s → 240s → 300s cap).
@@ -3847,7 +3856,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
     def __init__(self, initial_api_key, command_line_files, args):
         super().__init__()
-        self.title("Multimodal AI Batch Processor v26.24 (GPTBatcher) - Dark Mode")
+        self.title("Multimodal AI Batch Processor v26.25 (GPTBatcher) - Dark Mode")
         self.configure(bg=self.DARK_BG)
         self.geometry("1400x820")
 
@@ -3890,6 +3899,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.job_start_lock = threading.Lock()
         self.next_job_start_ts = 0.0
         self.job_id_counter = 0
+        self._active_preset_name = None          # tracks the preset currently loaded into the GUI
 
         self.all_input_files = list(command_line_files or [])
         self.files_var = tk.Variable(value=[])
@@ -4001,6 +4011,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         self.create_widgets()
         self.apply_theme()
+        self.after(500, self._set_equal_initial_widths)
         self._apply_file_filter()
         
         self.refresh_presets_combo()
@@ -4017,7 +4028,18 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.after(300, self._update_folder_preview)
         self.after(100, self._check_result_queue)
 
+
+    def _set_equal_initial_widths(self):
+        """Sets the initial column widths to be exactly equal (25% each)."""
+        self.update_idletasks()
+        w = self.main_pane.winfo_width()
+        if w > 1:
+            self.main_pane.sashpos(0, w // 4)
+            self.main_pane.sashpos(1, w // 2)
+            self.main_pane.sashpos(2, (3 * w) // 4)
+
     def _check_signal(self):
+
         self.after(500, self._check_signal)
 
     def _handle_sigint(self, signum, frame):
@@ -4109,48 +4131,91 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
     def create_widgets(self):
         self.style = ttk.Style()
 
-        toolbar = ttk.Frame(self, padding=(10, 5))
-        toolbar.pack(side=tk.TOP, fill=tk.X)
+        self.main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        main_pane = self.main_pane  # Local alias for downstream references
 
-        ttk.Label(toolbar, text="Preset:").pack(side=tk.LEFT, padx=(0, 5))
-        self.preset_var = tk.StringVar()
-        self.preset_combo = ttk.Combobox(
-            toolbar, textvariable=self.preset_var, state="readonly", width=30
-        )
-        self.preset_combo.pack(side=tk.LEFT)
-        self.preset_combo.bind("<<ComboboxSelected>>", self.load_preset)
+        # ── Column 0: Preset Management ──
+        preset_frame = ttk.LabelFrame(main_pane, text="0. Preset", padding=5)
+        self.main_pane.add(preset_frame, weight=1)
 
-        ttk.Button(
-            toolbar, text="➕ New", width=6, command=self.create_new_preset
-        ).pack(side=tk.LEFT, padx=(5, 1))
-        ttk.Button(
-            toolbar, text="💾 Save", width=6, command=self.save_current_preset
-        ).pack(side=tk.LEFT, padx=1)
-        ttk.Button(
-            toolbar, text="💾 As...", width=6, command=self.save_preset_as
-        ).pack(side=tk.LEFT, padx=1)
-        ttk.Button(toolbar, text="✏️ Ren", width=6, command=self.rename_preset).pack(
-            side=tk.LEFT, padx=1
-        )
-        ttk.Button(toolbar, text="🗑️ Del", width=6, command=self.delete_preset).pack(
-            side=tk.LEFT, padx=1
-        )
+        preset_lb_row = ttk.Frame(preset_frame)
+        preset_lb_row.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        self.preset_listbox = tk.Listbox(
+            preset_lb_row,
+            selectmode=tk.EXTENDED,
+            height=8,
+            width=45,
+            exportselection=False,
+        )
+        self.preset_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.preset_listbox.bind("<<ListboxSelect>>", self._on_preset_listbox_select)
+
+        preset_sb = ttk.Scrollbar(
+            preset_lb_row, orient=tk.VERTICAL, command=self.preset_listbox.yview
+        )
+        preset_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.preset_listbox.config(yscrollcommand=preset_sb.set)
+
+        self.preset_status_var = tk.StringVar(value="No preset selected")
+        ttk.Label(
+            preset_frame,
+            textvariable=self.preset_status_var,
+            font=("Segoe UI", 8, "italic"),
+            foreground=self.DARK_FG_MUTED,
+        ).pack(side=tk.TOP, anchor="w", pady=(2, 5))
+
+        # Preset action buttons (now stacked vertically)
+        self.btn_preset_new = ttk.Button(
+            preset_frame, text="➕ New", command=self.create_new_preset
+        )
+        self.btn_preset_new.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        self.btn_preset_save = ttk.Button(
+            preset_frame, text="💾 Save", command=self.save_current_preset, state="disabled"
+        )
+        self.btn_preset_save.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        self.btn_preset_save_as = ttk.Button(
+            preset_frame, text="💾 As...", command=self.save_preset_as
+        )
+        self.btn_preset_save_as.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        self.btn_preset_ren = ttk.Button(
+            preset_frame, text="✏️ Ren", command=self.rename_preset, state="disabled"
+        )
+        self.btn_preset_ren.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        self.btn_preset_del = ttk.Button(
+            preset_frame, text="🗑️ Del", command=self.delete_preset, state="disabled"
+        )
+        self.btn_preset_del.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        # Multi-preset queue actions
+        self.btn_top_add_sel = ttk.Button(
+            preset_frame, text="Add Sel × Presets", command=lambda: self.add_to_queue(True)
+        )
+        self.btn_top_add_sel.pack(side=tk.TOP, fill=tk.X, pady=(5, 1))
+
+        self.btn_top_add_all = ttk.Button(
+            preset_frame, text="Add All × Presets", command=lambda: self.add_to_queue(False)
+        )
+        self.btn_top_add_all.pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        # API Key Source moved to bottom of Preset column
+        ttk.Label(preset_frame, text="API Key Source:").pack(side=tk.TOP, anchor="w", pady=(10, 2))
         self.main_api_key_source_var = tk.StringVar()
         self.main_api_key_combo = ttk.Combobox(
-            toolbar,
+            preset_frame,
             textvariable=self.main_api_key_source_var,
             state="readonly",
-            width=26
         )
         self.main_api_key_combo.bind("<<ComboboxSelected>>", self._on_main_api_key_source_change)
-        self.main_api_key_combo.pack(side=tk.RIGHT, padx=10)
-
-        main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.main_api_key_combo.pack(side=tk.TOP, fill=tk.X)
 
         left_frame = ttk.Frame(main_pane)
-        main_pane.add(left_frame, weight=3)
+        self.main_pane.add(left_frame, weight=1)
 
         file_frame = ttk.LabelFrame(left_frame, text="1. Input Files", padding=5)
         file_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -4269,7 +4334,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.toggle_multipass_ui()
 # --- COLUMN 2 (CENTER): CONFIGURATION ---
         mid_frame = ttk.Frame(main_pane)
-        main_pane.add(mid_frame, weight=2)
+        self.main_pane.add(mid_frame, weight=1)
 
         settings_frame = ttk.LabelFrame(mid_frame, text="3. Configuration", padding=5)
         settings_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -4808,7 +4873,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # --- COLUMN 3 (RIGHT): QUEUE & STATUS ---
         right_frame = ttk.Frame(main_pane)
-        main_pane.add(right_frame, weight=1)
+        self.main_pane.add(right_frame, weight=1)
         q_frame = ttk.LabelFrame(right_frame, text="Job Queue", padding=5)
         q_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -5341,11 +5406,143 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         preset_names = sorted(
             [k for k in self.current_presets.keys() if k != CONTEXT_PRESETS_KEY]
         )
-        self.preset_combo["values"] = preset_names
-        self.refresh_context_presets_combo()
 
-    def load_preset(self, event=None):
-        name = self.preset_var.get()
+        # Preserve current selection if it still exists
+        previously_active = self._active_preset_name
+
+        self.preset_listbox.delete(0, tk.END)
+        for name in preset_names:
+            self.preset_listbox.insert(tk.END, name)
+
+        # Re-select the previously active preset if it still exists
+        if previously_active and previously_active in preset_names:
+            idx = preset_names.index(previously_active)
+            self.preset_listbox.selection_clear(0, tk.END)
+            self.preset_listbox.selection_set(idx)
+            self.preset_listbox.see(idx)
+
+        self.refresh_context_presets_combo()
+        self._update_preset_button_states()
+        self._update_preset_status()
+
+    def _set_editing_enabled(self, enabled):
+        """Grey out the System Prompt and Configuration columns when multiple presets are selected."""
+        if not hasattr(self, '_original_widget_states'):
+            self._original_widget_states = {}
+            
+        def traverse_and_apply(widget):
+            for child in widget.winfo_children():
+                w_class = child.winfo_class()
+                widget_id = str(child)
+                
+                is_ttk = w_class in ("TEntry", "TCombobox", "TCheckbutton", "TRadiobutton", "TButton", "TSpinbox", "TScale")
+                is_tk = w_class in ("Text", "ScrolledText", "Entry", "Listbox")
+                
+                if is_ttk or is_tk:
+                    if not enabled:
+                        # Save original state before disabling
+                        if widget_id not in self._original_widget_states:
+                            try:
+                                self._original_widget_states[widget_id] = child.cget("state")
+                            except Exception:
+                                self._original_widget_states[widget_id] = "normal"
+                        try:
+                            child.configure(state="disabled")
+                        except Exception:
+                            pass
+                    else:
+                        # Restore original state
+                        if widget_id in self._original_widget_states:
+                            try:
+                                child.configure(state=self._original_widget_states[widget_id])
+                            except Exception:
+                                pass
+                traverse_and_apply(child)
+                
+        # Apply to System Prompt frame and Configuration notebook
+        traverse_and_apply(self.prompt_text.master)
+        traverse_and_apply(self.notebook)
+        
+        # Special case for the ScrolledText prompt itself since it's the root
+        if not enabled:
+            self.prompt_text.configure(state=tk.DISABLED)
+        else:
+            self.prompt_text.configure(state=tk.NORMAL)
+            
+        if enabled:
+            self._original_widget_states.clear()
+
+    def _on_preset_listbox_select(self, event=None):
+        """Handle preset listbox selection changes.
+
+        - Single selection triggers a GUI load (existing combo behavior).
+        - Multi-selection leaves the GUI alone and just updates button/status state.
+        - 2+ selections disables editing of Prompt and Configuration to prevent confusion.
+        """
+        sel = self.preset_listbox.curselection()
+        if len(sel) == 1:
+            name = self.preset_listbox.get(sel[0])
+            self._active_preset_name = name
+            self.load_preset_by_name(name)
+            self._set_editing_enabled(True)
+        elif len(sel) == 0:
+            self._set_editing_enabled(True)
+        else:  # 2 or more selections
+            self._set_editing_enabled(False)
+            
+        self._update_preset_button_states()
+        self._update_preset_status()
+    
+
+    def _update_preset_button_states(self):
+        """Grey out Save / Save As / Ren / Del based on selection count."""
+        n = len(self.preset_listbox.curselection())
+        if n == 1:
+            for b in (self.btn_preset_save, self.btn_preset_save_as,
+                      self.btn_preset_ren, self.btn_preset_del):
+                b.config(state="normal")
+        elif n == 0:
+            self.btn_preset_save.config(state="disabled")
+            self.btn_preset_save_as.config(state="normal")
+            self.btn_preset_ren.config(state="disabled")
+            self.btn_preset_del.config(state="disabled")
+        else:  # 2+
+            for b in (self.btn_preset_save, self.btn_preset_save_as,
+                      self.btn_preset_ren, self.btn_preset_del):
+                b.config(state="disabled")
+        self.btn_preset_new.config(state="normal")
+
+    def _update_preset_status(self):
+        """Refresh the live status line under the preset listbox."""
+        if not hasattr(self, "preset_status_var"):
+            return
+        n = len(self.preset_listbox.curselection())
+        files_count = len(list(self.files_var.get() or []))
+
+        if n == 0:
+            if files_count > 0:
+                self.preset_status_var.set(
+                    f"No preset selected · {files_count} file(s) · editing disabled"
+                )
+            else:
+                self.preset_status_var.set("No preset selected")
+        elif n == 1:
+            preset_name = self.preset_listbox.get(self.preset_listbox.curselection()[0])
+            if files_count > 0:
+                self.preset_status_var.set(
+                    f"1 preset ({preset_name}) · {files_count} file(s)"
+                )
+            else:
+                self.preset_status_var.set(f"1 preset ({preset_name})")
+        else:
+            if files_count > 0:
+                self.preset_status_var.set(
+                    f"{n} presets selected · {files_count} file(s) · editing disabled"
+                )
+            else:
+                self.preset_status_var.set(f"{n} presets selected · editing disabled")
+
+    def load_preset_by_name(self, name):
         console_log(f"User selected preset: {name}", "ACTION")
         if name in self.current_presets:
             data = self.current_presets[name]
@@ -5556,7 +5753,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         }
 
     def save_current_preset(self):
-        name = self.preset_var.get()
+        name = self._active_preset_name
         if not name:
             tkinter.messagebox.showwarning("Save", "No preset selected.")
             return
@@ -5672,8 +5869,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.current_presets[new_name] = self.get_default_settings_dict()
         save_presets(self.current_presets)
         self.refresh_presets_combo()
-        self.preset_var.set(new_name)
-        self.load_preset()
+        # Select and load the newly-created preset
+        names = list(self.preset_listbox.get(0, tk.END))
+        if new_name in names:
+            idx = names.index(new_name)
+            self.preset_listbox.selection_clear(0, tk.END)
+            self.preset_listbox.selection_set(idx)
+            self.preset_listbox.see(idx)
+            self._on_preset_listbox_select()
 
     def save_preset_as(self):
         new_name = tkinter.simpledialog.askstring(
@@ -5689,10 +5892,16 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.current_presets[new_name] = self.get_current_settings_dict()
         save_presets(self.current_presets)
         self.refresh_presets_combo()
-        self.preset_var.set(new_name)
+        names = list(self.preset_listbox.get(0, tk.END))
+        if new_name in names:
+            idx = names.index(new_name)
+            self.preset_listbox.selection_clear(0, tk.END)
+            self.preset_listbox.selection_set(idx)
+            self.preset_listbox.see(idx)
+            self._on_preset_listbox_select()
 
     def rename_preset(self):
-        old_name = self.preset_var.get()
+        old_name = self._active_preset_name
         if not old_name or old_name not in self.current_presets:
             return
         new_name = tkinter.simpledialog.askstring(
@@ -5708,16 +5917,22 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.current_presets[new_name] = self.current_presets.pop(old_name)
         save_presets(self.current_presets)
         self.refresh_presets_combo()
-        self.preset_var.set(new_name)
+        names = list(self.preset_listbox.get(0, tk.END))
+        if new_name in names:
+            idx = names.index(new_name)
+            self.preset_listbox.selection_clear(0, tk.END)
+            self.preset_listbox.selection_set(idx)
+            self.preset_listbox.see(idx)
+            self._on_preset_listbox_select()
 
     def delete_preset(self):
-        name = self.preset_var.get()
+        name = self._active_preset_name
         if name and name in self.current_presets:
             if tkinter.messagebox.askyesno("Confirm", f"Delete '{name}'?"):
                 del self.current_presets[name]
                 save_presets(self.current_presets)
+                self._active_preset_name = None
                 self.refresh_presets_combo()
-                self.preset_var.set("")
 
     def _on_closing(self):
         self.processing_cancelled.set()
@@ -5875,15 +6090,19 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.refresh_model_list()
             self._update_main_api_key_combo()
 
-    def _get_resolved_api_key(self, provider):
-        cfg = self.engine_configs.get(provider, {})
-        # Return manual key if set, else check env var
+    def _get_resolved_api_key_for(self, engine, engine_configs):
+        """Resolve an API key for a specific engine using an explicit config dict."""
+        cfg = (engine_configs or {}).get(engine, {}) or {}
         if cfg.get("api_key"):
             return cfg["api_key"]
         env_var = cfg.get("api_key_env")
         if env_var:
             return os.environ.get(env_var, "")
         return ""
+
+    def _get_resolved_api_key(self, provider):
+        """Backward-compatible wrapper using the GUI's current engine_configs."""
+        return self._get_resolved_api_key_for(provider, self.engine_configs)
 
     def get_models_for_provider(self, provider):
         if provider in self.model_cache:
@@ -6029,6 +6248,10 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.file_count_var.set(
                 f"{total_count} files" if total_count != 1 else "1 file"
             )
+
+        # Update the preset status line if the preset panel already exists
+        if hasattr(self, "preset_status_var"):
+            self._update_preset_status()
 
     def _add_filepaths_to_list(self, filepaths):
         cur = list(getattr(self, "all_input_files", []))
@@ -6313,6 +6536,14 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.output_dir_var.set(d)
 
     def add_to_queue(self, only_selected=False, files_override=None):
+        try:
+            self._add_to_queue_internal(only_selected, files_override)
+        except Exception as e:
+            import traceback
+            console_log(f"❌ CRITICAL ERROR in add_to_queue: {e}", "ERROR")
+            traceback.print_exc()
+
+    def _add_to_queue_internal(self, only_selected=False, files_override=None):
         if files_override:
             files = files_override
         elif only_selected:
@@ -6352,7 +6583,6 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     and ext not in NATIVE_IMAGE_EXTENSIONS
                 ):
                     incompatible.append(os.path.basename(f))
-
             if incompatible:
                 msg = (
                     f"Conversion is OFF, but these files are not native to AI models:\n\n"
@@ -6364,16 +6594,46 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 if not tkinter.messagebox.askyesno("Incompatible Files", msg):
                     return
 
-        mod = self.model_var.get()
-        if not mod or "Error" in mod:
-            tkinter.messagebox.showwarning("Error", "Invalid Model.")
-            return
-        if self.engine_var.get() == "google" and not self._get_resolved_api_key("google"):
-            tkinter.messagebox.showwarning("Error", "No API Key.")
-            return
+        # ── Determine which preset(s) to use ──
+        #  - 1 selection that matches the loaded preset -> GUI state (respects edits)
+        #  - 2+ selections -> stored preset settings, one job set per preset
+        #  - 0 selections -> GUI state
+        selected_indices = self.preset_listbox.curselection()
+        selected_names = [self.preset_listbox.get(i) for i in selected_indices]
 
-        prompt_text = self.prompt_text.get("1.0", tk.END).strip()
-        if prompt_expects_image(prompt_text):
+        if (
+            len(selected_names) == 1
+            and selected_names[0] == self._active_preset_name
+        ):
+            jobs_specs = [(self.get_current_settings_dict(), selected_names[0])]
+        elif selected_names:
+            jobs_specs = [
+                (self._settings_dict_from_preset(n), n) for n in selected_names
+            ]
+        else:
+            jobs_specs = [(self.get_current_settings_dict(), None)]
+
+        # ── Validate each spec ──
+        for settings, pname in jobs_specs:
+            mod = settings.get("model", "")
+            eng = settings.get("engine", DEFAULT_ENGINE)
+            label = f"preset '{pname}'" if pname else "current GUI settings"
+            if not mod or "Error" in mod:
+                tkinter.messagebox.showwarning("Error", f"Invalid model in {label}.")
+                return
+            if eng == "google":
+                key = self._get_resolved_api_key_for(
+                    eng, settings.get("engine_configs", {})
+                )
+                if not key:
+                    tkinter.messagebox.showwarning(
+                        "Error", f"No Google API Key configured in {label}."
+                    )
+                    return
+
+        # ── Prompt vs. image sanity check (using the primary/first spec's prompt) ──
+        primary_prompt = jobs_specs[0][0].get("prompt", "")
+        if prompt_expects_image(primary_prompt):
             has_image = any(
                 os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
                 for f in files
@@ -6387,172 +6647,226 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 if not tkinter.messagebox.askyesno("No Image Selected", msg):
                     return
 
-        base_group_size = self.group_size_var.get()
-        if self.overwrite_var.get() or not self.group_files_var.get():
+        # ── Build and enqueue ──
+        total = 0
+        for settings, pname in jobs_specs:
+            total += self._enqueue_jobs_for_settings(files, settings, pname)
+
+        if len(jobs_specs) > 1:
+            console_log(
+                f"Added {total} job(s) across {len(jobs_specs)} presets.", "SUCCESS"
+            )
+        else:
+            console_log(f"Added {total} job(s).", "SUCCESS")
+
+    def _enqueue_jobs_for_settings(self, files, settings, preset_name):
+        """Build and enqueue jobs for a single settings dict.
+
+        Returns the number of jobs created. Handles grouping and per-chunk
+        job splitting independently per preset, so different presets can use
+        different batch sizes without interference.
+        """
+        if settings.get("overwrite_original", False) or not settings.get("group_files", False):
             final_batch_size = 1
         else:
-            final_batch_size = base_group_size
+            final_batch_size = max(1, int(settings.get("group_size", 1) or 1))
 
         batches = [
-            files[i : i + final_batch_size]
+            files[i:i + final_batch_size]
             for i in range(0, len(files), final_batch_size)
         ]
 
-        safe = []
-        if self.engine_var.get() == "google":
-            if self.enable_safety_var.get():
-                safe = [
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT",
-                        threshold=self.safety_map[self.harassment_var.get()],
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH",
-                        threshold=self.safety_map[self.hate_speech_var.get()],
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold=self.safety_map[self.sexually_explicit_var.get()],
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                        threshold=self.safety_map[self.dangerous_content_var.get()],
-                    ),
-                ]
-            else:
-                safe = [
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold="BLOCK_NONE",
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                        threshold="BLOCK_NONE",
-                    ),
-                ]
-
-        # Capture current delay settings when adding jobs
-        d_min = self.delay_min_var.get()
-        d_sec = self.delay_sec_var.get()
-        total_delay = (d_min * 60) + d_sec
-        current_context = self._get_context_text()
-        use_persistent_context = self.persistent_context_var.get()
-        if use_persistent_context:
-            self.global_context_text_value = current_context
-
-        multipass_enabled = bool(self.enable_multipass_var.get())
-        multipass_count = max(1, int(self.multipass_count_var.get() or 1))
-        multipass_prompts = self._collect_multipass_prompts_from_ui(True)
+        prompt_text = settings.get("prompt", "")
+        mod = settings.get("model", "")
+        count = 0
+        tag = f"[{preset_name}] " if preset_name else ""
 
         for batch in batches:
-            # --- NEW: Check for Job-Level Chunk Splitting ---
-            if self.enable_chunking_var.get() and self.split_chunks_into_jobs_var.get():
+            # ── Chunk-splitting path ──
+            if settings.get("enable_chunking", False) and settings.get("split_chunks_into_jobs", False):
                 try:
-                    # 1. Identify Text Files in Batch
-                    image_files = [f for f in batch if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS]
-                    text_files = [f for f in batch if f not in image_files]
-                    
-                    if text_files:
-                        # 2. Accumulate Text Content
+                    image_files_local = [
+                        f for f in batch
+                        if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+                    ]
+                    text_files_local = [f for f in batch if f not in image_files_local]
+
+                    if text_files_local:
                         all_text_parts = []
-                        for tf in text_files:
+                        for tf in text_files_local:
                             content, _, _, err = read_file_content(tf)
                             if err:
-                                console_log(f"Error reading {os.path.basename(tf)} for chunking: {err}", "ERROR")
+                                console_log(
+                                    f"Error reading {os.path.basename(tf)} for chunking: {err}",
+                                    "ERROR",
+                                )
                                 continue
-                            if self.add_filename_var.get():
-                                all_text_parts.append(f"\n--- File: {os.path.basename(tf)} ---\n")
+                            if settings.get("add_filename_to_prompt", False):
+                                all_text_parts.append(
+                                    f"\n--- File: {os.path.basename(tf)} ---\n"
+                                )
                             all_text_parts.append(content)
-                        
+
                         full_content = "\n".join(all_text_parts)
-                        
-                        # 3. Calculate Chunk Budget
-                        # We use the current prompt to calculate budget
+
                         budget = compute_chunk_budget(
                             prompt_text=prompt_text,
-                            engine=self.engine_var.get(),
+                            engine=settings.get("engine", DEFAULT_ENGINE),
                             model_name=mod,
-                            chunk_size_cap=self.chunk_size_var.get(),
+                            chunk_size_cap=settings.get("chunk_size", 4000),
                         )
-                        
-                        # 4. Split into chunks
+
                         chunks = build_semantic_chunks(
                             full_content,
                             budget["chunk_payload_tokens"],
-                            overlap_tokens=0, # No overlap for independent jobs usually
+                            overlap_tokens=0,
                             encoding=budget.get("encoding"),
                         )
-                        
+
                         if len(chunks) > 1:
-                            console_log(f"Splitting {generate_group_base_name(batch)} into {len(chunks)} chunk jobs.", "INFO")
+                            console_log(
+                                f"{tag}Splitting {generate_group_base_name(batch)} "
+                                f"into {len(chunks)} chunk jobs.",
+                                "INFO",
+                            )
                             for idx, chunk_text in enumerate(chunks):
                                 self.job_id_counter += 1
                                 jid = self.job_id_counter
-                                
-                                # Clone a base job data
-                                job_data = self._build_base_job_data(
-                                    jid, batch, prompt_text, mod, safe, total_delay, 
-                                    current_context, use_persistent_context,
-                                    multipass_enabled, multipass_count, multipass_prompts
-                                )
-                                
-                                # Inject Chunk Overrides
-                                # We treat the chunk as a 'virtual' file content override
-                                job_data["enable_chunking"] = False # Disable internal chunking
+
+                                job_data = self._build_base_job_data(jid, batch, settings)
+                                job_data["enable_chunking"] = False
                                 job_data["filepaths_group"] = batch
                                 job_data["chunk_content_override"] = chunk_text
                                 job_data["chunk_index"] = idx + 1
                                 job_data["total_chunks"] = len(chunks)
-                                
-                                # Use a specialized base name for the UI
-                                display_name = f"{generate_group_base_name(batch)} [Part {idx+1}/{len(chunks)}]"
-                                
+
+                                display_name = (
+                                    f"{tag}{generate_group_base_name(batch)} "
+                                    f"[Part {idx + 1}/{len(chunks)}]"
+                                )
+
                                 self.job_registry[jid] = job_data
                                 self.job_queue.put(job_data)
                                 self.tree.insert(
-                                    "",
-                                    tk.END,
-                                    iid=jid,
+                                    "", tk.END, iid=jid,
                                     values=(jid, display_name, "Pending", mod),
                                 )
-                            continue # Skip the normal job creation for this batch
+                                count += 1
+                            continue
                 except Exception as e:
-                    console_log(f"Pre-chunking failed: {e}. Falling back to normal job.", "ERROR")
+                    console_log(
+                        f"Pre-chunking failed: {e}. Falling back to normal job.",
+                        "ERROR",
+                    )
 
-            # Normal single job creation (or fallback)
+            # ── Normal single job ──
             self.job_id_counter += 1
             jid = self.job_id_counter
-            job_data = self._build_base_job_data(
-                jid, batch, prompt_text, mod, safe, total_delay, 
-                current_context, use_persistent_context,
-                multipass_enabled, multipass_count, multipass_prompts
-            )
+            job_data = self._build_base_job_data(jid, batch, settings)
 
             self.job_registry[jid] = job_data
             self.job_queue.put(job_data)
+            display_name = f"{tag}{generate_group_base_name(batch)}"
             self.tree.insert(
-                "",
-                tk.END,
-                iid=jid,
-                values=(jid, generate_group_base_name(batch), "Pending", mod),
+                "", tk.END, iid=jid,
+                values=(jid, display_name, "Pending", mod),
             )
+            count += 1
 
-    def _build_base_job_data(self, jid, batch, prompt_text, mod, safe, total_delay, 
-                            current_context, use_persistent_context,
-                            multipass_enabled, multipass_count, multipass_prompts):
-        resolved_context = current_context
+        return count
+
+    def _settings_dict_from_preset(self, preset_name):
+        """Build a full settings dict from a stored preset, filling in defaults for missing keys."""
+        if preset_name not in self.current_presets:
+            return self.get_default_settings_dict()
         
-        # Resolve Context from File if enabled
-        if self.load_context_from_file_var.get():
-            mode = self.context_file_mode_var.get()
+        data = self.current_presets[preset_name].copy()
+        defaults = self.get_default_settings_dict()
+        
+        # Merge with defaults to ensure all expected keys exist
+        for k, v in defaults.items():
+            if k not in data:
+                data[k] = v
+        
+        # Ensure required structural keys are present
+        if "prompt" not in data or data["prompt"] is None:
+            data["prompt"] = ""
+        if "model" not in data or data["model"] is None:
+            data["model"] = ""
+            
+        # Ensure engine_configs is a proper dict
+        if "engine_configs" not in data or not isinstance(data["engine_configs"], dict):
+            data["engine_configs"] = defaults["engine_configs"]
+            
+        # Ensure multipass prompts is a list
+        if "multipass_prompts" not in data or not isinstance(data["multipass_prompts"], list):
+            data["multipass_prompts"] = []
+
+        return data
+
+    def _build_base_job_data(self, jid, batch, settings):
+        """Build a single job dict from a settings dict (no GUI reads)."""
+        prompt_text = settings.get("prompt", "")
+        engine = settings.get("engine", DEFAULT_ENGINE)
+        mod = settings.get("model", "")
+        current_context = settings.get("context_text", "")
+        use_persistent_context = bool(settings.get("persistent_context", False))
+
+        # Safety settings (Google only)
+        safe = []
+        if engine == "google":
+            safety_map = {
+                "Off": "BLOCK_NONE",
+                "High Only": "BLOCK_ONLY_HIGH",
+                "Med+": "BLOCK_MEDIUM_AND_ABOVE",
+            }
+            if settings.get("enable_safety", False):
+                safe = [
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT",
+                        threshold=safety_map.get(settings.get("safety_harassment", "Off"), "BLOCK_NONE"),
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH",
+                        threshold=safety_map.get(settings.get("safety_hate_speech", "Off"), "BLOCK_NONE"),
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold=safety_map.get(settings.get("safety_sexually_explicit", "Off"), "BLOCK_NONE"),
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                        threshold=safety_map.get(settings.get("safety_dangerous_content", "Off"), "BLOCK_NONE"),
+                    ),
+                ]
+            else:
+                safe = [
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                ]
+
+        total_delay = (int(settings.get("delay_min", 0) or 0) * 60) + int(settings.get("delay_sec", 0) or 0)
+
+        multipass_enabled = bool(settings.get("enable_multipass", False))
+        multipass_count = max(1, int(settings.get("multipass_count", 1) or 1))
+        multipass_prompts = settings.get("multipass_prompts", [prompt_text])
+        if not isinstance(multipass_prompts, list) or not multipass_prompts:
+            multipass_prompts = [prompt_text]
+        multipass_prompts = normalize_multipass_prompts(multipass_prompts, multipass_count, prompt_text)
+
+        # Resolve API key using this preset's OWN engine config
+        api_key = self._get_resolved_api_key_for(
+            engine, settings.get("engine_configs", self.engine_configs)
+        )
+
+        # Resolve context (static file / dynamic file / plain text)
+        resolved_context = current_context
+        if settings.get("load_context_from_file", False):
+            mode = settings.get("context_file_mode", "static")
             if mode == "static":
-                file_path = self.static_context_path_var.get()
+                file_path = settings.get("static_context_path", "")
                 if file_path and os.path.exists(file_path):
                     try:
                         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -6560,65 +6874,70 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     except Exception as e:
                         console_log(f"Error loading static context file {file_path}: {e}", "ERROR")
             elif mode == "dynamic" and batch:
-                # Dynamic matching based on first file in batch
                 matched_file = find_dynamic_context_file(batch[0])
                 if matched_file and os.path.exists(matched_file):
                     try:
                         with open(matched_file, "r", encoding="utf-8", errors="replace") as f:
                             resolved_context = f.read()
-                        console_log(f"Matched and loaded context from: {os.path.basename(matched_file)} for {os.path.basename(batch[0])}", "INFO")
+                        console_log(
+                            f"Matched and loaded context from: {os.path.basename(matched_file)} "
+                            f"for {os.path.basename(batch[0])}",
+                            "INFO",
+                        )
                     except Exception as e:
                         console_log(f"Error loading dynamic context file {matched_file}: {e}", "ERROR")
+
+        suffix = settings.get("output_suffix", "")
+        if settings.get("add_context_as_suffix", False) and resolved_context:
+            suffix += sanitize_filename(resolved_context)
 
         return {
             "job_id": jid,
             "filepaths_group": batch,
             "user_prompt": prompt_text,
-            "engine": self.engine_var.get(),
+            "engine": engine,
             "model_name": mod,
-            "api_key": self._get_resolved_api_key(self.engine_var.get()),
-            "output_folder": self.output_dir_var.get(),
-            "add_filename_to_prompt": self.add_filename_var.get(),
-            "output_suffix": self.suffix_var.get()
-            + (
-                sanitize_filename(resolved_context)
-                if self.add_context_as_suffix_var.get() and resolved_context
-                else ""
-            ),
-            "use_previous_output_ref": self.use_previous_output_var.get(),
+            "api_key": api_key,
+            "output_folder": settings.get("output_folder", ""),
+            "add_filename_to_prompt": settings.get("add_filename_to_prompt", False),
+            "output_suffix": suffix,
+            "use_previous_output_ref": settings.get("use_previous_output_ref", False),
             "context_text": resolved_context,
             "use_persistent_context": use_persistent_context,
-            "overwrite_original": self.overwrite_var.get(),
-            "output_under_input": self.output_under_input_var.get(),
-            "output_extension": self.output_ext_var.get(),
-            "stream_output": self.stream_var.get(),
-            "enable_web_search": self.ollama_search_var.get(),
-            "validate_json": self.validate_json_var.get(),
-            "validate_json_keys": self.validate_keys_var.get(),
-            "clean_markdown": self.clean_markdown_var.get(),
-            "save_log": self.save_log_var.get(),
-            "allow_empty_files": self.allow_empty_files_var.get(),
+            "overwrite_original": settings.get("overwrite_original", False),
+            "output_under_input": settings.get("output_under_input", False),
+            "output_extension": settings.get("output_extension", ""),
+            "stream_output": settings.get("stream_output", True),
+            "enable_web_search": settings.get("enable_web_search", False),
+            "validate_json": settings.get("validate_json", False),
+            "validate_json_keys": settings.get("validate_json_keys", False),
+            "clean_markdown": settings.get("clean_markdown", True),
+            "save_log": settings.get("save_log", False),
+            "allow_empty_files": settings.get("allow_empty_files", False),
             "safety_settings": safe,
             "job_delay_seconds": total_delay,
-            "sequential_upload": (self.upload_mode_var.get() == "sequential"),
-            "stop_queue_on_model_unavailable": self.stop_queue_on_model_unavailable_var.get(),
-            "rename_mode": self.rename_mode_var.get(),
-            "rename_method": self.rename_method_var.get(),
-            "enable_img_conversion": self.enable_img_conversion_var.get(),
-            "temp_img_fmt": self.temp_img_fmt_var.get(),
-            "img_quality": self.img_quality_var.get(),
-            "img_max_dim": self.img_max_dim_var.get(),
-            "force_conversion": self.force_conversion_var.get(),
-            "save_img_to_output": self.save_img_to_output_var.get(),
-            "enable_chunking": self.enable_chunking_var.get(),
-            "chunk_size": self.chunk_size_var.get(),
-            "model_prefix": self.model_prefix_var.get(),
-            "add_output_to_input": self.add_output_to_input_var.get(),
+            "sequential_upload": settings.get("upload_mode", "parallel") == "sequential",
+            "stop_queue_on_model_unavailable": settings.get("stop_queue_on_model_unavailable", True),
+            "rename_mode": settings.get("rename_mode", False),
+            "rename_method": settings.get("rename_method", "full"),
+            "enable_img_conversion": settings.get("enable_img_conversion", False),
+            "temp_img_fmt": settings.get("temp_img_fmt", "PNG"),
+            "img_quality": settings.get("img_quality", 100),
+            "img_max_dim": settings.get("img_max_dim", 0),
+            "force_conversion": settings.get("force_conversion", False),
+            "save_img_to_output": settings.get("save_img_to_output", False),
+            "enable_chunking": settings.get("enable_chunking", False),
+            "chunk_size": settings.get("chunk_size", 4000),
+            "model_prefix": settings.get("model_prefix", False),
+            "add_output_to_input": settings.get("add_output_to_input", False),
             "enable_multipass": multipass_enabled,
             "multipass_count": multipass_count,
             "multipass_prompts": multipass_prompts,
-            "enable_thinking": self.thinking_var.get(),
+            "enable_thinking": settings.get("enable_thinking", False),
             "result_metadata": {},
+            # Phase B scaffolding (dormant)
+            "chain_id": None,
+            "chain_index": 0,
         }
 
     def requeue_failed(self):

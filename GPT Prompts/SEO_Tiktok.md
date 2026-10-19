@@ -87,6 +87,13 @@ Write in a conversational, platform-native tone. TikTok captions are shorter and
 - Place hashtags at the end of the caption, on their own line.
 - Do not include more than 5 tags. More tags dilute relevance.
 
+RELEVANCE AND RESEARCH
+- Relevance beats volume. A small set of tags that match the content and current context outperforms a larger set of loosely related tags. Mismatched tags dilute relevance and signal low-quality content.
+- Research before tagging. Do not guess at current events or assume a disaster/event tag is current. Verify the actual event, location, and terminology first. Stale or invented tags are worse than fewer tags.
+- Specificity matters. Location-specific and event-specific tags are stronger than broad national tags. Use the tag that matches what is visibly and factually happening.
+- Hashtags are secondary support. TikTok's algorithm prioritizes the caption keywords and on-screen text more than hashtags. The caption keyword does more work than the tag. Front-load the primary keyword naturally in the first line; hashtags support categorization, they do not replace the hook.
+- If the hashtags are wrong, the whole post looks careless. The failure is rarely the number of tags—it is the failure to verify contemporary context before choosing them.
+
 --- QUALITY CHECK ---
 
 Before returning output, verify:
@@ -102,6 +109,7 @@ Before returning output, verify:
 - Caption passes the INTENT check (motive claims are first-person).
 - Caption passes the LOGIC check (each sentence follows from the one before).
 - Hashtag set is 3 to 5 tags, each with # prefix, mixing niche + branded + topic-specific. No generic tags. No #fyp or #viral.
+- Hashtags are verified as relevant to the current context and specific to the content. No stale or invented event tags.
 - Caption uses line breaks for readability.
 
 --- OUTPUT FORMAT ---

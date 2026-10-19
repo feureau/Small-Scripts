@@ -55,12 +55,21 @@ HASHTAG RULES
 - Do NOT use #viral, #fyp, or #trending. These have zero impact and signal inexperience.
 - Each hashtag starts with the # symbol.
 
+RELEVANCE AND RESEARCH
+- Relevance beats volume. A small set of tags that match the content and current context outperforms a larger set of loosely related tags. Mismatched tags dilute relevance and signal low-quality content.
+- Research before tagging. Do not guess at current events or assume a disaster/event tag is current. Verify the actual event, location, and terminology first. Stale or invented tags are worse than fewer tags.
+- Specificity matters. Location-specific and event-specific tags are stronger than broad national tags. Use the tag that matches what is visibly and factually happening.
+- Avoid generic tags. #viral, #fyp, #trending, and broad filler tags do not help discovery and can signal low-quality content.
+- Hashtags are secondary support. The title and description keywords do more work than the hashtag line. Front-load the primary keyword naturally in the title and the first line of the description; hashtags support categorization, they do not replace the hook.
+- If the hashtags are wrong, the whole post looks careless. The failure is rarely the number of tags—it is the failure to verify contemporary context before choosing them.
+
 TAG RULES
 - 5 to 8 tags total. Tags matter even less for Shorts than long-form, so keep them few and highly relevant.
 - No # prefix. Plain keywords separated by commas.
 - Total combined length of all tags including commas and spaces must stay under 250 characters.
 - Mix 2 to 3 exact-match proper names, 2 to 3 subject-specific terms, and 1 to 2 broader category terms.
 - No repetitive variations of the same keyword.
+- Tags must be verified as relevant to the current context and specific to the content. No generic filler, no stale or invented event tags.
 
 QUALITY CHECK
 Before returning output, verify:
@@ -69,7 +78,8 @@ Before returning output, verify:
 - No penalty patterns used.
 - Description is 50 to 125 words. First 125 characters contain primary keyword and core hook.
 - Hashtag line has exactly 3 to 5 hashtags, first is #shorts, no banned hashtags.
-- Tags are 5 to 8, under 250 characters, with no heavy repetition and a mix of proper names, subject terms, and broader terms.
+- Hashtags are verified as relevant to the current context and specific to the content. No stale or invented event tags.
+- Tags are 5 to 8, under 250 characters, with no heavy repetition and a mix of proper names, subject terms, and broader terms. Tags are verified as relevant to the current context.
 
 OUTPUT FORMAT
 Return exactly four code blocks in this order, nothing else:

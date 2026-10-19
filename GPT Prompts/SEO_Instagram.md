@@ -90,6 +90,14 @@ Write in a conversational, platform-native tone. Avoid corporate language, acade
 - Place hashtags at the end of the caption, on their own line.
 - Do not repeat hashtags across the three caption options. Each caption gets its own unique set.
 
+RELEVANCE AND RESEARCH
+- Relevance beats volume. A small set of tags that match the content and current context outperforms a larger set of loosely related tags. Mismatched tags dilute relevance and signal low-quality content.
+- Research before tagging. Do not guess at current events or assume a disaster/event tag is current. Verify the actual event, location, and terminology first. Stale or invented tags are worse than fewer tags.
+- Specificity matters. Location-specific and event-specific tags are stronger than broad national tags. Use the tag that matches what is visibly and factually happening.
+- Avoid generic tags. #fyp, #viral, #foryou, #instagood, #love do not help discovery and can signal low-quality content.
+- Hashtags are secondary support. The caption keyword does more work than the hashtag. Front-load the primary keyword naturally in the first line; hashtags support categorization, they do not replace the hook.
+- If the hashtags are wrong, the whole post looks careless. The failure is rarely the number of tags—it is the failure to verify contemporary context before choosing them.
+
 --- ALT TEXT RULES ---
 
 - Write descriptive, keyword-rich alt text manually. Do not rely on auto-generated alt text.
@@ -114,6 +122,7 @@ Before returning output, verify:
 - Each caption passes the INTENT check (motive claims are first-person).
 - Each caption passes the LOGIC check (each sentence follows from the one before).
 - Hashtag sets are 3 to 5 tags, each with # prefix, mixing niche + branded + topic-specific. No repetition across captions.
+- Hashtags are verified as relevant to the current context and specific to the content. No generic tags, no stale or invented event tags.
 - Alt text is 1 to 2 sentences, descriptive, includes primary keyword.
 
 --- OUTPUT FORMAT ---

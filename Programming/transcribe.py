@@ -138,9 +138,9 @@ SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wma",
 # Words that must never be the last token of a subtitle segment.
 # Kept intentionally broad across EN/PT so the guard fires before a split.
 HANGING_START_WORDS = {
-    # Coordinating conjunctions that should not open a subtitle segment.
-    "and", "or", "but", "so", "yet", "nor",
-    "e", "ou", "mas", "porém", "porem",
+    # Indonesian clause-final particles that must stay attached to the preceding word
+    # and never open a new subtitle segment.
+    "loh", "lho", "nih", "tuh", "dong", "sih", "deh", "lah", "kan", "kok",
 }
 
 
@@ -150,7 +150,7 @@ HANGING_TAIL_WORDS = {
     "my", "your", "his", "her", "its", "our", "their",
     "some", "any", "each", "every", "no", "both", "either", "neither",
     # Conjunctions / subordinators (EN)
-    "and", "or", "but", "so", "yet", "nor", "if", "than",
+    "and", "or", "but", "so", "yet", "nor", "if", "than", "as",
     "because", "since", "while", "when", "where", "which", "who", "whom",
     "whose", "although", "though", "unless", "until", "whether",
     # Prepositions (EN)
@@ -186,6 +186,27 @@ HANGING_TAIL_WORDS = {
     "pode", "podem", "podia", "podiam", "deve", "devem", "devia", "deviam",
     # Negatives (PT)
     "não", "nao", "nunca", "jamais", "nem",
+    # Articles / determiners / classifiers (ID)
+    # Note: 'ini' and 'itu' are post-nominal in Indonesian ("rumah itu", "orang ini")
+    # and legitimately end phrases/clauses, so they must NOT be in HANGING_TAIL_WORDS.
+    "si", "sang", "para", "sebuah", "seorang", "seekor",
+    "suatu", "tiap", "setiap", "beberapa", "berbagai",
+    # Conjunctions / subordinators (ID)
+    "dan", "atau", "tapi", "tetapi", "namun", "karena", "sebab", "sehingga",
+    "supaya", "agar", "jika", "kalau", "kalo", "bila", "apabila", "meskipun",
+    "walaupun", "bahwa", "yang", "saat", "ketika", "waktu", "padahal", "sambil",
+    "seraya", "sewaktu", "setelah", "sesudah", "sebelum",
+    # Prepositions (ID)
+    "di", "ke", "dari", "pada", "kepada", "dalam", "dengan", "untuk", "buat",
+    "oleh", "tentang", "mengenai", "antara", "terhadap", "sampai", "sejac", "sejak",
+    "bagi", "demi", "atas", "bawah", "samping", "depan", "belakang",
+    # Auxiliary / copula / aspect / modals (ID)
+    # Note: 'lagi' is omitted because it frequently appears phrase-finally ("lebih gawat lagi").
+    "adalah", "ialah", "merupakan", "akan", "bisa", "dapat", "harus", "mesti",
+    "perlu", "sudah", "telah", "belum", "sedang", "hendak", "mau",
+    "boleh", "mampu",
+    # Negatives (ID)
+    "tidak", "tak", "nggak", "gak", "ndak", "bukan", "jangan",
 }
 
 
@@ -794,21 +815,33 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
     Uses word-level timestamps to split on punctuation and natural speech pauses."""
     
     # Heuristic Fix for Whisper Attention Stretching:
-    # Whisper often stretches the *start* of the very first word in a segment 
-    # backwards across any preceding background noise or silence. 
-    # We heuristically clamp any single word to a maximum of 1.0 second.
+    # Whisper often stretches the *start* of the very first word in a segment
+    # backwards across any preceding background noise or silence.
+    # Clamp only the first word of a segment (or a word preceded by a real pause)
+    # so we never create artificial mid-sentence gaps inside continuous speech.
     MAX_WORD_DURATION = 1.0
     for seg in data.get('segments', []):
-        for w in seg.get('words', []):
+        seg_words = seg.get('words', [])
+        for idx_w, w in enumerate(seg_words):
             if w['end'] - w['start'] > MAX_WORD_DURATION:
-                w['start'] = max(w['start'], w['end'] - MAX_WORD_DURATION)
+                if idx_w == 0 or (w['start'] - seg_words[idx_w - 1]['end']) > 0.25:
+                    w['start'] = max(w['start'], w['end'] - MAX_WORD_DURATION)
 
-    # Flatten all words from all segments
+    # Flatten all words from all segments, merging subword fragments
+    # (e.g. " 2" + "%", " AI" + "-associated") that lack leading whitespace
+    # so word counts and token normalization operate on true whole words.
     all_words = []
     for seg in data.get('segments', []):
         for w in seg.get('words', []):
-            if w.get('word', '').strip():
-                all_words.append(w)
+            raw = w.get('word', '')
+            if not raw or not raw.strip():
+                continue
+            if all_words and not raw[0].isspace():
+                prev_w = all_words[-1]
+                prev_w['word'] = prev_w['word'] + raw
+                prev_w['end'] = max(float(prev_w.get('end', 0.0)), float(w.get('end', 0.0)))
+            else:
+                all_words.append(dict(w))
 
     if not all_words:
         # Some segments can come back without word timestamps.
@@ -832,17 +865,61 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
     hard_end_chars = {'.', '!', '?', ';', ':'}
     weak_tail_tokens = {
         "e", "mas", "que", "de", "do", "da", "dos", "das",
-        "pra", "para", "com", "se", "em", "no", "na", "nos", "nas"
+        "pra", "para", "com", "se", "em", "no", "na", "nos", "nas",
+        "and", "or", "but", "that", "of", "in", "on", "at", "to", "for", "as",
+        "dan", "atau", "tapi", "tetapi", "yang", "di", "ke", "dari", "pada",
+        "dalam", "dengan", "untuk", "buat", "karena", "sebab", "kalau", "kalo",
+        "jika", "bahwa", "si"
     }
     discourse_starters = {
-        "mas", "entao", "então", "agora", "enfim", "porem", "porém",
-        "porque", "pois", "so", "só", "ai", "aí"
+        "entao", "então", "agora", "enfim", "porem", "porém",
+        "porque", "pois", "só", "aí",
+        "but", "so", "however", "then", "now", "because", "yet",
+        "padahal", "tapi", "tetapi", "namun", "jadi", "nah", "terus", "lalu",
+        "kemudian", "lagian", "lagipula", "malah", "malahan", "soalnya",
+        "karena", "sebab", "sebenarnya", "sebetulnya", "bahkan", "selain",
+        "sementara", "sedangkan", "meskipun", "walaupun", "apalagi", "makanya"
+    }
+    clause_end_particles = {
+        "loh", "lho", "kok", "kan", "nih", "tuh", "dong", "sih", "deh", "lah"
+    }
+    capitalized_sentence_starters = discourse_starters | {
+        # Indonesian pronouns / demonstratives / common sentence openers (never proper nouns)
+        "saya", "aku", "gue", "gua", "kita", "kami", "kamu", "kau", "lu", "lo",
+        "dia", "ia", "mereka", "ini", "itu", "orang", "hal",
+        "kalau", "kalo", "jika", "bila", "apabila", "waktu", "saat", "ketika", "pas",
+        "coba", "jangan", "mending", "mendingan", "biar", "supaya", "agar",
+        "harusnya", "seharusnya", "sebisanya", "mungkin", "memang", "emang",
+        "barusan", "tadi", "kemarin", "sekarang", "besok", "oke", "ok", "ya", "iya",
+        # English / Portuguese non-proper sentence openers (excluding 'I' which is always capitalized)
+        "you", "he", "she", "it", "we", "they", "this", "that", "these", "those",
+        "there", "here", "what", "why", "how", "when", "where", "who",
+        "although", "though", "if", "unless", "until", "while", "since",
+        "let's", "lets", "okay", "well", "except", "despite",
+        "eu", "tu", "você", "voce", "ele", "ela", "nós", "nos", "eles", "elas",
+        "isso", "isto", "aquilo", "quando", "como", "onde", "embora", "enquanto",
+    }
+    # Multi-word conversational clause/sentence openers for unpunctuated 30s Whisper windows
+    unpunctuated_bigram_starters = {
+        ("now", "let's"), ("now", "lets"), ("now", "the"), ("now", "if"), ("now", "what"),
+        ("now", "we"), ("now", "you"), ("now", "it"), ("now", "it's"), ("now", "in"),
+        ("okay", "let's"), ("okay", "lets"), ("ok", "let's"), ("ok", "lets"),
+        ("well", "now"), ("well", "let's"), ("well", "if"),
+        ("let's", "change"), ("let's", "say"), ("let's", "add"), ("let's", "take"),
+        ("let's", "look"), ("let's", "see"), ("lets", "change"), ("lets", "say"),
+        ("which", "is"), ("which", "means"), ("and", "so"), ("and", "now"),
+        ("and", "then"), ("but", "now"), ("but", "if"), ("but", "when"),
     }
 
     def _norm_token(t: str) -> str:
         t = (t or "").strip().lower()
-        t = re.sub(r"[^\wÀ-ÖØ-öø-ÿ]", "", t)
+        t = re.sub(r"[^\wÀ-ÖØ-öø-ÿ']", "", t)
         return t
+
+    def _is_title_case_word(t: str) -> bool:
+        """True for Title-Case words ('Padahal', 'Now', 'Oke?'), False for acronyms ('AI', 'US', 'IMF') and 1-letter 'I'."""
+        alpha = "".join(ch for ch in (t or "").strip() if ch.isalpha())
+        return len(alpha) >= 2 and alpha[0].isupper() and alpha[1:].islower()
 
     new_segments = []
     current_words = []
@@ -876,9 +953,12 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
         if i > 0 and current_words:
             prev = all_words[i - 1]
             gap = float(word.get("start", 0.0)) - float(prev.get("end", 0.0))
-            next_norm = _norm_token(word.get("word", ""))
+            word_raw = word.get("word", "")
+            next_norm = _norm_token(word_raw)
             prev_norm = _norm_token(prev.get("word", ""))
             prev_is_hanging = prev_norm in HANGING_TAIL_WORDS
+            is_cap_start = _is_title_case_word(word_raw)
+            after_norm = _norm_token(all_words[i + 1].get("word", "")) if (i + 1 < len(all_words)) else ""
 
             # Split when there is a real pause between spoken words.
             # Require a larger pause when the current phrase is still very short,
@@ -905,9 +985,31 @@ def resegment_by_phrase(data: dict, pause_split_s: float = DEFAULT_PHRASE_PAUSE_
                 process_and_add_phrase(current_words)
                 current_words = []
             # Discourse-starter split after enough context.
-            elif (len(current_words) >= 10 and gap >= 0.08
+            elif (len(current_words) >= 6 and gap >= 0.08
                   and next_norm in discourse_starters
                   and not prev_is_hanging):
+                process_and_add_phrase(current_words)
+                current_words = []
+            # Unpunctuated sentence boundary: Whisper frequently drops periods
+            # in conversational speech (especially after final particles like
+            # 'loh', 'kok', 'nih', 'kan' or demonstratives like 'itu', 'ini')
+            # while still capitalizing the first word of the new sentence.
+            elif (len(current_words) >= 3 and not prev_is_hanging and is_cap_start
+                  and (prev_norm in clause_end_particles
+                       or (len(current_words) >= 4 and next_norm in capitalized_sentence_starters))):
+                process_and_add_phrase(current_words)
+                current_words = []
+            # Unpunctuated lowercase 30s Whisper window: split on multi-word
+            # conversational clause openers ("now let's", "okay let's", "well now", etc.)
+            # once the current clause is already substantial.
+            elif (len(current_words) >= 6 and not prev_is_hanging
+                  and (next_norm, after_norm) in unpunctuated_bigram_starters
+                  and prev_norm not in {"well", "okay", "ok", "and", "but", "so", "right", "just"}):
+                process_and_add_phrase(current_words)
+                current_words = []
+            # Clause-final particle followed by a noticeable pause.
+            elif (len(current_words) >= 5 and prev_norm in clause_end_particles
+                  and gap >= 0.25 and next_norm not in clause_end_particles):
                 process_and_add_phrase(current_words)
                 current_words = []
 
@@ -1143,6 +1245,9 @@ def sanitize_subtitle_segments(
             "sorry", "please", "hello", "hi", "hey", "bye", "wait",
             "sim", "não", "nao", "oi", "olá", "ola", "tchau", "obrigado",
             "obrigada", "valeu", "beleza",
+            "ya", "iya", "tidak", "enggak", "nggak", "gak", "bukan", "oke",
+            "ok", "halo", "hai", "makasih", "terima kasih", "maaf", "permisi",
+            "tolong", "tunggu", "sebentar", "siap", "paham", "ngerti"
         }
         if len(tokens) == 1 and tokens[0] in common_standalone:
             return False
@@ -1279,51 +1384,119 @@ def split_long_subtitle_segments(
                 continue
 
             # hard guard split
-            if cur_count >= max_words or cur_dur >= max_duration:
+            words_remaining_after = len(words) - 1 - idx
+            if (cur_count >= max_words or cur_dur >= max_duration) and not (
+                0 < words_remaining_after <= 2 and cur_dur < max_duration * 1.10
+            ):
                 if len(cur) == 1:
                     flush_chunk(cur)
                     cur = []
                 else:
                     chosen = None
                     # prefer latest punctuation boundary inside current chunk, but not too skewed
-                    for j in range(len(cur) - 2, 0, -1):
+                    for j in range(len(cur) - 3, 2, -1):
                         tw = str(cur[j].get("word", "")).strip()
                         if tw and tw[-1] in split_chars:
-                            if len(cur) >= 6 and (j < 2 or j > len(cur) - 3):
-                                continue
                             chosen = j + 1
                             break
                     if chosen is None:
-                        # Prefer splitting near the middle before a minor grammar word
-                        mid = len(cur) // 2
-                        minor_words = {"a", "an", "the", "and", "or", "but", "of", "in", "to", "for", "with", "on", "at", "by", "from", "as", "is", "are", "was", "were", "it", "this", "that", "o", "os", "as", "um", "uma", "uns", "umas", "e", "ou", "mas", "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "para", "pra", "com", "por", "como", "é", "são", "foi", "era", "isso", "aquilo", "este", "esta", "esse", "essa", "que", "se"}
-                        best_diff = 999
-                        for j in range(2, len(cur) - 1):
-                            # Skip if this split would leave a hanging word behind.
+                        # Prefer splitting near the balanced midpoint of the remaining words
+                        total_rem = len(cur) + words_remaining_after
+                        if total_rem <= int(max_words * 1.6):
+                            mid = max(4, min(len(cur) - 4, total_rem // 2))
+                        else:
+                            mid = len(cur) // 2
+
+                        clause_break_before = {
+                            "but", "because", "since", "while", "when", "if", "although", "though", "unless", "until",
+                            "so", "however", "yet", "which", "where", "now", "okay", "ok", "well", "let's", "lets",
+                            "despite", "except",
+                            "mas", "porém", "porem", "porque", "pois", "quando", "enquanto", "embora", "se", "caso", "então", "entao",
+                            "tapi", "tetapi", "namun", "padahal", "soalnya", "karena", "sebab", "kalau", "kalo", "jika", "bila",
+                            "apabila", "ketika", "saat", "waktu", "lalu", "kemudian", "terus", "maka", "makanya", "sedangkan",
+                            "sementara", "meskipun", "walaupun", "agar", "supaya", "biar", "sehingga", "sampai", "lagian", "malah"
+                        }
+                        clause_break_after = {
+                            "loh", "lho", "kok", "kan", "nih", "tuh", "dong", "sih", "deh", "lah"
+                        }
+                        # Tier 2: coordinating conjunctions, predicate auxiliaries (after a >=5-word subject),
+                        # and heavier prepositions that introduce adjunct clauses/phrases.
+                        tier2_words = {
+                            "and", "or", "with", "without", "before", "after", "through", "into", "between",
+                            "during", "against", "under", "over", "behind", "across", "toward", "towards", "upon", "within",
+                            "e", "ou", "com", "sem", "para", "pra", "por", "como", "que",
+                            "dan", "atau", "dengan", "tanpa", "untuk", "buat", "yang", "adalah", "akan", "bisa", "sudah", "belum", "sedang"
+                        }
+                        predicate_aux = {
+                            "is", "are", "was", "were", "has", "have", "had", "will", "would", "can", "could", "should", "may", "might", "must"
+                        }
+                        # Tier 3: lighter prepositions (excluding 'of', articles, and object pronouns
+                        # which bind tightly to the preceding noun/verb).
+                        tier3_words = {
+                            "in", "to", "for", "on", "at", "by", "from",
+                            "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+                            "di", "ke", "dari", "pada", "dalam", "tidak", "gak", "nggak", "si"
+                        }
+                        # Tight bigrams that must never be split across two subtitle segments
+                        tight_pairs = {
+                            ("as", "if"), ("as", "though"), ("as", "well"), ("even", "if"), ("even", "though"),
+                            ("so", "that"), ("such", "that"), ("in", "order"), ("according", "to"), ("due", "to"),
+                            ("up", "to"), ("prior", "to"), ("close", "to"), ("next", "to"), ("thanks", "to"),
+                            ("short", "of"), ("part", "of"), ("bunch", "of"), ("amount", "of"), ("lot", "of"),
+                            ("lots", "of"), ("loads", "of"), ("some", "of"), ("all", "of"), ("most", "of"),
+                            ("majority", "of"), ("cost", "of"), ("price", "of"), ("world", "of"), ("bank", "of"),
+                            ("out", "of"), ("instead", "of"), ("because", "of"), ("kind", "of"), ("sort", "of"),
+                            ("priced", "at"), ("look", "at"), ("looking", "at"), ("based", "in"), ("based", "on"),
+                            ("trying", "to"), ("started", "to"), ("starting", "to"), ("going", "to"), ("want", "to"),
+                            ("need", "to"), ("needs", "to"), ("have", "to"), ("has", "to"), ("had", "to"),
+                            ("used", "to"), ("able", "to"), ("continue", "to"), ("come", "to"), ("borrows", "to"),
+                            ("well", "now"), ("right", "now"), ("just", "now"),
+                        }
+
+                        min_side = min(4, max(2, len(cur) // 3))
+                        low_j = max(min_side, len(cur) // 4)
+                        high_j = min(len(cur) - min_side, (len(cur) * 3) // 4 + 1)
+                        if low_j >= high_j:
+                            low_j = 2
+                            high_j = len(cur) - 1
+
+                        best_score = 999
+                        for j in range(low_j, high_j):
                             prev_tok = _norm_token(str(cur[j - 1].get("word", "")))
                             if prev_tok in HANGING_TAIL_WORDS:
                                 continue
-                            tw = str(cur[j].get("word", "")).strip().lower()
-                            # Skip if this split would put a connector at the
-                            # start of the next segment.
+                            tw = _norm_token(str(cur[j].get("word", "")))
                             if tw in HANGING_START_WORDS:
                                 continue
-                            if tw in minor_words:
-                                diff = abs(j - mid)
-                                if diff < best_diff:
-                                    best_diff = diff
+                            if (prev_tok, tw) in tight_pairs:
+                                continue
+                            if tw in clause_break_before or prev_tok in clause_break_after:
+                                score = abs(j - mid) - 100
+                                if score < best_score:
+                                    best_score = score
+                                    chosen = j
+                            elif tw in tier2_words or (j >= 5 and tw in predicate_aux):
+                                score = abs(j - mid) - 30
+                                if score < best_score:
+                                    best_score = score
+                                    chosen = j
+                            elif tw in tier3_words:
+                                score = abs(j - mid)
+                                if score < best_score:
+                                    best_score = score
                                     chosen = j
                         if chosen is None:
                             # Last resort: walk outwards from mid and pick the
                             # first position whose preceding word is not hanging.
-                            for off in range(0, mid):
+                            for off in range(0, len(cur)):
                                 found = False
                                 for j in (mid - off, mid + off):
-                                    if 1 <= j <= len(cur) - 1:
+                                    if min_side <= j <= len(cur) - min_side:
                                         prev_tok = _norm_token(str(cur[j - 1].get("word", "")))
                                         start_tok = _norm_token(str(cur[j].get("word", "")))
                                         if (prev_tok not in HANGING_TAIL_WORDS
-                                                and start_tok not in HANGING_START_WORDS):
+                                                and start_tok not in HANGING_START_WORDS
+                                                and (prev_tok, start_tok) not in tight_pairs):
                                             chosen = j
                                             found = True
                                             break
