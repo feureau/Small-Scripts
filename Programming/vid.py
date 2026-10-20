@@ -75,6 +75,33 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.64 - Resolution-independent scaling for subtitles, titles, offsets, and blur across all orientations and handlings (2026-10-19)
+    • FEATURE: Added compute_resolution_scale_factor(target_w, target_h,
+      options) anchored to REF_SHORT_SIDE = 1080.0. For standard canvas
+      modes, scale = min(target_w, target_h) / 1080.0 (720p -> 0.667x,
+      1080p -> 1.0x, 2160p -> 2.0x, 4320p -> 4.0x). For hybrid auto
+      canvases, scale anchors to the primary layout axis (target_h for
+      side_by_side, target_w for stacked) / 1080.0.
+    • SUBTITLES & TITLES: create_temporary_ass_file() and
+      create_title_ass_file() now scale font_size, margin_v/l/r,
+      outline_width, shadow_offset_x/y, shadow_blur, seam_h_offset,
+      seam_v_offset, title_spacing, title_line_spacing, title_bg_radius,
+      and title_bg_pad_x/y by compute_resolution_scale_factor(). Auto
+      line-wrapping character limits remain strictly invariant across all
+      output resolutions.
+    • OFFSETS & BLUR: Pixel-unit ("px") video_offset_x/y,
+      hybrid_top/bottom_offset_x/y, hybrid_composite_offset_x/y, and CPU
+      gblur sigma now scale by compute_resolution_scale_factor() across
+      both FFmpeg and NVEncC pipelines.
+    • PIPELINE UNIFICATION: Unified construct_ffmpeg_command's non-hybrid
+      resolution calculation with compute_target_resolution_for_options()
+      (fixing 4:3/5:4 horizontal aspect ratios and "original" resolution
+      handling), passed info_bot to compute_target_resolution_for_options()
+      for hybrid-duo auto canvases, and removed :original_size=... overrides
+      on FFmpeg subtitles= filters so libass respects PlayResX/PlayResY in
+      multi-stage superres passes and external .ass passthrough files.
+    • PRESETS: Normalized pre-multiplied 4K/8K subtitle, title, and pixel
+      offset values in vid.py.preset.json to their 1080p reference base.
 v8.63 - Respect saved burn_subtitles=False in presets and sync queued jobs on preset save (2026-10-19)
     • FIX: v8.62 forced options["burn_subtitles"] = True in
       _create_job_entry and _apply_subtitle_to_job whenever a
@@ -1501,6 +1528,51 @@ def alpha_to_libass_alpha(alpha_val):
     return f"&H{alpha_val:02X}"
 
 
+REF_SHORT_SIDE = 1080.0
+
+
+def compute_resolution_scale_factor(target_w, target_h, options=None):
+    """Return the linear scale factor of (target_w, target_h) relative to a
+    1080p short-side reference canvas (1.0 at 1080p, 2/3 at 720p, 2.0 at
+    2160p/4K, 4.0 at 4320p/8K).
+
+    Handles all orientations (horizontal, vertical, original, hybrid
+    stacked, hybrid-duo side-by-side / stacked) and aspect handlings
+    (fixed aspect ratios and merged_aspect='auto').
+    """
+    try:
+        w = int(target_w)
+        h = int(target_h)
+    except (TypeError, ValueError):
+        return 1.0
+    if w <= 0 or h <= 0:
+        return 1.0
+    anchor = min(w, h)
+    if options:
+        orient = str(options.get("orientation", "")).lower()
+        if orient in ("hybrid (stacked)", "hybrid-duo (dual source)"):
+            merged = str(options.get("merged_aspect", "9:16")).lower()
+            layout = str(options.get("hybrid_layout", "auto")).lower()
+            if layout not in ("stacked", "side_by_side"):
+                if not merged or merged == "auto":
+                    layout = "stacked"
+                else:
+                    try:
+                        num, den = map(int, merged.split(":"))
+                        layout = "side_by_side" if num >= den else "stacked"
+                    except Exception:
+                        layout = "stacked"
+            if merged == "auto":
+                anchor = h if layout == "side_by_side" else w
+            else:
+                try:
+                    num, den = map(int, merged.split(":"))
+                    anchor = h if num >= den else w
+                except Exception:
+                    anchor = min(w, h)
+    return max(0.1, float(anchor) / REF_SHORT_SIDE)
+
+
 def create_temporary_ass_file(srt_path, options, target_res=None):
     global CURRENT_TEMP_FILE
     try:
@@ -1511,6 +1583,7 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         return None
 
     play_res_x, play_res_y = target_res if target_res else (1920, 1080)
+    res_scale = compute_resolution_scale_factor(play_res_x, play_res_y, options)
     font_name = options.get('subtitle_font', DEFAULT_SUBTITLE_FONT)
     font_size = options.get('subtitle_font_size', DEFAULT_SUBTITLE_FONT_SIZE)
     bold_flag = "-1" if options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD) else "0"
@@ -1529,15 +1602,25 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     except (ValueError, TypeError):
         user_wrap_limit = 0
     try:
-        m_v_offset = float(margin_v)
+        m_v_offset = float(margin_v) * res_scale
     except (ValueError, TypeError):
         m_v_offset = 0.0
     try:
-        f_size = float(font_size)
-        m_l = float(margin_l)
-        m_r = float(margin_r)
+        f_size = max(1.0, float(font_size) * res_scale)
     except (ValueError, TypeError):
-        f_size, m_l, m_r = 32.0, 50.0, 50.0
+        f_size = max(1.0, 32.0 * res_scale)
+    try:
+        m_l = float(margin_l) * res_scale
+    except (ValueError, TypeError):
+        m_l = 50.0 * res_scale
+    try:
+        m_r = float(margin_r) * res_scale
+    except (ValueError, TypeError):
+        m_r = 50.0 * res_scale
+    scaled_font_size = max(1, int(round(f_size)))
+    scaled_margin_l = max(0, int(round(m_l)))
+    scaled_margin_r = max(0, int(round(m_r)))
+    scaled_margin_v = max(0, int(round(m_v_offset)))
     available_width = play_res_x - m_l - m_r
     if user_wrap_limit > 0:
         final_limit = user_wrap_limit
@@ -1583,23 +1666,35 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         outline_color_hex = srgb_hex_to_bt2020_pq_hex(outline_color_hex)
 
     outline_alpha_val = options.get('outline_alpha', DEFAULT_OUTLINE_ALPHA)
-    outline_width = float(options.get('outline_width', DEFAULT_OUTLINE_WIDTH))
+    try:
+        outline_width = round(float(options.get('outline_width', DEFAULT_OUTLINE_WIDTH)) * res_scale, 2)
+    except (ValueError, TypeError):
+        outline_width = round(float(DEFAULT_OUTLINE_WIDTH) * res_scale, 2)
 
     shadow_color_hex = options.get('shadow_color', DEFAULT_SHADOW_COLOR)
     if _is_hdr:
         shadow_color_hex = srgb_hex_to_bt2020_pq_hex(shadow_color_hex)
 
     shadow_alpha_val = options.get('shadow_alpha', DEFAULT_SHADOW_ALPHA)
-    shadow_offset_x = float(options.get('shadow_offset_x', DEFAULT_SHADOW_OFFSET_X))
-    shadow_offset_y = float(options.get('shadow_offset_y', DEFAULT_SHADOW_OFFSET_Y))
-    shadow_blur = float(options.get('shadow_blur', DEFAULT_SHADOW_BLUR))
+    try:
+        shadow_offset_x = round(float(options.get('shadow_offset_x', DEFAULT_SHADOW_OFFSET_X)) * res_scale, 2)
+    except (ValueError, TypeError):
+        shadow_offset_x = round(float(DEFAULT_SHADOW_OFFSET_X) * res_scale, 2)
+    try:
+        shadow_offset_y = round(float(options.get('shadow_offset_y', DEFAULT_SHADOW_OFFSET_Y)) * res_scale, 2)
+    except (ValueError, TypeError):
+        shadow_offset_y = round(float(DEFAULT_SHADOW_OFFSET_Y) * res_scale, 2)
+    try:
+        shadow_blur = round(float(options.get('shadow_blur', DEFAULT_SHADOW_BLUR)) * res_scale, 2)
+    except (ValueError, TypeError):
+        shadow_blur = round(float(DEFAULT_SHADOW_BLUR) * res_scale, 2)
     style_main = (
-        f"Style: Main,{font_name},{font_size},"
+        f"Style: Main,{font_name},{scaled_font_size},"
         f"{hex_to_libass_color(fill_color_hex)},&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
         f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
-        f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
+        f"{outline_width},{shadow_offset_y},{alignment},{scaled_margin_l},{scaled_margin_r},{scaled_margin_v},1"
     )
     header = f"""[Script Info]
 Title: Corrected Single-Layer Subtitle File
@@ -1712,8 +1807,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if align_mode == "seam" and "calculated_pos" in options:
             x, y = options["calculated_pos"]
             try:
-                ho = float(seam_h_offset)
-                vo = float(seam_v_offset)
+                ho = float(seam_h_offset) * res_scale
+                vo = float(seam_v_offset) * res_scale
             except (ValueError, TypeError):
                 ho = 0.0
                 vo = 0.0
@@ -1954,25 +2049,35 @@ def measure_text_lines(lines, font_name, font_size, is_bold=False, is_italic=Fal
 def create_title_ass_file(title_text, options, target_res=None):
     global CURRENT_TEMP_FILE
     play_res_x, play_res_y = target_res if target_res else (1920, 1080)
+    res_scale = compute_resolution_scale_factor(play_res_x, play_res_y, options)
     font_name = options.get('title_font', DEFAULT_TITLE_FONT)
     try:
-        font_size = float(options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE))
+        font_size = float(options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE)) * res_scale
     except (ValueError, TypeError):
-        font_size = 48.0
+        font_size = 48.0 * res_scale
+    font_size = max(8.0, round(font_size, 1))
     bold_flag = "-1" if options.get('title_bold', DEFAULT_TITLE_BOLD) else "0"
     italic_flag = "-1" if options.get('title_italic', DEFAULT_TITLE_ITALIC) else "0"
     underline_flag = "-1" if options.get('title_underline', DEFAULT_TITLE_UNDERLINE) else "0"
-    margin_v = options.get('title_margin_v', DEFAULT_TITLE_MARGIN_V)
-    margin_l = options.get('title_margin_l', DEFAULT_TITLE_MARGIN_L)
-    margin_r = options.get('title_margin_r', DEFAULT_TITLE_MARGIN_R)
+    try:
+        m_v_offset = float(options.get('title_margin_v', DEFAULT_TITLE_MARGIN_V)) * res_scale
+        m_l = float(options.get('title_margin_l', DEFAULT_TITLE_MARGIN_L)) * res_scale
+        m_r = float(options.get('title_margin_r', DEFAULT_TITLE_MARGIN_R)) * res_scale
+    except (ValueError, TypeError):
+        m_v_offset = 50.0 * res_scale
+        m_l = 50.0 * res_scale
+        m_r = 50.0 * res_scale
+    margin_v = str(int(round(m_v_offset)))
+    margin_l = str(int(round(m_l)))
+    margin_r = str(int(round(m_r)))
     align_map = {"top": 8, "middle": 5, "bottom": 2}
     alignment = align_map.get(options.get('title_alignment', 'top'), 8)
     try:
-        title_spacing = float(options.get('title_spacing', DEFAULT_TITLE_SPACING))
+        title_spacing = round(float(options.get('title_spacing', DEFAULT_TITLE_SPACING)) * res_scale, 2)
     except (ValueError, TypeError):
         title_spacing = 0.0
     try:
-        line_spacing_offset = float(options.get('title_line_spacing', DEFAULT_TITLE_LINE_SPACING))
+        line_spacing_offset = float(options.get('title_line_spacing', DEFAULT_TITLE_LINE_SPACING)) * res_scale
     except (ValueError, TypeError):
         line_spacing_offset = 0.0
     # === PATCH: HDR Title Color Pre-compensation ===
@@ -1987,18 +2092,18 @@ def create_title_ass_file(title_text, options, target_res=None):
         outline_color_hex = srgb_hex_to_bt2020_pq_hex(outline_color_hex)
 
     try:
-        outline_width = float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH))
+        outline_width = round(float(options.get('title_outline_width', DEFAULT_TITLE_OUTLINE_WIDTH)) * res_scale, 2)
     except (ValueError, TypeError):
-        outline_width = 3.0
+        outline_width = round(3.0 * res_scale, 2)
 
     shadow_color_hex = options.get('title_shadow_color', DEFAULT_TITLE_SHADOW_COLOR)
     if _is_hdr:
         shadow_color_hex = srgb_hex_to_bt2020_pq_hex(shadow_color_hex)
 
     try:
-        shadow_offset_y = float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y))
+        shadow_offset_y = round(float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y)) * res_scale, 2)
     except (ValueError, TypeError):
-        shadow_offset_y = 3.0
+        shadow_offset_y = round(3.0 * res_scale, 2)
     bg_enabled = options.get('title_bg_enabled', DEFAULT_TITLE_BG_ENABLED)
     bg_mode = options.get('title_bg_mode', DEFAULT_TITLE_BG_MODE)
 
@@ -2011,17 +2116,17 @@ def create_title_ass_file(title_text, options, target_res=None):
     except (ValueError, TypeError):
         bg_alpha_val = 0
     try:
-        bg_radius = float(options.get('title_bg_radius', DEFAULT_TITLE_BG_RADIUS))
+        bg_radius = float(options.get('title_bg_radius', DEFAULT_TITLE_BG_RADIUS)) * res_scale
     except (ValueError, TypeError):
-        bg_radius = 16.0
+        bg_radius = 16.0 * res_scale
     try:
-        pad_x = float(options.get('title_bg_pad_x', DEFAULT_TITLE_BG_PAD_X))
+        pad_x = float(options.get('title_bg_pad_x', DEFAULT_TITLE_BG_PAD_X)) * res_scale
     except (ValueError, TypeError):
-        pad_x = 20.0
+        pad_x = 20.0 * res_scale
     try:
-        pad_y = float(options.get('title_bg_pad_y', DEFAULT_TITLE_BG_PAD_Y))
+        pad_y = float(options.get('title_bg_pad_y', DEFAULT_TITLE_BG_PAD_Y)) * res_scale
     except (ValueError, TypeError):
-        pad_y = 10.0
+        pad_y = 10.0 * res_scale
 
     def time_to_ass(time_str):
         parts = time_str.split(':')
@@ -2036,7 +2141,7 @@ def create_title_ass_file(title_text, options, target_res=None):
     start_ass = time_to_ass(options.get('title_start_time', DEFAULT_TITLE_START_TIME))
     end_ass = time_to_ass(options.get('title_end_time', DEFAULT_TITLE_END_TIME))
     style_title = (
-        f"Style: __VID_TITLE__,{font_name},{int(font_size)},"
+        f"Style: __VID_TITLE__,{font_name},{int(round(font_size))},"
         f"{hex_to_libass_color(fill_color_hex)},&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
@@ -2044,7 +2149,7 @@ def create_title_ass_file(title_text, options, target_res=None):
         f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
     )
     bg_style = (
-        f"Style: __VID_TITLE_BG__,{font_name},{int(font_size)},"
+        f"Style: __VID_TITLE_BG__,{font_name},{int(round(font_size))},"
         f"&H00000000,&HFF000000,&HFF000000,&HFF000000,"
         f"0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1"
     )
@@ -2061,10 +2166,6 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    try:
-        m_v_offset = float(margin_v); m_l = float(margin_l); m_r = float(margin_r)
-    except (ValueError, TypeError):
-        m_v_offset, m_l, m_r = 50.0, 50.0, 50.0
     cx = (m_l + (play_res_x - m_r)) / 2.0
     align_mode = options.get("title_alignment", "top")
     raw_lines = [l.strip() for l in re.split(r'\r?\n|\\N', title_text) if l.strip()]
@@ -2128,7 +2229,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     eff_line_h = line_h + (outline_width * 2)
     line_spacing = max(eff_line_h, int(round(font_size * 1.25)))
     if bg_enabled and bg_mode == "pill":
-        line_spacing = max(line_spacing, eff_line_h + (pad_y * 2) + 4)
+        line_spacing = max(line_spacing, eff_line_h + (pad_y * 2) + (4.0 * res_scale))
     line_spacing += line_spacing_offset
     total_h = ((num_lines - 1) * line_spacing) + eff_line_h
     if align_mode == "top":
@@ -5550,6 +5651,7 @@ class VideoProcessorApp:
         self.root.after(100, self._populate_title_fonts)
         ttk.Label(font_row1, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(font_row1, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(font_row1, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
         font_row2 = ttk.Frame(font_frame)
         font_row2.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(font_row2, text="Kerning:").pack(side=tk.LEFT, padx=(0, 5))
@@ -5731,6 +5833,7 @@ class VideoProcessorApp:
         ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         font_size_entry = ttk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
         font_size_entry.pack(side=tk.LEFT)
+        ttk.Label(font_frame, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
         style_frame = ttk.Frame(general_style_frame)
         style_frame.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var,
@@ -6432,8 +6535,9 @@ class VideoProcessorApp:
                   f"Reset to fractions in [-1.0, 1.0] for meaningful "
                   f"positioning.")
         if _off_units == "px":
-            cp_off_x = int(round(cp_off_x_frac))
-            cp_off_y = int(round(cp_off_y_frac))
+            _res_scale = compute_resolution_scale_factor(target_w, target_h, options)
+            cp_off_x = int(round(cp_off_x_frac * _res_scale))
+            cp_off_y = int(round(cp_off_y_frac * _res_scale))
         else:
             cp_off_x = int(round(cp_off_x_frac * target_w))
             cp_off_y = int(round(cp_off_y_frac * target_h))
@@ -9543,6 +9647,16 @@ class VideoProcessorApp:
             info = get_video_info(job['video_path'])
             self._resolve_dv_auto_match(options, info)
 
+            _seam_info_bot = None
+            if orientation == "hybrid-duo (dual source)":
+                _seam_bot_path = self._resolve_hybrid_bot_path(job.get('video_path', ''), options)
+                if _seam_bot_path and os.path.exists(_seam_bot_path):
+                    options["hybrid_bottom_path"] = _seam_bot_path
+                    try:
+                        _seam_info_bot = get_video_info(_seam_bot_path)
+                    except Exception:
+                        _seam_info_bot = None
+
             # v8.59 MULTI-STAGE PLAN
             # Both hops can carry their own algorithm/level via the
             # per-stage overrides. Whatever the combination, the chain
@@ -9571,7 +9685,21 @@ class VideoProcessorApp:
             else:
                 options.pop("_preproc_scale_override", None)
 
-            sub_target_w, sub_target_h = self.compute_target_resolution_for_options(options, info, orientation)
+            sub_target_w, sub_target_h = self.compute_target_resolution_for_options(
+                options, info, orientation, info_bot=_seam_info_bot)
+            if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
+                try:
+                    _seam_layout = self._compute_hybrid_layout(
+                        options, info, _seam_info_bot, orientation,
+                        sub_target_w, sub_target_h, verbose=False)
+                    sub_target_w = _seam_layout["canvas_w"]
+                    sub_target_h = _seam_layout["canvas_h"]
+                    if options.get("subtitle_alignment") == "seam":
+                        options["calculated_pos"] = (
+                            _seam_layout["seam_x"], _seam_layout["seam_y"])
+                except Exception as _e:
+                    print(f"[WARN] Failed to compute hybrid layout "
+                          f"for '{job['display_name']}': {_e}")
             # v8.33 FROZEN TARGET FIX
             # Freeze the target resolution computed here, while
             # `info` still describes the SOURCE block.  The NVEncC
@@ -9607,27 +9735,6 @@ class VideoProcessorApp:
                 elif os.path.exists(sub_identifier):
                     subtitle_source_file = sub_identifier
                 if subtitle_source_file:
-                    if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"] and \
-                            options.get("subtitle_alignment") == "seam":
-                        try:
-                            # Fetch the second source's info for hybrid-duo
-                            # so the helper can resolve "original" aspects
-                            # against the correct block. For hybrid-stacked
-                            # (single source split in two) info_bot stays
-                            # None and the helper falls back to info_top.
-                            _seam_info_bot = None
-                            if orientation == "hybrid-duo (dual source)":
-                                _seam_bot_path = options.get("hybrid_bottom_path", "")
-                                if _seam_bot_path and os.path.exists(_seam_bot_path):
-                                    _seam_info_bot = get_video_info(_seam_bot_path)
-                            _seam_layout = self._compute_hybrid_layout(
-                                options, info, _seam_info_bot, orientation,
-                                sub_target_w, sub_target_h, verbose=False)
-                            options["calculated_pos"] = (
-                                _seam_layout["seam_x"], _seam_layout["seam_y"])
-                        except Exception as _e:
-                            print(f"[WARN] Failed to compute hybrid seam position "
-                                  f"for '{job['display_name']}': {_e}")
                     sub_ext = os.path.splitext(subtitle_source_file)[1].lower()
                     if sub_ext in [".ass", ".ssa"]:
                         ass_burn_path = create_temporary_ass_passthrough_file(subtitle_source_file)
@@ -10070,6 +10177,33 @@ class VideoProcessorApp:
                 bitrate_kbps = 100
         return bitrate_kbps, max_duration, input_duration
 
+    def _resolve_hybrid_bot_path(self, file_path, options):
+        bot_path = options.get("hybrid_bottom_path", "")
+        if bot_path and os.path.exists(bot_path):
+            return bot_path
+        if not file_path:
+            return ""
+        base_name, ext = os.path.splitext(file_path)
+        if base_name.endswith("-top"):
+            bot_path = base_name[:-4] + "-bot" + ext
+        elif base_name.endswith("_top"):
+            bot_path = base_name[:-4] + "_bot" + ext
+        elif base_name.endswith("-left"):
+            bot_path = base_name[:-5] + "-right" + ext
+        elif base_name.endswith("_left"):
+            bot_path = base_name[:-5] + "_right" + ext
+        else:
+            bot_path = base_name + "-bot" + ext
+        if os.path.exists(bot_path):
+            return bot_path
+        bot_path_alt = (file_path.replace("-top", "-bot")
+                        .replace("_top", "_bot")
+                        .replace("-left", "-right")
+                        .replace("_left", "_right"))
+        if bot_path_alt != file_path and os.path.exists(bot_path_alt):
+            return bot_path_alt
+        return ""
+
     def _resolve_aspect_ratio(self, aspect_val, video_info, default_ratio="16:9"):
         if str(aspect_val).lower() == "original" and video_info:
             w = video_info.get("width", 16); h = video_info.get("height", 9)
@@ -10084,12 +10218,13 @@ class VideoProcessorApp:
             except Exception:
                 return 16, 9
 
-    def compute_target_resolution_for_options(self, options, info, orientation):
+    def compute_target_resolution_for_options(self, options, info, orientation, info_bot=None):
         orientation = self._resolve_orientation(options, orientation)
         res_key = options.get('resolution')
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
             aspect_str = options.get("merged_aspect", "9:16")
             eff_layout = self._resolve_hybrid_layout(options)
+            info_b = info_bot if (orientation == "hybrid-duo (dual source)" and info_bot) else info
             if str(aspect_str).lower() == "auto":
                 if eff_layout == "side_by_side":
                     height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
@@ -10106,7 +10241,7 @@ class VideoProcessorApp:
                         w_left = int(target_h * 16 / 9)
                     try:
                         num_r, den_r = self._resolve_aspect_ratio(
-                            options.get('hybrid_bottom_aspect', '16:9'), info, '16:9')
+                            options.get('hybrid_bottom_aspect', '16:9'), info_b, '16:9')
                         w_right = int(target_h * num_r / den_r)
                     except Exception:
                         w_right = int(target_h * 16 / 9)
@@ -10126,7 +10261,7 @@ class VideoProcessorApp:
                         h_top = int(target_w * 9 / 16)
                     try:
                         num_b, den_b = self._resolve_aspect_ratio(
-                            options.get('hybrid_bottom_aspect', '4:5'), info, '4:5')
+                            options.get('hybrid_bottom_aspect', '4:5'), info_b, '4:5')
                         h_bot = int(target_w * den_b / num_b)
                     except Exception:
                         h_bot = int(target_w * 5 / 4)
@@ -10176,7 +10311,13 @@ class VideoProcessorApp:
         if orientation == "vertical":
             width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                          "HD": 1080, "4k": 2160, "8k": 4320}
-            target_w = width_map.get(res_key, 1080)
+            if res_key and str(res_key).lower() == "original":
+                _src_w = int(info.get("width", 0)) if info else 0
+                _src_h = int(info.get("height", 0)) if info else 0
+                _src_short = min(_src_w, _src_h) if (_src_w > 0 and _src_h > 0) else 1080
+                target_w = (_src_short // 2) * 2
+            else:
+                target_w = width_map.get(res_key, 1080)
             try:
                 num, den = map(int, options.get('vertical_aspect', '9:16').split(':'))
                 target_h = int(target_w * den / num)
@@ -10195,7 +10336,13 @@ class VideoProcessorApp:
         # outputs inside the same vertical envelope as 16:9.
         height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                       "HD": 1080, "4k": 2160, "8k": 4320}
-        target_h = height_map.get(res_key, 1080)
+        if res_key and str(res_key).lower() == "original":
+            _src_w = int(info.get("width", 0)) if info else 0
+            _src_h = int(info.get("height", 0)) if info else 0
+            _src_short = min(_src_w, _src_h) if (_src_w > 0 and _src_h > 0) else 1080
+            target_h = (_src_short // 2) * 2
+        else:
+            target_h = height_map.get(res_key, 1080)
         try:
             num, den = map(int, options.get('horizontal_aspect', '16:9').split(':'))
             target_w = int(target_h * num / den)
@@ -10505,8 +10652,9 @@ class VideoProcessorApp:
                     ox = int(round(_ox_f * target_w))
                     oy = int(round(_oy_f * target_h))
                 else:
-                    ox = int(round(_ox_f))
-                    oy = int(round(_oy_f))
+                    _res_scale = compute_resolution_scale_factor(target_w, target_h, options)
+                    ox = int(round(_ox_f * _res_scale))
+                    oy = int(round(_oy_f * _res_scale))
                 pad_res = _compute_pad(info["width"], info["height"], target_w, target_h, ox, oy)
                 if not pad_res:
                     output_res = f"{output_res},preserve_aspect_ratio=decrease"
@@ -11398,7 +11546,8 @@ class VideoProcessorApp:
             if _ffmpeg_stage_ov:
                 target_w, total_h = _ffmpeg_stage_ov
             else:
-                target_w, total_h = self.compute_target_resolution_for_options(options, info, orientation)
+                target_w, total_h = self.compute_target_resolution_for_options(
+                    options, info, orientation, info_bot=info_bot)
             eff_layout = self._resolve_hybrid_layout(options)
             _hybrid_block_offset_units = str(options.get(
                 "hybrid_block_offset_units",
@@ -11463,8 +11612,9 @@ class VideoProcessorApp:
                     _ox = int(round(_ox_raw * block_w))
                     _oy = int(round(_oy_raw * block_h))
                 else:
-                    _ox = int(round(_ox_raw))
-                    _oy = int(round(_oy_raw))
+                    _blk_scale = compute_resolution_scale_factor(target_w, total_h, options)
+                    _ox = int(round(_ox_raw * _blk_scale))
+                    _oy = int(round(_oy_raw * _blk_scale))
                 _ox = (_ox // 2) * 2
                 _oy = (_oy // 2) * 2
                 # Effective source aspect ratio, or None if unknown.
@@ -11617,10 +11767,10 @@ class VideoProcessorApp:
                 cpu_chain.insert(0, "yadif=mode=send_frame:parity=auto:deint=all")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
-                cpu_chain.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{total_h}")
+                cpu_chain.append(f"subtitles=filename={safe_ass}")
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
-                cpu_chain.append(f"subtitles=filename={safe_title_ass}:original_size={target_w}x{total_h}")
+                cpu_chain.append(f"subtitles=filename={safe_title_ass}")
             if is_cpu_encode:
                 cpu_chain.append(f"format={target_cpu_pix_fmt}")
             elif not is_hdr_output:
@@ -11660,6 +11810,7 @@ class VideoProcessorApp:
             vf_filters, cpu_filters = [], []
             video_in_tag = cuda_video_in
             if orientation == "original":
+                target_w, target_h = info["width"], info["height"]
                 res_key = options.get('resolution')
                 if res_key and res_key.lower() != "original":
                     safe_algo = ffmpeg_upscale_algo
@@ -11687,20 +11838,14 @@ class VideoProcessorApp:
                 res_key = options.get('resolution')
                 if orientation == "vertical":
                     aspect_str = options.get('vertical_aspect')
-                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
-                                 "HD": 1080, "4k": 2160, "8k": 4320}
                     if not aspect_str:
                         raise VideoProcessingError("Missing 'Vertical Aspect Ratio' in preset.")
                 else:
                     aspect_str = options.get('horizontal_aspect')
-                    width_map = {"720p": 1280, "1080p": 1920, "2160p": 3840, "4320p": 7680,
-                                 "HD": 1920, "4k": 3840, "8k": 7680}
                     if not aspect_str:
                         raise VideoProcessingError("Missing 'Horizontal Aspect Ratio' in preset.")
-                ox = options.get("video_offset_x", "0")
-                oy = options.get("video_offset_y", "0")
-                target_w = width_map.get(res_key)
-                if target_w is None:
+                _valid_res_keys = {"720p", "1080p", "2160p", "4320p", "HD", "4k", "8k", "original"}
+                if not res_key or (res_key not in _valid_res_keys and str(res_key).lower() != "original"):
                     raise VideoProcessingError(
                         f"Invalid resolution '{res_key}' for {orientation} mode.")
                 try:
@@ -11708,8 +11853,10 @@ class VideoProcessorApp:
                 except (ValueError, AttributeError):
                     raise VideoProcessingError(
                         f"Invalid aspect ratio format: '{aspect_str}'. Expected 'num:den'.")
-                target_h = int(target_w * den / num)
-                target_w, target_h = (target_w // 2) * 2, (target_h // 2) * 2
+                ox = options.get("video_offset_x", "0")
+                oy = options.get("video_offset_y", "0")
+                target_w, target_h = self.compute_target_resolution_for_options(
+                    options, info, orientation)
                 # Multi-stage superres override: the FFmpeg preprocessor
                 # outputs at half the final target so NVEncC superres can
                 # complete the upscale in a single 2x pass.
@@ -11734,8 +11881,9 @@ class VideoProcessorApp:
                     ox = int(round(_ox_f * target_w))
                     oy = int(round(_oy_f * target_h))
                 else:
-                    ox = int(round(_ox_f))
-                    oy = int(round(_oy_f))
+                    _res_scale = compute_resolution_scale_factor(target_w, target_h, options)
+                    ox = int(round(_ox_f * _res_scale))
+                    oy = int(round(_oy_f * _res_scale))
                 safe_algo = ffmpeg_upscale_algo
                 if not safe_algo:
                     raise VideoProcessingError("Upscale algorithm not specified in preset.")
@@ -11763,6 +11911,7 @@ class VideoProcessorApp:
                     has_bg_effect = apply_pixelate or apply_blur or apply_ambient
                     if has_bg_effect:
                         target_fmt = cuda_work_fmt
+                        _bg_res_scale = compute_resolution_scale_factor(target_w, target_h, options)
                         fc_parts = []
                         if apply_pixelate or apply_blur:
                             fc_parts.append(f"{video_in_tag}split=2[v_bg_base][v_fg_in];")
@@ -11791,7 +11940,10 @@ class VideoProcessorApp:
                                 f"format={target_fmt}[v_bg_pixelated];")
                             bg_current = "[v_bg_pixelated]"
                         if apply_blur:
-                            sigma = options.get("blur_sigma", DEFAULT_BLUR_SIGMA)
+                            try:
+                                sigma = round(float(options.get("blur_sigma", DEFAULT_BLUR_SIGMA)) * _bg_res_scale, 2)
+                            except (TypeError, ValueError):
+                                sigma = round(float(DEFAULT_BLUR_SIGMA) * _bg_res_scale, 2)
                             steps = options.get("blur_steps", DEFAULT_BLUR_STEPS)
                             bright = options.get("pixelate_brightness", DEFAULT_PIXELATE_BRIGHTNESS)
                             sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
@@ -11827,7 +11979,10 @@ class VideoProcessorApp:
                                     f"format={target_fmt}[v_bg_blurred];")
                             bg_current = "[v_bg_blurred]"
                         if apply_ambient:
-                            sigma = options.get("blur_sigma", "25")
+                            try:
+                                sigma = round(float(options.get("blur_sigma", "25")) * _bg_res_scale, 2)
+                            except (TypeError, ValueError):
+                                sigma = round(25.0 * _bg_res_scale, 2)
                             steps = options.get("blur_steps", "1")
                             sat = options.get("pixelate_saturation", "1.5")
                             spread_str = options.get("ambient_spread", DEFAULT_AMBIENT_SPREAD)
@@ -11977,11 +12132,10 @@ class VideoProcessorApp:
                 cpu_filters.insert(0, "yadif=mode=send_frame:parity=auto:deint=all")
             if ass_burn_path:
                 safe_ass = escape_ffmpeg_filter_path(ass_burn_path, base_dir=base_dir)
-                cpu_filters.append(f"subtitles=filename={safe_ass}:original_size={target_w}x{target_h}")
+                cpu_filters.append(f"subtitles=filename={safe_ass}")
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
-                cpu_filters.append(
-                    f"subtitles=filename={safe_title_ass}:original_size={target_w}x{target_h}")
+                cpu_filters.append(f"subtitles=filename={safe_title_ass}")
             # The preprocessor (encoder_backend == "preprocess") writes a
             # CPU-resident intermediate that a downstream encoder reads.
             # Leaving frames on a CUDA surface here forces FFmpeg to

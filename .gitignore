@@ -1,0 +1,71 @@
+# =============================================================================
+# Python Bytecode, Caches & Virtual Environments
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+ENV/
+
+build/
+dist/
+*.egg-info/
+.eggs/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================================
+# Logs, Runtime Caches, State & Debug Dumps
+# =============================================================================
+*.log
+processing_log.txt
+error_log.txt
+errors.txt
+
+*cache*.json
+*.iaupload.json
+*.iaupload.json.tmp
+
+.pgstosrt_cache/
+ocr.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.db-journal
+*.db-wal
+
+# =============================================================================
+# OS, Editor & Secret Files
+# =============================================================================
+.idea/
+*.swp
+*.swo
+*~
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.env
+.env.*
+!.env.example
+
+*.bak
+*.tmp
+*.temp
+
+# =============================================================================
+# Temp & Test Artifacts in Programming/
+# =============================================================================
+Programming/temp/
+Programming/test_dir/
+Programming/testdir*/
+Programming/test_dlmdz_img/
+Programming/outside_dir/
+Programming/_good/
+Programming/out_*.mov
+Programming/out.txt
