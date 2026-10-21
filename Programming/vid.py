@@ -3269,6 +3269,8 @@ class VideoProcessorApp:
         self.root.minsize(1050, 600)
         self.output_mode = output_mode
         self.processing_jobs = []
+        self._job_sort_key = None
+        self._job_sort_desc = False
         self.input_files = []
         self.filtered_input_indices = []
         self.preset_manager = WorkflowPresetManager()
@@ -4141,9 +4143,9 @@ class VideoProcessorApp:
         ToolTip(preset_combo, "NVENC Preset. p1 is fastest, p7 is slowest/highest quality.")
         ttk.Label(basic_group, text="Tune:").grid(row=2, column=0, sticky=tk.W, pady=2)
         tune_combo = ttk.Combobox(basic_group, textvariable=self.nvenc_tune_var,
-                                  values=["hq", "ll", "ull", "lossless"], width=10, state="readonly")
+                                  values=["hq", "uhq", "ll", "ull", "lossless"], width=10, state="readonly")
         tune_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-        ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, ll=Low Latency, ull=Ultra Low Latency.")
+        ToolTip(tune_combo, "NVENC Tuning. hq=High Quality, uhq=Ultra High Quality (HEVC/AV1 only; falls back to hq for H.264), ll=Low Latency, ull=Ultra Low Latency.")
         ttk.Label(basic_group, text="Codec:").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.video_codec_combo = ttk.Combobox(basic_group, textvariable=self.video_codec_var,
                                               values=["h264", "hevc", "av1"], width=10, state="readonly")
@@ -4512,6 +4514,13 @@ class VideoProcessorApp:
         extra_tools.pack(side=tk.LEFT, padx=10)
         ttk.Button(extra_tools, text="Sel Preset",
                    command=self.select_jobs_by_current_preset).pack(side=tk.LEFT, padx=1)
+        ttk.Label(extra_tools, text="Sort:").pack(side=tk.LEFT, padx=(8, 2))
+        self.sort_name_button = ttk.Button(extra_tools, text="Name", width=8,
+                                           command=lambda: self.sort_jobs("name"))
+        self.sort_name_button.pack(side=tk.LEFT, padx=1)
+        self.sort_preset_button = ttk.Button(extra_tools, text="Preset", width=8,
+                                             command=lambda: self.sort_jobs("preset"))
+        self.sort_preset_button.pack(side=tk.LEFT, padx=1)
         file_buttons_frame = ttk.Frame(file_group)
         file_buttons_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT)
@@ -12456,6 +12465,11 @@ class VideoProcessorApp:
             nv_b_ref_mode = options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE)
             encoder_map = {"h264": "h264_nvenc", "hevc": "hevc_nvenc", "av1": "av1_nvenc"}
             encoder_name = encoder_map.get(selected_codec, "h264_nvenc")
+            # h264_nvenc does not support tune=uhq (only hevc_nvenc / av1_nvenc do);
+            # FFmpeg aborts with "Unable to parse 'tune' option value 'uhq'".
+            if encoder_name == "h264_nvenc" and nv_tune == "uhq":
+                print("[WARN] h264_nvenc does not support tune 'uhq'; falling back to 'hq'.")
+                nv_tune = "hq"
             encoder_opts = ["-c:v", encoder_name, "-preset", nv_preset, "-tune", nv_tune]
             if selected_codec == "h264":
                 nv_profile = options.get("nvenc_profile_sdr", DEFAULT_NVENC_PROFILE_SDR)
@@ -12988,6 +13002,76 @@ class VideoProcessorApp:
             self.update_status(f"Selected {count} jobs with preset '{target_preset}'")
         else:
             self.update_status(f"No jobs found with preset '{target_preset}'")
+
+    @staticmethod
+    def _natural_sort_key(text):
+        """Case-insensitive natural sort key so 'ep2' sorts before 'ep10'."""
+        return [(0, int(part), "") if part.isdigit() else (1, 0, part.casefold())
+                for part in re.split(r"(\d+)", text or "") if part != ""]
+
+    def _is_processing_active(self):
+        btn = getattr(self, "start_button", None)
+        try:
+            return btn is not None and str(btn.cget("state")) == "disabled"
+        except tk.TclError:
+            return False
+
+    def sort_jobs(self, key):
+        """Sort the processing job queue by 'name' or 'preset'.
+        Clicking the same key again toggles ascending/descending."""
+        if not self.processing_jobs:
+            return
+        if self._is_processing_active():
+            self.update_status("Cannot sort jobs while processing is running.")
+            return
+        if self._job_sort_key == key:
+            self._job_sort_desc = not self._job_sort_desc
+        else:
+            self._job_sort_key, self._job_sort_desc = key, False
+
+        selected_ids = {id(self.processing_jobs[i]) for i in self.job_listbox.curselection()}
+
+        def name_key(job):
+            return self._natural_sort_key(os.path.basename(job.get("video_path") or ""))
+
+        def preset_key(job):
+            return self._natural_sort_key(job.get("preset_name") or "")
+
+        if key == "name":
+            sort_fn = lambda j: (name_key(j), preset_key(j))
+        else:
+            sort_fn = lambda j: (preset_key(j), name_key(j))
+
+        # In-place so existing references to self.processing_jobs stay valid.
+        self.processing_jobs.sort(key=sort_fn, reverse=self._job_sort_desc)
+        self._refresh_job_listbox(selected_ids)
+        self._update_sort_button_labels()
+        direction = "descending" if self._job_sort_desc else "ascending"
+        self.update_status(f"Sorted {len(self.processing_jobs)} jobs by {key} ({direction})")
+
+    def _refresh_job_listbox(self, selected_ids=None):
+        selected_ids = selected_ids or set()
+        self.job_listbox.delete(0, tk.END)
+        first_sel = None
+        for i, job in enumerate(self.processing_jobs):
+            self.job_listbox.insert(tk.END, job.get("display_name", ""))
+            if id(job) in selected_ids:
+                self.job_listbox.selection_set(i)
+                if first_sel is None:
+                    first_sel = i
+        if first_sel is not None:
+            self.job_listbox.activate(first_sel)
+            self.job_listbox.see(first_sel)
+            self.on_job_select(None)
+
+    def _update_sort_button_labels(self):
+        arrow = " \u25bc" if self._job_sort_desc else " \u25b2"
+        if hasattr(self, "sort_name_button"):
+            self.sort_name_button.config(
+                text="Name" + (arrow if self._job_sort_key == "name" else ""))
+        if hasattr(self, "sort_preset_button"):
+            self.sort_preset_button.config(
+                text="Preset" + (arrow if self._job_sort_key == "preset" else ""))
 
     def invert_selection(self):
         selected_indices = self.job_listbox.curselection()

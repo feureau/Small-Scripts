@@ -139,7 +139,19 @@ import argparse
 import shutil
 import logging
 import datetime
-import ffmpeg
+try:
+    import ffmpeg
+    if not hasattr(ffmpeg, 'probe'):
+        print("[FATAL ERROR] The imported 'ffmpeg' module does not have a 'probe' function.", file=sys.stderr)
+        print("This usually occurs when the package 'ffmpeg' is installed instead of 'ffmpeg-python'.", file=sys.stderr)
+        print("To fix this, please run the following commands in your terminal:", file=sys.stderr)
+        print("  pip uninstall -y ffmpeg", file=sys.stderr)
+        print("  pip install ffmpeg-python\n", file=sys.stderr)
+        sys.exit(1)
+except ImportError:
+    print("[FATAL ERROR] The 'ffmpeg-python' package is not installed.", file=sys.stderr)
+    print("Please install it by running: pip install ffmpeg-python\n", file=sys.stderr)
+    sys.exit(1)
 import json
 import pathlib
 from collections import namedtuple

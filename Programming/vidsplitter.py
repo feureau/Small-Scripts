@@ -65,6 +65,12 @@ MIN_CLIP_DURATION = 10
 #   Setting to 0 disables.
 MAX_CLIP_DURATION = 180
 
+# TRAILING_TAGS — if a source filename ends with "_<tag>" (case-insensitive),
+#   that tag is moved to the very end of the output name, after
+#   "_speech_NNN".  e.g. "Game_replay.mp4" → "Game_speech_001_replay.mp4".
+#   Only the last tag is moved.  Override with --trailing-tags.
+TRAILING_TAGS = ["replay"]
+
 # ----------------------------------------------------------------------
 # Logging
 # ----------------------------------------------------------------------
@@ -548,9 +554,26 @@ def enforce_max_clip_duration(
     return [Clip(idx, c.start, c.end, c.end - c.start) for idx, c in enumerate(result, 1)]
 
 
-def run_ffmpeg_split(video_path, clips, output_dir, basename, ext):
+def build_clip_name(basename, index, ext, tags=None):
+    """Build an output clip filename.
+
+    If ``basename`` ends with ``_<tag>`` for any tag in ``tags``
+    (case-insensitive), that tag is moved after ``_speech_NNN``,
+    preserving its original casing. Only the last tag is moved.
+    """
+    trailing = ""
+    for tag in tags or ():
+        suffix = f"_{tag}"
+        if tag and basename.lower().endswith(suffix.lower()):
+            trailing = basename[-len(suffix):]
+            basename = basename[: -len(suffix)]
+            break
+    return f"{basename}_speech_{index:03d}{trailing}{ext}"
+
+
+def run_ffmpeg_split(video_path, clips, output_dir, basename, ext, tags=None):
     for clip in clips:
-        out_name = f"{basename}_speech_{clip.index:03d}{ext}"
+        out_name = build_clip_name(basename, clip.index, ext, tags)
         out_path = os.path.join(output_dir, out_name)
         cmd = [
             "ffmpeg",
@@ -580,14 +603,14 @@ def run_ffmpeg_split(video_path, clips, output_dir, basename, ext):
 # ----------------------------------------------------------------------
 # SRT splitting for clips
 # ----------------------------------------------------------------------
-def split_srt_for_video(srt_path, clips, output_dir, basename, ext):
+def split_srt_for_video(srt_path, clips, output_dir, basename, ext, tags=None):
     blocks = parse_srt_blocks(srt_path)
     if not blocks:
         return
 
     for clip in clips:
         # Probe the actual video stream start time in the generated clip
-        out_name_video = f"{basename}_speech_{clip.index:03d}{ext}"
+        out_name_video = build_clip_name(basename, clip.index, ext, tags)
         out_path_video = os.path.join(output_dir, out_name_video)
         video_offset = get_actual_video_start(out_path_video)
 
@@ -600,7 +623,7 @@ def split_srt_for_video(srt_path, clips, output_dir, basename, ext):
                 new_end = (e - clip.start) + video_offset
                 clip_entries.append((new_start, new_end, block.text))
 
-        out_name = f"{basename}_speech_{clip.index:03d}.srt"
+        out_name = build_clip_name(basename, clip.index, ".srt", tags)
         out_path = os.path.join(output_dir, out_name)
 
         with open(out_path, "w", encoding="utf-8") as f:
@@ -621,7 +644,7 @@ def split_srt_for_video(srt_path, clips, output_dir, basename, ext):
 # ----------------------------------------------------------------------
 # CSV output
 # ----------------------------------------------------------------------
-def write_csv(csv_path, all_plans):
+def write_csv(csv_path, all_plans, tags=None):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -640,7 +663,7 @@ def write_csv(csv_path, all_plans):
             base = os.path.splitext(os.path.basename(video_path))[0]
             ext = os.path.splitext(video_path)[1]
             for clip, wc in zip(clips, word_counts):
-                out_name = f"{base}_speech_{clip.index:03d}{ext}"
+                out_name = build_clip_name(base, clip.index, ext, tags)
                 writer.writerow(
                     [
                         video_path,
@@ -733,11 +756,22 @@ def main():
         action="store_true",
         help="Do not generate accompanying SRT files for clips.",
     )
+    parser.add_argument(
+        "--trailing-tags",
+        default=",".join(TRAILING_TAGS),
+        help="Comma-separated tags. If a source filename ends with _<tag> "
+        "(case-insensitive), the tag is moved to the end of the output name, "
+        "e.g. Game_replay.mp4 -> Game_speech_001_replay.mp4. "
+        "Pass an empty string to disable. "
+        f"(default: {','.join(TRAILING_TAGS)})",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging.")
     args = parser.parse_args()
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    trailing_tags = [t.strip() for t in args.trailing_tags.split(",") if t.strip()]
 
     pairs = find_video_srt_pairs(args)
 
@@ -848,7 +882,7 @@ def main():
         if not os.path.dirname(csv_path):
             csv_path = os.path.join(args.output_dir, csv_path)
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        write_csv(csv_path, all_plans)
+        write_csv(csv_path, all_plans, trailing_tags)
         log.info("CSV written to %s", csv_path)
 
     if args.dry_run:
@@ -891,11 +925,13 @@ def main():
         ext = os.path.splitext(video)[1]
         log.info("Splitting %s...", os.path.basename(video))
 
-        run_ffmpeg_split(video, clips, args.output_dir, base, ext)
+        run_ffmpeg_split(video, clips, args.output_dir, base, ext, trailing_tags)
 
         if not args.no_srt:
             srt_path = next(srt for v, srt in pairs if v == video)
-            split_srt_for_video(srt_path, clips, args.output_dir, base, ext)
+            split_srt_for_video(
+                srt_path, clips, args.output_dir, base, ext, trailing_tags
+            )
 
     log.info("All done. Clips saved to %s", args.output_dir)
 

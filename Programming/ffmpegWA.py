@@ -193,9 +193,22 @@ updated to reflect those changes.
 import sys
 import os
 import glob
-import ffmpeg
 import math
 import argparse
+
+try:
+    import ffmpeg
+    if not hasattr(ffmpeg, 'probe'):
+        print("[FATAL ERROR] The imported 'ffmpeg' module does not have a 'probe' function.", file=sys.stderr)
+        print("This usually occurs when the package 'ffmpeg' is installed instead of 'ffmpeg-python'.", file=sys.stderr)
+        print("To fix this, please run the following commands in your terminal:", file=sys.stderr)
+        print("  pip uninstall -y ffmpeg", file=sys.stderr)
+        print("  pip install ffmpeg-python\n", file=sys.stderr)
+        sys.exit(1)
+except ImportError:
+    print("[FATAL ERROR] The 'ffmpeg-python' package is not installed.", file=sys.stderr)
+    print("Please install it by running: pip install ffmpeg-python\n", file=sys.stderr)
+    sys.exit(1)
 
 # --- Default Script Configuration ---
 DEFAULT_CONFIG = {
@@ -251,6 +264,7 @@ def _encode_chunk(input_path, output_path, start_time, duration, audio_stream_ex
             'b:v': int(video_bitrate),
             'maxrate': int(video_bitrate),
             'bufsize': int(video_bitrate * 2),
+            'pix_fmt': 'yuv420p',
             'c:a': 'aac',
             'b:a': '128k'
         }
