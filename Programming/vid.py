@@ -75,6 +75,23 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.65 - JSON-detected titles override preset-saved titles + title fallback text (2026-10-22)
+    • FIX: title_override_text was persisted into presets, so a title
+      detected for one video got frozen into the preset and stamped onto
+      every job created from it. _autofill_title_for_job skipped any job
+      whose title was non-empty, and the burn step only consulted the JSON
+      when the title was empty, so auto-detection never ran for those jobs.
+    • PRESETS: title_override_text is now per-job data (like hybrid paths).
+      save_preset() blanks it, get_preset() ignores it, and preset
+      save/load/apply keep each queued job's own title.
+    • PROVENANCE: Jobs track "_title_source" ("detected" / "manual").
+      Typing in the Title box marks it manual; clearing it reverts to
+      auto. With auto-detect on, JSON overrides any non-manual title; a
+      previously detected title is cleared if the JSON no longer matches.
+    • FEATURE: New title_fallback_text option ("Fallback" box in the Title
+      tab), saved with presets. Burn priority is now: manual title ->
+      JSON (if auto-detect on) -> previously detected/legacy title ->
+      fallback text. With auto-detect off the JSON is no longer consulted.
 v8.64 - Resolution-independent scaling for subtitles, titles, offsets, and blur across all orientations and handlings (2026-10-19)
     • FEATURE: Added compute_resolution_scale_factor(target_w, target_h,
       options) anchored to REF_SHORT_SIDE = 1080.0. For standard canvas
@@ -837,6 +854,8 @@ DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
 DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
 DEFAULT_SUBTITLE_FONT_SIZE = "32"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
+DEFAULT_SUBTITLE_PIPELINE = "cpu_libass"
+DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY = True
 DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
 DEFAULT_SUBTITLE_UNDERLINE = False
@@ -869,6 +888,13 @@ DEFAULT_TITLE_REMOVE_HASHTAGS = True
 DEFAULT_TITLE_ENABLE_EMOJI = True
 DEFAULT_TITLE_AUTODETECT = True
 DEFAULT_TITLE_OVERRIDE_TEXT = ""
+DEFAULT_TITLE_FALLBACK_TEXT = ""
+# v8.65: Per-job title provenance, stored in job options under "_title_source"
+# and never persisted into presets. "manual" titles beat JSON auto-detection.
+TITLE_SOURCE_DETECTED = "detected"
+TITLE_SOURCE_MANUAL = "manual"
+# v8.65: Option keys that belong to an individual job, not to a preset.
+PER_JOB_TITLE_KEYS = ("title_override_text", "_title_source")
 DEFAULT_TITLE_START_TIME = "00:00:00.00"
 DEFAULT_TITLE_END_TIME = "00:00:03.00"
 DEFAULT_TITLE_FONT = "HelveticaNeueLT Std Blk"
@@ -1927,6 +1953,70 @@ def create_merged_ass_for_nvencc(sub_ass_path, title_ass_path):
         return sub_ass_path
 
 
+def check_subtitle_font_compatibility(subtitle_file, font_name):
+    """
+    Checks if characters in a subtitle file are supported by font_name.
+    Returns a dictionary with missing character info if incompatible glyphs exist.
+    """
+    if not subtitle_file or not os.path.exists(subtitle_file):
+        return None
+    try:
+        with open(subtitle_file, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    except Exception:
+        return None
+
+    clean_text = re.sub(r'<[^>]+>', '', content)
+    clean_text = re.sub(r'\{[^}]+\}', '', clean_text)
+    clean_text = re.sub(r'\d{2}:\d{2}:\d{2}[.,]\d{3}', '', clean_text)
+
+    unique_chars = {ch for ch in clean_text if not ch.isspace() and ord(ch) > 127}
+    if not unique_chars:
+        return None
+
+    missing_samples = []
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hdc = ctypes.windll.user32.GetDC(0)
+            hfont = ctypes.windll.gdi32.CreateFontW(
+                0, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, font_name)
+            old_font = ctypes.windll.gdi32.SelectObject(hdc, hfont)
+
+            for ch in unique_chars:
+                code_unit = ord(ch)
+                if code_unit > 0xFFFF:
+                    missing_samples.append(ch)
+                    continue
+                wchars = (wintypes.WCHAR * 1)(ch)
+                glyphs = (wintypes.WORD * 1)()
+                res = ctypes.windll.gdi32.GetGlyphIndicesW(hdc, wchars, 1, glyphs, 1)
+                if res == 0xFFFF or glyphs[0] == 0 or glyphs[0] == 0xFFFF:
+                    missing_samples.append(ch)
+
+            ctypes.windll.gdi32.SelectObject(hdc, old_font)
+            ctypes.windll.gdi32.DeleteObject(hfont)
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+        except Exception:
+            for ch in unique_chars:
+                if ord(ch) >= 0x0400:
+                    missing_samples.append(ch)
+    else:
+        for ch in unique_chars:
+            if ord(ch) >= 0x0400:
+                missing_samples.append(ch)
+
+    if missing_samples:
+        return {
+            "total_missing": len(missing_samples),
+            "samples": missing_samples[:10],
+            "font_name": font_name
+        }
+    return None
+
+
 def generate_ass_rounded_rect(x1, y1, x2, y2, radius):
     w = max(0.0, float(x2 - x1))
     h = max(0.0, float(y2 - y1))
@@ -2576,6 +2666,7 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('title_remove_hashtags', DEFAULT_TITLE_REMOVE_HASHTAGS)),
         str(job_options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)),
         job_options.get('title_override_text', ''),
+        job_options.get('title_fallback_text', ''),
         job_options.get('title_start_time', ''),
         job_options.get('title_end_time', ''),
         job_options.get('title_font', ''),
@@ -3057,6 +3148,8 @@ class WorkflowPresetManager:
             "subtitle_font": DEFAULT_SUBTITLE_FONT,
             "subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,
             "subtitle_alignment": DEFAULT_SUBTITLE_ALIGNMENT,
+            "subtitle_pipeline": DEFAULT_SUBTITLE_PIPELINE,
+            "subtitle_check_font_compatibility": DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY,
             "subtitle_bold": DEFAULT_SUBTITLE_BOLD,
             "subtitle_italic": DEFAULT_SUBTITLE_ITALIC,
             "subtitle_underline": DEFAULT_SUBTITLE_UNDERLINE,
@@ -3110,6 +3203,7 @@ class WorkflowPresetManager:
             "title_enable_emoji": DEFAULT_TITLE_ENABLE_EMOJI,
             "title_autodetect": DEFAULT_TITLE_AUTODETECT,
             "title_override_text": DEFAULT_TITLE_OVERRIDE_TEXT,
+            "title_fallback_text": DEFAULT_TITLE_FALLBACK_TEXT,
             "title_start_time": DEFAULT_TITLE_START_TIME,
             "title_end_time": DEFAULT_TITLE_END_TIME,
             "title_font": DEFAULT_TITLE_FONT,
@@ -3185,6 +3279,9 @@ class WorkflowPresetManager:
             if v is not None:
                 if k in ("hybrid_top_path", "hybrid_bottom_path"):
                     continue
+                # v8.65: titles are per-job; never load one from a preset.
+                if k in PER_JOB_TITLE_KEYS:
+                    continue
                 if k == "sofa_file" and not str(v).strip():
                     continue
                 if k == "sofa_speakers" and not str(v).strip():
@@ -3199,6 +3296,11 @@ class WorkflowPresetManager:
         clean_options["hybrid_top_path"] = ""
         clean_options["hybrid_bottom_path"] = ""
         clean_options.pop("_duo_color_mismatch", None)
+        # v8.65: titles are per-job (detected from JSON or typed for one
+        # video); persisting them would stamp one video's title onto every
+        # job created from the preset. Use title_fallback_text instead.
+        clean_options["title_override_text"] = ""
+        clean_options.pop("_title_source", None)
         if "chroma_subsampling" in clean_options:
             clean_options["chroma_subsampling"] = _normalize_chroma_code(clean_options["chroma_subsampling"])
         self.presets[name] = {"options": clean_options, "triggers": triggers}
@@ -3678,6 +3780,13 @@ class VideoProcessorApp:
         self.subtitle_font_size_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('subtitle_font_size'))
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
+        self.subtitle_pipeline_var = tk.StringVar(value=DEFAULT_SUBTITLE_PIPELINE)
+        self.subtitle_pipeline_var.trace_add(
+            'write', lambda *args: (self.update_subtitle_pipeline_ui(),
+                                    self._update_selected_jobs('subtitle_pipeline')))
+        self.subtitle_check_font_compatibility_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY)
+        self.subtitle_check_font_compatibility_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('subtitle_check_font_compatibility'))
         self.subtitle_bold_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_BOLD)
         self.subtitle_italic_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_ITALIC)
         self.subtitle_underline_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_UNDERLINE)
@@ -3729,7 +3838,10 @@ class VideoProcessorApp:
         self.title_enable_emoji_var = tk.BooleanVar(value=DEFAULT_TITLE_ENABLE_EMOJI)
         self.title_autodetect_var = tk.BooleanVar(value=DEFAULT_TITLE_AUTODETECT)
         self.title_override_var = tk.StringVar(value=DEFAULT_TITLE_OVERRIDE_TEXT)
-        self.title_override_var.trace_add('write', lambda *args: self._update_selected_jobs('title_override_text'))
+        self._suppress_title_manual_mark = False
+        self.title_override_var.trace_add('write', lambda *args: self._on_title_override_edit())
+        self.title_fallback_var = tk.StringVar(value=DEFAULT_TITLE_FALLBACK_TEXT)
+        self.title_fallback_var.trace_add('write', lambda *args: self._update_selected_jobs('title_fallback_text'))
         self.title_start_time_var = tk.StringVar(value=DEFAULT_TITLE_START_TIME)
         self.title_start_time_var.trace_add('write', lambda *args: self._update_selected_jobs('title_start_time'))
         self.title_end_time_var = tk.StringVar(value=DEFAULT_TITLE_END_TIME)
@@ -5635,6 +5747,13 @@ class VideoProcessorApp:
         ttk.Button(override_frame, text="Detect",
                    command=lambda: self.detect_title_for_selected(force=True),
                    width=8).pack(side=tk.LEFT, padx=(5, 0))
+        fallback_frame = ttk.Frame(source_group)
+        fallback_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(fallback_frame, text="Fallback:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(fallback_frame, textvariable=self.title_fallback_var, width=50).pack(
+            side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(fallback_frame, text="(used when no JSON title; saved with preset)").pack(
+            side=tk.LEFT, padx=(5, 0))
         timing_group = ttk.LabelFrame(parent, text="Display Timing", padding=10)
         timing_group.pack(fill=tk.X, pady=5)
         timing_frame = ttk.Frame(timing_group)
@@ -5891,6 +6010,20 @@ class VideoProcessorApp:
         ttk.Label(align_sub_row2, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 2))
         margin_r_entry = ttk.Entry(align_sub_row2, textvariable=self.subtitle_margin_r_var, width=5)
         margin_r_entry.pack(side=tk.LEFT)
+        pipeline_frame = ttk.Frame(general_style_frame)
+        pipeline_frame.pack(fill=tk.X, pady=(4, 2))
+        ttk.Label(pipeline_frame, text="Pipeline:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(pipeline_frame, text="CPU (libass Live)",
+                        variable=self.subtitle_pipeline_var, value="cpu_libass",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT)
+        ttk.Radiobutton(pipeline_frame, text="GPU (Direct CUDA)",
+                        variable=self.subtitle_pipeline_var, value="gpu_cuda",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT, padx=10)
+        self.check_font_compatibility_cb = ttk.Checkbutton(
+            pipeline_frame, text="Check Font Compatibility",
+            variable=self.subtitle_check_font_compatibility_var,
+            command=lambda: self._update_selected_jobs("subtitle_check_font_compatibility"))
+        self.check_font_compatibility_cb.pack(side=tk.LEFT, padx=10)
         reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
         ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line",
@@ -6015,6 +6148,14 @@ class VideoProcessorApp:
         else:
             self.wrap_limit_entry.config(state="disabled")
 
+    def update_subtitle_pipeline_ui(self, *args):
+        mode = self.subtitle_pipeline_var.get()
+        if hasattr(self, "check_font_compatibility_cb"):
+            if mode == "gpu_cuda":
+                self.check_font_compatibility_cb.config(state="disabled")
+            else:
+                self.check_font_compatibility_cb.config(state="normal")
+
     def browse_lut_file(self):
         file_path = filedialog.askopenfilename(title="Select LUT File",
                                                filetypes=[("LUT files", "*.cube;*.3dl;*.dat"),
@@ -6077,17 +6218,66 @@ class VideoProcessorApp:
         return detected_title
 
     def _autofill_title_for_job(self, job, force=False):
+        # v8.65: JSON detection overrides any title that was not typed by the
+        # user for this job (e.g. one leaked from a preset or detected for a
+        # different subtitle). Manual titles win unless force=True (Detect).
         options = job.get("options", {})
         if not force and not options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT):
             return False
         current_title = (options.get("title_override_text", "") or "").strip()
-        if current_title and not force:
+        title_source = options.get("_title_source")
+        if current_title and title_source == TITLE_SOURCE_MANUAL and not force:
             return False
         detected_title = self._detect_title_text_for_job(job)
         if not detected_title:
+            # A stale auto-detected title (e.g. subtitle changed) must not
+            # survive; clearing it lets title_fallback_text apply.
+            if title_source == TITLE_SOURCE_DETECTED:
+                options["title_override_text"] = ""
+                options.pop("_title_source", None)
             return False
         options["title_override_text"] = detected_title
+        options["_title_source"] = TITLE_SOURCE_DETECTED
         return True
+
+    def _set_title_override_var_silently(self, value):
+        # Update the Title box without marking the selected jobs as manual.
+        self._suppress_title_manual_mark = True
+        try:
+            self.title_override_var.set(value)
+        finally:
+            self._suppress_title_manual_mark = False
+
+    def _on_title_override_edit(self):
+        if self._is_loading_job_to_gui or self._suppress_title_manual_mark:
+            return
+        selected_indices = self.job_listbox.curselection()
+        if not selected_indices:
+            return
+        text = self.title_override_var.get()
+        for index in selected_indices:
+            options = self.processing_jobs[index]['options']
+            options["title_override_text"] = text
+            if text.strip():
+                options["_title_source"] = TITLE_SOURCE_MANUAL
+            else:
+                # Clearing the box hands control back to auto-detection.
+                options.pop("_title_source", None)
+
+    def _carry_over_job_title(self, old_options, new_options):
+        # v8.65: keep a job's own title when its options are replaced
+        # wholesale (preset save/load/apply).
+        for key in PER_JOB_TITLE_KEYS:
+            if key in old_options:
+                new_options[key] = old_options[key]
+            else:
+                new_options.pop(key, None)
+
+    def _refresh_title_var_from_selection(self):
+        selected_indices = self.job_listbox.curselection()
+        if selected_indices:
+            self._set_title_override_var_silently(
+                self.processing_jobs[selected_indices[0]]['options'].get("title_override_text", ""))
 
     def detect_title_for_selected(self, force=False):
         selected_indices = self.job_listbox.curselection()
@@ -6102,10 +6292,8 @@ class VideoProcessorApp:
             messagebox.showinfo("No Title Found",
                                 "No matching title was detected from JSON for the selected job(s).")
         else:
-            if len(selected_indices) == 1:
-                self.title_override_var.set(
-                    self.processing_jobs[selected_indices[0]]['options'].get("title_override_text", ""))
             self.update_status(f"Detected titles for {updated} job(s).")
+        self._refresh_title_var_from_selection()
 
     def _on_title_autodetect_toggle(self):
         self._update_selected_jobs("title_autodetect")
@@ -7725,6 +7913,8 @@ class VideoProcessorApp:
             "subtitle_font": self.subtitle_font_var.get(),
             "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(),
+            "subtitle_pipeline": self.subtitle_pipeline_var.get(),
+            "subtitle_check_font_compatibility": self.subtitle_check_font_compatibility_var.get(),
             "subtitle_bold": self.subtitle_bold_var.get(),
             "subtitle_italic": self.subtitle_italic_var.get(),
             "subtitle_underline": self.subtitle_underline_var.get(),
@@ -7788,6 +7978,7 @@ class VideoProcessorApp:
             "title_enable_emoji": self.title_enable_emoji_var.get(),
             "title_autodetect": self.title_autodetect_var.get(),
             "title_override_text": self.title_override_var.get(),
+            "title_fallback_text": self.title_fallback_var.get(),
             "title_start_time": self.title_start_time_var.get(),
             "title_end_time": self.title_end_time_var.get(),
             "title_font": self.title_font_var.get(),
@@ -7886,14 +8077,18 @@ class VideoProcessorApp:
         if selected_indices:
             for index in selected_indices:
                 job = self.processing_jobs[index]
-                job['options'] = copy.deepcopy(preset['options'])
+                new_options = copy.deepcopy(preset['options'])
+                self._carry_over_job_title(job['options'], new_options)
+                job['options'] = new_options
                 job['preset_name'] = preset_name
+                self._autofill_title_for_job(job, force=False)
                 tag = job.get('display_tag', "")
                 base_name = os.path.basename(job['video_path'])
                 job['display_name'] = f"{base_name} {tag} [{preset_name}]".strip()
                 self.job_listbox.delete(index)
                 self.job_listbox.insert(index, job['display_name'])
                 self.job_listbox.selection_set(index)
+            self._refresh_title_var_from_selection()
 
     def apply_preset_settings_to_selected(self):
         selected_indices = self.job_listbox.curselection()
@@ -7917,8 +8112,11 @@ class VideoProcessorApp:
 
     def _update_job_at_index(self, index, options, preset_name):
         job = self.processing_jobs[index]
-        job['options'] = copy.deepcopy(options)
+        new_options = copy.deepcopy(options)
+        self._carry_over_job_title(job['options'], new_options)
+        job['options'] = new_options
         job['preset_name'] = preset_name
+        self._autofill_title_for_job(job, force=False)
         tag = job.get('display_tag', "")
         if not tag:
             match = re.search(r'(.*) (\[.*\]) \[.*\]', job['display_name'])
@@ -7985,7 +8183,9 @@ class VideoProcessorApp:
                 top_p = job["options"].get("hybrid_top_path", "")
                 bot_p = job["options"].get("hybrid_bottom_path", "")
                 mismatch = job["options"].get("_duo_color_mismatch", False)
+                old_options = job["options"]
                 job["options"] = copy.deepcopy(options)
+                self._carry_over_job_title(old_options, job["options"])
                 if top_p:
                     job["options"]["hybrid_top_path"] = top_p
                 if bot_p:
@@ -8657,6 +8857,10 @@ class VideoProcessorApp:
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT))
         self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE))
         self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
+        self.subtitle_pipeline_var.set(options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE))
+        self.subtitle_check_font_compatibility_var.set(
+            options.get("subtitle_check_font_compatibility", DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY))
+        self.update_subtitle_pipeline_ui()
         self.subtitle_bold_var.set(options.get("subtitle_bold", DEFAULT_SUBTITLE_BOLD))
         self.subtitle_italic_var.set(options.get("subtitle_italic", DEFAULT_SUBTITLE_ITALIC))
         self.subtitle_underline_var.set(options.get("subtitle_underline", DEFAULT_SUBTITLE_UNDERLINE))
@@ -8735,6 +8939,7 @@ class VideoProcessorApp:
         self.title_enable_emoji_var.set(options.get("title_enable_emoji", DEFAULT_TITLE_ENABLE_EMOJI))
         self.title_autodetect_var.set(options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT))
         self.title_override_var.set(options.get("title_override_text", DEFAULT_TITLE_OVERRIDE_TEXT))
+        self.title_fallback_var.set(options.get("title_fallback_text", DEFAULT_TITLE_FALLBACK_TEXT))
         self.title_start_time_var.set(options.get("title_start_time", DEFAULT_TITLE_START_TIME))
         self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
         self.title_font_var.set(options.get("title_font", DEFAULT_TITLE_FONT))
@@ -9754,22 +9959,40 @@ class VideoProcessorApp:
                                                                   target_res=(sub_target_w, sub_target_h))
                         if not ass_burn_path:
                             raise VideoProcessingError("Failed to create styled ASS file.")
+                    if options.get("subtitle_check_font_compatibility", DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY):
+                        chk_font = options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)
+                        chk_res = check_subtitle_font_compatibility(subtitle_source_file, chk_font)
+                        if chk_res:
+                            sample_str = "', '".join(chk_res["samples"])
+                            print(f"[WARN] Subtitle font compatibility notice for '{os.path.basename(subtitle_source_file)}': "
+                                  f"{chk_res['total_missing']} character(s) (e.g. '{sample_str}') are missing from font '{chk_font}'.")
+                            print(f"[WARN] In CPU mode, Windows DirectWrite font fallback searching may significantly slow down burn speed.")
             title_ass_path = None
             if options.get("title_burn_enabled"):
-                title_text = options.get("title_override_text", "").strip()
-                if not title_text:
-                    _, title_text = find_title_json_file(
-                        job['video_path'], job.get('subtitle_path'),
-                        options.get('title_json_suffix', ''),
-                        remove_hashtags=options.get('title_remove_hashtags',
-                                                    DEFAULT_TITLE_REMOVE_HASHTAGS),
-                        keep_emoji=options.get('title_enable_emoji',
-                                               DEFAULT_TITLE_ENABLE_EMOJI))
+                # v8.65 priority: manual title -> JSON (if auto-detect on) ->
+                # previously detected/legacy title -> preset fallback text.
+                keep_emoji = options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)
+                stored_title = (options.get("title_override_text", "") or "").strip()
+                title_text = ""
+                if stored_title and options.get("_title_source") == TITLE_SOURCE_MANUAL:
+                    title_text = sanitize_title(stored_title, remove_hashtags=False,
+                                                keep_emoji=keep_emoji)
                 else:
-                    title_text = sanitize_title(
-                        title_text, remove_hashtags=False,
-                        keep_emoji=options.get('title_enable_emoji',
-                                               DEFAULT_TITLE_ENABLE_EMOJI))
+                    if options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT):
+                        _, title_text = find_title_json_file(
+                            job['video_path'], job.get('subtitle_path'),
+                            options.get('title_json_suffix', ''),
+                            remove_hashtags=options.get('title_remove_hashtags',
+                                                        DEFAULT_TITLE_REMOVE_HASHTAGS),
+                            keep_emoji=keep_emoji)
+                    if not title_text and stored_title:
+                        title_text = sanitize_title(stored_title, remove_hashtags=False,
+                                                    keep_emoji=keep_emoji)
+                    if not title_text:
+                        fallback_title = (options.get("title_fallback_text", "") or "").strip()
+                        if fallback_title:
+                            title_text = sanitize_title(fallback_title, remove_hashtags=False,
+                                                        keep_emoji=keep_emoji)
                 if title_text:
                     title_ass_path = create_title_ass_file(title_text, options,
                                                            target_res=(sub_target_w, sub_target_h))
@@ -10710,6 +10933,9 @@ class VideoProcessorApp:
                 cmd.extend(["--audio-copy"])
         if subtitle_burn_path:
             safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir)
+            pipeline_mode = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) if options else DEFAULT_SUBTITLE_PIPELINE
+            mode_lbl = "GPU (Direct CUDA)" if pipeline_mode == "gpu_cuda" else "CPU (libass Live)"
+            print(f"[INFO] NVEncC Subtitle Burn Pipeline: {mode_lbl} [sub={os.path.basename(subtitle_burn_path)}]")
             cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         return cmd
 

@@ -92,9 +92,9 @@ def _get_language_name(code):
     except Exception:
         return code
 
-def _probe_subtitle_streams(video_path):
+def _probe_streams(video_path, stream_type="s"):
     cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "s", "-show_streams",
+        "ffprobe", "-v", "error", "-select_streams", stream_type, "-show_streams",
         "-show_entries", "stream=index,codec_name,disposition,tags", "-of", "json", video_path
     ]
     try:
@@ -107,7 +107,7 @@ def _probe_subtitle_streams(video_path):
             
         return json.loads(decoded_stdout).get("streams", [])
     except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-        print(f"  Error probing subtitles: {e}")
+        print(f"  Error probing streams ({stream_type}): {e}")
         return None
 
 def _generate_subtitle_filename(video_basename, stream_info, extension, output_dir):
@@ -141,7 +141,7 @@ def _generate_subtitle_filename(video_basename, stream_info, extension, output_d
 def extract_subtitles_hybrid(video_path, output_dir, video_basename):
     """Probes the video and extracts text subs to .srt and image subs to .mkv."""
     print("  Probing for subtitle streams...")
-    streams = _probe_subtitle_streams(video_path)
+    streams = _probe_streams(video_path, "s")
     if not streams:
         print("  No subtitle streams found.")
         return
@@ -198,29 +198,36 @@ def calculate_channel_count(layout: str) -> int:
 
 def find_video_files_recursive(base_dir, pattern):
     """Walk the directory tree recursively, matching the provided patterns."""
-    # First check if this is an exact file path (not a glob pattern)
+    # First check if this is an exact file path
+    if os.path.isfile(pattern):
+        return [os.path.abspath(pattern)]
+    exact_path = os.path.join(base_dir, pattern)
+    if os.path.isfile(exact_path):
+        return [os.path.abspath(exact_path)]
+
+    # Fallback for literal paths with Unicode encoding differences (only if not a glob pattern)
+    is_glob = any(c in pattern for c in ('*', '?', '['))
+    if not is_glob and '|' not in pattern:
+        for dirpath, dirnames, filenames in os.walk(base_dir):
+            dirnames[:] = [d for d in dirnames if d.lower() != 'input']
+            for fname in filenames:
+                full_path = os.path.join(dirpath, fname)
+                if pattern.casefold() in full_path.casefold() or full_path.casefold() in pattern.casefold():
+                    return [full_path]
+
     found = []
-    
+    patterns = [p.strip() for p in pattern.split('|') if p.strip()]
+
     for dirpath, dirnames, filenames in os.walk(base_dir):
         dirnames[:] = [d for d in dirnames if d.lower() != 'input']
         
         for fname in filenames:
-            full_path = os.path.join(dirpath, fname)
-            
-            # Check exact match first (for literal file paths) - handles Unicode encoding issues
-            if pattern.casefold() in full_path.casefold().lower() or full_path.casefold().lower() in pattern.casefold():
-                found.append(full_path)
-                return found  # Found by substring/exact match, stop searching
-            
-            # Otherwise treat as glob pattern(s)
-            patterns = pattern.split('|')
             for p in patterns:
                 if fnmatch.fnmatch(fname, p):
-                    found.append(full_path)
-                    return found  # Found a match using glob, stop searching
+                    found.append(os.path.join(dirpath, fname))
+                    break
     
-    # No matches found
-    return []
+    return found
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -294,13 +301,51 @@ def main():
         else:
             current_output_file = final_output_file
 
+        # Identify audio streams, sort English first, and keep metadata
+        audio_streams = _probe_streams(file, "a")
+        audio_maps_and_metadata = []
+
+        if audio_streams and len(audio_streams) > 0:
+            english_streams = []
+            other_streams = []
+            for s in audio_streams:
+                tags = s.get('tags') or {}
+                lang = tags.get('language', '').lower()
+
+                if lang in ('eng', 'en', 'english'):
+                    english_streams.append(s)
+                else:
+                    other_streams.append(s)
+
+            sorted_streams = english_streams + other_streams
+
+            for i, s in enumerate(sorted_streams):
+                audio_maps_and_metadata.extend(["-map", f"0:{s['index']}"])
+
+                tags = s.get('tags') or {}
+                lang = tags.get('language')
+                if lang:
+                    audio_maps_and_metadata.extend([f"-metadata:s:a:{i}", f"language={lang}"])
+
+                title = tags.get('title')
+                if title:
+                    audio_maps_and_metadata.extend([f"-metadata:s:a:{i}", f"title={title}"])
+
+                # Make the first stream default
+                disp = "default" if i == 0 else "0"
+                audio_maps_and_metadata.extend([f"-disposition:a:{i}", disp])
+        else:
+            # Fallback if no specific streams found
+            audio_maps_and_metadata = ["-map", "0:a"]
+
         layout_args = ["-ch_layout", desired_layout] if downmix_method == "5.1" else ["-ac", str(channels)]
 
         command = [
             "ffmpeg", "-y",
             "-i", file,
-            "-map", "0:v:0", "-c:v", "copy",
-            "-map", "0:a", "-c:a", audio_encoder, "-b:a", audio_bitrate,
+            "-map", "0:v:0", "-c:v", "copy"
+        ] + audio_maps_and_metadata + [
+            "-c:a", audio_encoder, "-b:a", audio_bitrate
         ] + layout_args + [current_output_file]
 
         print(f"Running video/audio conversion (Audio: {audio_bitrate})...")

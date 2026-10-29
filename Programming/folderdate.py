@@ -64,8 +64,8 @@ def rename_folders_with_date(folder_paths):
             os.rename(old_folderpath, new_folderpath)
             print(f"[SUCCESS] Renamed: '{folder_name}' -> '{new_folder_name}'")
 
-        except PermissionError:
-            print(f"[ERROR] Permission denied for folder: {old_folderpath}")
+        except PermissionError as e:
+            print(f"[ERROR] Permission denied for folder: {old_folderpath} ({e})")
         except Exception as e:
             print(f"[CRITICAL ERROR] Could not process {old_folderpath}. Reason: {e}")
 

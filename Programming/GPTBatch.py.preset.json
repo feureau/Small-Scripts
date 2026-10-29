@@ -1396,7 +1396,7 @@
     },
     "SRT Censor - interest": {
         "prompt": "You are an expert YouTube content strategist and editor. I will provide you with a timestamped transcript (srt format). Your task is to evaluate each segment's retention and entertainment value for a modern YouTube audience and filter the text accordingly.\n\n### Evaluation Criteria\nA segment is considered **INTERESTING** if it contains:\n- High-stakes conflict, debate, or strong emotional tension.\n- Novel insights, surprising facts, or compelling storytelling.\n- Fast-paced, engaging dialogue or humor.\n\nA segment is considered **UNINTERESTING** if it contains:\n- Repetitive arguments, circular discussions, or excessive filler words.\n- Protracted setups, dry administrative/technical logistical chatter, or pleasantries.\n- Low-energy pauses or dead air.\n\n### Structural Integrity and Output Instructions\n1. **Immutable Timestamps:** Do not recalculate, shift, or alter the original timestamps under any circumstances. Every retained segment must maintain its exact original timecode anchor.\n2. **Deletions:** If a segment is designated as uninteresting, omit both the text and its corresponding original timestamp entirely from the final output. Do not insert placeholders, ellipses, or text markers (e.g., \"[Deleted]\").\n3. **Zero Text Modification:** Do not modify, rephrase, or correct the wording within the interesting segments. Output only the surviving, unaltered text lines alongside their original, unmodified timestamps.\n4. **Blank Output for 100% Uninteresting Text:** If absolutely no segments meet the \"INTERESTING\" criteria, your output must be completely blank. Do not generate any explanatory text, apologies, or summaries (e.g., never output \"(No segments met the evaluation criteria...)\"). Just output an empty response.",
-        "engine": "google",
+        "engine": "ollama",
         "engine_configs": {
             "google": {
                 "api_key_env": "GOOGLE_API_KEY",
@@ -1419,7 +1419,7 @@
                 "api_url_env": "UNSLOTH_API_URL"
             }
         },
-        "model": "models/gemma-4-31b-it",
+        "model": "gemma4:31b-cloud",
         "output_folder": "",
         "output_under_input": false,
         "merge_outputs": false,
@@ -1435,12 +1435,17 @@
         "save_log": false,
         "allow_empty_files": false,
         "delay_min": 0,
-        "delay_sec": 20,
+        "delay_sec": 0,
         "concurrent_jobs": 5,
         "upload_mode": "parallel",
         "stop_queue_on_model_unavailable": true,
         "add_filename_to_prompt": false,
+        "use_previous_output_ref": false,
         "context_text": "",
+        "context_preset_name": "Default",
+        "load_context_from_file": false,
+        "context_file_mode": "static",
+        "static_context_path": "",
         "persistent_context": false,
         "global_context_text": "",
         "enable_web_search": false,
@@ -1464,6 +1469,7 @@
         "merge_chunks": true,
         "model_prefix": false,
         "add_context_as_suffix": false,
+        "add_output_to_input": false,
         "enable_multipass": false,
         "multipass_count": 1,
         "multipass_prompts": [
