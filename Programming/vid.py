@@ -75,6 +75,43 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.69 - Add Blank Video at End Feature (2026-11-XX)
+    • FEATURE: Added ability to append a blank (black screen with silent audio)
+      video tail segment (default 20 seconds) at the end of processed video
+      outputs. Configurable via "Add Blank Video at End" checkbox and
+      duration field in the Target & Constraints section of the Video tab.
+    • PIPELINE: Automatically promotes NVEncC-only jobs to nvencc_with_ffmpeg
+      backend when enabled, generating the matching black video and silent
+      audio streams in FFmpeg filtergraph before encoding.
+v8.68 - NVENC TrueHDR exact color and contrast matching (2026-11-XX)
+    • FIX: SDR to HDR conversion via NVEncC TrueHDR no longer applies an
+      artificial cinematic look (crushed darks, desaturated colors). The
+      TrueHDR filter now explicitly forces neutral parameters (contrast=100,
+      saturation=100, middlegray=50) to perfectly match the SDR source.
+v8.68 - PCM passthrough into MP4 fix + verification failures fail the job (2026-10-30)
+    • FIX: Audio passthrough of PCM sources (e.g. ProRes .mov with pcm_s24le)
+      via the temp .mka audio prepass produced MP4s with no moov atom
+      ("unsupported channel layout"), i.e. unplayable files. PCM streams are
+      now re-encoded to lossless FLAC; other codecs are still stream-copied.
+    • FIX: verify_output_file() now raises on ffprobe failure, so broken
+      outputs are reported as FAILED instead of SUCCESS.
+v8.67 - Batch processing timing & comprehensive summary (2026-10-29)
+    • FEATURE: End-to-end timing for batch video processing, starting when
+      processing is initiated and continuing until all jobs finish or until
+      interrupted via Ctrl+C.
+    • FEATURE: Detailed summary output with total duration, wall-clock start/end
+      times, and per-file duration, input/output size, resolution, layout,
+      encoder backend, and completion status.
+    • FEATURE: Graceful Ctrl+C interruption report displaying partial elapsed
+      time for active job and summary of completed vs cancelled jobs.
+v8.66 - All-Intra (All-I) for NVENC intermediate prepasses (2026-10-29)
+    • FEATURE: Added `DEFAULT_NVENC_INTERMEDIATE_ALL_I = True` and setting
+      `nvenc_intermediate_all_i` to encode intermediate prepasses (TrueHDR
+      and SuperRes) using All-Intra frames (--gop-len 1 --bframes 0).
+      Eliminates temporal compression artifacts and provides instant
+      downstream seeking at the cost of larger temporary intermediate files.
+    • GUI: Added synchronized checkboxes in both the "SDR to HDR" panel
+      and the Advanced "GOP & B-Frames" panel.
 v8.65 - JSON-detected titles override preset-saved titles + title fallback text (2026-10-22)
     • FIX: title_override_text was persisted into presets, so a title
       detected for one video got frozen into the preset and stamped onto
@@ -583,6 +620,10 @@ DEFAULT_DOVI_ANALYSIS_TUNING = "-1"
 DEFAULT_DOVI_KEEP_XML = True
 DEFAULT_SDR_TO_HDR = False
 DEFAULT_SDR_TO_HDR_WORKING_RES = "source"
+DEFAULT_TRUEHDR_PIPELINE = "auto"
+DEFAULT_TRUEHDR_CONTRAST = "100"
+DEFAULT_TRUEHDR_SATURATION = "100"
+DEFAULT_TRUEHDR_MIDDLEGRAY = "30"
 DEFAULT_VIDEO_CODEC = "h264"
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"
 DEFAULT_NVENC_SUPERRES_MODE = "1"
@@ -706,6 +747,8 @@ DEFAULT_RENDER_BY_CHAPTERS = False
 DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER = False
 DEFAULT_USE_SHARPENING = True
 DEFAULT_FFMPEG_DENOISE_VULKAN = False
+DEFAULT_ADD_BLANK_END = False
+DEFAULT_BLANK_END_DURATION = "20"
 
 DEFAULT_CHROMA_SUBSAMPLING = "420"
 DEFAULT_COLOR_PRESET_SDR = "bt709"
@@ -785,6 +828,7 @@ DEFAULT_NVENC_SPATIAL_AQ = "1"
 DEFAULT_NVENC_TEMPORAL_AQ = "1"
 DEFAULT_NVENC_BFRAMES = "4"
 DEFAULT_NVENC_B_REF_MODE = "middle"
+DEFAULT_NVENC_INTERMEDIATE_ALL_I = True
 DEFAULT_NVENCC_DECODE_MODE = "auto"
 DEFAULT_NVENCC_COLOR_TAG_MODE = "auto"
 DEFAULT_NVENCC_COLOR_PRIM = "bt709"
@@ -933,6 +977,7 @@ DEBUG_MODE = False
 CURRENT_FFMPEG_PROCESS = None
 CURRENT_TEMP_FILE = None
 CURRENT_JOB_TEMP_DIR = None
+CURRENT_BATCH_TRACKER = None
 TRACKED_TEMP_FILES = set()
 TRACKED_TEMP_LOCK = threading.Lock()
 
@@ -1040,11 +1085,245 @@ def get_temp_work_dir():
     return os.getcwd()
 
 
+def format_duration(seconds):
+    if seconds is None:
+        return "N/A"
+    try:
+        sec = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "N/A"
+    hrs = int(sec // 3600)
+    mins = int((sec % 3600) // 60)
+    rem_sec = sec % 60
+    if hrs > 0:
+        return f"{hrs}h {mins:02d}m {rem_sec:04.1f}s"
+    elif mins > 0:
+        return f"{mins}m {rem_sec:04.1f}s"
+    else:
+        return f"{rem_sec:.2f}s"
+
+
+def format_file_size(size_bytes):
+    if size_bytes is None:
+        return "Unknown"
+    try:
+        val = float(size_bytes)
+        if val < 0:
+            return "Unknown"
+    except (TypeError, ValueError):
+        return "Unknown"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if val < 1024.0:
+            return f"{val:.1f} {unit}"
+        val /= 1024.0
+    return f"{val:.1f} PB"
+
+
+class BatchTracker:
+    def __init__(self, jobs):
+        self.jobs = list(jobs or [])
+        self.total_jobs = len(self.jobs)
+        self.start_wall = None
+        self.start_mono = None
+        self.end_wall = None
+        self.end_mono = None
+        self.is_active = False
+        self.is_interrupted = False
+        self.is_printed = False
+        self.active_job_index = None
+        self.active_job_start_mono = None
+        self.records = []
+        for i, j in enumerate(self.jobs):
+            src_path = j.get('video_path', '')
+            src_size = None
+            if src_path and os.path.exists(src_path):
+                try:
+                    src_size = os.path.getsize(src_path)
+                except Exception:
+                    pass
+            self.records.append({
+                'index': i + 1,
+                'display_name': j.get('display_name', f"Job {i+1}"),
+                'video_path': src_path,
+                'source_size': src_size,
+                'status': 'NOT STARTED',
+                'start_mono': None,
+                'end_mono': None,
+                'duration': None,
+                'output_file': None,
+                'output_size': None,
+                'resolution': j.get('options', {}).get('resolution', 'Unknown'),
+                'orientation': j.get('options', {}).get('orientation', 'Unknown'),
+                'codec': j.get('options', {}).get('video_codec', 'Unknown'),
+                'backend': j.get('options', {}).get('encoder_backend', 'Unknown'),
+                'error': None,
+            })
+
+    def start(self):
+        from datetime import datetime
+        self.start_wall = datetime.now()
+        self.start_mono = time.time()
+        self.is_active = True
+        global CURRENT_BATCH_TRACKER
+        CURRENT_BATCH_TRACKER = self
+        return self
+
+    def job_started(self, index, job=None):
+        self.active_job_index = index
+        self.active_job_start_mono = time.time()
+        if 0 <= index < len(self.records):
+            rec = self.records[index]
+            rec['status'] = 'IN PROGRESS'
+            rec['start_mono'] = self.active_job_start_mono
+            if job:
+                rec['resolution'] = job.get('options', {}).get('resolution', rec['resolution'])
+                rec['codec'] = job.get('options', {}).get('video_codec', rec['codec'])
+                rec['backend'] = job.get('options', {}).get('encoder_backend', rec['backend'])
+
+    def job_succeeded(self, index, job=None, output_file=None, orientation=None):
+        now = time.time()
+        if 0 <= index < len(self.records):
+            rec = self.records[index]
+            rec['status'] = 'SUCCESS'
+            rec['end_mono'] = now
+            start_m = rec['start_mono'] or self.active_job_start_mono or now
+            rec['duration'] = max(0.0, now - start_m)
+            rec['output_file'] = output_file
+            if orientation:
+                rec['orientation'] = orientation
+            if output_file and os.path.exists(output_file):
+                try:
+                    rec['output_size'] = os.path.getsize(output_file)
+                except Exception:
+                    pass
+        if self.active_job_index == index:
+            self.active_job_index = None
+            self.active_job_start_mono = None
+
+    def job_failed(self, index, job=None, error_msg=None, orientation=None):
+        now = time.time()
+        if 0 <= index < len(self.records):
+            rec = self.records[index]
+            rec['status'] = 'FAILED'
+            rec['end_mono'] = now
+            start_m = rec['start_mono'] or self.active_job_start_mono or now
+            rec['duration'] = max(0.0, now - start_m)
+            rec['error'] = str(error_msg or "")
+            if orientation:
+                rec['orientation'] = orientation
+        if self.active_job_index == index:
+            self.active_job_index = None
+            self.active_job_start_mono = None
+
+    def interrupt(self):
+        from datetime import datetime
+        now = time.time()
+        if not self.end_wall:
+            self.end_wall = datetime.now()
+            self.end_mono = now
+        self.is_active = False
+        self.is_interrupted = True
+        if self.active_job_index is not None and 0 <= self.active_job_index < len(self.records):
+            rec = self.records[self.active_job_index]
+            rec['status'] = 'INTERRUPTED'
+            rec['end_mono'] = now
+            start_m = rec['start_mono'] or self.active_job_start_mono or now
+            rec['duration'] = max(0.0, now - start_m)
+        for i, rec in enumerate(self.records):
+            if rec['status'] in ('NOT STARTED', 'IN PROGRESS') and i != self.active_job_index:
+                rec['status'] = 'CANCELLED'
+
+    def finish(self):
+        from datetime import datetime
+        if not self.end_mono:
+            self.end_wall = datetime.now()
+            self.end_mono = time.time()
+        self.is_active = False
+
+    def get_total_duration(self):
+        start = self.start_mono or time.time()
+        end = self.end_mono or time.time()
+        return max(0.0, end - start)
+
+    def get_total_duration_str(self):
+        return format_duration(self.get_total_duration())
+
+    def get_last_job_duration_str(self):
+        for rec in reversed(self.records):
+            if rec.get('duration') is not None:
+                return format_duration(rec['duration'])
+        return "N/A"
+
+    def generate_summary_text(self):
+        total_dur = self.get_total_duration()
+        tot_str = format_duration(total_dur)
+        start_str = self.start_wall.strftime("%Y-%m-%d %H:%M:%S") if self.start_wall else "N/A"
+        end_str = self.end_wall.strftime("%Y-%m-%d %H:%M:%S") if self.end_wall else "N/A"
+
+        successful = sum(1 for r in self.records if r['status'] == 'SUCCESS')
+        failed = sum(1 for r in self.records if r['status'] == 'FAILED')
+        interrupted = sum(1 for r in self.records if r['status'] == 'INTERRUPTED')
+        skipped = sum(1 for r in self.records if r['status'] in ('CANCELLED', 'NOT STARTED'))
+
+        status_line = "INTERRUPTED (Ctrl+C)" if self.is_interrupted else "COMPLETED"
+        if failed > 0 and not self.is_interrupted:
+            status_line = "COMPLETED WITH ERRORS"
+
+        lines = [
+            "\n" + "=" * 80,
+            f"{'BATCH PROCESSING SUMMARY':^80}",
+            "=" * 80,
+            f"Batch Started:   {start_str}",
+            f"Batch Ended:     {end_str}",
+            f"Total Duration:  {tot_str} ({total_dur:.2f}s)",
+            f"Batch Status:    {status_line}",
+            f"Queue Progress:  {successful + failed + interrupted}/{self.total_jobs} processed "
+            f"({successful} succeeded, {failed} failed, {interrupted} interrupted, {skipped} skipped)",
+            "-" * 80,
+        ]
+
+        for r in self.records:
+            idx = r['index']
+            st = r['status']
+            dur_str = format_duration(r['duration']) if r['duration'] is not None else "N/A"
+            lines.append(f"[{idx}/{self.total_jobs}] {st} - {dur_str}")
+
+            src_name = os.path.basename(r['video_path']) if r['video_path'] else r['display_name']
+            src_sz = f" ({format_file_size(r['source_size'])})" if r['source_size'] is not None else ""
+            lines.append(f"      Input:   {src_name}{src_sz}")
+
+            if st == 'SUCCESS' and r['output_file']:
+                out_sz = f" ({format_file_size(r['output_size'])})" if r['output_size'] is not None else ""
+                lines.append(f"      Output:  {r['output_file']}{out_sz}")
+
+            lines.append(f"      Config:  {r['resolution']} | {r['orientation']} | {r['backend']} ({r['codec']})")
+
+            if st == 'FAILED' and r['error']:
+                first_line_err = r['error'].strip().splitlines()[0] if r['error'] else "Unknown error"
+                lines.append(f"      Error:   {first_line_err[:120]}")
+            elif st == 'INTERRUPTED':
+                lines.append(f"      Note:    Processing interrupted by user (Ctrl+C)")
+            lines.append("")
+
+        if lines and lines[-1] == "":
+            lines.pop()
+        lines.append("-" * 80)
+        lines.append(f"Total Processing Time: {tot_str}")
+        lines.append("=" * 80 + "\n")
+        return "\n".join(lines)
+
+    def print_summary(self):
+        if self.is_printed:
+            return
+        self.is_printed = True
+        print(self.generate_summary_text(), flush=True)
+
+
 def handle_sigint(signum, frame):
     print("\n\n" + "!" * 60)
     print("[WARN] Ctrl+C detected! Stopping immediately...")
     print("!" * 60)
-    global CURRENT_FFMPEG_PROCESS, CURRENT_TEMP_FILE
+    global CURRENT_FFMPEG_PROCESS, CURRENT_TEMP_FILE, CURRENT_BATCH_TRACKER
     if CURRENT_FFMPEG_PROCESS:
         try:
             print(f"[INFO] Terminating FFmpeg process (PID: {CURRENT_FFMPEG_PROCESS.pid})...")
@@ -1055,6 +1334,9 @@ def handle_sigint(signum, frame):
     if CURRENT_TEMP_FILE:
         cleanup_single_temp_file(CURRENT_TEMP_FILE, verbose=True)
     cleanup_tracked_temp_files(verbose=True)
+    if CURRENT_BATCH_TRACKER and CURRENT_BATCH_TRACKER.is_active:
+        CURRENT_BATCH_TRACKER.interrupt()
+        CURRENT_BATCH_TRACKER.print_summary()
     print("[INFO] Exiting.")
     sys.exit(0)
 
@@ -2585,6 +2867,8 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('resolution', ''),
         job_options.get('output_format', ''),
         str(job_options.get('burn_subtitles', False)),
+        str(job_options.get('add_blank_end', DEFAULT_ADD_BLANK_END)),
+        str(job_options.get('blank_end_duration', DEFAULT_BLANK_END_DURATION)),
         job_options.get('horizontal_aspect', ''),
         job_options.get('vertical_aspect', ''),
         job_options.get('aspect_mode', ''),
@@ -2713,6 +2997,7 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('dovi_keep_xml', True)),
         str(job_options.get('sdr_to_hdr', False)),
         job_options.get('sdr_to_hdr_working_res', ''),
+        str(job_options.get('nvenc_intermediate_all_i', DEFAULT_NVENC_INTERMEDIATE_ALL_I)),
         # === v8.59 ===
         str(job_options.get('multi_stage_superres', DEFAULT_MULTI_STAGE_SUPERRES)),
         str(job_options.get('nvenc_superres_strength', DEFAULT_NVENC_SUPERRES_STRENGTH)),
@@ -3049,6 +3334,8 @@ class WorkflowPresetManager:
             "split_subtitles_by_chapter": DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
+            "add_blank_end": DEFAULT_ADD_BLANK_END,
+            "blank_end_duration": DEFAULT_BLANK_END_DURATION,
             "manual_bitrate": "0",
             "override_bitrate": False,
             "aspect_mode": DEFAULT_ASPECT_MODE,
@@ -3245,6 +3532,11 @@ class WorkflowPresetManager:
             "dovi_keep_xml": DEFAULT_DOVI_KEEP_XML,
             "sdr_to_hdr": DEFAULT_SDR_TO_HDR,
             "sdr_to_hdr_working_res": DEFAULT_SDR_TO_HDR_WORKING_RES,
+            "truehdr_pipeline": DEFAULT_TRUEHDR_PIPELINE,
+            "truehdr_contrast": DEFAULT_TRUEHDR_CONTRAST,
+            "truehdr_saturation": DEFAULT_TRUEHDR_SATURATION,
+            "truehdr_middlegray": DEFAULT_TRUEHDR_MIDDLEGRAY,
+            "nvenc_intermediate_all_i": DEFAULT_NVENC_INTERMEDIATE_ALL_I,
         }
         self.load_presets()
 
@@ -3537,6 +3829,10 @@ class VideoProcessorApp:
         self.max_size_mb_var.trace_add('write', lambda *args: self._update_selected_jobs('max_size_mb'))
         self.max_duration_var = tk.StringVar(value=str(DEFAULT_MAX_DURATION))
         self.max_duration_var.trace_add('write', lambda *args: self._update_selected_jobs('max_duration'))
+        self.add_blank_end_var = tk.BooleanVar(value=DEFAULT_ADD_BLANK_END)
+        self.add_blank_end_var.trace_add('write', lambda *args: self._update_selected_jobs('add_blank_end'))
+        self.blank_end_duration_var = tk.StringVar(value=str(DEFAULT_BLANK_END_DURATION))
+        self.blank_end_duration_var.trace_add('write', lambda *args: self._update_selected_jobs('blank_end_duration'))
         self.use_dynaudnorm_var = tk.BooleanVar(value=DEFAULT_USE_DYNAUDNORM)
         self.normalize_audio_var = tk.BooleanVar(value=DEFAULT_NORMALIZE_AUDIO)
         self.loudness_target_var = tk.StringVar(value=DEFAULT_LOUDNESS_TARGET)
@@ -3606,6 +3902,9 @@ class VideoProcessorApp:
         self.nvenc_bframes_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_bframes'))
         self.nvenc_b_ref_mode_var = tk.StringVar(value=DEFAULT_NVENC_B_REF_MODE)
         self.nvenc_b_ref_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_b_ref_mode'))
+        self.nvenc_intermediate_all_i_var = tk.BooleanVar(value=DEFAULT_NVENC_INTERMEDIATE_ALL_I)
+        self.nvenc_intermediate_all_i_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvenc_intermediate_all_i'))
         self.nvencc_decode_mode_var = tk.StringVar(value=DEFAULT_NVENCC_DECODE_MODE)
         self.nvencc_decode_mode_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('nvencc_decode_mode'))
@@ -3699,9 +3998,21 @@ class VideoProcessorApp:
         self.sdr_to_hdr_var = tk.BooleanVar(value=DEFAULT_SDR_TO_HDR)
         self.sdr_to_hdr_var.trace_add(
             'write', lambda *a: self._update_selected_jobs('sdr_to_hdr'))
+        self.truehdr_pipeline_var = tk.StringVar(value=DEFAULT_TRUEHDR_PIPELINE)
+        self.truehdr_pipeline_var.trace_add(
+            'write', lambda *a: (self._refresh_sdr_to_hdr_state(), self._update_selected_jobs('truehdr_pipeline')))
         self.sdr_to_hdr_res_var = tk.StringVar(value=DEFAULT_SDR_TO_HDR_WORKING_RES)
         self.sdr_to_hdr_res_var.trace_add(
             'write', lambda *a: self._update_selected_jobs('sdr_to_hdr_working_res'))
+        self.truehdr_contrast_var = tk.StringVar(value=DEFAULT_TRUEHDR_CONTRAST)
+        self.truehdr_contrast_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('truehdr_contrast'))
+        self.truehdr_saturation_var = tk.StringVar(value=DEFAULT_TRUEHDR_SATURATION)
+        self.truehdr_saturation_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('truehdr_saturation'))
+        self.truehdr_middlegray_var = tk.StringVar(value=DEFAULT_TRUEHDR_MIDDLEGRAY)
+        self.truehdr_middlegray_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('truehdr_middlegray'))
         self.status_var = tk.StringVar(value="Ready")
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
         self.hybrid_layout_var.trace_add('write', lambda *args: (
@@ -4157,7 +4468,31 @@ class VideoProcessorApp:
             "nvencc_video_with_ffmpeg_audio"))
         fmt_ok = fmt in ("hdr", "dolby_vision")
         self.sdr_to_hdr_cb.config(state="normal" if (backend_ok and fmt_ok) else "disabled")
+        if hasattr(self, "sdr_to_hdr_pipeline_combo"):
+            self.sdr_to_hdr_pipeline_combo.config(state="readonly" if on else "disabled")
         self.sdr_to_hdr_res_combo.config(state="readonly" if on else "disabled")
+        if hasattr(self, "sdr_to_hdr_all_intra_cb"):
+            self.sdr_to_hdr_all_intra_cb.config(state="normal" if on else "disabled")
+        entry_state = "normal" if on else "disabled"
+        if hasattr(self, "sdr_to_hdr_contrast_entry"):
+            self.sdr_to_hdr_contrast_entry.config(state=entry_state)
+        if hasattr(self, "sdr_to_hdr_saturation_entry"):
+            self.sdr_to_hdr_saturation_entry.config(state=entry_state)
+        if hasattr(self, "sdr_to_hdr_middlegray_entry"):
+            self.sdr_to_hdr_middlegray_entry.config(state=entry_state)
+
+        warn_active = False
+        if on and hasattr(self, "burn_subtitles_var") and self.burn_subtitles_var.get():
+            pipe_mode = getattr(self, "truehdr_pipeline_var", tk.StringVar(value="auto")).get()
+            if pipe_mode in ("auto", "1-pass"):
+                warn_active = True
+
+        if hasattr(self, "sdr_to_hdr_subtitle_warn_lbl"):
+            if warn_active:
+                self.sdr_to_hdr_subtitle_warn_lbl.pack(fill=tk.X, pady=(2, 0))
+            else:
+                self.sdr_to_hdr_subtitle_warn_lbl.pack_forget()
+
         # If HLG preset is selected, force PQ when SDR→HDR is on
         if on and fmt_ok:
             ck = self.color_preset_hdr_var.get()
@@ -4307,6 +4642,14 @@ class VideoProcessorApp:
                                   values=["disabled", "each", "middle"], width=10, state="readonly")
         bref_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ToolTip(bref_combo, "B-Frame reference mode. middle is standard.")
+        self.inter_all_i_cb = ttk.Checkbutton(
+            gop_group, text="All-Intra (All-I) for NVENC Prepasses / Intermediates",
+            variable=self.nvenc_intermediate_all_i_var)
+        self.inter_all_i_cb.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(4, 2))
+        ToolTip(self.inter_all_i_cb,
+                "Encode intermediate prepasses (TrueHDR and SuperRes) using All-Intra frames (GOP 1).\n"
+                "Eliminates temporal compression artifacts and provides instant downstream seeking,\n"
+                "at the cost of larger temporary intermediate files. Default: ON.")
         rc_group = ttk.LabelFrame(scroll_frame, text="Rate Control & Quality", padding=10)
         rc_group.pack(fill=tk.X, pady=5, padx=5)
         ttk.Label(rc_group, text="RC Lookahead:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -5407,11 +5750,52 @@ class VideoProcessorApp:
             variable=self.sdr_to_hdr_var,
             command=self._on_sdr_to_hdr_toggle)
         self.sdr_to_hdr_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Label(s2h_row, text="Pipeline:").pack(side=tk.LEFT, padx=(0, 2))
+        self.sdr_to_hdr_pipeline_combo = ttk.Combobox(
+            s2h_row, textvariable=self.truehdr_pipeline_var,
+            values=["auto", "1-pass", "2-pass"], state="readonly", width=8)
+        self.sdr_to_hdr_pipeline_combo.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.sdr_to_hdr_pipeline_combo,
+                "auto: 1-Pass for 1:1 res, 2-Pass for upscales.\n"
+                "1-pass: Force inline (fastest, dim subtitles).\n"
+                "2-pass: Force preprocessor (slowest, bright subtitles).")
         ttk.Label(s2h_row, text="Working resolution:").pack(side=tk.LEFT, padx=(0, 5))
         self.sdr_to_hdr_res_combo = ttk.Combobox(
             s2h_row, textvariable=self.sdr_to_hdr_res_var,
             values=["source", "1080p"], state="readonly", width=10)
         self.sdr_to_hdr_res_combo.pack(side=tk.LEFT)
+        self.sdr_to_hdr_all_intra_cb = ttk.Checkbutton(
+            s2h_row, text="All-Intra (All-I)",
+            variable=self.nvenc_intermediate_all_i_var)
+        self.sdr_to_hdr_all_intra_cb.pack(side=tk.LEFT, padx=(10, 0))
+        ToolTip(self.sdr_to_hdr_all_intra_cb,
+                "Encode intermediate prepasses (TrueHDR / SuperRes) using All-Intra frames (GOP 1).\n"
+                "Provides zero temporal compression artifacts and instant downstream seeking.\n"
+                "Default: ON.")
+        s2h_row2 = ttk.Frame(self.sdr2hdr_frame)
+        s2h_row2.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(s2h_row2, text="Contrast:").pack(side=tk.LEFT, padx=(0, 2))
+        self.sdr_to_hdr_contrast_entry = ttk.Entry(
+            s2h_row2, textvariable=self.truehdr_contrast_var, width=5)
+        self.sdr_to_hdr_contrast_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.sdr_to_hdr_contrast_entry, "TrueHDR Contrast adjustment (default: 100).")
+        ttk.Label(s2h_row2, text="Saturation:").pack(side=tk.LEFT, padx=(0, 2))
+        self.sdr_to_hdr_saturation_entry = ttk.Entry(
+            s2h_row2, textvariable=self.truehdr_saturation_var, width=5)
+        self.sdr_to_hdr_saturation_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(self.sdr_to_hdr_saturation_entry, "TrueHDR Saturation adjustment (default: 100).")
+        ttk.Label(s2h_row2, text="Middle Gray:").pack(side=tk.LEFT, padx=(0, 2))
+        self.sdr_to_hdr_middlegray_entry = ttk.Entry(
+            s2h_row2, textvariable=self.truehdr_middlegray_var, width=5)
+        self.sdr_to_hdr_middlegray_entry.pack(side=tk.LEFT)
+        ToolTip(self.sdr_to_hdr_middlegray_entry, "TrueHDR Middle Gray level (default: 30, lower = darker mid-tones).")
+        self.sdr_to_hdr_subtitle_warn_lbl = ttk.Label(
+            self.sdr2hdr_frame,
+            text="⚠️ Warning: 1-Pass mode keeps burned subtitles dim in HDR.",
+            foreground="#B8860B"
+        )
+        self.sdr_to_hdr_subtitle_warn_lbl.pack(fill=tk.X, pady=(2, 0))
+        self.sdr_to_hdr_subtitle_warn_lbl.pack_forget()
         ToolTip(self.sdr2hdr_frame,
                 "Uses NVIDIA RTX TrueHDR to upconvert SDR content to HDR10 PQ.\n"
                 "Requires an NVEncC backend. HLG output is not supported for SDR sources.\n"
@@ -5435,6 +5819,19 @@ class VideoProcessorApp:
         self.max_dur_entry = ttk.Entry(con_row1, textvariable=self.max_duration_var, width=6)
         self.max_dur_entry.pack(side=tk.LEFT)
         ttk.Label(con_row1, text="s").pack(side=tk.LEFT, padx=(2, 0))
+        con_row2 = ttk.Frame(constraints_group)
+        con_row2.pack(fill=tk.X, pady=(5, 0))
+        self.add_blank_end_cb = ttk.Checkbutton(
+            con_row2, text="Add Blank Video at End", variable=self.add_blank_end_var,
+            command=lambda: [self._toggle_blank_end_options(),
+                             self._update_selected_jobs("add_blank_end")])
+        self.add_blank_end_cb.pack(side=tk.LEFT)
+        ttk.Label(con_row2, text="Duration:").pack(side=tk.LEFT, padx=(10, 5))
+        self.blank_end_dur_entry = ttk.Entry(con_row2, textvariable=self.blank_end_duration_var, width=6)
+        self.blank_end_dur_entry.pack(side=tk.LEFT)
+        ttk.Label(con_row2, text="s").pack(side=tk.LEFT, padx=(2, 0))
+        ToolTip(self.add_blank_end_cb, "Appends a blank black video screen with silent audio at the end of the video.")
+        self._toggle_blank_end_options()
         fruc_frame = ttk.Frame(quality_group)
         fruc_frame.pack(fill=tk.X, pady=(5, 0))
         ttk.Checkbutton(fruc_frame, text="Enable FRUC", variable=self.fruc_var,
@@ -5929,9 +6326,13 @@ class VideoProcessorApp:
     def setup_subtitle_tab(self, parent):
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, pady=(0, 10))
+        def _on_burn_sub_toggle():
+            self._update_selected_jobs("burn_subtitles")
+            self._refresh_sdr_to_hdr_state()
+
         self.burn_subtitles_cb = ttk.Checkbutton(action_frame, text="Enable Subtitle Burning",
                                                  variable=self.burn_subtitles_var,
-                                                 command=lambda: self._update_selected_jobs("burn_subtitles"))
+                                                 command=_on_burn_sub_toggle)
         self.burn_subtitles_cb.pack(side=tk.LEFT)
         source_frame = ttk.LabelFrame(parent, text="Subtitle Source", padding=10)
         source_frame.pack(fill=tk.X, pady=(0, 10))
@@ -6506,6 +6907,11 @@ class VideoProcessorApp:
         if not is_override:
             self._update_bitrate_display()
         self._update_selected_jobs("override_bitrate", "manual_bitrate")
+
+    def _toggle_blank_end_options(self):
+        if hasattr(self, 'blank_end_dur_entry'):
+            state = "normal" if self.add_blank_end_var.get() else "disabled"
+            self.blank_end_dur_entry.config(state=state)
 
     def _update_bitrate_display(self):
         if self.override_bitrate_var.get():
@@ -7856,6 +8262,8 @@ class VideoProcessorApp:
             "override_bitrate": self.override_bitrate_var.get(),
             "manual_bitrate": self.manual_bitrate_var.get(),
             "max_size_mb": self.max_size_mb_var.get(), "max_duration": self.max_duration_var.get(),
+            "add_blank_end": self.add_blank_end_var.get(),
+            "blank_end_duration": self.blank_end_duration_var.get(),
             "use_dynaudnorm": self.use_dynaudnorm_var.get(),
             "dyn_frame_len": self.dyn_frame_len_var.get(), "dyn_gauss_win": self.dyn_gauss_win_var.get(),
             "dyn_peak": self.dyn_peak_var.get(), "dyn_max_gain": self.dyn_max_gain_var.get(),
@@ -8020,6 +8428,10 @@ class VideoProcessorApp:
             "dovi_keep_xml": self.dovi_keep_xml_var.get(),
             "sdr_to_hdr": self.sdr_to_hdr_var.get(),
             "sdr_to_hdr_working_res": self.sdr_to_hdr_res_var.get(),
+            "truehdr_contrast": self.truehdr_contrast_var.get(),
+            "truehdr_saturation": self.truehdr_saturation_var.get(),
+            "truehdr_middlegray": self.truehdr_middlegray_var.get(),
+            "nvenc_intermediate_all_i": self.nvenc_intermediate_all_i_var.get(),
         }
 
     def load_preset_to_gui(self, preset_name):
@@ -8697,6 +9109,12 @@ class VideoProcessorApp:
         self.sdr_to_hdr_var.set(options.get("sdr_to_hdr", DEFAULT_SDR_TO_HDR))
         self.sdr_to_hdr_res_var.set(
             options.get("sdr_to_hdr_working_res", DEFAULT_SDR_TO_HDR_WORKING_RES))
+        self.truehdr_contrast_var.set(
+            options.get("truehdr_contrast", DEFAULT_TRUEHDR_CONTRAST))
+        self.truehdr_saturation_var.set(
+            options.get("truehdr_saturation", DEFAULT_TRUEHDR_SATURATION))
+        self.truehdr_middlegray_var.set(
+            options.get("truehdr_middlegray", DEFAULT_TRUEHDR_MIDDLEGRAY))
         mode = options.get("subfolder_mode")
         if not mode:
             if options.get("group_by_resolution"):
@@ -8907,6 +9325,8 @@ class VideoProcessorApp:
         self.nvenc_temporal_aq_var.set(options.get("nvenc_temporal_aq", DEFAULT_NVENC_TEMPORAL_AQ))
         self.nvenc_bframes_var.set(options.get("nvenc_bframes", DEFAULT_NVENC_BFRAMES))
         self.nvenc_b_ref_mode_var.set(options.get("nvenc_b_ref_mode", DEFAULT_NVENC_B_REF_MODE))
+        self.nvenc_intermediate_all_i_var.set(
+            options.get("nvenc_intermediate_all_i", DEFAULT_NVENC_INTERMEDIATE_ALL_I))
         self.nvencc_decode_mode_var.set(options.get("nvencc_decode_mode", DEFAULT_NVENCC_DECODE_MODE))
         self.nvencc_color_tag_mode_var.set(
             options.get("nvencc_color_tag_mode", DEFAULT_NVENCC_COLOR_TAG_MODE))
@@ -8928,6 +9348,9 @@ class VideoProcessorApp:
         self._toggle_encoder_family_ui()
         self.max_size_mb_var.set(options.get("max_size_mb", str(DEFAULT_MAX_SIZE_MB)))
         self.max_duration_var.set(options.get("max_duration", str(DEFAULT_MAX_DURATION)))
+        self.add_blank_end_var.set(options.get("add_blank_end", DEFAULT_ADD_BLANK_END))
+        self.blank_end_duration_var.set(options.get("blank_end_duration", str(DEFAULT_BLANK_END_DURATION)))
+        self._toggle_blank_end_options()
         self._update_codec_options(show_message=False)
         self._apply_backend_constraints()
         self._update_upscale_algo_options()
@@ -9113,6 +9536,26 @@ class VideoProcessorApp:
         print(f"[WARN] Unknown delivery target '{target}'; using custom.")
         return self._build_custom_audio_segment(file_path, options, base_dir, loudnorm_stats), []
 
+    def _passthrough_audio_args(self, file_path):
+        # v8.68 PCM PASSTHROUGH FIX
+        # Raw PCM copied into the temp .mka audio prepass cannot be muxed
+        # into MP4 by NVEncC/libavformat ("unsupported channel layout"),
+        # which leaves the MP4 without a moov atom (unplayable). Keep the
+        # passthrough lossless by re-encoding PCM streams to FLAC, and
+        # stream-copy everything else.
+        args = ["-map", "0:a?", "-c:a", "copy"]
+        try:
+            streams = get_audio_stream_info(file_path)
+        except Exception:
+            streams = []
+        for out_idx, s in enumerate(streams):
+            codec = (s.get("codec_name") or "").lower()
+            if codec.startswith("pcm_"):
+                print(f"[INFO] Passthrough: audio stream {out_idx} is {codec}; "
+                      f"encoding to lossless FLAC for MP4 compatibility.")
+                args.extend([f"-c:a:{out_idx}", "flac"])
+        return args
+
     def _build_archival_audio(self, file_path, options):
         streams = get_audio_stream_info(file_path)
         for s in streams:
@@ -9122,7 +9565,7 @@ class VideoProcessorApp:
                       f"YouTube-compatible. The output MP4 will retain this codec and may "
                       f"fail to upload or play on YouTube/some players. "
                       f"Consider a YouTube target if upload is the goal.")
-        return ["-map", "0:a?", "-c:a", "copy"]
+        return self._passthrough_audio_args(file_path)
 
     # === v8.25: track_kind parameter ===
     def _auto_loudness_chain(self, options, track_kind, loudnorm_stats=None):
@@ -9382,7 +9825,7 @@ class VideoProcessorApp:
 
     def _build_custom_audio_segment(self, file_path, options, base_dir=None, loudnorm_stats=None):
         if options.get("audio_passthrough"):
-            return ["-map", "0:a?", "-c:a", "copy"]
+            return self._passthrough_audio_args(file_path)
         audio_streams = get_audio_stream_info(file_path)
         if not audio_streams:
             return ["-an"]
@@ -9696,6 +10139,12 @@ class VideoProcessorApp:
                   f"Using 'nvencc_with_ffmpeg' for '{job['display_name']}'.")
             encoder_backend = "nvencc_with_ffmpeg"
             options["encoder_backend"] = encoder_backend
+        if options.get("add_blank_end", DEFAULT_ADD_BLANK_END) and \
+                encoder_backend in ["nvencc_only", "nvencc_video_with_ffmpeg_audio"]:
+            print(f"[INFO] Appending blank video at end requires FFmpeg preprocessing. "
+                  f"Using 'nvencc_with_ffmpeg' for '{job['display_name']}'.")
+            encoder_backend = "nvencc_with_ffmpeg"
+            options["encoder_backend"] = encoder_backend
         if requested_orientation == "horizontal + vertical":
             merged_aspect = options.get("merged_aspect", DEFAULT_HORIZONTAL_ASPECT)
             if self._aspect_to_orientation(merged_aspect) == "vertical":
@@ -9810,6 +10259,7 @@ class VideoProcessorApp:
                 temp_extracted_srt = extract_embedded_subtitle(job['video_path'], idx, output_dir)
             else:
                 temp_extracted_srt = sub
+        last_rendered_file = None
         for i, chapter in enumerate(chapters):
             ch_options = copy.deepcopy(options)
             if options.get("render_by_chapters"):
@@ -9847,8 +10297,10 @@ class VideoProcessorApp:
             base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
             self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir,
                                                 base_dir=base_dir)
+            last_rendered_file = ch_output_file
         if do_subtitle_split and temp_extracted_srt and job['subtitle_path'].startswith("embedded:"):
             cleanup_single_temp_file(temp_extracted_srt)
+        return last_rendered_file
 
     def _process_single_render_segment(self, job, output_file, orientation, options, output_dir, base_dir=None):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
@@ -10078,35 +10530,47 @@ class VideoProcessorApp:
                     effective_job['video_path'], output_dir, options, effective_info,
                     basename_override=_dv_basename)
                 options["_dovi_rpu_path"] = dv_rpu_path
-            # HDR (non-DV) path: run TrueHDR as a dedicated preprocessor
-            # pass at source resolution, then feed the HDR intermediate
-            # into the rest of the pipeline. NGX TrueHDR cost scales
-            # with pixel count, so doing this at 1080p instead of at
-            # 4K/8K cuts the TrueHDR workload by 4x/16x. This mirrors
-            # what the DV path already does.
+            # HDR (non-DV) path: Smart Auto-Switch.
+            # When resolution changes (e.g. upscaling 1080p -> 4K), run TrueHDR
+            # as a dedicated preprocessor pass at source resolution to keep
+            # NGX TrueHDR GPU workload low (4x/16x faster).
+            # When resolution is 1:1, run TrueHDR inline in a single pass to
+            # eliminate temporary intermediate files and disk I/O.
             elif do_sdr_conv and _is_hdr and not _is_hybrid:
-                print("[INFO] SDR-HDR: running TrueHDR preprocessor at "
-                      "source resolution...")
-                truehdr_intermediate = self._truehdr_preprocess(
-                    job['video_path'], output_dir, options, info)
-                register_temp_file(truehdr_intermediate)
-                effective_info = get_video_info(truehdr_intermediate)
-                effective_job = dict(job)
-                effective_job['video_path'] = truehdr_intermediate
-                # _truehdr_preprocess already trimmed to [seek_start, seek_start + seek_duration]
-                options.pop("seek_start", None)
-                seek_start = None
-                options["_force_pq_tags"] = True
-                options["_truehdr_preprocessed"] = True
-                # All three NVEncC-backed encoders (nvencc_only,
-                # nvencc_with_ffmpeg, nvencc_video_with_ffmpeg_audio)
-                # read the TrueHDR intermediate directly. No backend
-                # promotion is needed — nvencc_only and
-                # nvencc_video_with_ffmpeg_audio run the final NVEncC
-                # encode on the intermediate as before, and
-                # nvencc_with_ffmpeg runs the FFmpeg preprocessor on
-                # it (the preprocessor's color tags are corrected in
-                # construct_ffmpeg_command).
+                src_w = int(info.get("width", 0))
+                src_h = int(info.get("height", 0))
+                frozen_tgt = options.get("_frozen_target_res")
+                if frozen_tgt:
+                    tgt_w, tgt_h = frozen_tgt
+                else:
+                    tgt_w, tgt_h = self.compute_target_resolution_for_options(options, info, orientation)
+
+                has_res_change = (src_w > 0 and src_h > 0 and tgt_w > 0 and tgt_h > 0) and (src_w != tgt_w or src_h != tgt_h)
+                has_multistage = bool(options.get("_preproc_scale_override"))
+
+                pipe_mode = options.get("truehdr_pipeline", "auto")
+                force_2pass = pipe_mode == "2-pass"
+                force_1pass = pipe_mode == "1-pass"
+
+                if force_2pass or (not force_1pass and (has_res_change or has_multistage)):
+                    reason = "forced" if force_2pass else f"({src_w}x{src_h} -> {tgt_w}x{tgt_h} scaling detected)"
+                    print(f"[INFO] SDR-HDR: running TrueHDR preprocessor at source resolution {reason}...")
+                    truehdr_intermediate = self._truehdr_preprocess(
+                        job['video_path'], output_dir, options, info)
+                    register_temp_file(truehdr_intermediate)
+                    effective_info = get_video_info(truehdr_intermediate)
+                    effective_job = dict(job)
+                    effective_job['video_path'] = truehdr_intermediate
+                    # _truehdr_preprocess already trimmed to [seek_start, seek_start + seek_duration]
+                    options.pop("seek_start", None)
+                    seek_start = None
+                    options["_force_pq_tags"] = True
+                    options["_truehdr_preprocessed"] = True
+                else:
+                    reason = "forced" if force_1pass else f"({src_w}x{src_h} matches target resolution)"
+                    print(f"[INFO] SDR-HDR: running TrueHDR inline in 1 pass {reason}...")
+                    options["_inline_truehdr"] = True
+                    options["_force_pq_tags"] = True
             if encoder_backend == "nvencc_with_ffmpeg":
                 # v8.59 MULTI-STAGE PREPASS DISPATCH
                 # When stage 1 is an AI upscaler, run an NVEncC superres
@@ -10343,6 +10807,7 @@ class VideoProcessorApp:
             self.verify_output_file(output_file, options)
             if options.get("measure_loudness"):
                 self.measure_loudness(output_file, options)
+            return output_file
         finally:
             if CURRENT_TEMP_FILE:
                 cleanup_single_temp_file(CURRENT_TEMP_FILE)
@@ -10901,8 +11366,17 @@ class VideoProcessorApp:
                             f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
         if options.get("nvenc_nvvfx_denoise"):
             cmd.append("--vpp-nvvfx-denoise")
+        if subtitle_burn_path:
+            safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir)
+            pipeline_mode = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) if options else DEFAULT_SUBTITLE_PIPELINE
+            mode_lbl = "GPU (Direct CUDA)" if pipeline_mode == "gpu_cuda" else "CPU (libass Live)"
+            print(f"[INFO] NVEncC Subtitle Burn Pipeline: {mode_lbl} [sub={os.path.basename(subtitle_burn_path)}]")
+            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         if options.get("_inline_truehdr", False):
-            cmd.append("--vpp-ngx-truehdr")
+            th_c = options.get("truehdr_contrast", DEFAULT_TRUEHDR_CONTRAST)
+            th_s = options.get("truehdr_saturation", DEFAULT_TRUEHDR_SATURATION)
+            th_mg = options.get("truehdr_middlegray", DEFAULT_TRUEHDR_MIDDLEGRAY)
+            cmd.extend(["--vpp-ngx-truehdr", f"contrast={th_c},saturation={th_s},middlegray={th_mg}"])
         if options.get("generate_log"):
             log_path = os.path.join(os.path.dirname(output_file),
                                     f"{os.path.splitext(os.path.basename(output_file))[0]}_nvencc.log")
@@ -10931,18 +11405,13 @@ class VideoProcessorApp:
                             "--audio-bitrate", str(SURROUND_BITRATE_K)])
             else:
                 cmd.extend(["--audio-copy"])
-        if subtitle_burn_path:
-            safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir)
-            pipeline_mode = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) if options else DEFAULT_SUBTITLE_PIPELINE
-            mode_lbl = "GPU (Direct CUDA)" if pipeline_mode == "gpu_cuda" else "CPU (libass Live)"
-            print(f"[INFO] NVEncC Subtitle Burn Pipeline: {mode_lbl} [sub={os.path.basename(subtitle_burn_path)}]")
-            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
         return cmd
 
     def run_nvencc_command(self, cmd, duration=None, progress_callback=None, cwd=None):
         global CURRENT_FFMPEG_PROCESS
         print("Running NVEncC command:")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
+        global CURRENT_FFMPEG_PROCESS
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    stdin=subprocess.DEVNULL, env=env, text=True,
                                    encoding='utf-8', errors='replace', bufsize=1, cwd=cwd)
@@ -11011,10 +11480,12 @@ class VideoProcessorApp:
         """
         print(f"--- {label} ---")
         print(" ".join(f'"{c}"' if " " in c else c for c in cmd))
+        global CURRENT_FFMPEG_PROCESS
         process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, env=env, text=True,
             encoding="utf-8", errors="replace", bufsize=1)
+        CURRENT_FFMPEG_PROCESS = process
         recent = deque(maxlen=200)
         carry = ""
         progress_line_active = False
@@ -11060,6 +11531,7 @@ class VideoProcessorApp:
                     carry += ch
             process.stdout.close()
             return_code = process.wait()
+            CURRENT_FFMPEG_PROCESS = None
         finally:
             if progress_line_active:
                 sys.stdout.write("\n")
@@ -11416,14 +11888,20 @@ class VideoProcessorApp:
             res_str = f"{w}x{h}"
 
         cmd = [NVENCC_CMD, "--avsw", "--codec", "hevc",
-               "--output-depth", "10", "--profile", "main10",
+               "--output-depth", "10", "--profile", "main10"]
+        if options.get("nvenc_intermediate_all_i", DEFAULT_NVENC_INTERMEDIATE_ALL_I):
+            cmd.extend(["--gop-len", "1", "--bframes", "0"])
+        th_c = options.get("truehdr_contrast", DEFAULT_TRUEHDR_CONTRAST)
+        th_s = options.get("truehdr_saturation", DEFAULT_TRUEHDR_SATURATION)
+        th_mg = options.get("truehdr_middlegray", DEFAULT_TRUEHDR_MIDDLEGRAY)
+        cmd.extend([
                "--colorprim", "bt2020", "--transfer", "smpte2084",
                "--colormatrix", "bt2020nc",
                "--master-display", md, "--max-cll", f"{maxcll},{maxfall}",
-               "--vpp-ngx-truehdr",
+               "--vpp-ngx-truehdr", f"contrast={th_c},saturation={th_s},middlegray={th_mg}",
                "--cqp", "12",
                "--audio-copy",
-               "--output-res", res_str]
+               "--output-res", res_str])
         # Respect chapter splitting so we don't re-encode the full
         # source for every chapter.
         # v8.40 EXACT-DURATION PIN (NVEncC muxer)
@@ -11544,6 +12022,8 @@ class VideoProcessorApp:
         cmd = [NVENCC_CMD, "--avsw" if _use_avsw else "--avhw",
                "--codec", _inter_codec]
         cmd.extend(_inter_codec_args)
+        if options.get("nvenc_intermediate_all_i", DEFAULT_NVENC_INTERMEDIATE_ALL_I):
+            cmd.extend(["--gop-len", "1", "--bframes", "0"])
         cmd.extend([
                "--colorprim", src_prim, "--transfer", src_trc,
                "--colormatrix", src_matrix,
@@ -11983,8 +12463,7 @@ class VideoProcessorApp:
                 # Pad the composite before any CPU filter so subtitles /
                 # sharpening / LUT see the final canvas dimensions.
                 cpu_chain.append(_cp_filter)
-            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and \
-                    os.path.exists(options.get("lut_file")):
+            if options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
                 cpu_chain.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"):
@@ -12348,8 +12827,7 @@ class VideoProcessorApp:
                                 target_w, target_h = info["width"], info["height"]
                             else:
                                 vf_filters.append(scale_base)
-            if info["is_hdr"] and not is_hdr_output and options.get("lut_file") and \
-                    os.path.exists(options.get("lut_file")):
+            if options.get("lut_file") and os.path.exists(options.get("lut_file")):
                 safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
                 cpu_filters.append(f"lut3d=file={safe_lut}")
             if options.get("fruc"):
@@ -12503,6 +12981,96 @@ class VideoProcessorApp:
                 video_out_tag = "[v_out]"
             elif video_in_tag != cuda_video_in:
                 video_out_tag = video_in_tag
+
+        if options.get("add_blank_end", DEFAULT_ADD_BLANK_END):
+            try:
+                _blank_dur = float(options.get("blank_end_duration", DEFAULT_BLANK_END_DURATION))
+            except (TypeError, ValueError):
+                _blank_dur = 20.0
+            if _blank_dur > 0:
+                if 'target_w' not in locals() or target_w is None or 'target_h' not in locals() or target_h is None:
+                    target_w, target_h = self.compute_target_resolution_for_options(options, info, orientation)
+                _blank_fps = float(options.get("fruc_fps", 60)) if options.get("fruc") else float(info.get("framerate", 30.0) or 30.0)
+                _blank_v_src = (
+                    f"color=c=black:s={target_w}x{target_h}:r={_blank_fps}:d={_blank_dur},"
+                    f"format={target_cpu_pix_fmt},setsar=1,"
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}[v_blank_src]"
+                )
+                filter_complex_parts.append(_blank_v_src)
+                if video_out_tag.startswith("["):
+                    _v_in_tag = video_out_tag
+                else:
+                    _v_in_tag = f"[{video_out_tag}]"
+                    filter_complex_parts.append(
+                        f"{_v_in_tag}format={target_cpu_pix_fmt},setsar=1,"
+                        f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}[v_main_base]"
+                    )
+                    _v_in_tag = "[v_main_base]"
+                filter_complex_parts.append(f"{_v_in_tag}[v_blank_src]concat=n=2:v=1:a=0[v_out_blank]")
+                video_out_tag = "[v_out_blank]"
+
+                audio_fc_extra = []
+                new_audio_cmd_parts = []
+                idx = 0
+                i = 0
+                while i < len(audio_cmd_parts):
+                    arg = audio_cmd_parts[i]
+                    if arg == "-map" and i + 1 < len(audio_cmd_parts):
+                        val = audio_cmd_parts[i + 1]
+                        if val.startswith("[") and val.endswith("]"):
+                            tag = val[1:-1]
+                            if "51" in tag or "surround" in tag:
+                                cl = "5.1(side)"
+                            elif "center" in tag or "lfe" in tag or "mono" in tag:
+                                cl = "mono"
+                            else:
+                                cl = "stereo"
+                            blank_a_tag = f"a_blank_{idx}"
+                            out_a_tag = f"{tag}_blank"
+                            audio_fc_extra.append(
+                                f"anullsrc=r=48000:cl={cl}:d={_blank_dur}[{blank_a_tag}];"
+                                f"[{tag}][{blank_a_tag}]concat=n=2:v=0:a=1[{out_a_tag}]"
+                            )
+                            new_audio_cmd_parts.extend(["-map", f"[{out_a_tag}]"])
+                            idx += 1
+                            i += 2
+                            continue
+                        elif val.startswith("0:a"):
+                            try:
+                                streams = get_audio_stream_info(file_path)
+                            except Exception:
+                                streams = []
+                            if streams:
+                                for s_idx, s in enumerate(streams):
+                                    src_ch = int(s.get("channels", 2))
+                                    cl = "5.1(side)" if src_ch >= 6 else ("mono" if src_ch == 1 else "stereo")
+                                    blank_a_tag = f"a_blank_{idx}"
+                                    out_a_tag = f"a_pt_{idx}_blank"
+                                    audio_fc_extra.append(
+                                        f"[0:a:{s_idx}]asetpts=PTS-STARTPTS,aresample=48000[a_pt_{idx}];"
+                                        f"anullsrc=r=48000:cl={cl}:d={_blank_dur}[{blank_a_tag}];"
+                                        f"[a_pt_{idx}][{blank_a_tag}]concat=n=2:v=0:a=1[{out_a_tag}]"
+                                    )
+                                    new_audio_cmd_parts.extend(["-map", f"[{out_a_tag}]", f"-c:a:{s_idx}", "aac", f"-b:a:{s_idx}", "384k"])
+                                    idx += 1
+                                i += 2
+                                while i < len(audio_cmd_parts):
+                                    if audio_cmd_parts[i] == "-c:a" and i + 1 < len(audio_cmd_parts) and audio_cmd_parts[i+1] == "copy":
+                                        i += 2
+                                    elif audio_cmd_parts[i] == "copy":
+                                        i += 1
+                                    else:
+                                        break
+                                continue
+                    new_audio_cmd_parts.append(arg)
+                    i += 1
+                audio_cmd_parts = new_audio_cmd_parts
+                if audio_fc_extra:
+                    if audio_fc_str:
+                        audio_fc_str = audio_fc_str + ";" + ";".join(audio_fc_extra)
+                    else:
+                        audio_fc_str = ";".join(audio_fc_extra)
+
         eff_w, eff_h = ((target_w, target_h)
                         if ('target_w' in locals() and 'target_h' in locals()) else (None, None))
         if filter_complex_parts or audio_fc_str:
@@ -12534,6 +13102,13 @@ class VideoProcessorApp:
                 _pin_dur = float(max_duration)
         else:
             _pin_dur = 0.0
+        if options.get("add_blank_end", DEFAULT_ADD_BLANK_END):
+            try:
+                _blank_dur_pin = float(options.get("blank_end_duration", DEFAULT_BLANK_END_DURATION))
+            except (TypeError, ValueError):
+                _blank_dur_pin = 20.0
+            if _pin_dur > 0 and _blank_dur_pin > 0:
+                _pin_dur += _blank_dur_pin
         if _pin_dur > 0:
             cmd.extend(["-t", f"{_pin_dur:.6f}"])
         gop_len = math.ceil(info["framerate"] / 2) if info["framerate"] > 0 else 30
@@ -12993,13 +13568,15 @@ class VideoProcessorApp:
             job['options']['seek_start'] = 0.0
             job['display_name'] = f"[TEST 5s] {job['display_name']}"
             job['options']['output_suffix_override'] = "_test"
+        tracker = BatchTracker(jobs_to_test)
+        tracker.start()
         self.output_mode = self.output_mode_var.get()
         self.start_button.config(state="disabled")
         if hasattr(self, 'test_button'):
             self.test_button.config(state="disabled")
         hibernate_flag = bool(self.hibernate_when_done_var.get())
         threading.Thread(target=self._process_files_thread,
-                         args=(jobs_to_test, hibernate_flag), daemon=True).start()
+                         args=(jobs_to_test, hibernate_flag, tracker), daemon=True).start()
 
     def start_processing(self):
         if not self.processing_jobs:
@@ -13011,37 +13588,58 @@ class VideoProcessorApp:
         close_gui = self.close_gui_var.get()
         if close_gui:
             jobs_snapshot = copy.deepcopy(self.processing_jobs)
+            tracker = BatchTracker(jobs_snapshot)
+            tracker.start()
             print("\n[INFO] 'Close GUI on Processing' enabled. Closing GUI and processing in console...")
             self.root.destroy()
-            self._process_files_console(jobs_snapshot)
+            self._process_files_console(jobs_snapshot, tracker=tracker)
             return
         self.start_button.config(state="disabled")
         if hasattr(self, 'test_button'):
             self.test_button.config(state="disabled")
         hibernate_flag = bool(self.hibernate_when_done_var.get())
         threading.Thread(target=self._process_files_thread,
-                         args=(None, hibernate_flag), daemon=True).start()
+                         args=(None, hibernate_flag, BatchTracker(self.processing_jobs).start()), daemon=True).start()
 
-    def _process_files_console(self, jobs):
+    def _process_files_console(self, jobs, tracker=None):
+        if tracker is None:
+            tracker = BatchTracker(jobs)
+            tracker.start()
+        global CURRENT_BATCH_TRACKER
+        CURRENT_BATCH_TRACKER = tracker
         print("\n" + "=" * 80 + "\n--- Starting processing batch (Console Mode) ---")
         successful, failed = 0, 0
         total_jobs = len(jobs)
-        for i, job in enumerate(jobs):
-            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
-                  f"{job['display_name']}\n" + "-" * 80)
-            try:
-                orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
-                resolution = job['options'].get("resolution", "Unknown")
-                print(f"[DEBUG] Job: {job['display_name']}")
-                print(f"[DEBUG] Orientation: {orientation}")
-                print(f"[DEBUG] Resolution: {resolution}")
-                self.build_ffmpeg_command_and_run(job, orientation)
-                successful += 1
-                print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
-            except (VideoProcessingError, Exception) as e:
-                failed += 1
-                print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
-        final_message = f"Processing Complete: {successful} successful, {failed} failed"
+        try:
+            for i, job in enumerate(jobs):
+                tracker.job_started(i, job)
+                print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
+                      f"{job['display_name']}\n" + "-" * 80)
+                try:
+                    orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
+                    resolution = job['options'].get("resolution", "Unknown")
+                    print(f"[DEBUG] Job: {job['display_name']}")
+                    print(f"[DEBUG] Orientation: {orientation}")
+                    print(f"[DEBUG] Resolution: {resolution}")
+                    output_file = self.build_ffmpeg_command_and_run(job, orientation)
+                    successful += 1
+                    tracker.job_succeeded(i, job, output_file=output_file, orientation=orientation)
+                    print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
+                except KeyboardInterrupt:
+                    raise
+                except (VideoProcessingError, Exception) as e:
+                    failed += 1
+                    tracker.job_failed(i, job, error_msg=str(e), orientation=orientation)
+                    print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
+            tracker.finish()
+            tracker.print_summary()
+        except KeyboardInterrupt:
+            tracker.interrupt()
+            tracker.print_summary()
+            raise
+        finally:
+            CURRENT_BATCH_TRACKER = None
+        final_message = f"Processing Complete in {tracker.get_total_duration_str()}: {successful} successful, {failed} failed"
         print("\n" + "=" * 80 + "\n" + final_message)
         hibernate = any(j.get('options', {}).get('hibernate_when_done', False) for j in jobs)
         if hibernate:
@@ -13049,31 +13647,50 @@ class VideoProcessorApp:
             subprocess.run(["shutdown", "/h"], shell=True)
         sys.exit(0)
 
-    def _process_files_thread(self, jobs_to_process=None, hibernate_when_done=False):
+    def _process_files_thread(self, jobs_to_process=None, hibernate_when_done=False, tracker=None):
         if jobs_to_process is None:
             jobs_to_process = self.processing_jobs
+        if tracker is None:
+            tracker = BatchTracker(jobs_to_process)
+            tracker.start()
+        global CURRENT_BATCH_TRACKER
+        CURRENT_BATCH_TRACKER = tracker
         print("\n" + "=" * 80 + "\n--- Starting processing batch ---")
         successful, failed = 0, 0
         total_jobs = len(jobs_to_process)
-        for i, job in enumerate(jobs_to_process):
-            self.root.after(0, lambda m=f"Processing {i + 1}/{total_jobs}: {job['display_name']}":
-                            self.update_status(m))
-            self.root.after(0, lambda: self.progress_bar.config(value=0))
-            print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
-                  f"{job['display_name']}\n" + "-" * 80)
-            try:
-                orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
-                resolution = job['options'].get("resolution", "Unknown")
-                print(f"[DEBUG] Job: {job['display_name']}")
-                print(f"[DEBUG] Orientation: {orientation}")
-                print(f"[DEBUG] Resolution: {resolution}")
-                self.build_ffmpeg_command_and_run(job, orientation)
-                successful += 1
-                print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
-            except (VideoProcessingError, Exception) as e:
-                failed += 1
-                print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
-        final_message = f"Processing Complete: {successful} successful, {failed} failed"
+        try:
+            for i, job in enumerate(jobs_to_process):
+                tracker.job_started(i, job)
+                self.root.after(0, lambda m=f"Processing {i + 1}/{total_jobs}: {job['display_name']}":
+                                self.update_status(m))
+                self.root.after(0, lambda: self.progress_bar.config(value=0))
+                print("\n" + "-" * 80 + f"\nStarting job {i + 1}/{total_jobs}: "
+                      f"{job['display_name']}\n" + "-" * 80)
+                try:
+                    orientation = job['options'].get("orientation", DEFAULT_ORIENTATION)
+                    resolution = job['options'].get("resolution", "Unknown")
+                    print(f"[DEBUG] Job: {job['display_name']}")
+                    print(f"[DEBUG] Orientation: {orientation}")
+                    print(f"[DEBUG] Resolution: {resolution}")
+                    output_file = self.build_ffmpeg_command_and_run(job, orientation)
+                    successful += 1
+                    tracker.job_succeeded(i, job, output_file=output_file, orientation=orientation)
+                    print(f"[SUCCESS] Job '{job['display_name']}' completed successfully.")
+                except KeyboardInterrupt:
+                    raise
+                except (VideoProcessingError, Exception) as e:
+                    failed += 1
+                    tracker.job_failed(i, job, error_msg=str(e), orientation=orientation)
+                    print(f"\n[ERROR] Job failed for '{job['display_name']}': {e}")
+            tracker.finish()
+            tracker.print_summary()
+        except KeyboardInterrupt:
+            tracker.interrupt()
+            tracker.print_summary()
+            raise
+        finally:
+            CURRENT_BATCH_TRACKER = None
+        final_message = f"Processing Complete in {tracker.get_total_duration_str()}: {successful} successful, {failed} failed"
         print("\n" + "=" * 80 + "\n" + final_message)
         self.root.after(0, lambda: self.update_status(final_message))
         self.root.after(0, lambda: self.progress_bar.config(value=0))
@@ -13130,6 +13747,7 @@ class VideoProcessorApp:
                       f"'{s.get('channel_layout')}')")
         except Exception as e:
             print(f"[ERROR] Verification failed: {e}")
+            raise VideoProcessingError(f"Output verification failed for {os.path.basename(file_path)}: {e}")
 
     def measure_loudness(self, file_path, options=None):
         print(f"--- Measuring loudness: {os.path.basename(file_path)} ---")
