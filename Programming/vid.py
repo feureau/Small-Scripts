@@ -633,6 +633,35 @@ DEFAULT_NVENC_SUPERRES_MODE = "1"
 # command line identical to the pre-strength build until the user opts in.
 DEFAULT_NVENC_SUPERRES_STRENGTH = ""
 DEFAULT_NVENC_NVVFX_DENOISE = False
+DEFAULT_NVENC_NVVFX_DENOISE_STRENGTH = "0"
+
+DEFAULT_NVENC_DENOISE_KNN = False
+DEFAULT_NVENC_DENOISE_KNN_RADIUS = "3"
+DEFAULT_NVENC_DENOISE_KNN_STRENGTH = "0.08"
+DEFAULT_NVENC_DENOISE_KNN_LERP = "0.20"
+DEFAULT_NVENC_DENOISE_KNN_TH_LERP = "0.80"
+
+DEFAULT_NVENC_DENOISE_PMD = False
+DEFAULT_NVENC_DENOISE_PMD_APPLY_COUNT = "2"
+DEFAULT_NVENC_DENOISE_PMD_STRENGTH = "100.00"
+DEFAULT_NVENC_DENOISE_PMD_THRESHOLD = "100.00"
+
+DEFAULT_NVENC_DENOISE_NLMEANS = False
+DEFAULT_NVENC_DENOISE_NLMEANS_SIGMA = "0.005"
+DEFAULT_NVENC_DENOISE_NLMEANS_H = "0.05"
+
+DEFAULT_NVENC_DENOISE_DCT = False
+DEFAULT_NVENC_DENOISE_DCT_STEP = "2"
+DEFAULT_NVENC_DENOISE_DCT_SIGMA = "4.0"
+
+DEFAULT_NVENC_DENOISE_FFT3D = False
+DEFAULT_NVENC_DENOISE_FFT3D_SIGMA = "1.00"
+DEFAULT_NVENC_DENOISE_FFT3D_AMOUNT = "1.00"
+
+DEFAULT_NVENC_DENOISE_CONV3D = False
+DEFAULT_NVENC_DENOISE_CONV3D_MATRIX = "standard"
+DEFAULT_NVENC_DENOISE_CONV3D_FAST = False
+
 DEFAULT_NVENC_NGX_VSR_QUALITY = "1"
 # v8.59: chain two NVVFX SuperRes / NGX VSR passes when the requested
 # upscale exceeds their ~2x single-pass ceiling. True preserves the
@@ -775,6 +804,13 @@ def _normalize_chroma_code(value):
     return "420"
 
 
+def _normalize_cuda_interp_algo(algo):
+    algo_str = str(algo).lower() if algo else "lanczos"
+    if algo_str in ("nearest", "bilinear", "bicubic", "lanczos"):
+        return algo_str
+    return "lanczos"
+
+
 COLOR_PRESET_LOOKUP = {
     "bt709": {"mode": "sdr", "label": "BT.709 (Standard SDR)",
               "primaries": "bt709", "trc": "bt709", "matrix": "bt709", "range": "tv",
@@ -895,7 +931,13 @@ DEFAULT_LOUDNESS_APPLY_STEREO = True
 DEFAULT_LOUDNESS_APPLY_SURROUND_51 = True
 DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
 
-DEFAULT_SUBTITLE_FONT = "HelveticaNeueLT Std Blk"
+DEFAULT_SUBTITLE_FONT = "Futura"
+DEFAULT_LANGUAGE_FONT_OVERRIDES = {
+    "-cn": "FZCuSong-B09S",
+    "-tw": "FOT-Matisse Pro DB",
+    "-jp": "FOT-Matisse Pro DB",
+    "-ko": "FOT-Matisse Pro DB"
+}
 DEFAULT_SUBTITLE_FONT_SIZE = "32"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
 DEFAULT_SUBTITLE_PIPELINE = "cpu_libass"
@@ -1776,6 +1818,25 @@ def hex_to_libass_color(hex_color):
 
 
 
+def _should_precompensate_hdr_colors(options):
+    """
+    Returns True if subtitle/title ASS colors should be pre-compensated from sRGB to BT.2020 PQ.
+    This should ONLY happen when burning onto a canvas that is ALREADY in HDR color space.
+    When TrueHDR AI is going to convert the SDR video frame (with subtitles burned in) to HDR,
+    we must keep native sRGB colors so TrueHDR AI converts the subtitle colors correctly.
+    """
+    if not options:
+        return False
+    is_hdr_output = options.get('output_format') in ('hdr', 'dolby_vision')
+    if not is_hdr_output:
+        return False
+    is_s2h = bool(options.get('sdr_to_hdr', False))
+    truehdr_done = bool(options.get('_truehdr_preprocessed', False))
+    if is_s2h and not truehdr_done:
+        return False
+    return True
+
+
 def srgb_hex_to_bt2020_pq_hex(srgb_hex, target_nits=1000):
     """
     Converts an SDR sRGB hex color to an HDR BT.2020 PQ hex color.
@@ -1961,7 +2022,7 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         repeat_ratio = float(DEFAULT_SUBTITLE_REPEAT_RATIO)
     truncate_suffix = "..."
     # === PATCH: HDR Subtitle Color Pre-compensation ===
-    _is_hdr = options.get('output_format') in ('hdr', 'dolby_vision')
+    _is_hdr = _should_precompensate_hdr_colors(options)
 
     fill_color_hex = options.get('fill_color', DEFAULT_FILL_COLOR)
     if _is_hdr:
@@ -2453,7 +2514,7 @@ def create_title_ass_file(title_text, options, target_res=None):
     except (ValueError, TypeError):
         line_spacing_offset = 0.0
     # === PATCH: HDR Title Color Pre-compensation ===
-    _is_hdr = options.get('output_format') in ('hdr', 'dolby_vision')
+    _is_hdr = _should_precompensate_hdr_colors(options)
 
     fill_color_hex = options.get('title_fill_color', DEFAULT_TITLE_FILL_COLOR)
     if _is_hdr:
@@ -2695,7 +2756,7 @@ def compute_original_target_resolution(res_key, info):
     # This replaces the old width-first interpretation, which computed
     # 4:3 4320p as 7680x5760 -- over the NVVFX SuperRes output ceiling.
     # The new math yields 5760x4320 for that case, which fits.
-    short_side_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+    short_side_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                       "hd": 1080, "4k": 2160, "8k": 4320}
     target_short = short_side_map.get(res_key_norm)
     if not target_short:
@@ -2833,10 +2894,10 @@ def split_srt_file(srt_file_path, output_path, chapter_start_sec, chapter_end_se
 
 def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, source_width=None):
     BITRATES = {
-        "SDR_NORMAL_FPS": {"720p": 5000, "1080p": 8000, "2160p": 45000, "4320p": 160000},
-        "SDR_HIGH_FPS":   {"720p": 7500, "1080p": 12000, "2160p": 68000, "4320p": 240000},
-        "HDR_NORMAL_FPS": {"720p": 6500, "1080p": 10000, "2160p": 56000, "4320p": 200000},
-        "HDR_HIGH_FPS":   {"720p": 9500, "1080p": 15000, "2160p": 85000, "4320p": 300000},
+        "SDR_NORMAL_FPS": {"144p": 200, "240p": 400, "360p": 750, "480p": 1500, "720p": 5000, "1080p": 8000, "2160p": 45000, "4320p": 160000},
+        "SDR_HIGH_FPS":   {"144p": 300, "240p": 600, "360p": 1100, "480p": 2250, "720p": 7500, "1080p": 12000, "2160p": 68000, "4320p": 240000},
+        "HDR_NORMAL_FPS": {"144p": 250, "240p": 500, "360p": 900, "480p": 1800, "720p": 6500, "1080p": 10000, "2160p": 56000, "4320p": 200000},
+        "HDR_HIGH_FPS":   {"144p": 400, "240p": 750, "360p": 1350, "480p": 2700, "720p": 9500, "1080p": 15000, "2160p": 85000, "4320p": 300000},
     }
     fps_category = "HIGH_FPS" if framerate > 40 else "NORMAL_FPS"
     dr_category = "HDR" if is_hdr else "SDR"
@@ -2846,7 +2907,15 @@ def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, so
     mapped_key = res_map.get(key_raw, key_raw)
     if mapped_key == "original":
         if source_height:
-            if source_height <= 720:
+            if source_height <= 144:
+                mapped_key = "144p"
+            elif source_height <= 240:
+                mapped_key = "240p"
+            elif source_height <= 360:
+                mapped_key = "360p"
+            elif source_height <= 480:
+                mapped_key = "480p"
+            elif source_height <= 720:
                 mapped_key = "720p"
             elif source_height <= 1080:
                 mapped_key = "1080p"
@@ -3319,6 +3388,28 @@ class WorkflowPresetManager:
             "video_codec": DEFAULT_VIDEO_CODEC,
             "encoder_backend": DEFAULT_ENCODER_BACKEND,
             "nvenc_nvvfx_denoise": DEFAULT_NVENC_NVVFX_DENOISE,
+            "nvenc_nvvfx_denoise_strength": DEFAULT_NVENC_NVVFX_DENOISE_STRENGTH,
+            "nvenc_denoise_knn": DEFAULT_NVENC_DENOISE_KNN,
+            "nvenc_denoise_knn_radius": DEFAULT_NVENC_DENOISE_KNN_RADIUS,
+            "nvenc_denoise_knn_strength": DEFAULT_NVENC_DENOISE_KNN_STRENGTH,
+            "nvenc_denoise_knn_lerp": DEFAULT_NVENC_DENOISE_KNN_LERP,
+            "nvenc_denoise_knn_th_lerp": DEFAULT_NVENC_DENOISE_KNN_TH_LERP,
+            "nvenc_denoise_pmd": DEFAULT_NVENC_DENOISE_PMD,
+            "nvenc_denoise_pmd_apply_count": DEFAULT_NVENC_DENOISE_PMD_APPLY_COUNT,
+            "nvenc_denoise_pmd_strength": DEFAULT_NVENC_DENOISE_PMD_STRENGTH,
+            "nvenc_denoise_pmd_threshold": DEFAULT_NVENC_DENOISE_PMD_THRESHOLD,
+            "nvenc_denoise_nlmeans": DEFAULT_NVENC_DENOISE_NLMEANS,
+            "nvenc_denoise_nlmeans_sigma": DEFAULT_NVENC_DENOISE_NLMEANS_SIGMA,
+            "nvenc_denoise_nlmeans_h": DEFAULT_NVENC_DENOISE_NLMEANS_H,
+            "nvenc_denoise_dct": DEFAULT_NVENC_DENOISE_DCT,
+            "nvenc_denoise_dct_step": DEFAULT_NVENC_DENOISE_DCT_STEP,
+            "nvenc_denoise_dct_sigma": DEFAULT_NVENC_DENOISE_DCT_SIGMA,
+            "nvenc_denoise_fft3d": DEFAULT_NVENC_DENOISE_FFT3D,
+            "nvenc_denoise_fft3d_sigma": DEFAULT_NVENC_DENOISE_FFT3D_SIGMA,
+            "nvenc_denoise_fft3d_amount": DEFAULT_NVENC_DENOISE_FFT3D_AMOUNT,
+            "nvenc_denoise_conv3d": DEFAULT_NVENC_DENOISE_CONV3D,
+            "nvenc_denoise_conv3d_matrix": DEFAULT_NVENC_DENOISE_CONV3D_MATRIX,
+            "nvenc_denoise_conv3d_fast": DEFAULT_NVENC_DENOISE_CONV3D_FAST,
             "nvenc_superres_mode": DEFAULT_NVENC_SUPERRES_MODE,
             "nvenc_superres_strength": DEFAULT_NVENC_SUPERRES_STRENGTH,
             "multi_stage_superres": DEFAULT_MULTI_STAGE_SUPERRES,
@@ -3433,6 +3524,7 @@ class WorkflowPresetManager:
             "sofa_speakers": DEFAULT_SOFA_SPEAKERS,
             "lut_file": DEFAULT_LUT_PATH,
             "subtitle_font": DEFAULT_SUBTITLE_FONT,
+            "language_font_overrides": DEFAULT_LANGUAGE_FONT_OVERRIDES,
             "subtitle_font_size": DEFAULT_SUBTITLE_FONT_SIZE,
             "subtitle_alignment": DEFAULT_SUBTITLE_ALIGNMENT,
             "subtitle_pipeline": DEFAULT_SUBTITLE_PIPELINE,
@@ -3647,6 +3739,48 @@ class WorkflowPresetManager:
                 "Vertical Hybrid Seam Hardsub": v_hybrid,
                 "Horizontal Hardsub (-cn)": h_hardsub}
 
+DENOISE_PRESETS = {
+    "Custom": {},
+    "Gold Standard (NLMeans + FFT3D)": {
+        "nvenc_nvvfx_denoise": False,
+        "nvenc_denoise_knn": False,
+        "nvenc_denoise_pmd": False,
+        "nvenc_denoise_nlmeans": True,
+        "nvenc_denoise_nlmeans_sigma": "0.005",
+        "nvenc_denoise_nlmeans_h": "0.05",
+        "nvenc_denoise_dct": False,
+        "nvenc_denoise_fft3d": True,
+        "nvenc_denoise_fft3d_sigma": "1.50",
+        "nvenc_denoise_fft3d_amount": "1.00",
+        "nvenc_denoise_conv3d": False
+    },
+    "Modern AI (NVVFX + Conv3D)": {
+        "nvenc_nvvfx_denoise": True,
+        "nvenc_nvvfx_denoise_strength": "1",
+        "nvenc_denoise_knn": False,
+        "nvenc_denoise_pmd": False,
+        "nvenc_denoise_nlmeans": False,
+        "nvenc_denoise_dct": False,
+        "nvenc_denoise_fft3d": False,
+        "nvenc_denoise_conv3d": True,
+        "nvenc_denoise_conv3d_matrix": "standard",
+        "nvenc_denoise_conv3d_fast": False
+    },
+    "Anime / Animation (PMD + DCT)": {
+        "nvenc_nvvfx_denoise": False,
+        "nvenc_denoise_knn": False,
+        "nvenc_denoise_pmd": True,
+        "nvenc_denoise_pmd_apply_count": "2",
+        "nvenc_denoise_pmd_strength": "100.00",
+        "nvenc_denoise_pmd_threshold": "100.00",
+        "nvenc_denoise_nlmeans": False,
+        "nvenc_denoise_dct": True,
+        "nvenc_denoise_dct_step": "2",
+        "nvenc_denoise_dct_sigma": "4.0",
+        "nvenc_denoise_fft3d": False,
+        "nvenc_denoise_conv3d": False
+    }
+}
 
 class VideoProcessorApp:
     def __init__(self, root, initial_files, output_mode):
@@ -3734,6 +3868,81 @@ class VideoProcessorApp:
             'write', lambda *args: [self._sync_superres_strength_controls(),
                                     self._update_selected_jobs('nvenc_superres_strength')])
         self.nvenc_nvvfx_denoise_var = tk.BooleanVar(value=DEFAULT_NVENC_NVVFX_DENOISE)
+        self.nvenc_nvvfx_denoise_strength_var = tk.StringVar(value=DEFAULT_NVENC_NVVFX_DENOISE_STRENGTH)
+        self.nvenc_nvvfx_denoise_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_nvvfx_denoise_strength'))
+        self.nvenc_nvvfx_denoise_strength_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_nvvfx_denoise_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_nvvfx_denoise_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_knn_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_KNN)
+        self.nvenc_denoise_knn_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_knn_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_knn_radius_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_KNN_RADIUS)
+        self.nvenc_denoise_knn_radius_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_knn_radius'))
+        self.nvenc_denoise_knn_radius_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_knn_strength_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_KNN_STRENGTH)
+        self.nvenc_denoise_knn_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_knn_strength'))
+        self.nvenc_denoise_knn_strength_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_knn_lerp_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_KNN_LERP)
+        self.nvenc_denoise_knn_lerp_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_knn_lerp'))
+        self.nvenc_denoise_knn_lerp_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_knn_th_lerp_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_KNN_TH_LERP)
+        self.nvenc_denoise_knn_th_lerp_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_knn_th_lerp'))
+        self.nvenc_denoise_knn_th_lerp_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_pmd_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_PMD)
+        self.nvenc_denoise_pmd_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_pmd_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_pmd_apply_count_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_PMD_APPLY_COUNT)
+        self.nvenc_denoise_pmd_apply_count_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_pmd_apply_count'))
+        self.nvenc_denoise_pmd_apply_count_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_pmd_strength_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_PMD_STRENGTH)
+        self.nvenc_denoise_pmd_strength_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_pmd_strength'))
+        self.nvenc_denoise_pmd_strength_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_pmd_threshold_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_PMD_THRESHOLD)
+        self.nvenc_denoise_pmd_threshold_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_pmd_threshold'))
+        self.nvenc_denoise_pmd_threshold_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_nlmeans_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_NLMEANS)
+        self.nvenc_denoise_nlmeans_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_nlmeans_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_nlmeans_sigma_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_NLMEANS_SIGMA)
+        self.nvenc_denoise_nlmeans_sigma_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_nlmeans_sigma'))
+        self.nvenc_denoise_nlmeans_sigma_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_nlmeans_h_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_NLMEANS_H)
+        self.nvenc_denoise_nlmeans_h_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_nlmeans_h'))
+        self.nvenc_denoise_nlmeans_h_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_dct_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_DCT)
+        self.nvenc_denoise_dct_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_dct_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_dct_step_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_DCT_STEP)
+        self.nvenc_denoise_dct_step_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_dct_step'))
+        self.nvenc_denoise_dct_step_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_dct_sigma_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_DCT_SIGMA)
+        self.nvenc_denoise_dct_sigma_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_dct_sigma'))
+        self.nvenc_denoise_dct_sigma_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_fft3d_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_FFT3D)
+        self.nvenc_denoise_fft3d_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_fft3d_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_fft3d_sigma_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_FFT3D_SIGMA)
+        self.nvenc_denoise_fft3d_sigma_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_fft3d_sigma'))
+        self.nvenc_denoise_fft3d_sigma_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_fft3d_amount_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_FFT3D_AMOUNT)
+        self.nvenc_denoise_fft3d_amount_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_fft3d_amount'))
+        self.nvenc_denoise_fft3d_amount_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
+        self.nvenc_denoise_conv3d_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_CONV3D)
+        self.nvenc_denoise_conv3d_var.trace_add('write', lambda *args: self._sync_denoise_controls())
+        self.nvenc_denoise_conv3d_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_conv3d_matrix_var = tk.StringVar(value=DEFAULT_NVENC_DENOISE_CONV3D_MATRIX)
+        self.nvenc_denoise_conv3d_matrix_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_conv3d_matrix'))
+        self.nvenc_denoise_conv3d_matrix_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+        self.nvenc_denoise_conv3d_fast_var = tk.BooleanVar(value=DEFAULT_NVENC_DENOISE_CONV3D_FAST)
+        self.nvenc_denoise_conv3d_fast_var.trace_add('write', lambda *args: self._update_selected_jobs('nvenc_denoise_conv3d_fast'))
+        self.nvenc_denoise_conv3d_fast_var.trace_add('write', lambda *args: self._on_denoise_manual_edit())
+
         self.nvenc_ngx_vsr_quality_var = tk.StringVar(value=DEFAULT_NVENC_NGX_VSR_QUALITY)
         # v8.59: the NGX VSR Quality dropdown shows a descriptive label
         # ("3 (High - recommended balance)") while the variable keeps the
@@ -4087,6 +4296,7 @@ class VideoProcessorApp:
         self.hybrid_bot_suffix_var = tk.StringVar(value="-bot")
         self.hybrid_bot_suffix_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_bot_suffix'))
         self.subtitle_font_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT)
+        self.language_font_overrides = copy.deepcopy(DEFAULT_LANGUAGE_FONT_OVERRIDES)
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_font_size_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('subtitle_font_size'))
@@ -5439,6 +5649,22 @@ class VideoProcessorApp:
                                            variable=self.resolution_var, value="original",
                                            command=lambda: self._update_selected_jobs("resolution"))
         self.rb_original.pack(side=tk.LEFT)
+        self.rb_144p = ttk.Radiobutton(resolution_options_frame, text="144p",
+                                       variable=self.resolution_var, value="144p",
+                                       command=lambda: self._update_selected_jobs("resolution"))
+        self.rb_144p.pack(side=tk.LEFT)
+        self.rb_240p = ttk.Radiobutton(resolution_options_frame, text="240p",
+                                       variable=self.resolution_var, value="240p",
+                                       command=lambda: self._update_selected_jobs("resolution"))
+        self.rb_240p.pack(side=tk.LEFT)
+        self.rb_360p = ttk.Radiobutton(resolution_options_frame, text="360p",
+                                       variable=self.resolution_var, value="360p",
+                                       command=lambda: self._update_selected_jobs("resolution"))
+        self.rb_360p.pack(side=tk.LEFT)
+        self.rb_480p = ttk.Radiobutton(resolution_options_frame, text="480p",
+                                       variable=self.resolution_var, value="480p",
+                                       command=lambda: self._update_selected_jobs("resolution"))
+        self.rb_480p.pack(side=tk.LEFT)
         self.rb_720p = ttk.Radiobutton(resolution_options_frame, text="720p",
                                        variable=self.resolution_var, value="720p",
                                        command=lambda: self._update_selected_jobs("resolution"))
@@ -5490,9 +5716,7 @@ class VideoProcessorApp:
         # sits directly UNDER the Upscale Algo row: the NVVFX SuperRes
         # Mode / NGX VSR Quality row, then the Multi-stage Upscaling box
         # (shown while the "Multi-stage SuperRes (>2x)" checkbox above is
-        # on), then the denoise row. The group's widgets are populated
-        # further down, once the output format section has claimed its
-        # slot after it.
+        # output format section has claimed its slot after it.
         superres_frame = ttk.LabelFrame(quality_group, text="Super Resolution & AI Upscaling",
                                         padding=5)
         superres_frame.pack(fill=tk.X, pady=(5, 0))
@@ -5663,23 +5887,128 @@ class VideoProcessorApp:
                 "Level for Stage 2 when it uses an AI upscaler.\n"
                 "\"Same as main control\" inherits the settings above.\n\n"
                 + NVVFX_SUPERRES_MODE_NOTE + "\n\n" + NGX_VSR_LEVEL_NOTE)
-        # Denoise row: packed last inside the Super Resolution group so it
-        # stays below the Multi-stage Upscaling box, which appears and
-        # disappears above it. Kept on self because it is the pack anchor
-        # _update_multi_stage_options() repacks the box against.
-        self.sres_denoise_row = ttk.Frame(superres_frame)
-        sres_row2 = self.sres_denoise_row
-        sres_row2.pack(fill=tk.X, pady=(2, 0))
-        self.nvvfx_denoise_check = ttk.Checkbutton(sres_row2, text="AI Video Denoising",
+
+        # -------------------------------------------------------------
+        # DENOISE GROUP
+        # -------------------------------------------------------------
+        denoise_group = ttk.LabelFrame(quality_group, text="Video Denoising (NVEncC)", padding=5)
+        denoise_group.pack(fill=tk.X, pady=(5, 0))
+
+        # Preset Row
+        d_row_preset = ttk.Frame(denoise_group)
+        d_row_preset.pack(fill=tk.X, pady=(2, 5))
+        ttk.Label(d_row_preset, text="Denoising Preset:").pack(side=tk.LEFT, padx=(0, 5))
+        self.denoise_preset_var = tk.StringVar(value="Custom")
+        self.denoise_preset_combo = ttk.Combobox(
+            d_row_preset, textvariable=self.denoise_preset_var,
+            values=list(DENOISE_PRESETS.keys()), state="readonly", width=35)
+        self.denoise_preset_combo.pack(side=tk.LEFT)
+        self.denoise_preset_combo.bind("<<ComboboxSelected>>", self._apply_denoise_preset)
+
+        # Row 1: NVVFX (AI) and Vulkan
+        d_row1 = ttk.Frame(denoise_group)
+        d_row1.pack(fill=tk.X, pady=(2, 2))
+        self.nvvfx_denoise_check = ttk.Checkbutton(d_row1, text="AI Video Denoising",
                                                    variable=self.nvenc_nvvfx_denoise_var,
-                                                   command=lambda: self._update_selected_jobs(
-                                                       "nvenc_nvvfx_denoise"))
-        self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(0, 15))
-        self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(sres_row2, text="FFmpeg Vulkan Denoise",
+                                                   command=lambda: self._update_selected_jobs("nvenc_nvvfx_denoise"))
+        self.nvvfx_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row1, text="Strength:").pack(side=tk.LEFT, padx=(5, 5))
+        self.nvvfx_denoise_strength_combo = ttk.Combobox(
+            d_row1, textvariable=self.nvenc_nvvfx_denoise_strength_var,
+            values=["0", "1"], width=4, state="disabled")
+        self.nvvfx_denoise_strength_combo.pack(side=tk.LEFT, padx=(0, 15))
+        self.nvvfx_denoise_strength_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._update_selected_jobs("nvenc_nvvfx_denoise_strength"))
+        self.ffmpeg_denoise_vulkan_check = ttk.Checkbutton(d_row1, text="FFmpeg Vulkan Denoise",
                                                            variable=self.ffmpeg_denoise_vulkan_var,
-                                                           command=lambda: self._update_selected_jobs(
-                                                               "ffmpeg_denoise_vulkan"))
+                                                           command=lambda: self._update_selected_jobs("ffmpeg_denoise_vulkan"))
         self.ffmpeg_denoise_vulkan_check.pack(side=tk.LEFT)
+
+        # Row 2: KNN
+        d_row2 = ttk.Frame(denoise_group)
+        d_row2.pack(fill=tk.X, pady=(2, 2))
+        self.knn_denoise_check = ttk.Checkbutton(d_row2, text="KNN", variable=self.nvenc_denoise_knn_var,
+                                                 command=lambda: self._update_selected_jobs("nvenc_denoise_knn"))
+        self.knn_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row2, text="Radius:").pack(side=tk.LEFT, padx=(5, 5))
+        self.knn_radius_entry = ttk.Entry(d_row2, textvariable=self.nvenc_denoise_knn_radius_var, width=5)
+        self.knn_radius_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row2, text="Strength:").pack(side=tk.LEFT, padx=(5, 5))
+        self.knn_strength_entry = ttk.Entry(d_row2, textvariable=self.nvenc_denoise_knn_strength_var, width=6)
+        self.knn_strength_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row2, text="Lerp:").pack(side=tk.LEFT, padx=(5, 5))
+        self.knn_lerp_entry = ttk.Entry(d_row2, textvariable=self.nvenc_denoise_knn_lerp_var, width=6)
+        self.knn_lerp_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row2, text="Th.Lerp:").pack(side=tk.LEFT, padx=(5, 5))
+        self.knn_th_lerp_entry = ttk.Entry(d_row2, textvariable=self.nvenc_denoise_knn_th_lerp_var, width=6)
+        self.knn_th_lerp_entry.pack(side=tk.LEFT)
+
+        # Row 3: PMD
+        d_row3 = ttk.Frame(denoise_group)
+        d_row3.pack(fill=tk.X, pady=(2, 2))
+        self.pmd_denoise_check = ttk.Checkbutton(d_row3, text="PMD", variable=self.nvenc_denoise_pmd_var,
+                                                 command=lambda: self._update_selected_jobs("nvenc_denoise_pmd"))
+        self.pmd_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row3, text="Apply Count:").pack(side=tk.LEFT, padx=(5, 5))
+        self.pmd_apply_count_entry = ttk.Entry(d_row3, textvariable=self.nvenc_denoise_pmd_apply_count_var, width=5)
+        self.pmd_apply_count_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row3, text="Strength:").pack(side=tk.LEFT, padx=(5, 5))
+        self.pmd_strength_entry = ttk.Entry(d_row3, textvariable=self.nvenc_denoise_pmd_strength_var, width=8)
+        self.pmd_strength_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row3, text="Threshold:").pack(side=tk.LEFT, padx=(5, 5))
+        self.pmd_threshold_entry = ttk.Entry(d_row3, textvariable=self.nvenc_denoise_pmd_threshold_var, width=8)
+        self.pmd_threshold_entry.pack(side=tk.LEFT)
+
+        # Row 4: NLMeans & DCT
+        d_row4 = ttk.Frame(denoise_group)
+        d_row4.pack(fill=tk.X, pady=(2, 2))
+        self.nlmeans_denoise_check = ttk.Checkbutton(d_row4, text="NLMeans", variable=self.nvenc_denoise_nlmeans_var,
+                                                     command=lambda: self._update_selected_jobs("nvenc_denoise_nlmeans"))
+        self.nlmeans_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row4, text="Sigma:").pack(side=tk.LEFT, padx=(2, 2))
+        self.nlmeans_sigma_entry = ttk.Entry(d_row4, textvariable=self.nvenc_denoise_nlmeans_sigma_var, width=6)
+        self.nlmeans_sigma_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row4, text="H:").pack(side=tk.LEFT, padx=(2, 2))
+        self.nlmeans_h_entry = ttk.Entry(d_row4, textvariable=self.nvenc_denoise_nlmeans_h_var, width=6)
+        self.nlmeans_h_entry.pack(side=tk.LEFT, padx=(0, 15))
+
+        self.dct_denoise_check = ttk.Checkbutton(d_row4, text="DCT", variable=self.nvenc_denoise_dct_var,
+                                                 command=lambda: self._update_selected_jobs("nvenc_denoise_dct"))
+        self.dct_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row4, text="Step:").pack(side=tk.LEFT, padx=(2, 2))
+        self.dct_step_entry = ttk.Entry(d_row4, textvariable=self.nvenc_denoise_dct_step_var, width=4)
+        self.dct_step_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row4, text="Sigma:").pack(side=tk.LEFT, padx=(2, 2))
+        self.dct_sigma_entry = ttk.Entry(d_row4, textvariable=self.nvenc_denoise_dct_sigma_var, width=6)
+        self.dct_sigma_entry.pack(side=tk.LEFT)
+
+        # Row 5: FFT3D & Conv3D
+        d_row5 = ttk.Frame(denoise_group)
+        d_row5.pack(fill=tk.X, pady=(2, 2))
+        self.fft3d_denoise_check = ttk.Checkbutton(d_row5, text="FFT3D", variable=self.nvenc_denoise_fft3d_var,
+                                                   command=lambda: self._update_selected_jobs("nvenc_denoise_fft3d"))
+        self.fft3d_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row5, text="Sigma:").pack(side=tk.LEFT, padx=(2, 2))
+        self.fft3d_sigma_entry = ttk.Entry(d_row5, textvariable=self.nvenc_denoise_fft3d_sigma_var, width=6)
+        self.fft3d_sigma_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(d_row5, text="Amount:").pack(side=tk.LEFT, padx=(2, 2))
+        self.fft3d_amount_entry = ttk.Entry(d_row5, textvariable=self.nvenc_denoise_fft3d_amount_var, width=6)
+        self.fft3d_amount_entry.pack(side=tk.LEFT, padx=(0, 15))
+
+        self.conv3d_denoise_check = ttk.Checkbutton(d_row5, text="Conv3D", variable=self.nvenc_denoise_conv3d_var,
+                                                    command=lambda: self._update_selected_jobs("nvenc_denoise_conv3d"))
+        self.conv3d_denoise_check.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(d_row5, text="Matrix:").pack(side=tk.LEFT, padx=(2, 2))
+        self.conv3d_matrix_combo = ttk.Combobox(
+            d_row5, textvariable=self.nvenc_denoise_conv3d_matrix_var,
+            values=["standard", "simple"], width=8, state="disabled")
+        self.conv3d_matrix_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.conv3d_matrix_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._update_selected_jobs("nvenc_denoise_conv3d_matrix"))
+        self.conv3d_fast_check = ttk.Checkbutton(d_row5, text="Fast", variable=self.nvenc_denoise_conv3d_fast_var,
+                                                 command=lambda: self._update_selected_jobs("nvenc_denoise_conv3d_fast"))
+        self.conv3d_fast_check.pack(side=tk.LEFT)
+
         output_format_frame = ttk.Frame(quality_group)
         output_format_frame.pack(fill=tk.X, pady=(5, 0))
         ttk.Label(output_format_frame, text="Output Format:").pack(side=tk.LEFT, padx=(0, 5))
@@ -6363,6 +6692,10 @@ class VideoProcessorApp:
         font_size_entry = ttk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
         font_size_entry.pack(side=tk.LEFT)
         ttk.Label(font_frame, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
+
+        self.language_font_btn = ttk.Button(font_frame, text="Lang Overrides...", command=self.open_language_font_overrides_dialog)
+        self.language_font_btn.pack(side=tk.LEFT, padx=(10, 0))
+
         style_frame = ttk.Frame(general_style_frame)
         style_frame.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(style_frame, text="Bold", variable=self.subtitle_bold_var,
@@ -6521,6 +6854,121 @@ class VideoProcessorApp:
                                                   command=lambda: self._update_selected_jobs(
                                                       "hibernate_when_done"))
         self.hibernate_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+
+    def open_language_font_overrides_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Language Font Overrides")
+        dialog.geometry("500x350")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Map subtitle language suffixes (e.g., '-cn', '-jp') to specific fonts.").pack(pady=(10, 5))
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        tree = ttk.Treeview(list_frame, columns=("Suffix", "Font"), show="headings", height=10)
+        tree.heading("Suffix", text="Suffix")
+        tree.heading("Font", text="Font Family")
+        tree.column("Suffix", width=100, anchor=tk.CENTER)
+        tree.column("Font", width=350)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def refresh_list():
+            for row in tree.get_children():
+                tree.delete(row)
+            for suffix, font_name in self.language_font_overrides.items():
+                tree.insert("", tk.END, values=(suffix, font_name))
+        refresh_list()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def add_override():
+            add_dialog = tk.Toplevel(dialog)
+            add_dialog.title("Add Override")
+            add_dialog.geometry("350x150")
+            add_dialog.transient(dialog)
+            add_dialog.grab_set()
+
+            ttk.Label(add_dialog, text="Suffix (e.g. -cn):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            suffix_entry = ttk.Entry(add_dialog, width=15)
+            suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+            ttk.Label(add_dialog, text="Font:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+            font_combo = ttk.Combobox(add_dialog, values=sorted(list(font.families())), width=30)
+            font_combo.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+            def save_new():
+                s = suffix_entry.get().strip()
+                f = font_combo.get().strip()
+                if s and f:
+                    self.language_font_overrides[s] = f
+                    self._update_selected_jobs('language_font_overrides')
+                    refresh_list()
+                    add_dialog.destroy()
+
+            ttk.Button(add_dialog, text="Save", command=save_new).grid(row=2, column=1, pady=10, sticky="e", padx=10)
+
+            ttk.Button(add_dialog, text="Save", command=save_new).grid(row=2, column=1, pady=10, sticky="e", padx=10)
+
+        def edit_override():
+            selected = tree.selection()
+            if not selected:
+                return
+
+            item = tree.item(selected[0])
+            old_suffix = item['values'][0]
+            old_font = item['values'][1]
+
+            edit_dialog = tk.Toplevel(dialog)
+            edit_dialog.title("Edit Override")
+            edit_dialog.geometry("350x150")
+            edit_dialog.transient(dialog)
+            edit_dialog.grab_set()
+
+            ttk.Label(edit_dialog, text="Suffix (e.g. -cn):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            suffix_entry = ttk.Entry(edit_dialog, width=15)
+            suffix_entry.insert(0, old_suffix)
+            suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+            ttk.Label(edit_dialog, text="Font:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+            font_combo = ttk.Combobox(edit_dialog, values=sorted(list(font.families())), width=30)
+            font_combo.set(old_font)
+            font_combo.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+            def save_edit():
+                s = suffix_entry.get().strip()
+                f = font_combo.get().strip()
+                if s and f:
+                    # Remove the old key if the suffix changed
+                    if s != old_suffix and old_suffix in self.language_font_overrides:
+                        del self.language_font_overrides[old_suffix]
+                    self.language_font_overrides[s] = f
+                    self._update_selected_jobs('language_font_overrides')
+                    refresh_list()
+                    edit_dialog.destroy()
+
+            ttk.Button(edit_dialog, text="Save", command=save_edit).grid(row=2, column=1, pady=10, sticky="e", padx=10)
+
+        def remove_override():
+            selected = tree.selection()
+            if selected:
+                item = tree.item(selected[0])
+                suffix = item['values'][0]
+                if suffix in self.language_font_overrides:
+                    del self.language_font_overrides[suffix]
+                    self._update_selected_jobs('language_font_overrides')
+                    refresh_list()
+
+        ttk.Button(btn_frame, text="Add...", command=add_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Edit...", command=edit_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Remove", command=remove_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def populate_fonts(self):
         try:
@@ -7632,6 +8080,53 @@ class VideoProcessorApp:
         if reassert:
             self._schedule_combo_label_sync()
 
+    def _apply_denoise_preset(self, event=None):
+        preset_name = self.denoise_preset_var.get()
+        if preset_name == "Custom" or preset_name not in DENOISE_PRESETS:
+            return
+        preset = DENOISE_PRESETS[preset_name]
+
+        # We need to temporarily unbind the traces that normally flip the preset to Custom,
+        # otherwise setting these values programmatically will just flip it right back.
+        # But for simplicity in Tkinter, we can just let it flip and then force it back at the end.
+        for key, value in preset.items():
+            var_name = key + "_var"
+            if hasattr(self, var_name):
+                getattr(self, var_name).set(value)
+
+        self.denoise_preset_var.set(preset_name)
+        self._sync_denoise_controls()
+
+        # update jobs with the new full denoise state
+        self._update_selected_jobs('nvenc_nvvfx_denoise')
+
+    def _on_denoise_manual_edit(self, *args):
+        if not getattr(self, '_is_loading_job_to_gui', False):
+            self.denoise_preset_var.set("Custom")
+
+    def _sync_denoise_controls(self, *args):
+        is_nvencc = (self.encoder_backend_var.get() in ["nvencc_only", "nvencc_video_with_ffmpeg_audio"])
+
+        def set_state(widgets, enabled):
+            for widget in widgets:
+                if hasattr(self, widget):
+                    self._set_widget_state_recursive(getattr(self, widget), "normal" if enabled and is_nvencc else "disabled")
+
+        if hasattr(self, "nvvfx_denoise_strength_combo"):
+            enabled = self.nvenc_nvvfx_denoise_var.get()
+            self._set_widget_state_recursive(self.nvvfx_denoise_strength_combo, "readonly" if enabled and is_nvencc else "disabled")
+
+        set_state(["knn_radius_entry", "knn_strength_entry", "knn_lerp_entry", "knn_th_lerp_entry"], self.nvenc_denoise_knn_var.get())
+        set_state(["pmd_apply_count_entry", "pmd_strength_entry", "pmd_threshold_entry"], self.nvenc_denoise_pmd_var.get())
+        set_state(["nlmeans_sigma_entry", "nlmeans_h_entry"], self.nvenc_denoise_nlmeans_var.get())
+        set_state(["dct_step_entry", "dct_sigma_entry"], self.nvenc_denoise_dct_var.get())
+        set_state(["fft3d_sigma_entry", "fft3d_amount_entry"], self.nvenc_denoise_fft3d_var.get())
+
+        if hasattr(self, "conv3d_matrix_combo"):
+            enabled = self.nvenc_denoise_conv3d_var.get()
+            self._set_widget_state_recursive(self.conv3d_matrix_combo, "readonly" if enabled and is_nvencc else "disabled")
+            set_state(["conv3d_fast_check"], enabled)
+
     def _sync_superres_strength_controls(self):
         """Apply the Specify checkbox state to the strength entry.
 
@@ -7770,19 +8265,8 @@ class VideoProcessorApp:
                 self.multi_stage_superres_check,
                 "normal" if nvencc_backend else "disabled")
         if hasattr(self, "multi_stage_frame"):
-            # Shown whenever the checkbox is on. Packed *before* the
-            # denoise row inside the Super Resolution group, so it renders
-            # directly under the NVVFX SuperRes Mode / NGX VSR Quality row
-            # and keeps the denoise row below it. Both are children of
-            # superres_frame, so the anchor has to be a sibling within
-            # that group.
             if self.multi_stage_superres_var.get():
-                _before = getattr(self, "sres_denoise_row", None)
-                if _before is not None:
-                    self.multi_stage_frame.pack(fill=tk.X, pady=(5, 0),
-                                                before=_before)
-                else:
-                    self.multi_stage_frame.pack(fill=tk.X, pady=(5, 0))
+                self.multi_stage_frame.pack(fill=tk.X, pady=(5, 0))
             else:
                 self.multi_stage_frame.pack_forget()
         for (algo_var, level_var, algo_combo, level_combo,
@@ -7893,8 +8377,10 @@ class VideoProcessorApp:
                 "normal" if (enable_superres or enable_ngx) else "disabled")
         self._update_multi_stage_options()
         if hasattr(self, "nvvfx_denoise_check"):
-            self._set_widget_state_recursive(self.nvvfx_denoise_check,
-                                             "normal" if enable_nvencc_features else "disabled")
+            for check in [self.nvvfx_denoise_check, self.knn_denoise_check, self.pmd_denoise_check,
+                          self.nlmeans_denoise_check, self.dct_denoise_check, self.fft3d_denoise_check, self.conv3d_denoise_check]:
+                self._set_widget_state_recursive(check, "normal" if enable_nvencc_features else "disabled")
+        self._sync_denoise_controls()
         if hasattr(self, "ffmpeg_denoise_vulkan_check"):
             self._set_widget_state_recursive(self.ffmpeg_denoise_vulkan_check,
                                              "normal" if enable_ffmpeg_features else "disabled")
@@ -8213,6 +8699,28 @@ class VideoProcessorApp:
             "output_format": self.output_format_var.get(), "video_codec": self.video_codec_var.get(),
             "encoder_backend": self.encoder_backend_var.get(),
             "nvenc_nvvfx_denoise": self.nvenc_nvvfx_denoise_var.get(),
+            "nvenc_nvvfx_denoise_strength": self.nvenc_nvvfx_denoise_strength_var.get(),
+            "nvenc_denoise_knn": self.nvenc_denoise_knn_var.get(),
+            "nvenc_denoise_knn_radius": self.nvenc_denoise_knn_radius_var.get(),
+            "nvenc_denoise_knn_strength": self.nvenc_denoise_knn_strength_var.get(),
+            "nvenc_denoise_knn_lerp": self.nvenc_denoise_knn_lerp_var.get(),
+            "nvenc_denoise_knn_th_lerp": self.nvenc_denoise_knn_th_lerp_var.get(),
+            "nvenc_denoise_pmd": self.nvenc_denoise_pmd_var.get(),
+            "nvenc_denoise_pmd_apply_count": self.nvenc_denoise_pmd_apply_count_var.get(),
+            "nvenc_denoise_pmd_strength": self.nvenc_denoise_pmd_strength_var.get(),
+            "nvenc_denoise_pmd_threshold": self.nvenc_denoise_pmd_threshold_var.get(),
+            "nvenc_denoise_nlmeans": self.nvenc_denoise_nlmeans_var.get(),
+            "nvenc_denoise_nlmeans_sigma": self.nvenc_denoise_nlmeans_sigma_var.get(),
+            "nvenc_denoise_nlmeans_h": self.nvenc_denoise_nlmeans_h_var.get(),
+            "nvenc_denoise_dct": self.nvenc_denoise_dct_var.get(),
+            "nvenc_denoise_dct_step": self.nvenc_denoise_dct_step_var.get(),
+            "nvenc_denoise_dct_sigma": self.nvenc_denoise_dct_sigma_var.get(),
+            "nvenc_denoise_fft3d": self.nvenc_denoise_fft3d_var.get(),
+            "nvenc_denoise_fft3d_sigma": self.nvenc_denoise_fft3d_sigma_var.get(),
+            "nvenc_denoise_fft3d_amount": self.nvenc_denoise_fft3d_amount_var.get(),
+            "nvenc_denoise_conv3d": self.nvenc_denoise_conv3d_var.get(),
+            "nvenc_denoise_conv3d_matrix": self.nvenc_denoise_conv3d_matrix_var.get(),
+            "nvenc_denoise_conv3d_fast": self.nvenc_denoise_conv3d_fast_var.get(),
             # v8.59: these two comboboxes display descriptive labels while
             # the option must stay the bare code. Normalize on read so a
             # label can never be persisted into a preset, job option, or
@@ -8319,6 +8827,7 @@ class VideoProcessorApp:
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
             "subtitle_font": self.subtitle_font_var.get(),
+            "language_font_overrides": self.language_font_overrides,
             "subtitle_font_size": self.subtitle_font_size_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(),
             "subtitle_pipeline": self.subtitle_pipeline_var.get(),
@@ -8427,6 +8936,7 @@ class VideoProcessorApp:
             "dovi_analysis_tuning": self.dovi_analysis_tuning_var.get(),
             "dovi_keep_xml": self.dovi_keep_xml_var.get(),
             "sdr_to_hdr": self.sdr_to_hdr_var.get(),
+            "truehdr_pipeline": self.truehdr_pipeline_var.get(),
             "sdr_to_hdr_working_res": self.sdr_to_hdr_res_var.get(),
             "truehdr_contrast": self.truehdr_contrast_var.get(),
             "truehdr_saturation": self.truehdr_saturation_var.get(),
@@ -8959,6 +9469,14 @@ class VideoProcessorApp:
                               f"bottom={bot_info.get('color_transfer')}")
             except Exception as e:
                 print(f"[WARN] Could not probe hybrid-duo pair: {e}")
+
+        if subtitle_path:
+            overrides = options.get("language_font_overrides", {})
+            for suffix, font in overrides.items():
+                if subtitle_path.lower().endswith(f"{suffix}.srt") or subtitle_path.lower().endswith(f"{suffix}.ass"):
+                    options["subtitle_font"] = font
+                    break
+
         new_job = {
             "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
             "video_path": video_path,
@@ -9065,6 +9583,35 @@ class VideoProcessorApp:
         self.video_codec_var.set(options.get("video_codec", DEFAULT_VIDEO_CODEC))
         # PATCHED: set backend before upscale_algo in update_gui_from_job_options
         self.nvenc_nvvfx_denoise_var.set(options.get("nvenc_nvvfx_denoise", DEFAULT_NVENC_NVVFX_DENOISE))
+        self.nvenc_nvvfx_denoise_strength_var.set(options.get("nvenc_nvvfx_denoise_strength", DEFAULT_NVENC_NVVFX_DENOISE_STRENGTH))
+
+        self.nvenc_denoise_knn_var.set(options.get("nvenc_denoise_knn", DEFAULT_NVENC_DENOISE_KNN))
+        self.nvenc_denoise_knn_radius_var.set(options.get("nvenc_denoise_knn_radius", DEFAULT_NVENC_DENOISE_KNN_RADIUS))
+        self.nvenc_denoise_knn_strength_var.set(options.get("nvenc_denoise_knn_strength", DEFAULT_NVENC_DENOISE_KNN_STRENGTH))
+        self.nvenc_denoise_knn_lerp_var.set(options.get("nvenc_denoise_knn_lerp", DEFAULT_NVENC_DENOISE_KNN_LERP))
+        self.nvenc_denoise_knn_th_lerp_var.set(options.get("nvenc_denoise_knn_th_lerp", DEFAULT_NVENC_DENOISE_KNN_TH_LERP))
+
+        self.nvenc_denoise_pmd_var.set(options.get("nvenc_denoise_pmd", DEFAULT_NVENC_DENOISE_PMD))
+        self.nvenc_denoise_pmd_apply_count_var.set(options.get("nvenc_denoise_pmd_apply_count", DEFAULT_NVENC_DENOISE_PMD_APPLY_COUNT))
+        self.nvenc_denoise_pmd_strength_var.set(options.get("nvenc_denoise_pmd_strength", DEFAULT_NVENC_DENOISE_PMD_STRENGTH))
+        self.nvenc_denoise_pmd_threshold_var.set(options.get("nvenc_denoise_pmd_threshold", DEFAULT_NVENC_DENOISE_PMD_THRESHOLD))
+
+        self.nvenc_denoise_nlmeans_var.set(options.get("nvenc_denoise_nlmeans", DEFAULT_NVENC_DENOISE_NLMEANS))
+        self.nvenc_denoise_nlmeans_sigma_var.set(options.get("nvenc_denoise_nlmeans_sigma", DEFAULT_NVENC_DENOISE_NLMEANS_SIGMA))
+        self.nvenc_denoise_nlmeans_h_var.set(options.get("nvenc_denoise_nlmeans_h", DEFAULT_NVENC_DENOISE_NLMEANS_H))
+
+        self.nvenc_denoise_dct_var.set(options.get("nvenc_denoise_dct", DEFAULT_NVENC_DENOISE_DCT))
+        self.nvenc_denoise_dct_step_var.set(options.get("nvenc_denoise_dct_step", DEFAULT_NVENC_DENOISE_DCT_STEP))
+        self.nvenc_denoise_dct_sigma_var.set(options.get("nvenc_denoise_dct_sigma", DEFAULT_NVENC_DENOISE_DCT_SIGMA))
+
+        self.nvenc_denoise_fft3d_var.set(options.get("nvenc_denoise_fft3d", DEFAULT_NVENC_DENOISE_FFT3D))
+        self.nvenc_denoise_fft3d_sigma_var.set(options.get("nvenc_denoise_fft3d_sigma", DEFAULT_NVENC_DENOISE_FFT3D_SIGMA))
+        self.nvenc_denoise_fft3d_amount_var.set(options.get("nvenc_denoise_fft3d_amount", DEFAULT_NVENC_DENOISE_FFT3D_AMOUNT))
+
+        self.nvenc_denoise_conv3d_var.set(options.get("nvenc_denoise_conv3d", DEFAULT_NVENC_DENOISE_CONV3D))
+        self.nvenc_denoise_conv3d_matrix_var.set(options.get("nvenc_denoise_conv3d_matrix", DEFAULT_NVENC_DENOISE_CONV3D_MATRIX))
+        self.nvenc_denoise_conv3d_fast_var.set(options.get("nvenc_denoise_conv3d_fast", DEFAULT_NVENC_DENOISE_CONV3D_FAST))
+
         self.nvenc_superres_mode_var.set(options.get("nvenc_superres_mode", DEFAULT_NVENC_SUPERRES_MODE))
         self._sync_superres_mode_display()
         # v8.59: a stored strength means the option was explicitly set, so
@@ -9107,6 +9654,7 @@ class VideoProcessorApp:
         self.dovi_analysis_tuning_var.set(options.get("dovi_analysis_tuning", DEFAULT_DOVI_ANALYSIS_TUNING))
         self.dovi_keep_xml_var.set(options.get("dovi_keep_xml", DEFAULT_DOVI_KEEP_XML))
         self.sdr_to_hdr_var.set(options.get("sdr_to_hdr", DEFAULT_SDR_TO_HDR))
+        self.truehdr_pipeline_var.set(options.get("truehdr_pipeline", DEFAULT_TRUEHDR_PIPELINE))
         self.sdr_to_hdr_res_var.set(
             options.get("sdr_to_hdr_working_res", DEFAULT_SDR_TO_HDR_WORKING_RES))
         self.truehdr_contrast_var.set(
@@ -9273,6 +9821,7 @@ class VideoProcessorApp:
         self.hybrid_bot_suffix_var.set(options.get("hybrid_bot_suffix", "-bot"))
         self._update_hybrid_ui_labels()
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT))
+        self.language_font_overrides = options.get("language_font_overrides", copy.deepcopy(DEFAULT_LANGUAGE_FONT_OVERRIDES))
         self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE))
         self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
         self.subtitle_pipeline_var.set(options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE))
@@ -10307,6 +10856,7 @@ class VideoProcessorApp:
         ass_burn_path, temp_extracted_srt_path = None, None
         nvencc_subburn_path = None
         title_ass_path = None
+        created_ass_files = []
         encoder_backend = options.get("encoder_backend", DEFAULT_ENCODER_BACKEND)
         base_dir = base_dir or os.getcwd()
         try:
@@ -10411,6 +10961,8 @@ class VideoProcessorApp:
                                                                   target_res=(sub_target_w, sub_target_h))
                         if not ass_burn_path:
                             raise VideoProcessingError("Failed to create styled ASS file.")
+                    if ass_burn_path:
+                        created_ass_files.append(ass_burn_path)
                     if options.get("subtitle_check_font_compatibility", DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY):
                         chk_font = options.get("subtitle_font", DEFAULT_SUBTITLE_FONT)
                         chk_res = check_subtitle_font_compatibility(subtitle_source_file, chk_font)
@@ -10449,6 +11001,7 @@ class VideoProcessorApp:
                     title_ass_path = create_title_ass_file(title_text, options,
                                                            target_res=(sub_target_w, sub_target_h))
                     if title_ass_path:
+                        created_ass_files.append(title_ass_path)
                         print(f"[INFO] Title burn: '{title_text[:50]}...'"
                               if len(title_text) > 50 else f"[INFO] Title burn: '{title_text}'")
                     else:
@@ -10499,8 +11052,15 @@ class VideoProcessorApp:
             if _is_dv and not _is_hybrid:
                 if do_sdr_conv:
                     print("[INFO] SDR-HDR: running TrueHDR preprocessor for DV...")
+                    sub_for_dv = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path) if (options.get("burn_subtitles", True) and (ass_burn_path or title_ass_path)) else None
+                    if sub_for_dv:
+                        created_ass_files.append(sub_for_dv)
                     truehdr_intermediate = self._truehdr_preprocess(
-                        job['video_path'], output_dir, options, info)
+                        job['video_path'], output_dir, options, info, subtitle_burn_path=sub_for_dv, base_dir=base_dir)
+                    if sub_for_dv:
+                        ass_burn_path = None
+                        title_ass_path = None
+                        options["_subtitles_already_burned"] = True
                     register_temp_file(truehdr_intermediate)
                     effective_info = get_video_info(truehdr_intermediate)
                     effective_job = dict(job)
@@ -10552,11 +11112,26 @@ class VideoProcessorApp:
                 force_2pass = pipe_mode == "2-pass"
                 force_1pass = pipe_mode == "1-pass"
 
+                # Force 2-pass in auto mode if there is a subtitle burn to prevent dim subtitles
+                has_subtitle = bool(options.get("burn_subtitles", False) and job.get("subtitle_path"))
+                if pipe_mode == "auto" and has_subtitle:
+                    force_2pass = True
+
                 if force_2pass or (not force_1pass and (has_res_change or has_multistage)):
-                    reason = "forced" if force_2pass else f"({src_w}x{src_h} -> {tgt_w}x{tgt_h} scaling detected)"
+                    if force_2pass and pipe_mode == "auto" and has_subtitle:
+                        reason = "forced (subtitle burn detected in auto mode)"
+                    else:
+                        reason = "forced" if force_2pass else f"({src_w}x{src_h} -> {tgt_w}x{tgt_h} scaling detected)"
                     print(f"[INFO] SDR-HDR: running TrueHDR preprocessor at source resolution {reason}...")
+                    sub_for_th = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path) if (options.get("burn_subtitles", True) and (ass_burn_path or title_ass_path)) else None
+                    if sub_for_th:
+                        created_ass_files.append(sub_for_th)
                     truehdr_intermediate = self._truehdr_preprocess(
-                        job['video_path'], output_dir, options, info)
+                        job['video_path'], output_dir, options, info, subtitle_burn_path=sub_for_th, base_dir=base_dir)
+                    if sub_for_th:
+                        ass_burn_path = None
+                        title_ass_path = None
+                        options["_subtitles_already_burned"] = True
                     register_temp_file(truehdr_intermediate)
                     effective_info = get_video_info(truehdr_intermediate)
                     effective_job = dict(job)
@@ -10726,6 +11301,8 @@ class VideoProcessorApp:
                         f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                if nvencc_subburn_path:
+                    created_ass_files.append(nvencc_subburn_path)
                 nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
                                                            orientation,
                                                            subtitle_burn_path=nvencc_subburn_path,
@@ -10747,6 +11324,8 @@ class VideoProcessorApp:
                 if self.run_ffmpeg_command(audio_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing audio for {job['video_path']}")
                 nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                if nvencc_subburn_path:
+                    created_ass_files.append(nvencc_subburn_path)
                 nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
                                                            orientation,
                                                            audio_source_path=temp_audio,
@@ -10814,13 +11393,9 @@ class VideoProcessorApp:
                 CURRENT_TEMP_FILE = None
             if temp_extracted_srt_path:
                 cleanup_single_temp_file(temp_extracted_srt_path)
-            if nvencc_subburn_path and nvencc_subburn_path not in [ass_burn_path, title_ass_path] and \
-                    os.path.exists(nvencc_subburn_path):
-                cleanup_single_temp_file(nvencc_subburn_path)
-            if ass_burn_path and os.path.exists(ass_burn_path):
-                cleanup_single_temp_file(ass_burn_path)
-            if title_ass_path and os.path.exists(title_ass_path):
-                cleanup_single_temp_file(title_ass_path)
+            for af in set(created_ass_files):
+                if af and os.path.exists(af):
+                    cleanup_single_temp_file(af)
             CURRENT_JOB_TEMP_DIR = None
 
     def compute_target_bitrate_kbps(self, options, info, file_path):
@@ -10924,7 +11499,7 @@ class VideoProcessorApp:
             info_b = info_bot if (orientation == "hybrid-duo (dual source)" and info_bot) else info
             if str(aspect_str).lower() == "auto":
                 if eff_layout == "side_by_side":
-                    height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                    height_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                                   "HD": 1080, "4k": 2160, "8k": 4320}
                     if res_key and str(res_key).lower() == "original":
                         target_h = info.get("height", 1080) if info else 1080
@@ -10944,7 +11519,7 @@ class VideoProcessorApp:
                         w_right = int(target_h * 16 / 9)
                     return ((w_left + w_right) // 2) * 2, (target_h // 2) * 2
                 else:
-                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                    width_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                                  "HD": 1080, "4k": 2160, "8k": 4320}
                     if res_key and str(res_key).lower() == "original":
                         target_w = info.get("width", 1080) if info else 1080
@@ -10991,7 +11566,7 @@ class VideoProcessorApp:
                     # Portrait canvas: short side is the width. The
                     # current width_map is already short-side-anchored,
                     # so no change needed here.
-                    width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                    width_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                                  "HD": 1080, "4k": 2160, "8k": 4320}
                     target_w = width_map.get(res_key, 1080)
                     target_h = int(target_w * den / num)
@@ -11000,13 +11575,13 @@ class VideoProcessorApp:
                     # Landscape canvas: the short side is the height.
                     # Anchor on the requested "Xp" value as target_h
                     # and derive the width from the canvas aspect.
-                    height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+                    height_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                                   "HD": 1080, "4k": 2160, "8k": 4320}
                     target_h = height_map.get(res_key, 1080)
                     target_w = int(target_h * num / den)
             return (target_w // 2) * 2, (target_h // 2) * 2
         if orientation == "vertical":
-            width_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+            width_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                          "HD": 1080, "4k": 2160, "8k": 4320}
             if res_key and str(res_key).lower() == "original":
                 _src_w = int(info.get("width", 0)) if info else 0
@@ -11031,7 +11606,7 @@ class VideoProcessorApp:
         # on the requested "Xp" value as target_h and derive the width
         # from the configured aspect ratio. This keeps 4:3 and 5:4
         # outputs inside the same vertical envelope as 16:9.
-        height_map = {"720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
+        height_map = {"144p": 144, "240p": 240, "360p": 360, "480p": 480, "720p": 720, "1080p": 1080, "2160p": 2160, "4320p": 4320,
                       "HD": 1080, "4k": 2160, "8k": 4320}
         if res_key and str(res_key).lower() == "original":
             _src_w = int(info.get("width", 0)) if info else 0
@@ -11365,8 +11940,36 @@ class VideoProcessorApp:
                 cmd.extend(["--vpp-pad",
                             f"{pad_args[0]},{pad_args[1]},{pad_args[2]},{pad_args[3]},color={pad_color_hex}"])
         if options.get("nvenc_nvvfx_denoise"):
-            cmd.append("--vpp-nvvfx-denoise")
-        if subtitle_burn_path:
+            strength = options.get("nvenc_nvvfx_denoise_strength", "0")
+            cmd.extend(["--vpp-nvvfx-denoise", f"strength={strength}"])
+        if options.get("nvenc_denoise_knn"):
+            r = options.get("nvenc_denoise_knn_radius", "3")
+            s = options.get("nvenc_denoise_knn_strength", "0.08")
+            l = options.get("nvenc_denoise_knn_lerp", "0.20")
+            th = options.get("nvenc_denoise_knn_th_lerp", "0.80")
+            cmd.extend(["--vpp-knn", f"radius={r},strength={s},lerp={l},th_lerp={th}"])
+        if options.get("nvenc_denoise_pmd"):
+            c = options.get("nvenc_denoise_pmd_apply_count", "2")
+            s = options.get("nvenc_denoise_pmd_strength", "100.00")
+            t = options.get("nvenc_denoise_pmd_threshold", "100.00")
+            cmd.extend(["--vpp-pmd", f"apply_count={c},strength={s},threshold={t}"])
+        if options.get("nvenc_denoise_nlmeans"):
+            s = options.get("nvenc_denoise_nlmeans_sigma", "0.005")
+            h = options.get("nvenc_denoise_nlmeans_h", "0.05")
+            cmd.extend(["--vpp-nlmeans", f"sigma={s},h={h}"])
+        if options.get("nvenc_denoise_dct"):
+            st = options.get("nvenc_denoise_dct_step", "2")
+            s = options.get("nvenc_denoise_dct_sigma", "4.0")
+            cmd.extend(["--vpp-denoise-dct", f"step={st},sigma={s}"])
+        if options.get("nvenc_denoise_fft3d"):
+            s = options.get("nvenc_denoise_fft3d_sigma", "1.00")
+            a = options.get("nvenc_denoise_fft3d_amount", "1.00")
+            cmd.extend(["--vpp-fft3d", f"sigma={s},amount={a}"])
+        if options.get("nvenc_denoise_conv3d"):
+            m = options.get("nvenc_denoise_conv3d_matrix", "standard")
+            f = "fast=True" if options.get("nvenc_denoise_conv3d_fast") else "fast=False"
+            cmd.extend(["--vpp-convolution3d", f"matrix={m},{f}"])
+        if subtitle_burn_path and not options.get("_subtitles_already_burned", False):
             safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir)
             pipeline_mode = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) if options else DEFAULT_SUBTITLE_PIPELINE
             mode_lbl = "GPU (Direct CUDA)" if pipeline_mode == "gpu_cuda" else "CPU (libass Live)"
@@ -11867,7 +12470,7 @@ class VideoProcessorApp:
 
         return final_mp4
 
-    def _truehdr_preprocess(self, input_file, work_dir, options, info):
+    def _truehdr_preprocess(self, input_file, work_dir, options, info, subtitle_burn_path=None, base_dir=None):
         base = os.path.splitext(os.path.basename(input_file))[0]
         safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip() or "truehdr"
         out_path = os.path.join(work_dir, f"{safe_base}_truehdr_intermediate.mp4")
@@ -11894,6 +12497,11 @@ class VideoProcessorApp:
         th_c = options.get("truehdr_contrast", DEFAULT_TRUEHDR_CONTRAST)
         th_s = options.get("truehdr_saturation", DEFAULT_TRUEHDR_SATURATION)
         th_mg = options.get("truehdr_middlegray", DEFAULT_TRUEHDR_MIDDLEGRAY)
+
+        if subtitle_burn_path:
+            safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir or work_dir)
+            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
+
         cmd.extend([
                "--colorprim", "bt2020", "--transfer", "smpte2084",
                "--colormatrix", "bt2020nc",
@@ -12277,7 +12885,7 @@ class VideoProcessorApp:
                     _fl = self._chroma_cpu_scale_flags(ffmpeg_upscale_algo)
                     s = f"scale=w={w}:h={h}:flags={_fl}"
                 else:
-                    s = (f"scale_cuda=w={w}:h={h}:interp_algo={ffmpeg_upscale_algo}"
+                    s = (f"scale_cuda=w={w}:h={h}:interp_algo={_normalize_cuda_interp_algo(ffmpeg_upscale_algo)}"
                          f":format={cuda_work_fmt}")
                 if force_ar:
                     s += f":force_original_aspect_ratio={force_ar}"
@@ -12544,7 +13152,7 @@ class VideoProcessorApp:
                     elif (not (use_nvencc_resize and options.get("aspect_mode") == "stretch")
                           or options.get("_preproc_scale_override")):
                         vf_filters.append(
-                            f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                            f"scale_cuda=w={target_w}:h={target_h}:interp_algo={_normalize_cuda_interp_algo(safe_algo)}"
                             f":format={cuda_work_fmt}")
                     else:
                         target_w, target_h = info["width"], info["height"]
@@ -12558,7 +13166,7 @@ class VideoProcessorApp:
                     aspect_str = options.get('horizontal_aspect')
                     if not aspect_str:
                         raise VideoProcessingError("Missing 'Horizontal Aspect Ratio' in preset.")
-                _valid_res_keys = {"720p", "1080p", "2160p", "4320p", "HD", "4k", "8k", "original"}
+                _valid_res_keys = {"144p", "240p", "360p", "480p", "720p", "1080p", "2160p", "4320p", "HD", "4k", "8k", "original"}
                 if not res_key or (res_key not in _valid_res_keys and str(res_key).lower() != "original"):
                     raise VideoProcessingError(
                         f"Invalid resolution '{res_key}' for {orientation} mode.")
@@ -12617,7 +13225,7 @@ class VideoProcessorApp:
                     else:
                         vf_filters.append(scale_base)
                 else:
-                    scale_base = (f"scale_cuda=w={target_w}:h={target_h}:interp_algo={safe_algo}"
+                    scale_base = (f"scale_cuda=w={target_w}:h={target_h}:interp_algo={_normalize_cuda_interp_algo(safe_algo)}"
                                   f":format={cuda_work_fmt}")
                     apply_pixelate = options.get("aspect_pixelate", False)
                     apply_blur = options.get("aspect_blur", False)
@@ -12644,7 +13252,7 @@ class VideoProcessorApp:
                             sat = options.get("pixelate_saturation", DEFAULT_PIXELATE_SATURATION)
                             fc_parts.append(
                                 f"{bg_current}scale_cuda=w={target_w // m}:h={target_h // m}:"
-                                f"interp_algo={safe_algo}:format={target_fmt},")
+                                f"interp_algo={_normalize_cuda_interp_algo(safe_algo)}:format={target_fmt},")
                             fc_parts.append(
                                 f"hwdownload,format={target_fmt},"
                                 f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix},"
@@ -12707,7 +13315,7 @@ class VideoProcessorApp:
                             fc_parts.append(f"{v_fg_in_tag}split=2[v_fg_for_ambient][v_fg_in_real];")
                             fc_parts.append(
                                 f"[v_fg_for_ambient]scale_cuda=w={target_w}:h={target_h}:"
-                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"interp_algo={_normalize_cuda_interp_algo(safe_algo)}:force_original_aspect_ratio=decrease:"
                                 f"format={target_fmt},")
                             # pad_cuda only accepts 8-bit nv12/yuv420p surfaces, so a
                             # 10-bit p010le foreground (HDR output) makes it fail with
@@ -12777,7 +13385,7 @@ class VideoProcessorApp:
                             # Foreground: scale on GPU, then download to CPU.
                             fc_parts.append(
                                 f"[v_fg_in_real]scale_cuda=w={target_w}:h={target_h}:"
-                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"interp_algo={_normalize_cuda_interp_algo(safe_algo)}:force_original_aspect_ratio=decrease:"
                                 # v8.41 CHROMA-ALIGNMENT FIX: normalize the odd-height
                                 # aspect-preserving scale output to even dimensions before
                                 # the overlay, so chroma is well-formed for the composite.
@@ -12791,7 +13399,7 @@ class VideoProcessorApp:
                             bg_current = "[v_bg_sys]"
                             fc_parts.append(
                                 f"{v_fg_in_tag}scale_cuda=w={target_w}:h={target_h}:"
-                                f"interp_algo={safe_algo}:force_original_aspect_ratio=decrease:"
+                                f"interp_algo={_normalize_cuda_interp_algo(safe_algo)}:force_original_aspect_ratio=decrease:"
                                 # v8.41 CHROMA-ALIGNMENT FIX: normalize the odd-height
                                 # aspect-preserving scale output to even dimensions before
                                 # the overlay, so chroma is well-formed for the composite.

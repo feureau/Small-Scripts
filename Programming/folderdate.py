@@ -71,5 +71,37 @@ def rename_folders_with_date(folder_paths):
 
 
 if __name__ == "__main__":
-    folders_to_process = sys.argv[1:]
-    rename_folders_with_date(folders_to_process)
+    import argparse
+    import glob
+
+    parser = argparse.ArgumentParser(description="Rename folders by prefixing them with the current date.")
+    parser.add_argument("folders", nargs="*", help="List of folder paths to rename (supports wildcards like *)")
+    parser.add_argument("--auto", action="store_true", help="Automatically process all folders in the current directory")
+
+    args = parser.parse_args()
+
+    folders_to_process = []
+
+    if args.auto:
+        # Get all directories in the current working directory
+        for item in os.listdir('.'):
+            if os.path.isdir(item):
+                folders_to_process.append(item)
+
+    # Expand wildcards manually for Windows CMD support
+    for raw_path in args.folders:
+        expanded = glob.glob(raw_path)
+        if expanded:
+            folders_to_process.extend(expanded)
+        else:
+            folders_to_process.append(raw_path)
+
+    if not folders_to_process:
+        parser.print_help()
+        print("\nError: No folder paths were provided. Provide folder paths or use --auto.")
+    else:
+        # Remove duplicates in case of overlap between explicit args and --auto
+        seen = set()
+        unique_folders = [x for x in folders_to_process if not (x in seen or seen.add(x))]
+        rename_folders_with_date(unique_folders)
+

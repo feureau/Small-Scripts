@@ -3,6 +3,41 @@
 ================================================================================================
 Image Cropper and Converter (Multiprocessing Supported)
 ================================================================================================
+
+This script is a robust command-line utility for batch processing images. It supports resizing,
+cropping, padding, format conversion, and adding/removing borders.
+
+--- Core Design & Reasoning ---
+
+1. Multiprocessing (ProcessPoolExecutor)
+   Image decoding, resampling, and encoding are heavily CPU-bound tasks. Python's Global
+   Interpreter Lock (GIL) prevents threads from executing Python bytecodes in parallel. By using
+   multiprocessing, the script spawns entirely separate Python processes, completely bypassing
+   the GIL and achieving true parallelism across all available CPU cores.
+
+2. EXIF Transpose (ImageOps.exif_transpose)
+   Modern smartphones and cameras often save the raw image data exactly as it hit the sensor
+   (e.g., sideways) and write an "Orientation" tag to the EXIF metadata. If we process the image
+   and strip the EXIF data without reading it, the resulting output will appear sideways or upside
+   down. This command bakes the EXIF rotation directly into the pixel data upon loading.
+
+3. Color Space Normalization (RGB / RGBA)
+   Images come in many color spaces (e.g., Grayscale 'L', Palette 'P', CMYK). If we attempt to
+   draw a colored border (e.g., 'red') onto a Grayscale image, Pillow will crash because the image
+   does not have color channels. Converting everything to RGB/RGBA immediately upon load ensures a
+   predictable canvas for all subsequent operations.
+
+4. High-Quality Resampling (LANCZOS)
+   Lanczos resampling is hardcoded for resizing operations. While slightly slower than Nearest
+   Neighbor or Bilinear, it provides vastly superior quality when downscaling images, effectively
+   preventing jagged edges and moiré patterns (aliasing).
+
+5. Auto Border Removal (ImageChops.difference)
+   Instead of guessing border thickness, the `--remove-borders` flag uses mathematical differencing.
+   It creates a solid image using the top-left pixel's color, subtracts the solid image from the
+   original image, applies a tolerance threshold (to account for JPEG artifacts), and finds the
+   bounding box of the non-zero pixels. This automatically and safely trims borders of varying
+   thicknesses on all four sides simultaneously.
 """
 
 import argparse
@@ -12,7 +47,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from PIL import Image, ImageColor, ImageOps
+from PIL import Image, ImageColor, ImageOps, ImageChops
 
 # Optional AVIF support
 try:
@@ -62,6 +97,17 @@ def looks_like_file_token(token: str) -> bool:
     return Path(t).suffix.lower() in SUPPORTED_INPUT_EXTENSIONS
 
 
+def remove_existing_borders(img, tolerance=15):
+    bg_color = img.getpixel((0, 0))
+    bg = Image.new(img.mode, img.size, bg_color)
+    diff = ImageChops.difference(img, bg)
+    mask = Image.eval(diff, lambda x: 255 if x > tolerance else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        return img.crop(bbox)
+    return img
+
+
 def calculate_dynamic_dimensions(img_width, img_height, rw, rh, box):
     in_ratio = img_width / img_height
     tgt_ratio = rw / rh
@@ -109,6 +155,10 @@ def process_image(path_str, output_dir, args, border_color, border_width):
                 img = img.convert("RGBA")
             else:
                 img = img.convert("RGB")
+
+        if args.remove_borders:
+            img = remove_existing_borders(img, tolerance=args.crop_tolerance)
+
     except Exception as e:
         return False, f"[Error] {path.name}: Open failed ({e})"
 
@@ -261,6 +311,28 @@ def main():
         choices=["jpg", "png", "webp", "tiff", "bmp", "avif"],
     )
     parser.add_argument("-q", "--quality", type=int, default=DEFAULT_QUALITY)
+
+    border_mgmt = parser.add_mutually_exclusive_group()
+    border_mgmt.add_argument(
+        "-R",
+        "--remove-borders",
+        action="store_true",
+        help="Automatically crop out existing borders (enabled by default with -b)",
+    )
+    border_mgmt.add_argument(
+        "-K",
+        "--keep-borders",
+        action="store_true",
+        help="Disable automatic border removal when using -b",
+    )
+
+    parser.add_argument(
+        "-T",
+        "--crop-tolerance",
+        type=int,
+        default=15,
+        help="Color tolerance for border removal (0-255) to handle JPEG artifacts",
+    )
     parser.add_argument(
         "-b",
         "--border",
@@ -300,6 +372,9 @@ def main():
     ):
         args.files.insert(0, args.border)
         args.border = DEFAULT_BORDER_COLOR
+
+    if args.border and not args.keep_borders:
+        args.remove_borders = True
 
     # --- Validation ---
     if args.crop_percent and args.zoom_percent:

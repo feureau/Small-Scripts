@@ -4194,12 +4194,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
 
         # Multi-preset queue actions
         self.btn_top_add_sel = ttk.Button(
-            preset_frame, text="Add Sel × Presets", command=lambda: self.add_to_queue(True)
+            preset_frame, text="Add Sel × Presets", command=lambda: self.add_to_queue(True, multi_preset=True)
         )
         self.btn_top_add_sel.pack(side=tk.TOP, fill=tk.X, pady=(5, 1))
 
         self.btn_top_add_all = ttk.Button(
-            preset_frame, text="Add All × Presets", command=lambda: self.add_to_queue(False)
+            preset_frame, text="Add All × Presets", command=lambda: self.add_to_queue(False, multi_preset=True)
         )
         self.btn_top_add_all.pack(side=tk.TOP, fill=tk.X, pady=1)
 
@@ -4952,11 +4952,11 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.clear_btn.pack(side=tk.RIGHT, padx=5)
 
         self.btn_add_sel = ttk.Button(
-            btn_row2, text="Add Sel", width=8, command=lambda: self.add_to_queue(True)
+            btn_row2, text="Add Sel", width=8, command=lambda: self.add_to_queue(True, multi_preset=False)
         )
         self.btn_add_sel.pack(side=tk.LEFT, padx=2)
         self.btn_add_all = ttk.Button(
-            btn_row2, text="Add All", width=8, command=lambda: self.add_to_queue(False)
+            btn_row2, text="Add All", width=8, command=lambda: self.add_to_queue(False, multi_preset=False)
         )
         self.btn_add_all.pack(side=tk.LEFT, padx=2)
         self.btn_requeue = ttk.Button(
@@ -5479,6 +5479,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         - Multi-selection leaves the GUI alone and just updates button/status state.
         - 2+ selections disables editing of Prompt and Configuration to prevent confusion.
         """
+        if not self.winfo_exists():
+            return
+
         sel = self.preset_listbox.curselection()
         if len(sel) == 1:
             name = self.preset_listbox.get(sel[0])
@@ -6128,6 +6131,8 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         self.update_models()
 
     def update_models(self, *args):
+        if not self.winfo_exists():
+            return
         e = self.engine_var.get()
         if e == "ollama":
             self.ollama_search_check.grid()
@@ -6535,15 +6540,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         if d:
             self.output_dir_var.set(d)
 
-    def add_to_queue(self, only_selected=False, files_override=None):
+    def add_to_queue(self, only_selected=False, files_override=None, multi_preset=False):
         try:
-            self._add_to_queue_internal(only_selected, files_override)
+            self._add_to_queue_internal(only_selected, files_override, multi_preset)
         except Exception as e:
             import traceback
             console_log(f"❌ CRITICAL ERROR in add_to_queue: {e}", "ERROR")
             traceback.print_exc()
 
-    def _add_to_queue_internal(self, only_selected=False, files_override=None):
+    def _add_to_queue_internal(self, only_selected=False, files_override=None, multi_preset=False):
         if files_override:
             files = files_override
         elif only_selected:
@@ -6606,10 +6611,12 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             and selected_names[0] == self._active_preset_name
         ):
             jobs_specs = [(self.get_current_settings_dict(), selected_names[0])]
-        elif selected_names:
+        elif selected_names and multi_preset:
             jobs_specs = [
                 (self._settings_dict_from_preset(n), n) for n in selected_names
             ]
+        elif self._active_preset_name:
+            jobs_specs = [(self.get_current_settings_dict(), self._active_preset_name)]
         else:
             jobs_specs = [(self.get_current_settings_dict(), None)]
 
