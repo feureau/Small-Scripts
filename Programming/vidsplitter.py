@@ -681,6 +681,14 @@ def write_csv(csv_path, all_plans, tags=None):
 # ----------------------------------------------------------------------
 # Main CLI
 # ----------------------------------------------------------------------
+def get_output_dir_for_video(video_path: str, args) -> str:
+    """Return destination output directory for clips of the given video."""
+    if args.output_dir:
+        return args.output_dir
+    video_dir = os.path.dirname(video_path) or "."
+    return os.path.join(video_dir, args.subfolder)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Losslessly split video into speech clips using SRT subtitles. "
@@ -708,8 +716,15 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
+        default=None,
+        help="Pool all output clips into this single directory. If omitted, clips are "
+        "saved into a subfolder alongside each source video (default subfolder: split_output).",
+    )
+    parser.add_argument(
+        "--subfolder",
         default="split_output",
-        help="Directory for output clips (default: ./split_output).",
+        help="Subfolder name used when saving clips alongside source files "
+        "(default: split_output).",
     )
     parser.add_argument(
         "--no-recursive",
@@ -757,6 +772,13 @@ def main():
         help="Do not generate accompanying SRT files for clips.",
     )
     parser.add_argument(
+        "--delete-original-srt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete original SRT after successful splitting (default: True). "
+        "Use --no-delete-original-srt to keep it.",
+    )
+    parser.add_argument(
         "--trailing-tags",
         default=",".join(TRAILING_TAGS),
         help="Comma-separated tags. If a source filename ends with _<tag> "
@@ -775,7 +797,8 @@ def main():
 
     pairs = find_video_srt_pairs(args)
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
 
     all_plans = []
 
@@ -880,7 +903,10 @@ def main():
     if args.csv:
         csv_path = args.csv if isinstance(args.csv, str) else "split_manifest.csv"
         if not os.path.dirname(csv_path):
-            csv_path = os.path.join(args.output_dir, csv_path)
+            if args.output_dir:
+                csv_path = os.path.join(args.output_dir, csv_path)
+            else:
+                csv_path = os.path.join(os.getcwd(), csv_path)
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         write_csv(csv_path, all_plans, trailing_tags)
         log.info("CSV written to %s", csv_path)
@@ -899,12 +925,18 @@ def main():
     log.info("  Videos to process:  %d", len(all_plans))
     log.info("  Total clips:        %d", total_clips)
     log.info("  Total words:        %d", total_words)
-    log.info("  Output directory:   %s", args.output_dir)
+    if args.output_dir:
+        log.info("  Output directory:   %s (pooled)", args.output_dir)
+    else:
+        log.info(
+            "  Output directory:   <source_dir>/%s (per source file)", args.subfolder
+        )
     if args.min_clip_duration > 0:
         log.info("  Min clip duration:  %gs", args.min_clip_duration)
     if args.max_clip_duration > 0:
         log.info("  Max clip duration:  %gs", args.max_clip_duration)
     log.info("  Generate SRT files: %s", "No" if args.no_srt else "Yes")
+    log.info("  Delete original SRT:%s", " Yes" if args.delete_original_srt else " No")
     log.info("")
     for video, clips, _, _, word_counts in all_plans:
         log.info("  %s", os.path.basename(video))
@@ -923,17 +955,31 @@ def main():
     for video, clips, _, _, _ in all_plans:
         base = os.path.splitext(os.path.basename(video))[0]
         ext = os.path.splitext(video)[1]
+        out_dir = get_output_dir_for_video(video, args)
+        os.makedirs(out_dir, exist_ok=True)
         log.info("Splitting %s...", os.path.basename(video))
 
-        run_ffmpeg_split(video, clips, args.output_dir, base, ext, trailing_tags)
+        run_ffmpeg_split(video, clips, out_dir, base, ext, trailing_tags)
 
+        srt_path = next(srt for v, srt in pairs if v == video)
         if not args.no_srt:
-            srt_path = next(srt for v, srt in pairs if v == video)
             split_srt_for_video(
-                srt_path, clips, args.output_dir, base, ext, trailing_tags
+                srt_path, clips, out_dir, base, ext, trailing_tags
             )
 
-    log.info("All done. Clips saved to %s", args.output_dir)
+        if args.delete_original_srt:
+            try:
+                os.remove(srt_path)
+                log.info("  Deleted original SRT: %s", srt_path)
+            except OSError as e:
+                log.warning("  Failed to delete original SRT %s: %s", srt_path, e)
+
+    if args.output_dir:
+        log.info("All done. Clips saved to %s", args.output_dir)
+    else:
+        log.info(
+            "All done. Clips saved to per-file '%s' subdirectories.", args.subfolder
+        )
 
 
 if __name__ == "__main__":

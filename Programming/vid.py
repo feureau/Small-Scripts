@@ -75,6 +75,11 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.70 - Subtitle Sort for Job Queue (2026-11-XX)
+    • FEATURE: Added "Subtitle" sort button in Step 2: Processing Jobs toolbar.
+      Sorts jobs based on whether they have subtitles attached or not (subtitled
+      first on ascending sort, no subtitles first on descending sort), with
+      name, preset, and subtitle display tag as secondary tie-breakers.
 v8.69 - Add Blank Video at End Feature (2026-11-XX)
     • FEATURE: Added ability to append a blank (black screen with silent audio)
       video tail segment (default 20 seconds) at the end of processed video
@@ -931,7 +936,7 @@ DEFAULT_LOUDNESS_APPLY_STEREO = True
 DEFAULT_LOUDNESS_APPLY_SURROUND_51 = True
 DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
 
-DEFAULT_SUBTITLE_FONT = "Futura"
+DEFAULT_SUBTITLE_FONT = "News Gothic Std"
 DEFAULT_LANGUAGE_FONT_OVERRIDES = {
     "-cn": "FZCuSong-B09S",
     "-tw": "FOT-Matisse Pro DB",
@@ -5171,21 +5176,26 @@ class VideoProcessorApp:
                               lambda e: self._handle_listbox_empty_click(e, self.job_listbox))
         job_toolbar = ttk.Frame(job_frame)
         job_toolbar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
-        ttk.Button(job_toolbar, text="Select All", command=self.select_all_jobs).pack(side=tk.LEFT, padx=2)
-        ttk.Button(job_toolbar, text="Clear Jobs", command=self.clear_all_jobs).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(job_toolbar, text="Remove Selected",
+        jb_row1 = ttk.Frame(job_toolbar)
+        jb_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(jb_row1, text="Select All", command=self.select_all_jobs).pack(side=tk.LEFT, padx=2)
+        ttk.Button(jb_row1, text="Sel Preset",
+                   command=self.select_jobs_by_current_preset).pack(side=tk.LEFT, padx=2)
+        ttk.Button(jb_row1, text="Clear Jobs", command=self.clear_all_jobs).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(jb_row1, text="Remove Selected",
                    command=self.remove_selected_jobs).pack(side=tk.RIGHT, padx=2)
-        extra_tools = ttk.Frame(job_toolbar)
-        extra_tools.pack(side=tk.LEFT, padx=10)
-        ttk.Button(extra_tools, text="Sel Preset",
-                   command=self.select_jobs_by_current_preset).pack(side=tk.LEFT, padx=1)
-        ttk.Label(extra_tools, text="Sort:").pack(side=tk.LEFT, padx=(8, 2))
-        self.sort_name_button = ttk.Button(extra_tools, text="Name", width=8,
+        jb_row2 = ttk.Frame(job_toolbar)
+        jb_row2.pack(fill=tk.X)
+        ttk.Label(jb_row2, text="Sort:").pack(side=tk.LEFT, padx=(2, 2))
+        self.sort_name_button = ttk.Button(jb_row2, text="Name", width=8,
                                            command=lambda: self.sort_jobs("name"))
         self.sort_name_button.pack(side=tk.LEFT, padx=1)
-        self.sort_preset_button = ttk.Button(extra_tools, text="Preset", width=8,
+        self.sort_preset_button = ttk.Button(jb_row2, text="Preset", width=8,
                                              command=lambda: self.sort_jobs("preset"))
         self.sort_preset_button.pack(side=tk.LEFT, padx=1)
+        self.sort_sub_button = ttk.Button(jb_row2, text="Subtitle", width=9,
+                                          command=lambda: self.sort_jobs("subtitle"))
+        self.sort_sub_button.pack(side=tk.LEFT, padx=1)
         file_buttons_frame = ttk.Frame(file_group)
         file_buttons_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT)
@@ -14469,7 +14479,7 @@ class VideoProcessorApp:
             return False
 
     def sort_jobs(self, key):
-        """Sort the processing job queue by 'name' or 'preset'.
+        """Sort the processing job queue by 'name', 'preset', or 'subtitle'.
         Clicking the same key again toggles ascending/descending."""
         if not self.processing_jobs:
             return
@@ -14489,10 +14499,18 @@ class VideoProcessorApp:
         def preset_key(job):
             return self._natural_sort_key(job.get("preset_name") or "")
 
+        def has_sub_key(job):
+            return 0 if job.get("subtitle_path") else 1
+
+        def sub_tag_key(job):
+            return self._natural_sort_key(job.get("display_tag") or "")
+
         if key == "name":
-            sort_fn = lambda j: (name_key(j), preset_key(j))
+            sort_fn = lambda j: (name_key(j), preset_key(j), has_sub_key(j), sub_tag_key(j))
+        elif key == "preset":
+            sort_fn = lambda j: (preset_key(j), name_key(j), has_sub_key(j), sub_tag_key(j))
         else:
-            sort_fn = lambda j: (preset_key(j), name_key(j))
+            sort_fn = lambda j: (has_sub_key(j), name_key(j), preset_key(j), sub_tag_key(j))
 
         # In-place so existing references to self.processing_jobs stay valid.
         self.processing_jobs.sort(key=sort_fn, reverse=self._job_sort_desc)
@@ -14524,6 +14542,9 @@ class VideoProcessorApp:
         if hasattr(self, "sort_preset_button"):
             self.sort_preset_button.config(
                 text="Preset" + (arrow if self._job_sort_key == "preset" else ""))
+        if hasattr(self, "sort_sub_button"):
+            self.sort_sub_button.config(
+                text="Subtitle" + (arrow if self._job_sort_key == "subtitle" else ""))
 
     def invert_selection(self):
         selected_indices = self.job_listbox.curselection()

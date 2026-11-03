@@ -1,5 +1,5 @@
 """
-# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.23
+# 🚀 Multimodal AI Batch Processor (GPTBatcher) v26.26
 
 A powerful, GUI-driven batch processing tool for Multimodal Large Language Models. Streamline your workflow by processing hundreds of files (images, text, code) through **Google Gemini**, **Ollama**, or **LM Studio** simultaneously.
 
@@ -34,6 +34,12 @@ A powerful, GUI-driven batch processing tool for Multimodal Large Language Model
 ---
 
 ## 📜 Recent Changelog
+
+### v26.26
+- ✅ **BUGFIX**: Fixed UI freeze and accidental preset list multi-selection when switching to Ollama or uncached providers by making model fetching asynchronous in a background thread with request-sequence guarding.
+- ✅ **IMPROVEMENT**: Suppressed accidental `<B1-Motion>` / `<B1-Leave>` drag-selection sweeps on the preset listbox; intentional multi-preset selection remains fully supported via `Ctrl+Click` and `Shift+Click`.
+- ✅ **IMPROVEMENT**: Streamlined preset engine/model loading order to eliminate redundant model fetches and prevent temporary loading states from clobbering selected preset models.
+- ✅ **IMPROVEMENT**: Guarded job enqueue validation to reject `"Loading..."` or `"No models found"` if jobs are added before a model is selected.
 
 ### v26.25
 - ✅ **FEATURE**: Preset toolbar is now a multi-select Listbox. Ctrl/Shift-click multiple presets, then use "Add Sel" / "Add All" to fan-out a single file selection across every selected preset (Cartesian product: N files × M presets).
@@ -4151,6 +4157,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         )
         self.preset_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.preset_listbox.bind("<<ListboxSelect>>", self._on_preset_listbox_select)
+        # Prevent accidental drag-selection on mouse slip; Ctrl+Click and Shift+Click still work
+        self.preset_listbox.bind("<B1-Motion>", lambda e: "break")
+        self.preset_listbox.bind("<B1-Leave>", lambda e: "break")
 
         preset_sb = ttk.Scrollbar(
             preset_lb_row, orient=tk.VERTICAL, command=self.preset_listbox.yview
@@ -5559,9 +5568,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                 elif default is not None:
                     var.set(default)
 
-            set_var(self.engine_var, "engine")
-
-            # Load engine configs before fetching models
+            # Load engine configs before setting engine to avoid unconfigured credentials
             saved_configs = data.get("engine_configs", {})
             for eng, cfg in saved_configs.items():
                 if eng in self.engine_configs:
@@ -5577,8 +5584,15 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
                     if cfg.get("api_url_env"):
                         self.engine_configs[eng]["api_url_env"] = cfg["api_url_env"]
 
-            self.update_models()
-            if data.get("model"):
+            self._suppress_engine_trace = True
+            try:
+                set_var(self.engine_var, "engine")
+            finally:
+                self._suppress_engine_trace = False
+
+            saved_model = data.get("model", "")
+            self.update_models(preferred_model=saved_model)
+            if saved_model:
                 set_var(self.model_var, "model")
             set_var(self.output_dir_var, "output_folder")
             self._update_main_api_key_combo()
@@ -6107,22 +6121,44 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
         """Backward-compatible wrapper using the GUI's current engine_configs."""
         return self._get_resolved_api_key_for(provider, self.engine_configs)
 
+    def _fetch_provider_models_raw(self, provider, key):
+        if provider == "google":
+            return fetch_google_models(key)
+        elif provider == "ollama":
+            return fetch_ollama_models()
+        elif provider == "lmstudio":
+            return fetch_lmstudio_models()
+        elif provider == "unsloth":
+            return fetch_unsloth_models(key)
+        return [], None
+
     def get_models_for_provider(self, provider):
         if provider in self.model_cache:
             return self.model_cache[provider]
-        m, err = [], None
         key = self._get_resolved_api_key(provider)
-        if provider == "google":
-            m, err = fetch_google_models(key)
-        elif provider == "ollama":
-            m, err = fetch_ollama_models()
-        elif provider == "lmstudio":
-            m, err = fetch_lmstudio_models()
-        elif provider == "unsloth":
-            m, err = fetch_unsloth_models(key)
+        m, err = self._fetch_provider_models_raw(provider, key)
         if m:
             self.model_cache[provider] = m
         return m or []
+
+    def _apply_fetched_models(self, provider, models, target_model):
+        if not self.winfo_exists():
+            return
+        if models:
+            self.model_combo["values"] = models
+            self.model_combo.config(state="readonly")
+            if target_model and target_model in models:
+                self.model_combo.set(target_model)
+            else:
+                self.model_combo.set(
+                    DEFAULT_GOOGLE_MODEL
+                    if provider == "google" and DEFAULT_GOOGLE_MODEL in models
+                    else models[0]
+                )
+        else:
+            self.model_combo["values"] = []
+            self.model_combo.set("No models found")
+            self.model_combo.config(state="disabled")
 
     def refresh_model_list(self):
         provider = self.engine_var.get()
@@ -6130,7 +6166,9 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             del self.model_cache[provider]
         self.update_models()
 
-    def update_models(self, *args):
+    def update_models(self, *args, preferred_model=None):
+        if getattr(self, "_suppress_engine_trace", False):
+            return
         if not self.winfo_exists():
             return
         e = self.engine_var.get()
@@ -6140,25 +6178,41 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             self.ollama_search_check.grid_remove()
             self.ollama_search_var.set(False)
 
-        self.model_combo.set("Loading...")
-        self.model_combo.config(state="disabled")
-        self.update_idletasks()
+        curr = preferred_model if preferred_model is not None else self.model_var.get()
+        if curr in ("Loading...", "No models found"):
+            curr = getattr(self, "_pending_target_model", "")
+        self._pending_target_model = curr
 
-        m = self.get_models_for_provider(e)
-        if m:
-            self.model_combo["values"] = m
-            self.model_combo.config(state="readonly")
-            curr = self.model_var.get()
-            if curr and curr in m:
-                self.model_combo.set(curr)
-            else:
-                self.model_combo.set(
-                    DEFAULT_GOOGLE_MODEL
-                    if e == "google" and DEFAULT_GOOGLE_MODEL in m
-                    else m[0]
-                )
+        # Fast path: already cached
+        if e in self.model_cache:
+            self._apply_fetched_models(e, self.model_cache[e], curr)
+            return
+
+        # Async path: fetch in background thread so UI never freezes
+        self._model_fetch_seq = getattr(self, "_model_fetch_seq", 0) + 1
+        req_id = self._model_fetch_seq
+        key = self._get_resolved_api_key(e)
+
+        if curr:
+            self.model_combo.set(curr)
         else:
-            self.model_combo.set("No models found")
+            self.model_combo.set("Loading...")
+        self.model_combo.config(state="disabled")
+
+        def _worker():
+            m, _err = self._fetch_provider_models_raw(e, key)
+            def _on_done():
+                if not self.winfo_exists():
+                    return
+                if m:
+                    self.model_cache[e] = m
+                if getattr(self, "_model_fetch_seq", 0) != req_id or self.engine_var.get() != e:
+                    return
+                self._apply_fetched_models(e, m or [], curr)
+            if self.winfo_exists():
+                self.after(0, _on_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def add_files(self):
         f = filedialog.askopenfilenames(
@@ -6625,7 +6679,7 @@ class AppGUI(TkinterDnD.Tk if DND_AVAILABLE else tk.Tk):
             mod = settings.get("model", "")
             eng = settings.get("engine", DEFAULT_ENGINE)
             label = f"preset '{pname}'" if pname else "current GUI settings"
-            if not mod or "Error" in mod:
+            if not mod or "Error" in mod or mod in ("Loading...", "No models found"):
                 tkinter.messagebox.showwarning("Error", f"Invalid model in {label}.")
                 return
             if eng == "google":
