@@ -7,170 +7,124 @@ OUTPUT LANGUAGE
 Detect the dominant language of the discussion and write everything in that language. If the discussion was in English, output English. If the discussion was in Indonesian or Chinese, output that. Proper nouns stay as-is.
 
 WHAT TO PRODUCE
-1. One Tumblr post title (optional, only if it fits naturally)
-2. One Tumblr post body
-3. A tags list
+1. One Tumblr post body
+2. A tags list
 
---- TUMBLR SEO REQUIREMENTS ---
+TITLE CLARIFICATION
+Tumblr has no dedicated title field. Do not output a separate title line or title block. The body's first line is the hook and must contain the primary keyword as a natural, searchable phrase. If a headline is used for emphasis, it is the first line of the body set in Tumblr's native Biggest header style, and it counts as body text, not as a title.
 
-These are non-negotiable platform-specific rules. They override any conflicting instinct from other platforms.
+TUMBLR SEO REQUIREMENTS
 
 ORIGINAL POST RULE
-Only original posts appear in Tumblr tag search results. Reblogs, even with added commentary, do not populate tag feeds. A reblog with your own commentary can still surface in general search, but it will not appear in tag search. The output must read as an original post, not a reblog or a reply. If the goal is discovery by strangers through tag pages, the post must be original.
+Only original posts appear in Tumblr tag search results. Reblogs, even with added commentary, do not populate tag feeds. The output must read as an original post, not a reblog or a reply.
 
 TAG PLACEMENT RULE
-Only tags placed in the dedicated tag field work for discovery. Typing # in the post body does nothing. The tags list you output is assumed to go into that field. Do not put hashtags in the body.
+Only tags placed in the dedicated tag field work for discovery. Typing # in the post body does nothing. Do not put hashtags in the body. All tags go in the separate tag code block.
 
-TAG INDEXING TIERS
-Tumblr discovery is layered, and tag order determines which layers a post reaches:
-- The first tag should be the exact primary keyword. This is the strongest single signal.
-- The first 5 tags are used to aggregate the post into tag-stream feeds. This is the most immediate discovery surface.
-- The first 20 tags are indexed for in-blog search and for the blog's own tag pages.
-- The first 30 tags are indexed for general tag search. Beyond ~30, additional tags are not reliably registered.
-- Tags beyond the first 5 support broader discovery but should never dilute the opening tags. Put core topic and community tags first, conversational or joke tags last.
+TAG COUNT AND ORDER
+Use 5 to 7 tags total. The first tag is the exact primary keyword and is the strongest single signal. The first 5 tags drive tag-stream aggregation, which is the most immediate discovery surface. Beyond roughly 6 tags the signal dilutes, so do not pad. Put core topic and community tags first, conversational or joke tags last.
 
 TAG REALISM RULE
-Use real words with spaces, not smushed-together words. Clever or joke tags do not help with discovery. Tags that accurately describe the post are what connect it to searchers. Each tag is capped at 140 characters. Tags must be phrases a person would actually type into search, not invented strings.
+Use real words with spaces, not smushed-together strings. Each tag must be under 140 characters. Tags must be phrases a person would actually type into search, not invented strings.
 
 KEYWORD PLACEMENT RULE
-The primary keyword must appear in the post title (if used) and in the first line of the body. Tumblr now indexes the actual body text, not just tags. The first sentence should contain a natural, searchable phrase that a real person would type into Tumblr search—not a keyword stuffed in artificially. The keyword must not exist only in the tags.
+Tumblr indexes the actual body text, not just tags. The primary keyword must appear in the first line of the body as a natural, searchable phrase. The keyword must not exist only in the tags.
 
 NO KEYWORD STUFFING RULE
-Write naturally. Google and Tumblr both penalize unnatural keyword repetition.
+Write naturally. Repetition that reads as machine-written is penalized.
 
 FORMATTING RULE
-Use at least one native Tumblr header block (Biggest for a title, Bigger for a subhead) when the post is longer than a few paragraphs. Native headers are real, accessible, searchable text. Do not simulate headers with all-caps, bold-only lines, or Unicode lookalike fonts. Break up long posts with paragraph breaks and line breaks; wall-of-text posts get scrolled past on the dashboard.
+Use at least one native Tumblr header block (Biggest or Bigger) when the post is longer than a few paragraphs. Native headers are real, accessible, searchable text. Do not simulate headers with all-caps, bold-only lines, or Unicode lookalike fonts.
+
+QUOTE BLOCK RULE
+For any post over roughly 300 words, include at least one native quote block (a line starting with >) as a pull-quote of the single strongest line in the post. This is a native Tumblr formatting element and it breaks up long text.
+
+READ-MORE GUIDANCE
+For posts over roughly 400 words, structure the body so the first two to three paragraphs stand alone above the editor's Keep reading break. The text above the break must tell the reader what the deep dive below contains.
 
 LINK VISIBILITY CAUTION
 Links in a post may reduce visibility, and link-heavy opening paragraphs can cause a post to be hidden from recent search results. If a link is necessary, place it after the first few lines of body text. Do not rely on a link to carry the primary keyword.
 
-PRE-PUBLISH BLOG SETTINGS CHECKLIST
-Post-level optimization cannot compensate for blog-level settings. Before treating a post as discoverable, verify:
-- "Allow search engines to index your blog" is enabled in Tumblr settings.
-- A custom theme is active so title tags and meta descriptions can be controlled; default themes often omit them.
+PRE-PUBLISH BLOG SETTINGS CHECKLIST (internal verification, not output)
+- Allow search engines to index your blog is enabled in Tumblr settings.
+- A custom theme is active so title tags and meta descriptions can be controlled.
 - The sitemap at /sitemap.xml has been submitted to Google Search Console.
 - The post URL has been edited to include the primary keyword.
+- If the post includes an image, the alt text field describes it with relevant keywords.
 
 CUSTOM URL NOTE
-When publishing, edit the post URL to include the primary keyword. Mention this only if it fits naturally in the body or as a separate note; do not force it.
+When publishing, edit the post URL to include the primary keyword. Mention this only if it fits naturally in the body.
 
-ALT TEXT NOTE
-If the post includes an image, describe it with relevant keywords in the alt text field. The prompt output can include an alt text suggestion if the post references a specific visual.
-
-TIMESTAMP RULE
-Timestamps are optional and are not an SEO factor on Tumblr. Use them only if they serve the joke or the close-read structure. Do not include them by default. If the source is an SRT, you may reference one or two key moments without listing every timestamp.
-
---- TITLE RULES (OPTIONAL) ---
-
-- If you use a title, keep it under 60 characters.
-- Make it punchy, conversational, and front-load the hook.
-- No question endings.
-- No corporate speak.
-- If the post works better without a title (which is common on Tumblr), skip it.
-
---- POST BODY VOICE AND STYLE ---
-
-These rules govern how the post must sound. They are non-negotiable.
+POST BODY VOICE AND STYLE
 
 ANTI-LITERAL RULE
-Never announce what you are doing. The following phrases and their variants are banned:
-- "In this post..."
-- "Here's what happened..."
-- "Let me explain..."
-- "The truth is..."
-- "Here's why..."
-- "This is about..."
-- "Let's talk about..."
-- "I want to discuss..."
+Never announce what you are doing. Banned phrases and their variants: "In this post...", "Here's what happened...", "Let me explain...", "The truth is...", "Here's why...", "This is about...", "Let's talk about...", "I want to discuss...". Replace them with direct delivery.
 
-Replace them with direct delivery.
+TUMBLR VOICE RULE
+Tumblr voice is lowercase by default, punctuation-light, and built for speed. Run-on sentences and intentional fragments are tools, not errors: they read as someone typing fast and thinking out loud. Letter repetition, keysmashing, italics, and nonstandard capitalization carry emotional nuance. Do not write a polished essay. Do not write a video script. If it sounds like a press release, rewrite it.
 
 STACCATO RULE
-No more than one sentence fragment per paragraph. No parallel triplets. Subordinate facts into clauses.
+Allow one sentence fragment per paragraph, and allow run-ons when the frustration or excitement builds. Do not use parallel triplets. Subordinate facts into clauses rather than stacking short declaratives.
 
 CASUALNESS RULE
-The post must sound like a person talking, not a brand posting. Tumblr culture is informal, self-aware, and allergic to corporate speak. Apply at least three of these:
-- Self-interruption: "Which is wild." / "Which, again, makes this weirder."
-- Casual dismissal: "Whatever, man." / "Cool. Great." / "Poof. Gone."
-- Thinking out loud: "I don't know. Maybe I'm wrong." / "Which makes me wonder..."
-- Shrugs and hedges: "But that's just how it feels." / "That's my read, anyway."
-- Verbal tics: "like," "I mean," "you know," "so yeah," "anyway," "it's just..."
-- Circling back: "Which, again, makes the timing thing even weirder."
+Apply at least three of these: self-interruption ("which is wild"), casual dismissal ("cool. great."), thinking out loud ("i don't know. maybe i'm wrong"), shrugs and hedges ("that's my read, anyway"), verbal tics ("like," "i mean," "so yeah," "anyway"), circling back ("which, again, makes the data question the one that actually matters").
 
 SASS RULE
-At least one of these per post:
-- Rhetorical question: "Why bother?" / "What's the point?" / "Who is this for?"
-- Direct address to the subject: "Good job, Sony." / "What the hell were you thinking?"
-- Absurd exaggeration: "They'd rather sit on a dead IP than let fans have something good."
+Include at least one: a rhetorical question, direct address to the subject ("good job, wattpad"), or absurd exaggeration ("they'd rather churn their own butter by candlelight").
 
 FAIRNESS RULE
-If there is a counterargument in the source material, acknowledge it before dismissing it. Use language like:
-- "And look, they're not wrong about the legal side."
-- "I get it. But here's the thing."
-- "I could be wrong, but..."
+If there is a counterargument in the source material, acknowledge it before dismissing it: "and look, i get it," "i could be wrong, but," "they're not wrong, but here's the thing." This separates commentary from rage bait.
 
 INTENT RULE
-Any claim about WHY a person or company acted must be first-person. "They did this on purpose" is a violation. "I think they did this on purpose" is compliant. Motive is never a fact. Motive is always an interpretation.
+Any claim about WHY a person or company acted must be first-person. "They did this on purpose" is a violation. "My read is" is compliant. Motive is never a fact; motive is always an interpretation.
 
 CONTEXT RULE
 The first 150 characters must contain the primary keyword and the core hook. The audience must understand WHAT happened before they care about WHY it matters.
 
 TONE RULE
-Write in a conversational, platform-native tone. Tumblr rewards sincerity, informality, and long-form analysis. Avoid corporate language and press-release cadence. If it sounds like a headline, rewrite it. If it sounds like a Tumblr post, keep it.
+Conversational, informal, sincere, allergic to corporate language. Tumblr rewards long-form analysis if it is formatted to be read. If it sounds like a headline, rewrite it. If it sounds like a Tumblr post, keep it.
 
---- POST BODY STRUCTURE ---
-
-- Length: 400 to 1,000 words. Tumblr welcomes long-form analysis.
-- The first 150 characters must contain the primary keyword and the core hook.
+POST BODY STRUCTURE
+- Length: 400 to 900 words.
+- First 150 characters must contain the primary keyword and the core hook.
 - Primary keyword should appear naturally 3 to 5 times.
 - Open with the core dramatic event or revelation. Do not frame it as a post.
-- Break up the body with native header blocks, line breaks, and scannable formatting. Tumblr readers are used to reading long posts on their dashboard.
+- Break up the body with at least one native header block, short paragraphs, line breaks, and at least one native quote block.
 - End with one specific, debatable question tied to the central tension of the topic to drive reblogs and replies.
 
---- TAG RULES ---
+TAG RULES
+- 5 to 7 tags total.
+- Each tag must include the # symbol prefix.
+- Total combined length under 500 characters. Each individual tag under 140 characters.
+- ORDER: first tag is the exact primary keyword; first 5 tags are the most important topic and community tags; conversational tags last.
+- Use real words with spaces. No smushed-together words.
+- Mix core topic tags, community tags, subject-specific tags, and at most one or two conversational tags.
+- No generic tags like #love or #instagood. No spammy or unrelated trending tags.
+- Output all tags on a single line, each prefixed with #, separated by commas and spaces.
 
-- 5 to 12 tags total. Up to 30 max.
-- Each tag must include the # symbol prefix so it is ready to paste directly into Tumblr's dedicated tag field.
-- Total combined length under 500 characters. Each individual tag must be under 140 characters.
-- ORDER MATTERS: The first tag is the exact primary keyword. The first 5 tags drive tag-stream aggregation. The first 20 are indexed for in-blog search. The first 30 are indexed for tag search.
-- Put your most important topic and community tags first. Conversational or joke tags go last.
-- Use real words with spaces. No smushed-together words. No invented strings.
-- Mix these types:
-  - Core topic tags: the exact subject and primary keyword
-  - Community tags: the fandom or niche the post belongs to
-  - Subject-specific tags: names, places, events referenced in the post
-  - High-intent discovery tags: phrases a person would actually search
-  - Conversational tags: #this is so frustrating, #why though
-- No generic tags like #love, #instagood. Every tag must be relevant.
-- No spammy, unrelated, or excessive trending tags. They are penalized and can read as spam.
-- Output all tags on a single line, each prefixed with #, separated by commas and spaces, ready to copy and paste as one string into the tag field only.
-
---- QUALITY CHECK ---
-
+QUALITY CHECK
 Before returning output, verify:
 - The post reads as an original post, not a reblog.
-- No hashtags appear in the body. Tags are only in the tags list.
+- No hashtags appear in the body. Tags are only in the tag block.
 - The first tag is the exact primary keyword, and the first 5 tags are the most important topic and community tags.
-- The primary keyword appears in the first line of the body and in the title (if used), as a natural searchable phrase.
-- The body uses at least one native header block if longer than a few paragraphs. No fake Unicode headers.
+- The primary keyword appears in the first line of the body as a natural searchable phrase.
+- There is no separate title line or title block; the first line is body text.
+- The body uses at least one native header block and at least one native quote block if longer than 300 words. No fake Unicode headers.
 - Links, if any, appear after the opening lines and do not carry the primary keyword.
-- Timestamps are used sparingly or not at all.
-- The post passes the ANTI-LITERAL check (no structural announcements).
-- The post passes the STACCATO check (no more than one fragment per paragraph, no parallel triplets).
-- The post passes the CASUALNESS check (at least three casualness techniques used).
-- The post passes the SASS check (at least one rhetorical question, direct address, or absurd exaggeration).
+- The post passes the ANTI-LITERAL check.
+- The post passes the TUMBLR VOICE check: lowercase-default, punctuation-light, conversational, not a polished essay.
+- The post passes the STACCATO check: no parallel triplets, no wall of stacked declaratives.
+- The post passes the CASUALNESS check with at least three techniques.
+- The post passes the SASS check with at least one technique.
 - The post passes the FAIRNESS check if a counterargument exists in the source.
-- The post passes the INTENT check (motive claims are first-person).
-- The post passes the LOGIC check (each sentence follows from the one before).
+- The post passes the INTENT check: motive claims are first-person.
 - The post ends with a specific, debatable question.
-- Tags are 5 to 12, under 500 characters total, each under 140 characters, using real words with spaces, ordered with the primary keyword first.
+- Tags are 5 to 7, under 500 characters total, each under 140 characters, real words with spaces, ordered with the primary keyword first.
 
---- OUTPUT FORMAT ---
+OUTPUT FORMAT
+Return exactly two code blocks, nothing else:
 
-Return code blocks in this order, nothing else:
+Block 1: The full post body, including native header lines, quote block, line breaks, and all text.
+Block 2: All tags on a single line, each prefixed with #, separated by commas and spaces, formatted for the dedicated Tumblr tag field only.
 
-Block 1: The post title (if used) or an empty code block if no title is used.
-Block 2: The full post body, including native header blocks, line breaks, and all text, in one code block.
-Block 3: All tags on a single line, each prefixed with #, separated by commas and spaces, in one code block. This block is formatted for the dedicated Tumblr tag field only, not the post body.
-
-Do not add headings, labels, commentary, or explanations outside the code blocks. Do not number the blocks. Do not use markdown bold or italics anywhere. Just the code blocks in order.
+Do not add headings, labels, commentary, or explanations outside the code blocks. Do not number the blocks. Do not use markdown bold or italics anywhere. Do not output an empty title block.

@@ -75,6 +75,17 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.71 - TrueHDR Middle Gray 44 Default, YouTube HDR .cube MKV Attachment & HDR-to-SDR 3D LUT (2026-11-XX)
+    • FEATURE: YouTube HDR Matroska .cube 3D LUT attachment stream. When output
+      format is HDR and "Embed .cube LUT in MKV (YouTube HDR)" is enabled,
+      embeds the .cube LUT (application/x-cube) as an attachment inside the
+      final .mkv container for automated YouTube SDR downconversion.
+    • FEATURE: HDR-to-SDR 3D LUT conversion. When output format is SDR and input
+      video is HDR, applies tetrahedral 3D LUT interpolation via NVEncC
+      (--vpp-colorspace matrix=bt2020nc:bt709,lut3d=...) or FFmpeg
+      (lut3d=file=...:interp=tetrahedral) to convert BT.2020 PQ/HLG into BT.709.
+      Automatically bypasses when input is SDR.
+    • CONFIG: Reverted default NVIDIA TrueHDR Middle Gray to 44 (official NVIDIA default).
 v8.70 - Subtitle Sort for Job Queue (2026-11-XX)
     • FEATURE: Added "Subtitle" sort button in Step 2: Processing Jobs toolbar.
       Sorts jobs based on whether they have subtitles attached or not (subtitled
@@ -554,7 +565,10 @@ SURROUND_BITRATE_K = 512
 PASSTHROUGH_NORMALIZE_BITRATE_K = 192
 IAMF_STREAM_BITRATE_K = 128
 
-DEFAULT_LUT_PATH = ""
+DEFAULT_LUT_PATH = r"F:\GitHub\Small-Scripts\LUT\5-NBCU_PQ2SDR_DL_RESOLVE17-VRT_v1.2.cube"
+DEFAULT_HDR_TO_SDR_LUT = True
+DEFAULT_HDR_EMBED_LUT = True
+DEFAULT_HDR_LUT_PATH = DEFAULT_LUT_PATH
 DEFAULT_SOFA_PATH = r"C:\Users\Feureau\AppData\Roaming\mpv\D1_48K_24bit_256tap_FIR_SOFA.sofa"
 DEFAULT_SOFA_GAIN = "0.0"
 DEFAULT_SOFA_NORMALIZE = True
@@ -628,7 +642,7 @@ DEFAULT_SDR_TO_HDR_WORKING_RES = "source"
 DEFAULT_TRUEHDR_PIPELINE = "auto"
 DEFAULT_TRUEHDR_CONTRAST = "100"
 DEFAULT_TRUEHDR_SATURATION = "100"
-DEFAULT_TRUEHDR_MIDDLEGRAY = "30"
+DEFAULT_TRUEHDR_MIDDLEGRAY = "44"
 DEFAULT_VIDEO_CODEC = "h264"
 DEFAULT_ENCODER_BACKEND = "ffmpeg_only"
 DEFAULT_NVENC_SUPERRES_MODE = "1"
@@ -936,7 +950,7 @@ DEFAULT_LOUDNESS_APPLY_STEREO = True
 DEFAULT_LOUDNESS_APPLY_SURROUND_51 = True
 DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
 
-DEFAULT_SUBTITLE_FONT = "News Gothic Std"
+DEFAULT_SUBTITLE_FONT = "Futura"
 DEFAULT_LANGUAGE_FONT_OVERRIDES = {
     "-cn": "FZCuSong-B09S",
     "-tw": "FOT-Matisse Pro DB",
@@ -1821,6 +1835,41 @@ def hex_to_libass_color(hex_color):
     r, g, b = tuple(int(hex_val[i:i + 2], 16) for i in (0, 2, 4))
     return f"&H{b:02X}{g:02X}{r:02X}"
 
+
+
+def _should_apply_hdr_to_sdr_lut(options, info=None, info_bot=None):
+    """
+    Returns True if an HDR source is being converted to SDR output using a 3D .cube LUT.
+    """
+    if not options:
+        return False
+    if options.get("output_format") != "sdr":
+        return False
+    if not bool(options.get("hdr_to_sdr_lut", DEFAULT_HDR_TO_SDR_LUT)):
+        return False
+    if bool(options.get("_hdr_to_sdr_lut_applied", False)):
+        return False
+    lut = str(options.get("lut_file", DEFAULT_LUT_PATH)).strip()
+    if not lut or not os.path.exists(lut):
+        return False
+    # Check if either main or secondary input is HDR
+    is_top_hdr = bool((info or {}).get("is_hdr"))
+    is_bot_hdr = bool((info_bot or {}).get("is_hdr"))
+    return is_top_hdr or is_bot_hdr
+
+
+def _should_embed_hdr_lut(options):
+    """
+    Returns True if an HDR video render should embed a .cube LUT inside the output MKV container.
+    """
+    if not options:
+        return False
+    if options.get("output_format") != "hdr":
+        return False
+    if not bool(options.get("hdr_embed_lut", DEFAULT_HDR_EMBED_LUT)):
+        return False
+    lut = str(options.get("hdr_lut_file", DEFAULT_HDR_LUT_PATH)).strip()
+    return bool(lut and os.path.exists(lut))
 
 
 def _should_precompensate_hdr_colors(options):
@@ -2713,23 +2762,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 def get_video_info(file_path):
     cmd = [FFPROBE_CMD, "-v", "error", "-select_streams", "v:0", "-show_entries",
-           "stream=pix_fmt,r_frame_rate,height,width,color_transfer,color_primaries,codec_name,codec_tag_string,field_order",
+           "stream=pix_fmt,r_frame_rate,height,width,color_space,color_transfer,color_primaries,codec_name,codec_tag_string,field_order,side_data_list",
            "-of", "json", file_path]
     try:
         result = safe_ffprobe(cmd, "video info extraction")
         data = json.loads(result.stdout)["streams"][0]
         pix_fmt = data.get("pix_fmt", "yuv420p")
-        bit_depth = 10 if pix_fmt in ["yuv420p10le", "p010le", "yuv422p10le", "yuv444p10le"] else 8
+        bit_depth = 10 if (pix_fmt in ["yuv420p10le", "p010le", "yuv422p10le", "yuv444p10le"]
+                           or any(b in pix_fmt for b in ("10", "12", "16"))) else 8
         fr_str = data.get("r_frame_rate", "30/1")
         num, den = map(int, fr_str.split('/'))
         framerate = num / den if den != 0 else 30.0
         height = int(data.get("height", 1080))
         width = int(data.get("width", 1920))
+        color_space = data.get("color_space", "").lower()
         color_transfer = data.get("color_transfer", "").lower()
         color_primaries = data.get("color_primaries", "").lower()
-        is_hdr = color_transfer in ["smpte2084", "arib-std-b67"] or color_primaries == "bt2020"
         codec_name = data.get("codec_name", "h264")
         codec_tag = data.get("codec_tag_string", "").lower()
+        side_data = data.get("side_data_list") or []
+        sd_types = [str(sd.get("side_data_type", "")) for sd in side_data if isinstance(sd, dict) and sd.get("side_data_type")]
+        has_hdr_side_data = any(
+            any(k in sdt.lower() for k in ("dovi", "dolby vision", "mastering display", "content light level"))
+            for sdt in sd_types
+        )
+        is_dovi_tag = codec_tag in ("dvhe", "dvh1", "dav1", "dva1") or color_space == "ipt_c2"
+        hdr_reasons = []
+        if color_transfer in ["smpte2084", "arib-std-b67"]:
+            hdr_reasons.append(f"color_transfer={color_transfer}")
+        if color_primaries == "bt2020":
+            hdr_reasons.append("color_primaries=bt2020")
+        if color_space in ["bt2020nc", "bt2020c"]:
+            hdr_reasons.append(f"color_space={color_space}")
+        if is_dovi_tag:
+            hdr_reasons.append(f"dovi({codec_tag or color_space})")
+        if has_hdr_side_data:
+            hdr_reasons.append(f"side_data({', '.join(sd_types)})")
+        is_hdr = bool(hdr_reasons)
         if codec_tag == "av01" or "av1" in codec_name.lower():
             codec_name = "av1"
         field_order = (data.get("field_order") or "progressive").lower()
@@ -2737,13 +2806,16 @@ def get_video_info(file_path):
         return {"bit_depth": bit_depth, "framerate": framerate, "height": height, "width": width,
                 "is_hdr": is_hdr, "codec_name": codec_name, "is_interlaced": is_interlaced,
                 "field_order": field_order, "color_transfer": color_transfer,
-                "color_primaries": color_primaries}
+                "color_primaries": color_primaries, "color_space": color_space,
+                "codec_tag": codec_tag, "pix_fmt": pix_fmt,
+                "side_data_types": sd_types, "hdr_reasons": hdr_reasons}
     except Exception as e:
         print(f"[WARN] Could not get video info for {file_path}, using defaults: {e}")
         return {"bit_depth": 8, "framerate": 30.0, "height": 1080, "width": 1920,
                 "is_hdr": False, "codec_name": "h264", "is_interlaced": False,
                 "field_order": "progressive", "color_transfer": "",
-                "color_primaries": ""}
+                "color_primaries": "", "color_space": "", "codec_tag": "",
+                "pix_fmt": "yuv420p", "side_data_types": [], "hdr_reasons": []}
 
 
 def compute_original_target_resolution(res_key, info):
@@ -3072,6 +3144,10 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('sdr_to_hdr', False)),
         job_options.get('sdr_to_hdr_working_res', ''),
         str(job_options.get('nvenc_intermediate_all_i', DEFAULT_NVENC_INTERMEDIATE_ALL_I)),
+        str(job_options.get('hdr_to_sdr_lut', DEFAULT_HDR_TO_SDR_LUT)),
+        str(job_options.get('hdr_embed_lut', DEFAULT_HDR_EMBED_LUT)),
+        job_options.get('hdr_lut_file', '') if job_options.get('output_format') == 'hdr' else '',
+        job_options.get('lut_file', '') if job_options.get('output_format') == 'sdr' else '',
         # === v8.59 ===
         str(job_options.get('multi_stage_superres', DEFAULT_MULTI_STAGE_SUPERRES)),
         str(job_options.get('nvenc_superres_strength', DEFAULT_NVENC_SUPERRES_STRENGTH)),
@@ -3634,6 +3710,9 @@ class WorkflowPresetManager:
             "truehdr_saturation": DEFAULT_TRUEHDR_SATURATION,
             "truehdr_middlegray": DEFAULT_TRUEHDR_MIDDLEGRAY,
             "nvenc_intermediate_all_i": DEFAULT_NVENC_INTERMEDIATE_ALL_I,
+            "hdr_to_sdr_lut": DEFAULT_HDR_TO_SDR_LUT,
+            "hdr_embed_lut": DEFAULT_HDR_EMBED_LUT,
+            "hdr_lut_file": DEFAULT_HDR_LUT_PATH,
         }
         self.load_presets()
 
@@ -3715,7 +3794,9 @@ class WorkflowPresetManager:
             "merged_aspect": "16:9",
             "resolution": "2160p",
             "normalize_audio": True,
-            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
+            "audio_delivery_target": "youtube_stereo_51",
+            "audio_passthrough": False,
+            "audio_stereo_downmix": True,
             "burn_subtitles": False,
         }
         h_clean = {"options": h_clean_opts,
@@ -3725,7 +3806,9 @@ class WorkflowPresetManager:
         v_hybrid_opts = {
             "orientation": "hybrid (stacked)",
             "resolution": "2160p", "normalize_audio": True,
-            "audio_delivery_target": DEFAULT_DELIVERY_TARGET,
+            "audio_delivery_target": "youtube_stereo_51",
+            "audio_passthrough": False,
+            "audio_stereo_downmix": True,
             "burn_subtitles": True, "subtitle_alignment": "seam",
         }
         v_hybrid = {"options": v_hybrid_opts,
@@ -4199,6 +4282,17 @@ class VideoProcessorApp:
             self._update_selected_jobs('audio_delivery_target')])
 
         self.lut_file_var = tk.StringVar(value=DEFAULT_LUT_PATH)
+        self.lut_file_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('lut_file'))
+        self.hdr_to_sdr_lut_var = tk.BooleanVar(value=DEFAULT_HDR_TO_SDR_LUT)
+        self.hdr_to_sdr_lut_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('hdr_to_sdr_lut'))
+        self.hdr_embed_lut_var = tk.BooleanVar(value=DEFAULT_HDR_EMBED_LUT)
+        self.hdr_embed_lut_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('hdr_embed_lut'))
+        self.hdr_lut_file_var = tk.StringVar(value=DEFAULT_HDR_LUT_PATH)
+        self.hdr_lut_file_var.trace_add(
+            'write', lambda *a: self._update_selected_jobs('hdr_lut_file'))
         self.dovi_mastering_id_var = tk.StringVar(value=DEFAULT_DOVI_MASTERING_ID)
         self.dovi_mastering_id_var.trace_add(
             'write', lambda *a: self._update_selected_jobs('dovi_mastering_id'))
@@ -4627,6 +4721,11 @@ class VideoProcessorApp:
                 self.hdr_meta_frame.pack(fill=tk.X, pady=(3, 0))
             else:
                 self.hdr_meta_frame.pack_forget()
+        if hasattr(self, "hdr2sdr_frame"):
+            if self.output_format_var.get() == "sdr":
+                self.hdr2sdr_frame.pack(fill=tk.X, pady=(5, 0))
+            else:
+                self.hdr2sdr_frame.pack_forget()
         if hasattr(self, "dovi_frame"):
             if self.output_format_var.get() == "dolby_vision":
                 self.dovi_frame.pack(fill=tk.X, pady=(5, 0))
@@ -6058,12 +6157,43 @@ class VideoProcessorApp:
         self.hdr_max_cll_entry.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(meta_row2, text="Reset to YouTube Defaults",
                    command=self._reset_hdr_metadata_defaults).pack(side=tk.LEFT)
-        lut_frame = ttk.Frame(quality_group)
-        lut_frame.pack(fill=tk.X, pady=(5, 0))
-        ttk.Label(lut_frame, text="LUT Path:").pack(side=tk.LEFT, padx=(0, 5))
-        self.lut_entry = ttk.Entry(lut_frame, textvariable=self.lut_file_var)
+        meta_row3 = ttk.Frame(self.hdr_meta_frame)
+        meta_row3.pack(fill=tk.X, pady=(5, 0))
+        self.hdr_embed_lut_cb = ttk.Checkbutton(
+            meta_row3, text="Embed .cube LUT in MKV (YouTube HDR)",
+            variable=self.hdr_embed_lut_var,
+            command=self._sync_hdr_embed_lut_ui)
+        self.hdr_embed_lut_cb.pack(side=tk.LEFT, padx=(0, 5))
+        self.hdr_lut_entry = ttk.Entry(meta_row3, textvariable=self.hdr_lut_file_var)
+        self.hdr_lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.hdr_lut_browse_btn = ttk.Button(meta_row3, text="...", command=self.browse_hdr_lut_file, width=4)
+        self.hdr_lut_browse_btn.pack(side=tk.LEFT)
+        ToolTip(self.hdr_embed_lut_cb,
+                "Embeds a 3D .cube LUT file as an application/x-cube Matroska attachment inside the output .mkv.\n"
+                "YouTube uses this embedded LUT to generate a high-quality custom SDR conversion.")
+
+        self.hdr2sdr_frame = ttk.LabelFrame(self.dynamic_format_container,
+                                            text="HDR to SDR Conversion (3D LUT)",
+                                            padding=5)
+        lut_row1 = ttk.Frame(self.hdr2sdr_frame)
+        lut_row1.pack(fill=tk.X)
+        self.hdr_to_sdr_lut_cb = ttk.Checkbutton(
+            lut_row1, text="Convert HDR input to SDR using .cube LUT",
+            variable=self.hdr_to_sdr_lut_var,
+            command=self._sync_hdr_to_sdr_lut_ui)
+        self.hdr_to_sdr_lut_cb.pack(side=tk.LEFT, padx=(0, 5))
+        self.lut_entry = ttk.Entry(lut_row1, textvariable=self.lut_file_var)
         self.lut_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(lut_frame, text="...", command=self.browse_lut_file, width=4).pack(side=tk.LEFT)
+        self.lut_browse_btn = ttk.Button(lut_row1, text="...", command=self.browse_lut_file, width=4)
+        self.lut_browse_btn.pack(side=tk.LEFT, padx=(0, 2))
+        self.lut_reset_btn = ttk.Button(lut_row1, text="Reset", command=self._reset_sdr_lut_default)
+        self.lut_reset_btn.pack(side=tk.LEFT)
+        ToolTip(self.hdr_to_sdr_lut_cb,
+                "When input video is HDR (PQ/HLG) and output format is SDR, applies this 3D LUT\n"
+                "with tetrahedral interpolation to convert HDR colors into SDR BT.709.\n"
+                "Automatically bypassed if input is already SDR.")
+        self.hdr2sdr_frame.pack_forget()
+
         self.dovi_frame = ttk.LabelFrame(
             self.dynamic_format_container,
             text="Dolby Vision (RPU auto-generated from source)",
@@ -6127,7 +6257,7 @@ class VideoProcessorApp:
         self.sdr_to_hdr_middlegray_entry = ttk.Entry(
             s2h_row2, textvariable=self.truehdr_middlegray_var, width=5)
         self.sdr_to_hdr_middlegray_entry.pack(side=tk.LEFT)
-        ToolTip(self.sdr_to_hdr_middlegray_entry, "TrueHDR Middle Gray level (default: 30, lower = darker mid-tones).")
+        ToolTip(self.sdr_to_hdr_middlegray_entry, "TrueHDR Middle Gray level (default: 44, lower = darker mid-tones).")
         self.sdr_to_hdr_subtitle_warn_lbl = ttk.Label(
             self.sdr2hdr_frame,
             text="⚠️ Warning: 1-Pass mode keeps burned subtitles dim in HDR.",
@@ -6201,6 +6331,39 @@ class VideoProcessorApp:
     def _reset_hdr_metadata_defaults(self):
         self.hdr_master_display_var.set(DEFAULT_HDR_MASTER_DISPLAY)
         self.hdr_max_cll_var.set(DEFAULT_HDR_MAX_CLL)
+        self.hdr_embed_lut_var.set(DEFAULT_HDR_EMBED_LUT)
+        self.hdr_lut_file_var.set(DEFAULT_HDR_LUT_PATH)
+        self._sync_hdr_embed_lut_ui()
+
+    def _reset_sdr_lut_default(self):
+        self.lut_file_var.set(DEFAULT_LUT_PATH)
+        self.hdr_to_sdr_lut_var.set(DEFAULT_HDR_TO_SDR_LUT)
+        self._sync_hdr_to_sdr_lut_ui()
+        self._update_selected_jobs("lut_file", "hdr_to_sdr_lut")
+
+    def _sync_hdr_embed_lut_ui(self):
+        st = "normal" if self.hdr_embed_lut_var.get() else "disabled"
+        if hasattr(self, "hdr_lut_entry"):
+            self.hdr_lut_entry.config(state=st)
+        if hasattr(self, "hdr_lut_browse_btn"):
+            self.hdr_lut_browse_btn.config(state=st)
+        self._update_selected_jobs("hdr_embed_lut")
+
+    def _sync_hdr_to_sdr_lut_ui(self):
+        st = "normal" if self.hdr_to_sdr_lut_var.get() else "disabled"
+        if hasattr(self, "lut_entry"):
+            self.lut_entry.config(state=st)
+        if hasattr(self, "lut_browse_btn"):
+            self.lut_browse_btn.config(state=st)
+        self._update_selected_jobs("hdr_to_sdr_lut")
+
+    def browse_hdr_lut_file(self):
+        file_path = filedialog.askopenfilename(title="Select HDR .cube LUT File",
+                                               filetypes=[("3D LUT files", "*.cube"),
+                                                          ("All files", "*.*")])
+        if file_path:
+            self.hdr_lut_file_var.set(file_path)
+            self._update_selected_jobs("hdr_lut_file")
 
     # =========================================================================
     # === v8.25: Loudness tab with per-track scope ===
@@ -7204,7 +7367,7 @@ class VideoProcessorApp:
                     return True
         return False
 
-    def _detect_subtitles_for_video_single(self, video_path, mock_dir=None, mock_basename=None):
+    def _detect_subtitles_for_video_single(self, video_path, mock_dir=None, mock_basename=None, verbose=False):
         detected_subs = []
         if video_path and os.path.exists(video_path):
             dir_name = os.path.dirname(video_path)
@@ -7225,64 +7388,89 @@ class VideoProcessorApp:
             pass
         best_subs_by_suffix = {}
         try:
-            for item in sorted(os.listdir(dir_name)):
-                item_lower = item.lower()
-                if item_lower.endswith((".srt", ".ass", ".ssa")):
-                    sub_basename = os.path.splitext(item)[0]
-                    matched_prefix = None
-                    matched_suffix = None
-                    for prefix in prefixes:
-                        if sub_basename == prefix:
+            all_dir_items = sorted(os.listdir(dir_name))
+            sub_items = [it for it in all_dir_items if it.lower().endswith((".srt", ".ass", ".ssa"))]
+            if verbose:
+                print(f"  [SUB-SCAN] Folder '{dir_name}' | target prefix='{video_basename}' | "
+                      f"{len(sub_items)} subtitle file(s) in folder")
+            for item in sub_items:
+                sub_basename = os.path.splitext(item)[0]
+                sub_basename_lower = sub_basename.lower()
+                matched_prefix = None
+                matched_suffix = None
+                skip_reason = None
+                for prefix in prefixes:
+                    prefix_lower = prefix.lower()
+                    if sub_basename_lower == prefix_lower:
+                        matched_prefix = prefix
+                        matched_suffix = ""
+                        break
+                    elif sub_basename_lower.startswith(prefix_lower):
+                        remainder = sub_basename[len(prefix):]
+                        if remainder and remainder[0] in [' ', '.', '-', '_']:
+                            belongs_to_other = False
+                            claimed_by_other = None
+                            for other_vid in all_video_basenames:
+                                if len(other_vid) > len(prefix_lower) and \
+                                        sub_basename_lower.startswith(other_vid):
+                                    other_rem = sub_basename_lower[len(other_vid):]
+                                    if not other_rem or other_rem[0] in [' ', '.', '-', '_']:
+                                        belongs_to_other = True
+                                        claimed_by_other = other_vid
+                                        break
+                            if belongs_to_other:
+                                skip_reason = (f"starts with '{prefix}', but belongs to longer video "
+                                               f"basename '{claimed_by_other}' in the same folder")
+                                continue
                             matched_prefix = prefix
-                            matched_suffix = ""
+                            matched_suffix = remainder
                             break
-                        elif sub_basename.startswith(prefix):
-                            remainder = sub_basename[len(prefix):]
-                            if remainder and remainder[0] in [' ', '.', '-', '_']:
-                                belongs_to_other = False
-                                for other_vid in all_video_basenames:
-                                    if len(other_vid) > len(prefix) and \
-                                            sub_basename.lower().startswith(other_vid):
-                                        other_rem = sub_basename.lower()[len(other_vid):]
-                                        if not other_rem or other_rem[0] in [' ', '.', '-', '_']:
-                                            belongs_to_other = True
-                                            break
-                                if belongs_to_other:
-                                    continue
-                                matched_prefix = prefix
-                                matched_suffix = remainder
-                                break
-                    if matched_prefix is not None:
-                        full_path = os.path.join(dir_name, item)
-                        display_tag = ("(Default)" if matched_suffix == ""
-                                       else f"({matched_suffix.strip()})")
-                        prefix_len = len(matched_prefix)
-                        if (matched_suffix not in best_subs_by_suffix or
-                                prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']):
-                            best_subs_by_suffix[matched_suffix] = {
-                                'path': full_path,
-                                'suffix': matched_suffix,
-                                'display_tag': display_tag,
-                                'basename': sub_basename,
-                                'prefix_len': prefix_len,
-                            }
-        except Exception:
-            pass
+                        else:
+                            skip_reason = (f"starts with '{prefix}', but next character '{remainder[0]}' "
+                                           f"is not a separator (' ', '.', '-', '_')")
+                if matched_prefix is not None:
+                    full_path = os.path.join(dir_name, item)
+                    display_tag = ("(Default)" if matched_suffix == ""
+                                   else f"({matched_suffix.strip()})")
+                    prefix_len = len(matched_prefix)
+                    if (matched_suffix not in best_subs_by_suffix or
+                            prefix_len > best_subs_by_suffix[matched_suffix]['prefix_len']):
+                        best_subs_by_suffix[matched_suffix] = {
+                            'path': full_path,
+                            'suffix': matched_suffix,
+                            'display_tag': display_tag,
+                            'basename': sub_basename,
+                            'prefix_len': prefix_len,
+                        }
+                elif verbose:
+                    if not skip_reason:
+                        skip_reason = f"basename '{sub_basename}' does not start with video basename '{video_basename}'"
+                    print(f"    [SUB-IGNORE] '{item}' -> {skip_reason}")
+        except Exception as e:
+            if verbose:
+                print(f"    [SUB-WARN] Error scanning subtitles in '{dir_name}': {e}")
         for suffix in sorted(best_subs_by_suffix.keys()):
             sub_info = best_subs_by_suffix[suffix].copy()
             del sub_info['prefix_len']
             detected_subs.append(sub_info)
+            if verbose:
+                print(f"    [SUB-MATCH] External: '{os.path.basename(sub_info['path'])}' "
+                      f"(suffix={sub_info['suffix']!r}, tag='{sub_info['display_tag']}')")
         if video_path and os.path.exists(video_path):
             embedded_subs = get_subtitle_stream_info(video_path)
             for relative_index, sub_stream in enumerate(embedded_subs):
                 tags = sub_stream.get("tags", {})
                 lang = tags.get("language", "und")
                 title = tags.get("title", f"Track {sub_stream.get('index')}")
-                detected_subs.append({'path': f"embedded:{relative_index}", 'suffix': "",
-                                      'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""})
+                emb_entry = {'path': f"embedded:{relative_index}", 'suffix': "",
+                             'display_tag': f"[Embedded: {lang} - {title}]", 'basename': ""}
+                detected_subs.append(emb_entry)
+                if verbose:
+                    print(f"    [SUB-MATCH] Embedded: {emb_entry['path']} "
+                          f"(suffix='', tag='{emb_entry['display_tag']}')")
         return detected_subs
 
-    def _detect_subtitles_for_video(self, video_path):
+    def _detect_subtitles_for_video(self, video_path, verbose=False):
         base, ext = os.path.splitext(video_path)
         suffixes_top = ["-top", "_top"]
         suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom"]
@@ -7294,6 +7482,9 @@ class VideoProcessorApp:
                 prefix = base[:-len(s)]
                 break
         if is_paired:
+            if verbose:
+                print(f"  [SUB-SCAN] '{os.path.basename(video_path)}' is a paired top/bottom video "
+                      f"(shared prefix='{os.path.basename(prefix)}').")
             top_file = None
             bot_file = None
             for s in suffixes_top:
@@ -7310,11 +7501,11 @@ class VideoProcessorApp:
                     break
             if not bot_file:
                 bot_file = prefix + "-bot" + ext
-            top_subs = self._detect_subtitles_for_video_single(top_file)
-            bot_subs = self._detect_subtitles_for_video_single(bot_file)
+            top_subs = self._detect_subtitles_for_video_single(top_file, verbose=verbose)
+            bot_subs = self._detect_subtitles_for_video_single(bot_file, verbose=verbose)
             base_subs = self._detect_subtitles_for_video_single(
                 None, mock_dir=os.path.dirname(video_path),
-                mock_basename=os.path.basename(prefix))
+                mock_basename=os.path.basename(prefix), verbose=verbose)
             combined = []
             seen = set()
             for sub in top_subs + bot_subs + base_subs:
@@ -7323,7 +7514,7 @@ class VideoProcessorApp:
                     combined.append(sub)
             return combined
         else:
-            return self._detect_subtitles_for_video_single(video_path)
+            return self._detect_subtitles_for_video_single(video_path, verbose=verbose)
 
     def _pick_preferred_subtitle(self, detected_subs):
         if not detected_subs:
@@ -7406,6 +7597,12 @@ class VideoProcessorApp:
         self._update_chroma_options()
 
     def _on_output_format_change(self):
+        if self.output_format_var.get() == "hdr":
+            if not self.hdr_lut_file_var.get():
+                self.hdr_lut_file_var.set(DEFAULT_HDR_LUT_PATH)
+        elif self.output_format_var.get() == "sdr":
+            if not self.lut_file_var.get():
+                self.lut_file_var.set(DEFAULT_LUT_PATH)
         self._update_codec_options(show_message=True)
         self._update_color_preset_options()
         self._update_selected_jobs("output_format", "video_codec",
@@ -7414,6 +7611,8 @@ class VideoProcessorApp:
         if self.output_format_var.get() == "dolby_vision":
             self._populate_dovi_mastering_combo()
         self._toggle_hdr_metadata_visibility()
+        self._sync_hdr_embed_lut_ui()
+        self._sync_hdr_to_sdr_lut_ui()
 
     def _browse_hybrid_file(self, position):
         ext_str = ";".join([f"*{ext}" for ext in SUPPORTED_VIDEO_EXTS])
@@ -8942,6 +9141,9 @@ class VideoProcessorApp:
             "color_preset_hdr": self.color_preset_hdr_var.get(),
             "hdr_master_display": self.hdr_master_display_var.get(),
             "hdr_max_cll": self.hdr_max_cll_var.get(),
+            "hdr_to_sdr_lut": self.hdr_to_sdr_lut_var.get(),
+            "hdr_embed_lut": self.hdr_embed_lut_var.get(),
+            "hdr_lut_file": self.hdr_lut_file_var.get(),
             "dovi_mastering_id": self.dovi_mastering_id_var.get(),
             "dovi_analysis_tuning": self.dovi_analysis_tuning_var.get(),
             "dovi_keep_xml": self.dovi_keep_xml_var.get(),
@@ -9175,9 +9377,11 @@ class VideoProcessorApp:
 
     def process_added_files(self, file_paths):
         added = []
+        already_queued = []
         for p in file_paths:
             p = os.path.abspath(p)
             if os.path.isdir(p):
+                print(f"[INPUT] Scanning directory for video files: {p}")
                 for root_dir, _, filenames in os.walk(p):
                     for filename in filenames:
                         if os.path.splitext(filename)[1].lower() in SUPPORTED_VIDEO_EXTS:
@@ -9185,11 +9389,28 @@ class VideoProcessorApp:
                             if full_path not in self.input_files:
                                 self.input_files.append(full_path)
                                 added.append(full_path)
+                            else:
+                                already_queued.append(full_path)
             elif os.path.isfile(p):
                 if os.path.splitext(p)[1].lower() in SUPPORTED_VIDEO_EXTS:
                     if p not in self.input_files:
                         self.input_files.append(p)
                         added.append(p)
+                    else:
+                        already_queued.append(p)
+                else:
+                    print(f"[INPUT] Ignored unsupported file extension: {p}")
+        if added:
+            print(f"[INPUT] Added {len(added)} new video file(s) to Input Queue:")
+            for ap in added:
+                print(f"  + {ap}")
+        if already_queued:
+            print(f"[INPUT] {len(already_queued)} file(s) were already in Input Queue:")
+            for qp in already_queued:
+                has_jobs = any(os.path.abspath(j.get('video_path', '')) == qp for j in self.processing_jobs)
+                print(f"  = {qp} (existing jobs in queue: {has_jobs})")
+                if not has_jobs and qp not in added:
+                    added.append(qp)
         self.refresh_input_listbox()
         if added:
             self.promote_input_files_auto(only_for_paths=added)
@@ -9211,42 +9432,106 @@ class VideoProcessorApp:
 
     def promote_input_files_auto(self, only_for_paths=None):
         targets = only_for_paths if only_for_paths else self.input_files
+        preset_names = self.preset_manager.get_preset_names()
         specific_suffix_filters = set()
-        for p_name in self.preset_manager.get_preset_names():
+        suffix_owners = {}
+        active_preset_summaries = []
+        for p_name in preset_names:
             p = self.preset_manager.get_preset(p_name)
-            s_filter = p['triggers'].get('suffix_filter')
-            s_mode = p['triggers'].get('suffix_mode',
-                                       'restrict' if s_filter is not None else 'all')
+            trig = p.get('triggers', {})
+            s_filter = trig.get('suffix_filter')
+            s_mode = trig.get('suffix_mode',
+                              'restrict' if s_filter is not None else 'all')
             if s_filter and (s_mode == 'restrict' or s_mode == 'include'):
                 for s in s_filter.split(','):
-                    specific_suffix_filters.add(s.strip())
+                    tok = s.strip()
+                    if tok:
+                        specific_suffix_filters.add(tok)
+                        suffix_owners.setdefault(tok, []).append(p_name)
+            elif s_filter == "" and s_mode == 'restrict':
+                specific_suffix_filters.add("")
+                suffix_owners.setdefault("", []).append(p_name)
+
+            vt = trig.get("video_trigger")
+            if not vt:
+                t_no_sub = trig.get('on_no_sub', False)
+                t_clean = trig.get('on_clean_copy_if_subs', False)
+                if t_no_sub and t_clean:
+                    vt = "Always (Clean/Backup)"
+                elif t_no_sub and not t_clean:
+                    vt = "Fallback (If No Subs)"
+                else:
+                    vt = "Never"
+            scan_s = bool(trig.get('on_scan_subs', False))
+            if vt != "Never" or scan_s:
+                active_preset_summaries.append(
+                    f"'{p_name}' [fmt={p['options'].get('output_format')}, "
+                    f"source_hdr_filter={trig.get('source_hdr_filter', 'any')!r}, "
+                    f"video_trigger={vt!r}, on_scan_subs={scan_s}, "
+                    f"suffix_mode={s_mode!r}, suffix_filter={s_filter!r}, "
+                    f"exclude={trig.get('exclude_suffix_filter')!r}]"
+                )
+
+        print("\n" + "=" * 78)
+        print(f"[AUTO-PROMOTE] Evaluating {len(targets)} video file(s) against {len(preset_names)} preset(s)...")
+        print(f"  Globally claimed subtitle suffixes: {sorted(specific_suffix_filters)}")
+        print(f"  Presets with active auto-triggers ({len(active_preset_summaries)}/{len(preset_names)}):")
+        for summary_line in active_preset_summaries:
+            print(f"    * {summary_line}")
+
+        curr_gui_preset = self.current_preset_var.get() if hasattr(self, 'current_preset_var') else ""
+        if curr_gui_preset and curr_gui_preset in preset_names:
+            saved_p = self.preset_manager.get_preset(curr_gui_preset)
+            saved_trig = saved_p.get('triggers', {}) if saved_p else {}
+            gui_hdr_filter = TRIGGER_SOURCE_HDR_FILTER_LOOKUP.get(
+                self.trigger_source_hdr_filter_var.get(), "any") if hasattr(self, 'trigger_source_hdr_filter_var') else "any"
+            if gui_hdr_filter != saved_trig.get("source_hdr_filter", "any"):
+                print(f"  [WARN] Unsaved GUI change detected on preset '{curr_gui_preset}': "
+                      f"GUI source_hdr_filter is '{gui_hdr_filter}', but saved preset has "
+                      f"'{saved_trig.get('source_hdr_filter', 'any')}'. Click 'Save Preset' to persist!")
+        print("=" * 78)
+
         files_processed_count = 0
-        for video_path in targets:
+        for idx_v, video_path in enumerate(targets, 1):
             video_path = os.path.abspath(video_path)
             if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
                 continue
             video_basename = os.path.splitext(os.path.basename(video_path))[0]
-            detected_subs = self._detect_subtitles_for_video(video_path)
+            print(f"\n--- [VIDEO {idx_v}/{len(targets)}] {os.path.basename(video_path)} ---")
+            print(f"  Path: {video_path}")
             try:
                 _src_info = get_video_info(video_path)
                 _source_is_hdr = bool(_src_info.get("is_hdr", False))
-            except Exception:
+                _hdr_reasons = _src_info.get("hdr_reasons") or []
+                _hdr_label = (f"HDR ({', '.join(_hdr_reasons)})"
+                              if _source_is_hdr else "SDR (no HDR transfer/primaries/matrix/side-data)")
+                print(f"  [PROBE] {_src_info.get('width')}x{_src_info.get('height')} "
+                      f"@ {_src_info.get('framerate', 0):.3f}fps | "
+                      f"codec={_src_info.get('codec_name')} (tag={_src_info.get('codec_tag')!r}, "
+                      f"pix_fmt={_src_info.get('pix_fmt')}, {_src_info.get('bit_depth')}-bit)")
+                print(f"  [COLOR] primaries={_src_info.get('color_primaries')!r}, "
+                      f"transfer={_src_info.get('color_transfer')!r}, "
+                      f"matrix={_src_info.get('color_space')!r}, "
+                      f"side_data={_src_info.get('side_data_types')}")
+                print(f"  [DETECT] Dynamic Range => {_hdr_label}")
+            except Exception as e:
                 _source_is_hdr = False
-            for preset_name in self.preset_manager.get_preset_names():
+                print(f"  [PROBE ERROR] Failed to probe video info: {e} -> defaulting to SDR")
+
+            detected_subs = self._detect_subtitles_for_video(video_path, verbose=True)
+            if detected_subs:
+                sub_summary = ", ".join(
+                    f"{s['display_tag']} (suffix={s['suffix']!r})" for s in detected_subs
+                )
+                print(f"  [SUB-SUMMARY] {len(detected_subs)} subtitle(s) matched to '{video_basename}': {sub_summary}")
+            else:
+                print(f"  [SUB-SUMMARY] 0 subtitles matched to '{video_basename}'.")
+
+            video_jobs_added = 0
+            for preset_name in preset_names:
                 preset = self.preset_manager.get_preset(preset_name)
                 triggers = preset['triggers']
-                _src_filter = triggers.get("source_hdr_filter", "any")
-                if _src_filter == "sdr_only" and _source_is_hdr:
-                    continue
-                if _src_filter == "hdr_only" and not _source_is_hdr:
-                    continue
                 video_trigger = triggers.get("video_trigger")
-                is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
-                if is_hybrid_duo and not (video_basename.endswith("-top") or
-                                          video_basename.endswith("_top") or
-                                          video_basename.endswith("-left") or
-                                          video_basename.endswith("_left")):
-                    continue
                 if not video_trigger:
                     t_no_sub = triggers.get('on_no_sub', False)
                     t_clean = triggers.get('on_clean_copy_if_subs', False)
@@ -9256,77 +9541,157 @@ class VideoProcessorApp:
                         video_trigger = "Fallback (If No Subs)"
                     else:
                         video_trigger = "Never"
+                on_scan_subs = bool(triggers.get('on_scan_subs', False))
+                is_active_preset = (video_trigger != "Never") or on_scan_subs
+                is_curr_selected = (preset_name == curr_gui_preset)
+
+                if not is_active_preset:
+                    if is_curr_selected:
+                        print(f"  [PRESET SKIP] '{preset_name}' (selected in GUI): "
+                              f"auto-triggers are off (video_trigger='Never', on_scan_subs=False).")
+                    continue
+
+                _src_filter = triggers.get("source_hdr_filter", "any")
+                if _src_filter == "sdr_only" and _source_is_hdr:
+                    print(f"  [PRESET SKIP] '{preset_name}': source_hdr_filter is 'sdr_only', "
+                          f"but '{os.path.basename(video_path)}' was detected as HDR.")
+                    continue
+                if _src_filter == "hdr_only" and not _source_is_hdr:
+                    print(f"  [PRESET SKIP] '{preset_name}': source_hdr_filter is 'hdr_only', "
+                          f"but '{os.path.basename(video_path)}' was detected as SDR.")
+                    continue
+                is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
+                if is_hybrid_duo and not (video_basename.endswith("-top") or
+                                          video_basename.endswith("_top") or
+                                          video_basename.endswith("-left") or
+                                          video_basename.endswith("_left")):
+                    print(f"  [PRESET SKIP] '{preset_name}': hybrid-duo requires video basename "
+                          f"ending in -top/_top/-left/_left (got '{video_basename}').")
+                    continue
                 exclude_suffix = triggers.get('exclude_suffix_filter')
                 exclude_patterns = ([s.strip() for s in exclude_suffix.split(',') if s.strip()]
                                     if exclude_suffix else None)
-                preset_detected_subs = ([s for s in detected_subs
-                                         if not self._matches_suffix_pattern(s, exclude_patterns)]
-                                        if exclude_patterns else detected_subs)
-                has_preset_subs = len(preset_detected_subs) > 0
                 # Exclude suffix gates all triggers for this video:
                 # a video whose own base name matches an excluded suffix
                 # is completely skipped for this preset.
                 video_excluded = bool(exclude_patterns) and self._matches_suffix_pattern(
                     {'suffix': '', 'basename': video_basename}, exclude_patterns)
                 if video_excluded:
+                    print(f"  [PRESET SKIP] '{preset_name}': video basename '{video_basename}' "
+                          f"matched exclude_suffix_filter={exclude_patterns}.")
                     continue
 
+                if exclude_patterns:
+                    preset_detected_subs = []
+                    for s in detected_subs:
+                        if self._matches_suffix_pattern(s, exclude_patterns):
+                            print(f"  [SUB-EXCLUDE] '{preset_name}': subtitle {s['display_tag']} "
+                                  f"(suffix={s['suffix']!r}) excluded by exclude_suffix_filter={exclude_patterns}.")
+                        else:
+                            preset_detected_subs.append(s)
+                else:
+                    preset_detected_subs = detected_subs
+                has_preset_subs = len(preset_detected_subs) > 0
+
                 if video_trigger == "Always (Clean/Backup)":
+                    print(f"  [PRESET MATCH] '{preset_name}': matched video_trigger='Always (Clean/Backup)' -> adding [No Subtitles] job.")
                     self._create_job_entry(video_path, None, preset['options'],
                                            preset_name, "[No Subtitles]")
                     files_processed_count += 1
-                elif video_trigger == "Fallback (If No Subs)" and not has_preset_subs:
-                    self._create_job_entry(video_path, None, preset['options'],
-                                           preset_name, "[No Subtitles]")
-                    files_processed_count += 1
-                if has_preset_subs and triggers.get('on_scan_subs'):
+                    video_jobs_added += 1
+                elif video_trigger == "Fallback (If No Subs)":
+                    if not has_preset_subs:
+                        print(f"  [PRESET MATCH] '{preset_name}': matched video_trigger='Fallback (If No Subs)' (0 subs) -> adding [No Subtitles] job.")
+                        self._create_job_entry(video_path, None, preset['options'],
+                                               preset_name, "[No Subtitles]")
+                        files_processed_count += 1
+                        video_jobs_added += 1
+                    elif not on_scan_subs:
+                        print(f"  [PRESET SKIP] '{preset_name}': video_trigger='Fallback (If No Subs)' and on_scan_subs=False, "
+                              f"but video has {len(preset_detected_subs)} subtitle(s).")
+
+                if on_scan_subs:
                     filter_suffix = triggers.get('suffix_filter')
                     filter_mode = triggers.get('suffix_mode',
                                                'restrict' if filter_suffix is not None else 'all')
-                    for sub in preset_detected_subs:
-                        match = False
-                        if filter_mode == 'all' or (filter_mode == 'restrict' and filter_suffix is None):
-                            is_claimed_specifically = False
-                            for specific in specific_suffix_filters:
-                                if specific == "":
-                                    if sub['suffix'] == "":
-                                        is_claimed_specifically = True
-                                else:
-                                    if self._matches_suffix_pattern(sub, [specific]):
-                                        is_claimed_specifically = True
-                            if not is_claimed_specifically:
-                                match = True
-                        elif filter_mode == 'include':
-                            is_specific_match = False
-                            if filter_suffix:
-                                valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()]
-                                if self._matches_suffix_pattern(sub, valid_patterns):
-                                    is_specific_match = True
-                            if is_specific_match:
-                                match = True
-                            else:
+                    if not has_preset_subs:
+                        print(f"  [PRESET SKIP] '{preset_name}': on_scan_subs=True (mode={filter_mode!r}, "
+                              f"suffix_filter={filter_suffix!r}), but 0 usable subtitles were found for '{video_basename}'.")
+                    else:
+                        for sub in preset_detected_subs:
+                            match = False
+                            reject_reason = ""
+                            if filter_mode == 'all' or (filter_mode == 'restrict' and filter_suffix is None):
                                 is_claimed_specifically = False
+                                claimed_by = []
                                 for specific in specific_suffix_filters:
                                     if specific == "":
                                         if sub['suffix'] == "":
                                             is_claimed_specifically = True
+                                            claimed_by.append(f"'' ({suffix_owners.get('', [])})")
                                     else:
                                         if self._matches_suffix_pattern(sub, [specific]):
                                             is_claimed_specifically = True
+                                            claimed_by.append(f"{specific!r} ({suffix_owners.get(specific, [])})")
                                 if not is_claimed_specifically:
                                     match = True
-                        elif filter_mode == 'restrict':
-                            if filter_suffix == "":
-                                if sub['suffix'] == "":
+                                else:
+                                    reject_reason = f"mode='all' (unclaimed only), but suffix {sub['suffix']!r} is claimed by {', '.join(claimed_by)}"
+                            elif filter_mode == 'include':
+                                is_specific_match = False
+                                valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()] if filter_suffix else []
+                                if valid_patterns and self._matches_suffix_pattern(sub, valid_patterns):
+                                    is_specific_match = True
+                                if is_specific_match:
                                     match = True
-                            elif filter_suffix is not None:
-                                valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()]
-                                if self._matches_suffix_pattern(sub, valid_patterns):
-                                    match = True
-                        if match:
-                            self._create_job_entry(video_path, sub['path'], preset['options'],
-                                                   preset_name, sub['display_tag'])
-                            files_processed_count += 1
+                                else:
+                                    is_claimed_specifically = False
+                                    claimed_by = []
+                                    for specific in specific_suffix_filters:
+                                        if specific == "":
+                                            if sub['suffix'] == "":
+                                                is_claimed_specifically = True
+                                                claimed_by.append(f"'' ({suffix_owners.get('', [])})")
+                                        else:
+                                            if self._matches_suffix_pattern(sub, [specific]):
+                                                is_claimed_specifically = True
+                                                claimed_by.append(f"{specific!r} ({suffix_owners.get(specific, [])})")
+                                    if not is_claimed_specifically:
+                                        match = True
+                                    else:
+                                        reject_reason = (f"mode='include' (patterns={valid_patterns} + unclaimed), "
+                                                         f"suffix {sub['suffix']!r} did not match patterns and is claimed by {', '.join(claimed_by)}")
+                            elif filter_mode == 'restrict':
+                                if filter_suffix == "":
+                                    if sub['suffix'] == "":
+                                        match = True
+                                    else:
+                                        reject_reason = f"mode='restrict' (unsuffixed only), but subtitle has suffix {sub['suffix']!r}"
+                                elif filter_suffix is not None:
+                                    valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()]
+                                    if self._matches_suffix_pattern(sub, valid_patterns):
+                                        match = True
+                                    else:
+                                        reject_reason = f"mode='restrict' (patterns={valid_patterns}), subtitle suffix {sub['suffix']!r} did not match"
+                            if match:
+                                print(f"  [PRESET MATCH] '{preset_name}': subtitle {sub['display_tag']} "
+                                      f"(suffix={sub['suffix']!r}) matched (mode={filter_mode!r}, filter={filter_suffix!r}).")
+                                self._create_job_entry(video_path, sub['path'], preset['options'],
+                                                       preset_name, sub['display_tag'])
+                                files_processed_count += 1
+                                video_jobs_added += 1
+                            else:
+                                print(f"  [SUB-SKIP] '{preset_name}': subtitle {sub['display_tag']} "
+                                      f"(suffix={sub['suffix']!r}) skipped -> {reject_reason}")
+            if video_jobs_added == 0:
+                print(f"  [RESULT] 0 jobs created for '{os.path.basename(video_path)}'.")
+            else:
+                print(f"  [RESULT] {video_jobs_added} job(s) created for '{os.path.basename(video_path)}'.")
+
+        print("\n" + "=" * 78)
+        print(f"[AUTO-PROMOTE DONE] Added {files_processed_count} job(s) across {len(targets)} video(s). "
+              f"Total jobs in queue: {len(self.processing_jobs)}.")
+        print("=" * 78 + "\n")
         if files_processed_count > 0 and not only_for_paths:
             self.update_status(f"Auto-added {files_processed_count} jobs from Input Queue.")
 
@@ -9347,12 +9712,13 @@ class VideoProcessorApp:
         suffix_val = triggers.get('suffix_filter')
         suffix_mode = triggers.get('suffix_mode', 'restrict' if suffix_val is not None else 'all')
 
+        print(f"\n[MANUAL-ADD] Adding {len(selected_indices)} selected video(s) with preset '{preset_name}'...")
         for index in selected_indices:
             actual_index = self.filtered_input_indices[index]
             video_path = self.input_files[actual_index]
             if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
                 continue
-            detected_subs = self._detect_subtitles_for_video(video_path)
+            detected_subs = self._detect_subtitles_for_video(video_path, verbose=True)
             if exclude_patterns:
                 detected_subs = [s for s in detected_subs
                                  if not self._matches_suffix_pattern(s, exclude_patterns)]
@@ -9487,6 +9853,17 @@ class VideoProcessorApp:
                     options["subtitle_font"] = font
                     break
 
+        if options.get("output_format") == "hdr":
+            if "hdr_embed_lut" not in options:
+                options["hdr_embed_lut"] = DEFAULT_HDR_EMBED_LUT
+            if not options.get("hdr_lut_file"):
+                options["hdr_lut_file"] = DEFAULT_HDR_LUT_PATH
+        elif options.get("output_format") == "sdr":
+            if "hdr_to_sdr_lut" not in options:
+                options["hdr_to_sdr_lut"] = DEFAULT_HDR_TO_SDR_LUT
+            if not options.get("lut_file"):
+                options["lut_file"] = DEFAULT_LUT_PATH
+
         new_job = {
             "job_id": f"job_{time.time()}_{len(self.processing_jobs)}_{preset_name}",
             "video_path": video_path,
@@ -9499,6 +9876,21 @@ class VideoProcessorApp:
         new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
         self.processing_jobs.append(new_job)
         self.job_listbox.insert(tk.END, new_job["display_name"])
+        try:
+            _j_info = get_video_info(video_path)
+            _j_bot_info = (get_video_info(options["hybrid_bottom_path"])
+                           if options.get("hybrid_bottom_path") and os.path.exists(options["hybrid_bottom_path"])
+                           else None)
+            _will_lut = _should_apply_hdr_to_sdr_lut(options, _j_info, _j_bot_info)
+        except Exception:
+            _will_lut = False
+        _will_embed = _should_embed_hdr_lut(options)
+        _sub_label = (os.path.basename(subtitle_path)
+                      if subtitle_path and not str(subtitle_path).startswith("embedded:")
+                      else (subtitle_path or "None"))
+        print(f"    -> [JOB CREATED] #{len(self.processing_jobs)}: \"{new_job['display_name']}\" | "
+              f"fmt={options.get('output_format')} ({options.get('video_codec')}, {options.get('resolution')}) | "
+              f"sub={_sub_label} | HDR->SDR LUT={_will_lut} | Embed HDR LUT={_will_embed}")
 
     def _handle_listbox_empty_click(self, event, listbox):
         if listbox.size() > 0:
@@ -9660,6 +10052,11 @@ class VideoProcessorApp:
         self.color_preset_hdr_var.set(options.get("color_preset_hdr", DEFAULT_COLOR_PRESET_HDR))
         self.hdr_master_display_var.set(options.get("hdr_master_display", DEFAULT_HDR_MASTER_DISPLAY))
         self.hdr_max_cll_var.set(options.get("hdr_max_cll", DEFAULT_HDR_MAX_CLL))
+        self.hdr_to_sdr_lut_var.set(options.get("hdr_to_sdr_lut", DEFAULT_HDR_TO_SDR_LUT))
+        self.hdr_embed_lut_var.set(options.get("hdr_embed_lut", DEFAULT_HDR_EMBED_LUT))
+        self.hdr_lut_file_var.set(options.get("hdr_lut_file", DEFAULT_HDR_LUT_PATH))
+        self._sync_hdr_embed_lut_ui()
+        self._sync_hdr_to_sdr_lut_ui()
         self.dovi_mastering_id_var.set(options.get("dovi_mastering_id", DEFAULT_DOVI_MASTERING_ID))
         self.dovi_analysis_tuning_var.set(options.get("dovi_analysis_tuning", DEFAULT_DOVI_ANALYSIS_TUNING))
         self.dovi_keep_xml_var.set(options.get("dovi_keep_xml", DEFAULT_DOVI_KEEP_XML))
@@ -10827,7 +11224,8 @@ class VideoProcessorApp:
                 extra_hash_data = f"{job['video_path']}_{i}_{safe_ch_title}"
                 ch_job_hash = get_job_hash(ch_options, extra_hash_data)
                 base_chunk = f"{base_name_without_hash}_{i + 1:02d}_{safe_ch_title}_{ch_job_hash}"
-                ch_output_file = os.path.join(output_dir, f"{base_chunk}.mp4")
+                out_ext = ".mkv" if _should_embed_hdr_lut(ch_options) else ".mp4"
+                ch_output_file = os.path.join(output_dir, f"{base_chunk}{out_ext}")
                 ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
                 print(f"\n[INFO] Processing Chapter {i + 1}/{total_chapters}: {ch_title}")
                 ch_options["seek_start"] = chapter['start_time']
@@ -10851,7 +11249,8 @@ class VideoProcessorApp:
                 extra_hash_data = f"{job['video_path']}"
                 ch_job_hash = get_job_hash(ch_options, extra_hash_data)
                 base_chunk = f"{base_name_without_hash}_{ch_job_hash}"
-                ch_output_file = os.path.join(output_dir, f"{base_chunk}.mp4")
+                out_ext = ".mkv" if _should_embed_hdr_lut(ch_options) else ".mp4"
+                ch_output_file = os.path.join(output_dir, f"{base_chunk}{out_ext}")
                 ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
             base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
             self._process_single_render_segment(job, ch_output_file, orientation, ch_options, output_dir,
@@ -11051,6 +11450,7 @@ class VideoProcessorApp:
                                           "hybrid-duo (dual source)")
             options.pop("_dovi_rpu_path", None)
             options.pop("_inline_truehdr", None)
+            options.pop("_hdr_to_sdr_lut_applied", None)
             dv_rpu_path = None
             dv_xml_path = None
             truehdr_intermediate = None
@@ -11210,6 +11610,8 @@ class VideoProcessorApp:
                         options["hybrid_top_path"] = _top_sr
                         options["hybrid_bottom_path"] = _bot_sr
                         options["_sr_prepass_sources"] = [_top_sr, _bot_sr]
+                        if _should_apply_hdr_to_sdr_lut(options, _top_info, _bot_info):
+                            options["_hdr_to_sdr_lut_applied"] = True
                     else:
                         _src_w = info["width"]
                         _src_h = info["height"]
@@ -11226,6 +11628,8 @@ class VideoProcessorApp:
                         effective_job["video_path"] = _sr_intermediate
                         effective_info = get_video_info(_sr_intermediate)
                         options["_sr_prepass_source"] = _sr_intermediate
+                        if _should_apply_hdr_to_sdr_lut(options, info):
+                            options["_hdr_to_sdr_lut_applied"] = True
                 elif _sr_override:
                     # v8.59 classical stage 1: no NVEncC prepass. The
                     # FFmpeg preprocessor scales the source straight to
@@ -11264,6 +11668,8 @@ class VideoProcessorApp:
                                                         encoder_backend="preprocess", base_dir=base_dir)
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
+                if _should_apply_hdr_to_sdr_lut(options, effective_info, _seam_info_bot):
+                    options["_hdr_to_sdr_lut_applied"] = True
                 composite_source = temp_preproc
                 composite_info = get_video_info(temp_preproc)
                 # Hybrid SDR→HDR: TrueHDR on composite
@@ -11391,6 +11797,11 @@ class VideoProcessorApp:
                         cleanup_single_temp_file(_sr_path)
                     except Exception:
                         pass
+
+            if _should_embed_hdr_lut(options):
+                output_file = self._attach_hdr_cube_lut(
+                    output_file, options.get("hdr_lut_file", DEFAULT_HDR_LUT_PATH),
+                    output_dir, base_dir=base_dir)
 
             print(f"File finalized => {output_file}")
             self.verify_output_file(output_file, options)
@@ -11914,6 +12325,10 @@ class VideoProcessorApp:
                       f"documented for Quality-priority mode (mode 0).")
         elif upscale_algo in CLASSICAL_UPSCALE_ALGOS:
             resize_algo = upscale_algo
+        if _should_apply_hdr_to_sdr_lut(options, info):
+            lut_path = os.path.abspath(options.get("lut_file", DEFAULT_LUT_PATH))
+            print(f"[INFO] NVEncC HDR-to-SDR 3D LUT conversion: {os.path.basename(lut_path)}")
+            cmd.extend(["--vpp-colorspace", f"matrix=bt2020nc:bt709,lut3d={lut_path},lut3d_interp=tetrahedral"])
         if precrop:
             cmd.extend(["--crop", f"{precrop[0]},{precrop[1]},{precrop[2]},{precrop[3]}"])
         if resize_algo and (info["width"] != target_w or info["height"] != target_h):
@@ -12185,8 +12600,8 @@ class VideoProcessorApp:
         if options.get("use_sharpening", False):
             reasons.append("sharpening is enabled")
         lut = str(options.get("lut_file", "")).strip()
-        if lut and os.path.exists(lut):
-            reasons.append("a LUT is active")
+        if lut and os.path.exists(lut) and _should_apply_hdr_to_sdr_lut(options):
+            reasons.append("an HDR-to-SDR LUT is active")
         if options.get("burn_subtitles", False):
             reasons.append("subtitles are burned in")
         if options.get("title_burn_enabled", False):
@@ -12480,6 +12895,47 @@ class VideoProcessorApp:
 
         return final_mp4
 
+    def _attach_hdr_cube_lut(self, encoded_file, lut_path, output_dir, base_dir=None):
+        """
+        Losslessly remuxes encoded_file into Matroska (.mkv) attaching the .cube LUT
+        file with mimetype=application/x-cube, per YouTube HDR custom downconversion specifications.
+        """
+        if not lut_path or not os.path.exists(lut_path):
+            print(f"[WARN] HDR .cube LUT attachment skipped: file not found '{lut_path}'")
+            return encoded_file
+
+        base = os.path.splitext(encoded_file)[0]
+        final_mkv = f"{base}.mkv"
+        temp_encoded = f"{base}_raw_pre_lut{os.path.splitext(encoded_file)[1]}"
+        try:
+            if os.path.exists(temp_encoded):
+                os.remove(temp_encoded)
+            os.replace(encoded_file, temp_encoded)
+        except Exception as e:
+            raise VideoProcessingError(f"Failed to prepare video for LUT attachment: {e}")
+
+        lut_filename = os.path.basename(lut_path)
+        cmd = [
+            FFMPEG_CMD, "-y",
+            "-i", temp_encoded,
+            "-map", "0",
+            "-c", "copy",
+            "-attach", lut_path,
+            "-metadata:s:t:0", "mimetype=application/x-cube",
+            "-metadata:s:t:0", f"filename={lut_filename}",
+            final_mkv
+        ]
+        print(f"[INFO] Embedding HDR .cube LUT into Matroska container: {lut_filename}...")
+        try:
+            self.run_external_tool(cmd, "FFmpeg attach HDR LUT")
+            if os.path.exists(temp_encoded):
+                os.remove(temp_encoded)
+            return final_mkv
+        except Exception as e:
+            if os.path.exists(temp_encoded) and not os.path.exists(encoded_file):
+                os.replace(temp_encoded, encoded_file)
+            raise VideoProcessingError(f"Failed to attach .cube LUT to HDR video: {e}")
+
     def _truehdr_preprocess(self, input_file, work_dir, options, info, subtitle_burn_path=None, base_dir=None):
         base = os.path.splitext(os.path.basename(input_file))[0]
         safe_base = re.sub(r'[\\/*?:"<>|]', "", base).strip() or "truehdr"
@@ -12644,7 +13100,12 @@ class VideoProcessorApp:
             cmd.extend(["--gop-len", "1", "--bframes", "0"])
         cmd.extend([
                "--colorprim", src_prim, "--transfer", src_trc,
-               "--colormatrix", src_matrix,
+               "--colormatrix", src_matrix])
+        if _should_apply_hdr_to_sdr_lut(options, _src_info):
+            lut_path = os.path.abspath(options.get("lut_file", DEFAULT_LUT_PATH))
+            print(f"[INFO] NVEncC SuperRes prepass applying HDR-to-SDR LUT: {os.path.basename(lut_path)}")
+            cmd.extend(["--vpp-colorspace", f"matrix=bt2020nc:bt709,lut3d={lut_path},lut3d_interp=tetrahedral"])
+        cmd.extend([
                "--vpp-resize", resize_algo,
                "--output-res", output_res,
                "--cqp", "12",
@@ -12742,8 +13203,9 @@ class VideoProcessorApp:
         filter_complex_parts = []
         is_hdr_output = _fmt in ("hdr", "dolby_vision")
         is_cpu_encode = (options.get("encoder_family") == "cpu_software")
+        apply_hdr2sdr_lut = _should_apply_hdr_to_sdr_lut(options, info, info_bot)
         chroma = _normalize_chroma_code(options.get("chroma_subsampling", "420"))
-        cuda_work_fmt = "p010le" if is_hdr_output else "nv12"
+        cuda_work_fmt = "p010le" if (is_hdr_output or info.get("bit_depth") == 10 or apply_hdr2sdr_lut) else "nv12"
         color_preset_key = (options.get("color_preset_hdr") if is_hdr_output
                             else options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
         color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
@@ -12754,7 +13216,7 @@ class VideoProcessorApp:
         _cm_fix = color_info["matrix"]
         _r_fix = color_info["range_ffmpeg"]
         use_cpu_scaling = (chroma != "420")
-        if is_hdr_output or info["bit_depth"] == 10:
+        if is_hdr_output or (encoder_backend == "preprocess" and info["bit_depth"] == 10):
             out_bit_depth = 10
         else:
             out_bit_depth = 8
@@ -13081,9 +13543,26 @@ class VideoProcessorApp:
                 # Pad the composite before any CPU filter so subtitles /
                 # sharpening / LUT see the final canvas dimensions.
                 cpu_chain.append(_cp_filter)
-            if options.get("lut_file") and os.path.exists(options.get("lut_file")):
-                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
-                cpu_chain.append(f"lut3d=file={safe_lut}")
+            if apply_hdr2sdr_lut:
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file", DEFAULT_LUT_PATH), base_dir=base_dir)
+                _lut_expr = (
+                    f"scale=in_color_matrix=bt2020:out_color_matrix=bt709,format=rgb48le,"
+                    f"lut3d=file={safe_lut}:interp=tetrahedral,"
+                    f"scale=in_color_matrix=bt709:out_color_matrix=bt709,format={cuda_work_fmt},"
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}"
+                )
+                _top_is_hdr = bool((info or {}).get("is_hdr"))
+                _bot_is_hdr = (bool((info_bot or {}).get("is_hdr"))
+                               if orientation == "hybrid-duo (dual source)" else _top_is_hdr)
+                if _top_is_hdr and _bot_is_hdr:
+                    cpu_chain.append(_lut_expr)
+                elif _top_is_hdr:
+                    top_cpu = f"{top_cpu},{_lut_expr}" if top_cpu else _lut_expr
+                elif _bot_is_hdr:
+                    bot_cpu = f"{bot_cpu},{_lut_expr}" if bot_cpu else _lut_expr
+            cpu_chain.append(
+                f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}"
+            )
             if options.get("fruc"):
                 cpu_chain.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
@@ -13103,7 +13582,7 @@ class VideoProcessorApp:
             if title_ass_path:
                 safe_title_ass = escape_ffmpeg_filter_path(title_ass_path, base_dir=base_dir)
                 cpu_chain.append(f"subtitles=filename={safe_title_ass}")
-            if is_cpu_encode:
+            if is_cpu_encode or encoder_backend == "preprocess":
                 cpu_chain.append(f"format={target_cpu_pix_fmt}")
             elif not is_hdr_output:
                 cpu_chain.append("format=nv12")
@@ -13432,10 +13911,17 @@ class VideoProcessorApp:
                         if aspect_mode == 'pad':
                             pad_color = options.get("pad_color", DEFAULT_PAD_COLOR)
                             vf_filters.append(f"{scale_base}:force_original_aspect_ratio=decrease")
-                            vf_filters.append(
-                                f"pad_cuda={target_w}:{target_h}:"
-                                f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):"
-                                f"{pad_color}")
+                            if cuda_work_fmt == "p010le":
+                                # pad_cuda does not support 10-bit p010le surfaces
+                                cpu_filters.append(
+                                    f"pad={target_w}:{target_h}:"
+                                    f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):"
+                                    f"{pad_color}")
+                            else:
+                                vf_filters.append(
+                                    f"pad_cuda={target_w}:{target_h}:"
+                                    f"floor(({target_w}-iw)/2+{ox}):floor(({target_h}-ih)/2+{oy}):"
+                                    f"{pad_color}")
                         elif aspect_mode == 'crop':
                             vf_filters.append(f"{scale_base}:force_original_aspect_ratio=increase")
                             cpu_filters.append(f"crop={target_w}:{target_h}")
@@ -13445,9 +13931,14 @@ class VideoProcessorApp:
                                 target_w, target_h = info["width"], info["height"]
                             else:
                                 vf_filters.append(scale_base)
-            if options.get("lut_file") and os.path.exists(options.get("lut_file")):
-                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file"), base_dir=base_dir)
-                cpu_filters.append(f"lut3d=file={safe_lut}")
+            if apply_hdr2sdr_lut:
+                safe_lut = escape_ffmpeg_filter_path(options.get("lut_file", DEFAULT_LUT_PATH), base_dir=base_dir)
+                cpu_filters.append(
+                    f"scale=in_color_matrix=bt2020:out_color_matrix=bt709,format=rgb48le,"
+                    f"lut3d=file={safe_lut}:interp=tetrahedral,"
+                    f"scale=in_color_matrix=bt709:out_color_matrix=bt709,format={cuda_work_fmt},"
+                    f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}"
+                )
             if options.get("fruc"):
                 cpu_filters.append(f"minterpolate=fps={options.get('fruc_fps')}")
             if options.get("use_sharpening"):
@@ -13929,7 +14420,10 @@ class VideoProcessorApp:
         cmd.extend(encoder_opts)
         if audio_stream_groups:
             cmd.extend(audio_stream_groups)
-        cmd.extend(["-movflags", "+faststart+negative_cts_offsets", "-f", "mp4", output_file])
+        if str(output_file).lower().endswith(".mkv"):
+            cmd.extend(["-f", "matroska", output_file])
+        else:
+            cmd.extend(["-movflags", "+faststart+negative_cts_offsets", "-f", "mp4", output_file])
         return cmd
 
     def validate_processing_settings(self):
@@ -13940,9 +14434,21 @@ class VideoProcessorApp:
                 not check_nvencc_availability():
             issues.append(f"NVEncC not found. Set NVENCC_PATH or ensure '{NVENCC_CMD}' is in PATH.")
         if self.output_format_var.get() == 'sdr':
-            lut_path = self.lut_file_var.get()
-            if lut_path and not os.path.exists(lut_path):
-                issues.append(f"LUT file path is set but file not found: {lut_path}")
+            if self.hdr_to_sdr_lut_var.get():
+                lut_path = self.lut_file_var.get()
+                if not lut_path or not os.path.exists(lut_path):
+                    issues.append(f"HDR-to-SDR LUT file not found: '{lut_path}'")
+        if self.output_format_var.get() == 'hdr':
+            if self.hdr_embed_lut_var.get():
+                hdr_lut = self.hdr_lut_file_var.get()
+                if not hdr_lut or not os.path.exists(hdr_lut):
+                    issues.append(f"HDR embed LUT file not found: '{hdr_lut}'")
+                delivery_target = DELIVERY_TARGET_LOOKUP.get(
+                    self.audio_delivery_target_var.get(), DEFAULT_DELIVERY_TARGET)
+                if delivery_target == "youtube_stereo_eclipsa":
+                    issues.append(
+                        "Embedding a .cube LUT requires an MKV container, which is incompatible "
+                        "with IAMF/Eclipsa delivery (MP4 only). Disable LUT embedding or choose another audio target.")
         selected_codec = self.video_codec_var.get()
         if self.output_format_var.get() == "hdr" and selected_codec == "h264":
             issues.append("HDR output requires HEVC or AV1. H.264 cannot carry HDR.")
@@ -14363,6 +14869,23 @@ class VideoProcessorApp:
                 print(f"[AUDIO VER] Stream #{s.get('index')}: '{title}' "
                       f"({s.get('codec_name')}, {s.get('channels')} channels, "
                       f"'{s.get('channel_layout')}')")
+            if options and _should_embed_hdr_lut(options):
+                cmd_attach = [FFPROBE_CMD, "-v", "error", "-select_streams", "t", "-show_entries",
+                              "stream=index,codec_name:stream_tags=filename,mimetype",
+                              "-of", "json", file_path]
+                attach_info = json.loads(
+                    safe_ffprobe(cmd_attach, "output attachment verification").stdout).get("streams", [])
+                cube_attached = False
+                for att in attach_info:
+                    tags = att.get('tags', {})
+                    fn = tags.get('filename', '')
+                    mime = tags.get('mimetype', '')
+                    if mime == "application/x-cube" or fn.lower().endswith(".cube"):
+                        cube_attached = True
+                        print(f"[ATTACH VER] Embedded .cube LUT verified: '{fn}' (mime={mime})")
+                if not cube_attached:
+                    raise VideoProcessingError(
+                        f"HDR output verification failed: application/x-cube attachment not found in {os.path.basename(file_path)}")
         except Exception as e:
             print(f"[ERROR] Verification failed: {e}")
             raise VideoProcessingError(f"Output verification failed for {os.path.basename(file_path)}: {e}")

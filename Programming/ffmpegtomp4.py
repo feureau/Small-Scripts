@@ -6,8 +6,9 @@ and extract/package all embedded subtitle streams alongside the output.
 - Recursively processes all subdirectories from the working folder.
 - Re-encodes audio to AAC at 1536 kbps by default (configurable).
 - Copies the video stream losslessly.
-- Extracts text-based subtitles to .srt files in the file's own folder.
-- Packages image-based subtitles to .mkv files in the file's own folder.
+- Extracts text-based subtitles to .srt files in a "srt" subfolder (English subtitles placed in "srt/English").
+- Automatically generates a combined_english.txt transcript in "srt/English" if multiple videos have English subtitles.
+- Packages image-based subtitles to .mkv files in the "srt" subfolder.
 - Original files are safely moved into an "input" folder inside their own directory.
 - New .mp4 output stays in the original file's location.
 - Gracefully handles Ctrl-C by stopping FFmpeg and cleaning up partial files.
@@ -16,6 +17,7 @@ and extract/package all embedded subtitle streams alongside the output.
 import sys
 import subprocess
 import os
+import re
 import argparse
 import shutil
 import fnmatch
@@ -92,6 +94,24 @@ def _get_language_name(code):
     except Exception:
         return code
 
+def _is_english_stream(stream_info):
+    """Checks tags and metadata to determine if a stream is English."""
+    tags = stream_info.get('tags') or {}
+    lang_code = tags.get('language', '').strip().lower()
+    if lang_code in ('eng', 'en', 'english'):
+        return True
+    if pycountry and lang_code:
+        try:
+            lang = pycountry.languages.get(alpha_3=lang_code) or pycountry.languages.get(alpha_2=lang_code)
+            if lang and lang.name.lower() == 'english':
+                return True
+        except Exception:
+            pass
+    title = tags.get('title', '').strip().lower()
+    if 'english' in title or title == 'eng':
+        return True
+    return False
+
 def _probe_streams(video_path, stream_type="s"):
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", stream_type, "-show_streams",
@@ -139,7 +159,7 @@ def _generate_subtitle_filename(video_basename, stream_info, extension, output_d
     return filename
 
 def extract_subtitles_hybrid(video_path, output_dir, video_basename):
-    """Probes the video and extracts text subs to .srt and image subs to .mkv."""
+    """Probes the video and extracts text subs to .srt (English in srt/English) and image subs to .mkv."""
     print("  Probing for subtitle streams...")
     streams = _probe_streams(video_path, "s")
     if not streams:
@@ -149,12 +169,23 @@ def extract_subtitles_hybrid(video_path, output_dir, video_basename):
     text_subs = [s for s in streams if s.get('codec_name', '').lower() in KNOWN_TEXT_SUBTITLE_CODECS]
     image_subs = [s for s in streams if s.get('codec_name', '').lower() not in KNOWN_TEXT_SUBTITLE_CODECS]
 
-    # Extract text subtitles into the exact same folder
+    if not text_subs and not image_subs:
+        print("  No extractable subtitle streams found.")
+        return
+
+    srt_base_dir = os.path.join(output_dir, "srt")
+    english_dir = os.path.join(srt_base_dir, "English")
+
+    # Extract text subtitles into the 'srt' (or 'srt/English') subfolder
     for stream in text_subs:
-        out_name = _generate_subtitle_filename(video_basename, stream, "srt", output_dir)
-        out_path = os.path.join(output_dir, out_name)
+        is_english = _is_english_stream(stream)
+        target_dir = english_dir if is_english else srt_base_dir
+        os.makedirs(target_dir, exist_ok=True)
+        out_name = _generate_subtitle_filename(video_basename, stream, "srt", target_dir)
+        out_path = os.path.join(target_dir, out_name)
+        display_subfolder = "srt/English" if is_english else "srt"
         cmd = ["ffmpeg", "-y", "-i", video_path, "-map", f"0:{stream['index']}", out_path]
-        print(f"    Extracting SRT subtitle to: {out_name}")
+        print(f"    Extracting SRT subtitle to: {display_subfolder}/{out_name}")
         try:
             _, err, rc = _run_command_and_decode(cmd)
             if rc != 0:
@@ -166,14 +197,21 @@ def extract_subtitles_hybrid(video_path, output_dir, video_basename):
             if os.path.exists(out_path):
                 os.remove(out_path)
                 print(f"      -> Cleaned up incomplete subtitle: {out_name}")
+            for d in [english_dir, srt_base_dir]:
+                if os.path.exists(d) and not os.listdir(d):
+                    try:
+                        os.rmdir(d)
+                    except OSError:
+                        pass
             raise # Bubble up to the main handler
 
-    # Package image subtitles into the exact same folder
+    # Package image subtitles into the 'srt' subfolder
     for stream in image_subs:
-        out_name = _generate_subtitle_filename(video_basename, stream, "mkv", output_dir)
-        out_path = os.path.join(output_dir, out_name)
+        os.makedirs(srt_base_dir, exist_ok=True)
+        out_name = _generate_subtitle_filename(video_basename, stream, "mkv", srt_base_dir)
+        out_path = os.path.join(srt_base_dir, out_name)
         cmd = ["ffmpeg", "-y", "-i", video_path, "-map", f"0:{stream['index']}", "-c", "copy", out_path]
-        print(f"    Packaging MKV subtitle to: {out_name}")
+        print(f"    Packaging MKV subtitle to: srt/{out_name}")
         try:
             _, err, rc = _run_command_and_decode(cmd)
             if rc != 0:
@@ -183,7 +221,106 @@ def extract_subtitles_hybrid(video_path, output_dir, video_basename):
             if os.path.exists(out_path):
                 os.remove(out_path)
                 print(f"      -> Cleaned up incomplete subtitle: {out_name}")
+            for d in [english_dir, srt_base_dir]:
+                if os.path.exists(d) and not os.listdir(d):
+                    try:
+                        os.rmdir(d)
+                    except OSError:
+                        pass
             raise # Bubble up to the main handler
+
+    # Cleanup directories if they ended up empty
+    for d in [english_dir, srt_base_dir]:
+        if os.path.exists(d) and not os.listdir(d):
+            try:
+                os.rmdir(d)
+            except OSError:
+                pass
+
+def _clean_srt_text(srt_path):
+    """Reads an SRT file, strips timestamps and subtitle index numbers, and returns clean text."""
+    timestamp_pattern = re.compile(r'^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}')
+    line_number_pattern = re.compile(r'^\d+$')
+
+    try:
+        with open(srt_path, 'rb') as f:
+            raw_data = f.read()
+        enc = chardet.detect(raw_data)['encoding'] or 'utf-8'
+        content = raw_data.decode(enc, errors='replace')
+    except Exception:
+        with open(srt_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+    cleaned_lines = []
+    for line in content.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+        if line_number_pattern.match(line_str):
+            continue
+        if timestamp_pattern.match(line_str):
+            continue
+        cleaned_lines.append(line_str)
+
+    return "\n".join(cleaned_lines).strip()
+
+def _check_and_generate_combined_english_txt(folder):
+    """If there are English SRTs from multiple videos in srt/English/, create combined_english.txt."""
+    english_dir = os.path.join(folder, "srt", "English")
+    if not os.path.isdir(english_dir):
+        return
+
+    srt_files = [
+        os.path.join(english_dir, f) for f in os.listdir(english_dir)
+        if f.lower().endswith(".srt") and not f.lower().startswith("combined_")
+    ]
+    if len(srt_files) < 2:
+        return
+
+    # Group SRTs by video basename to determine distinct videos
+    # Filename format: <video_basename> - <tag>.srt
+    video_map = {}
+    for srt_path in sorted(srt_files):
+        fname = os.path.splitext(os.path.basename(srt_path))[0]
+        if " - " in fname:
+            v_base = fname.rsplit(" - ", 1)[0]
+        else:
+            v_base = fname
+        if v_base not in video_map:
+            video_map[v_base] = []
+        video_map[v_base].append(srt_path)
+
+    # Only generate if there are multiple distinct videos
+    if len(video_map) < 2:
+        return
+
+    # Select best SRT per video: prefer non-[Forced] if available
+    selected_srts = []
+    for v_base, s_list in sorted(video_map.items()):
+        non_forced = [s for s in s_list if "[forced]" not in os.path.basename(s).lower()]
+        best_srt = non_forced[0] if non_forced else s_list[0]
+        selected_srts.append((v_base, best_srt))
+
+    combined_path = os.path.join(english_dir, "combined_english.txt")
+    rel_path = os.path.relpath(combined_path, folder).replace(os.sep, '/')
+    print(f"\nGenerating combined English transcript for {len(selected_srts)} videos:")
+    print(f"  -> {rel_path}")
+
+    try:
+        with open(combined_path, 'w', encoding='utf-8') as out_f:
+            for idx, (v_base, srt_file) in enumerate(selected_srts):
+                cleaned_text = _clean_srt_text(srt_file)
+                if idx > 0:
+                    out_f.write("\n\n" + "=" * 80 + "\n")
+                else:
+                    out_f.write("=" * 80 + "\n")
+                out_f.write(f"Source: {os.path.splitext(os.path.basename(srt_file))[0]}\n")
+                out_f.write("=" * 80 + "\n\n")
+                out_f.write(cleaned_text + "\n")
+    except Exception as e:
+        print(f"  Error writing combined English transcript: {e}")
 
 # --------------------------------------------------------------------------------------------------
 # VIDEO PROCESSING HELPERS
@@ -209,7 +346,7 @@ def find_video_files_recursive(base_dir, pattern):
     is_glob = any(c in pattern for c in ('*', '?', '['))
     if not is_glob and '|' not in pattern:
         for dirpath, dirnames, filenames in os.walk(base_dir):
-            dirnames[:] = [d for d in dirnames if d.lower() != 'input']
+            dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'srt')]
             for fname in filenames:
                 full_path = os.path.join(dirpath, fname)
                 if pattern.casefold() in full_path.casefold() or full_path.casefold() in pattern.casefold():
@@ -219,7 +356,7 @@ def find_video_files_recursive(base_dir, pattern):
     patterns = [p.strip() for p in pattern.split('|') if p.strip()]
 
     for dirpath, dirnames, filenames in os.walk(base_dir):
-        dirnames[:] = [d for d in dirnames if d.lower() != 'input']
+        dirnames[:] = [d for d in dirnames if d.lower() not in ('input', 'srt')]
         
         for fname in filenames:
             for p in patterns:
@@ -285,6 +422,7 @@ def main():
 
     success_items = []
     failed_items = []
+    processed_dirs = set()
 
     for file in files:
         print(f"\n{'='*60}\nProcessing: {file}")
@@ -408,10 +546,15 @@ def main():
                 os.rename(current_output_file, final_output_file)
 
             success_items.append({"source": file, "output": final_output_file, "status": "ok"})
+            processed_dirs.add(file_dir)
         else:
             print(f"\nError processing {file}: ffmpeg exited with code {proc.returncode}")
             stderr_output = "".join(stderr_lines).strip() or "No stderr captured"
             failed_items.append({"source": file, "status": "ffmpeg_error", "returncode": proc.returncode, "reason": stderr_output})
+
+    # Generate combined English transcripts for directories with multiple videos having English SRTs
+    for p_dir in sorted(processed_dirs):
+        _check_and_generate_combined_english_txt(p_dir)
 
     print("\n" + "=" * 72)
     print("PROCESSING SUMMARY")
