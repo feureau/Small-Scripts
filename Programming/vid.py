@@ -1858,6 +1858,22 @@ def _should_apply_hdr_to_sdr_lut(options, info=None, info_bot=None):
     return is_top_hdr or is_bot_hdr
 
 
+def _can_defer_hdr_to_sdr_lut_to_nvencc(options, info=None, info_bot=None, orientation=None):
+    """
+    Returns True if an HDR-to-SDR 3D LUT conversion in an FFmpeg preprocessor
+    pass (nvencc_with_ffmpeg) can be deferred to NVEncC's GPU --vpp-colorspace
+    filter instead of running on CPU in FFmpeg.
+    """
+    if not _should_apply_hdr_to_sdr_lut(options, info, info_bot):
+        return False
+    if orientation == "hybrid-duo (dual source)" and info_bot is not None:
+        is_top_hdr = bool((info or {}).get("is_hdr"))
+        is_bot_hdr = bool((info_bot or {}).get("is_hdr"))
+        if is_top_hdr != is_bot_hdr:
+            return False
+    return True
+
+
 def _should_embed_hdr_lut(options):
     """
     Returns True if an HDR video render should embed a .cube LUT inside the output MKV container.
@@ -3793,10 +3809,10 @@ class WorkflowPresetManager:
             "orientation": "horizontal + vertical",
             "merged_aspect": "16:9",
             "resolution": "2160p",
-            "normalize_audio": True,
-            "audio_delivery_target": "youtube_stereo_51",
-            "audio_passthrough": False,
-            "audio_stereo_downmix": True,
+            "normalize_audio": False,
+            "audio_delivery_target": "archival",
+            "audio_passthrough": True,
+            "audio_stereo_downmix": False,
             "burn_subtitles": False,
         }
         h_clean = {"options": h_clean_opts,
@@ -3805,10 +3821,10 @@ class WorkflowPresetManager:
                                 "suffix_filter": None, "exclude_suffix_filter": None}}
         v_hybrid_opts = {
             "orientation": "hybrid (stacked)",
-            "resolution": "2160p", "normalize_audio": True,
-            "audio_delivery_target": "youtube_stereo_51",
-            "audio_passthrough": False,
-            "audio_stereo_downmix": True,
+            "resolution": "2160p", "normalize_audio": False,
+            "audio_delivery_target": "archival",
+            "audio_passthrough": True,
+            "audio_stereo_downmix": False,
             "burn_subtitles": True, "subtitle_alignment": "seam",
         }
         v_hybrid = {"options": v_hybrid_opts,
@@ -11663,12 +11679,24 @@ class VideoProcessorApp:
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
                 register_temp_file(temp_preproc)
+                _defer_lut = _can_defer_hdr_to_sdr_lut_to_nvencc(
+                    options, effective_info, _seam_info_bot, orientation)
+                _defer_subs_to_nvencc = (
+                    not (_is_dv and _is_hybrid)
+                    and not (do_sdr_conv and _is_hybrid)
+                    and (
+                        _defer_lut
+                        or options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) == "gpu_cuda"
+                    )
+                )
+                pre_ass = None if _defer_subs_to_nvencc else ass_burn_path
+                pre_title_ass = None if _defer_subs_to_nvencc else title_ass_path
                 pre_cmd = self.construct_ffmpeg_command(effective_job, temp_preproc, orientation,
-                                                        ass_burn_path, options, title_ass_path,
+                                                        pre_ass, options, pre_title_ass,
                                                         encoder_backend="preprocess", base_dir=base_dir)
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
-                if _should_apply_hdr_to_sdr_lut(options, effective_info, _seam_info_bot):
+                if not _defer_lut and _should_apply_hdr_to_sdr_lut(options, effective_info, _seam_info_bot):
                     options["_hdr_to_sdr_lut_applied"] = True
                 composite_source = temp_preproc
                 composite_info = get_video_info(temp_preproc)
@@ -11708,9 +11736,14 @@ class VideoProcessorApp:
                 # chain, both stereo + 5.1). NVEncC must not rebuild
                 # them from legacy booleans or it drops tracks.
                 nvencc_options["_audio_already_processed"] = True
+                if _defer_subs_to_nvencc:
+                    nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                    if nvencc_subburn_path:
+                        created_ass_files.append(nvencc_subburn_path)
                 nvencc_cmd = self.construct_nvencc_command(
                     composite_source, output_file, nvencc_options,
-                    orientation, info=composite_info, base_dir=base_dir)
+                    orientation, subtitle_burn_path=nvencc_subburn_path,
+                    info=composite_info, base_dir=base_dir)
                 if self.run_nvencc_command(nvencc_cmd, duration=duration,
                                            progress_callback=self.update_progress, cwd=base_dir) != 0:
                     raise VideoProcessingError(
@@ -13203,12 +13236,23 @@ class VideoProcessorApp:
         filter_complex_parts = []
         is_hdr_output = _fmt in ("hdr", "dolby_vision")
         is_cpu_encode = (options.get("encoder_family") == "cpu_software")
-        apply_hdr2sdr_lut = _should_apply_hdr_to_sdr_lut(options, info, info_bot)
+        _defer_lut_to_nvencc = (
+            encoder_backend == "preprocess"
+            and _can_defer_hdr_to_sdr_lut_to_nvencc(options, info, info_bot, orientation)
+        )
+        apply_hdr2sdr_lut = (
+            False if _defer_lut_to_nvencc
+            else _should_apply_hdr_to_sdr_lut(options, info, info_bot)
+        )
         chroma = _normalize_chroma_code(options.get("chroma_subsampling", "420"))
-        cuda_work_fmt = "p010le" if (is_hdr_output or info.get("bit_depth") == 10 or apply_hdr2sdr_lut) else "nv12"
-        color_preset_key = (options.get("color_preset_hdr") if is_hdr_output
+        cuda_work_fmt = "p010le" if (is_hdr_output or info.get("bit_depth") == 10 or apply_hdr2sdr_lut or _defer_lut_to_nvencc) else "nv12"
+        color_preset_key = (options.get("color_preset_hdr", DEFAULT_COLOR_PRESET_HDR)
+                            if (is_hdr_output or _defer_lut_to_nvencc)
                             else options.get("color_preset_sdr", DEFAULT_COLOR_PRESET_SDR))
-        color_info = COLOR_PRESET_LOOKUP.get(color_preset_key, COLOR_PRESET_LOOKUP["bt709"])
+        color_info = COLOR_PRESET_LOOKUP.get(
+            color_preset_key,
+            COLOR_PRESET_LOOKUP["bt2020_pq" if (is_hdr_output or _defer_lut_to_nvencc) else "bt709"]
+        )
         # Local aliases so the f-strings below can interpolate the
         # resolved color tags without nested quotes.
         _cp_fix = color_info["primaries"]
@@ -13216,7 +13260,7 @@ class VideoProcessorApp:
         _cm_fix = color_info["matrix"]
         _r_fix = color_info["range_ffmpeg"]
         use_cpu_scaling = (chroma != "420")
-        if is_hdr_output or (encoder_backend == "preprocess" and info["bit_depth"] == 10):
+        if is_hdr_output or _defer_lut_to_nvencc or (encoder_backend == "preprocess" and info["bit_depth"] == 10):
             out_bit_depth = 10
         else:
             out_bit_depth = 8
@@ -14235,7 +14279,7 @@ class VideoProcessorApp:
                 encoder_opts = ["-c:v", "prores_ks",
                                 "-profile:v", "1",
                                 "-pix_fmt", pix_fmt]
-            elif is_hdr_output or info["bit_depth"] == 10:
+            elif is_hdr_output or _defer_lut_to_nvencc or info["bit_depth"] == 10:
                 # v8.53 AV1-INTERMEDIATE OPTION
                 # Match the intermediate codec to the final output
                 # codec when that codec is AV1. HEVC otherwise.

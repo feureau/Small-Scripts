@@ -41,9 +41,15 @@ cropping, padding, format conversion, and adding/removing borders.
 """
 
 import argparse
+import ctypes
+from ctypes import wintypes
+import fnmatch
 import glob
 import os
+import signal
+import struct
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -134,6 +140,271 @@ def center_crop(img, new_w, new_h):
     return img.crop((l, t, l + new_w, t + new_h))
 
 
+def is_valid_input_path(path: Path, cwd: Path, output_dir_name: str, file_patterns: list[str]) -> bool:
+    if path.suffix.lower() not in SUPPORTED_INPUT_EXTENSIONS:
+        return False
+    try:
+        rel_path = path.relative_to(cwd)
+        if output_dir_name in rel_path.parts:
+            return False
+    except ValueError:
+        rel_path = path
+
+    if file_patterns:
+        rel_str = str(rel_path)
+        name_str = path.name
+        matched = any(
+            fnmatch.fnmatch(rel_str, pat) or fnmatch.fnmatch(name_str, pat)
+            for pat in file_patterns
+        )
+        if not matched:
+            return False
+    return True
+
+
+def discover_files(args, cwd: Path) -> list[str]:
+    files = []
+    if not args.files:
+        for p in cwd.rglob("*"):
+            if p.is_file() and is_valid_input_path(p, cwd, args.output_dir, []):
+                files.append(str(p))
+    else:
+        for f in args.files:
+            for matched in glob.glob(f, recursive=True):
+                p = Path(matched)
+                if p.is_file() and is_valid_input_path(p, cwd, args.output_dir, []):
+                    files.append(str(p))
+    return sorted(set(files))
+
+
+def _init_worker():
+    """Ignore SIGINT in child worker processes so Ctrl+C is handled cleanly by main."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def wait_until_file_ready(path: Path, retries: int = 25, delay: float = 0.05) -> bool:
+    """
+    Wait until a newly created/modified image file is completely written,
+    its size/mtime have settled across a 150ms window, and it is readable.
+    """
+    for _ in range(retries):
+        if not path.exists():
+            return False
+        try:
+            st1 = path.stat()
+            if st1.st_size == 0:
+                time.sleep(delay)
+                continue
+            time.sleep(0.15)
+            st2 = path.stat()
+            if (st1.st_mtime_ns, st1.st_size) != (st2.st_mtime_ns, st2.st_size):
+                continue
+            with Image.open(path) as img:
+                img.load()
+            return True
+        except Exception:
+            time.sleep(delay)
+    return False
+
+
+# --- Event-Driven Directory Watcher (Windows ReadDirectoryChangesW) ---
+
+
+class OVERLAPPED(ctypes.Structure):
+    _fields_ = [
+        ("Internal", ctypes.c_void_p),
+        ("InternalHigh", ctypes.c_void_p),
+        ("Offset", wintypes.DWORD),
+        ("OffsetHigh", wintypes.DWORD),
+        ("hEvent", wintypes.HANDLE),
+    ]
+
+
+def watch_directory_events(watch_dir: Path):
+    """
+    Generator yielding sets of Path objects whenever the OS kernel notifies of
+    added, modified, or renamed files in watch_dir (and subdirectories).
+    Uses Win32 ReadDirectoryChangesW with OVERLAPPED I/O for zero-polling wait
+    while remaining responsive to Ctrl+C (KeyboardInterrupt).
+    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+
+    kernel32.CreateEventW.argtypes = [
+        wintypes.LPVOID,
+        wintypes.BOOL,
+        wintypes.BOOL,
+        wintypes.LPCWSTR,
+    ]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+
+    kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.ResetEvent.restype = wintypes.BOOL
+
+    kernel32.ReadDirectoryChangesW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(OVERLAPPED),
+        wintypes.LPVOID,
+    ]
+    kernel32.ReadDirectoryChangesW.restype = wintypes.BOOL
+
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+    kernel32.GetOverlappedResult.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(OVERLAPPED),
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.BOOL,
+    ]
+    kernel32.GetOverlappedResult.restype = wintypes.BOOL
+
+    kernel32.CancelIo.argtypes = [wintypes.HANDLE]
+    kernel32.CancelIo.restype = wintypes.BOOL
+
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    FILE_LIST_DIRECTORY = 0x0001
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    FILE_FLAG_OVERLAPPED = 0x40000000
+
+    FILE_NOTIFY_CHANGE_FILE_NAME = 0x00000001
+    FILE_NOTIFY_CHANGE_SIZE = 0x00000008
+    FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
+
+    FILE_ACTION_ADDED = 0x00000001
+    FILE_ACTION_MODIFIED = 0x00000003
+    FILE_ACTION_RENAMED_NEW_NAME = 0x00000005
+
+    WAIT_OBJECT_0 = 0x00000000
+    WAIT_TIMEOUT = 0x00000102
+    ERROR_IO_PENDING = 997
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    h_dir = kernel32.CreateFileW(
+        str(watch_dir),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        None,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+        None,
+    )
+    if h_dir == INVALID_HANDLE_VALUE or not h_dir:
+        err = ctypes.get_last_error()
+        raise OSError(err, f"Failed to open directory handle for {watch_dir}")
+
+    h_event = kernel32.CreateEventW(None, True, False, None)
+    if not h_event:
+        err = ctypes.get_last_error()
+        kernel32.CloseHandle(h_dir)
+        raise OSError(err, "Failed to create event handle")
+
+    buf_size = 65536
+    buf = ctypes.create_string_buffer(buf_size)
+    overlapped = OVERLAPPED()
+    overlapped.hEvent = h_event
+    bytes_returned = wintypes.DWORD(0)
+
+    notify_filter = (
+        FILE_NOTIFY_CHANGE_FILE_NAME
+        | FILE_NOTIFY_CHANGE_SIZE
+        | FILE_NOTIFY_CHANGE_LAST_WRITE
+    )
+
+    def arm_read():
+        kernel32.ResetEvent(h_event)
+        ok = kernel32.ReadDirectoryChangesW(
+            h_dir,
+            buf,
+            buf_size,
+            True,  # Watch subtree
+            notify_filter,
+            None,
+            ctypes.byref(overlapped),
+            None,
+        )
+        if not ok:
+            err = ctypes.get_last_error()
+            if err != ERROR_IO_PENDING:
+                raise OSError(err, "ReadDirectoryChangesW failed")
+
+    try:
+        arm_read()
+        while True:
+            # Wait in kernel on the event handle; yield every 400ms only so Python
+            # can process Ctrl+C (SIGINT) without touching the filesystem.
+            while True:
+                wait_res = kernel32.WaitForSingleObject(h_event, 400)
+                if wait_res == WAIT_OBJECT_0:
+                    break
+                if wait_res != WAIT_TIMEOUT:
+                    err = ctypes.get_last_error()
+                    raise OSError(err, "WaitForSingleObject failed")
+
+            if not kernel32.GetOverlappedResult(
+                h_dir, ctypes.byref(overlapped), ctypes.byref(bytes_returned), False
+            ):
+                err = ctypes.get_last_error()
+                raise OSError(err, "GetOverlappedResult failed")
+
+            n_bytes = bytes_returned.value
+            raw = buf.raw[:n_bytes] if n_bytes > 0 else b""
+
+            # Re-arm immediately so kernel continues buffering events while we process
+            arm_read()
+
+            if not raw:
+                continue
+
+            offset = 0
+            changed_paths = set()
+
+            while offset < n_bytes:
+                next_offset, action, name_len = struct.unpack_from("<III", raw, offset)
+                name_start = offset + 12
+                rel_name = raw[name_start : name_start + name_len].decode(
+                    "utf-16-le", errors="replace"
+                )
+                if action in (
+                    FILE_ACTION_ADDED,
+                    FILE_ACTION_MODIFIED,
+                    FILE_ACTION_RENAMED_NEW_NAME,
+                ):
+                    changed_paths.add(watch_dir / rel_name)
+
+                if next_offset == 0:
+                    break
+                offset += next_offset
+
+            if changed_paths:
+                yield changed_paths
+    finally:
+        kernel32.CancelIo(h_dir)
+        kernel32.CloseHandle(h_event)
+        kernel32.CloseHandle(h_dir)
+
+
 # --- Core Processing ---
 
 
@@ -145,16 +416,18 @@ def process_image(path_str, output_dir, args, border_color, border_width):
     path = Path(path_str)
 
     try:
-        img = Image.open(path)
-        img = ImageOps.exif_transpose(img)
+        with Image.open(path) as src_img:
+            img = ImageOps.exif_transpose(src_img)
 
-        # Ensure we are in a color mode (RGB or RGBA) so that color borders
-        # and color output work even if the input is grayscale.
-        if img.mode not in ("RGB", "RGBA"):
-            if "transparency" in img.info or img.mode in ("LA", "PA"):
-                img = img.convert("RGBA")
+            # Ensure we are in a color mode (RGB or RGBA) so that color borders
+            # and color output work even if the input is grayscale.
+            if img.mode not in ("RGB", "RGBA"):
+                if "transparency" in img.info or img.mode in ("LA", "PA"):
+                    img = img.convert("RGBA")
+                else:
+                    img = img.convert("RGB")
             else:
-                img = img.convert("RGB")
+                img = img.copy()
 
         if args.remove_borders:
             img = remove_existing_borders(img, tolerance=args.crop_tolerance)
@@ -163,7 +436,10 @@ def process_image(path_str, output_dir, args, border_color, border_width):
         return False, f"[Error] {path.name}: Open failed ({e})"
 
     # --- Target sizing ---
-    target_w, target_h = DEFAULT_TARGET_WIDTH, DEFAULT_TARGET_HEIGHT
+    if img.height > img.width:
+        target_w, target_h = DEFAULT_TARGET_HEIGHT, DEFAULT_TARGET_WIDTH
+    else:
+        target_w, target_h = DEFAULT_TARGET_WIDTH, DEFAULT_TARGET_HEIGHT
 
     if args.fixed:
         target_w, target_h = args.fixed
@@ -294,13 +570,20 @@ def main():
         help="Flatten all outputs to one single directory",
     )
 
-    # NEW ARGUMENT
     parser.add_argument(
         "-w",
         "--workers",
         type=int,
         default=os.cpu_count(),
         help="Number of parallel processes",
+    )
+    parser.add_argument(
+        "-W",
+        "--watch",
+        "--monitor",
+        dest="watch",
+        action="store_true",
+        help="Monitor folder for new/modified images and process automatically until Ctrl+C",
     )
 
     parser.add_argument("-x", "--suffix", help="Custom filename suffix")
@@ -429,55 +712,135 @@ def main():
             print("[Warning] Invalid border color. Skipping border.")
 
     # --- Files ---
-    files = []
-    global_out = Path.cwd() / args.output_dir
+    cwd = Path.cwd()
+    global_out = cwd / args.output_dir
+    files = discover_files(args, cwd)
 
-    if not args.files:
-        for p in Path.cwd().rglob("*"):
-            if p.suffix.lower() in SUPPORTED_INPUT_EXTENSIONS:
-                try:
-                    rel_parts = p.relative_to(Path.cwd()).parts
-                    if args.output_dir not in rel_parts:
-                        files.append(str(p))
-                except ValueError:
-                    files.append(str(p))
-    else:
-        for f in args.files:
-            files.extend(glob.glob(f, recursive=True))
-
-    files = sorted(set(files))
-    if not files:
-        print(f"No images found in {Path.cwd()}.")
+    if not files and not args.watch:
+        print(f"No images found in {cwd}.")
         sys.exit(1)
 
-    print(f"Starting processing on {len(files)} files using {args.workers} workers...")
-
     ok_count = 0
+    total_count = 0
+    processed_signatures = {}
 
     # --- Multiprocessing Execution ---
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = []
-        for f in files:
-            # Determine output directory for this specific file
-            # If --pool is set, everything goes to global_out.
-            # If not, it goes to a subfolder relative to the source file.
-            out_dir = global_out if args.pool else Path(f).parent / args.output_dir
-
-            # Submit task to the pool
-            futures.append(
-                executor.submit(
-                    process_image, f, out_dir, args, border_color, border_width
-                )
+    executor = ProcessPoolExecutor(
+        max_workers=args.workers, initializer=_init_worker
+    )
+    try:
+        if files:
+            print(
+                f"Starting processing on {len(files)} files using {args.workers} workers..."
             )
+            futures = []
+            now_init = time.monotonic()
+            for f in files:
+                p = Path(f)
+                try:
+                    st = p.stat()
+                    processed_signatures[p.resolve()] = (
+                        st.st_mtime_ns,
+                        st.st_size,
+                        now_init,
+                    )
+                except OSError:
+                    pass
+                out_dir = global_out if args.pool else p.parent / args.output_dir
+                futures.append(
+                    executor.submit(
+                        process_image, f, out_dir, args, border_color, border_width
+                    )
+                )
 
-        # Process results as they complete
-        for future in as_completed(futures):
-            success, message = future.result()
-            print(message)
-            if success:
-                ok_count += 1
+            for future in as_completed(futures):
+                success, message = future.result()
+                print(message, flush=True)
+                total_count += 1
+                if success:
+                    ok_count += 1
 
-    print(f"\nDone. {ok_count}/{len(files)} successful.")
+            if not args.watch:
+                print(f"\nDone. {ok_count}/{len(files)} successful.")
+
+        if args.watch:
+            print(
+                f"\nWatching {cwd} for new images... (Press Ctrl+C to stop)",
+                flush=True,
+            )
+            try:
+                for changed_paths in watch_directory_events(cwd):
+                    batch = []
+                    for p in sorted(changed_paths):
+                        if not is_valid_input_path(
+                            p, cwd, args.output_dir, args.files
+                        ):
+                            continue
+                        if not wait_until_file_ready(p):
+                            continue
+                        try:
+                            resolved = p.resolve()
+                            st = p.stat()
+                        except OSError:
+                            continue
+
+                        now = time.monotonic()
+                        prev = processed_signatures.get(resolved)
+                        if prev is not None:
+                            prev_mtime, prev_size, prev_time = prev
+                            if prev_mtime == st.st_mtime_ns and prev_size == st.st_size:
+                                continue
+                            # Ignore post-save metadata/ADS timestamp updates when size is unchanged
+                            if prev_size == st.st_size and (now - prev_time) < 3.0:
+                                processed_signatures[resolved] = (
+                                    st.st_mtime_ns,
+                                    st.st_size,
+                                    now,
+                                )
+                                continue
+
+                        processed_signatures[resolved] = (
+                            st.st_mtime_ns,
+                            st.st_size,
+                            now,
+                        )
+                        batch.append(p)
+
+                    if batch:
+                        futures = []
+                        for p in batch:
+                            out_dir = (
+                                global_out
+                                if args.pool
+                                else p.parent / args.output_dir
+                            )
+                            futures.append(
+                                executor.submit(
+                                    process_image,
+                                    str(p),
+                                    out_dir,
+                                    args,
+                                    border_color,
+                                    border_width,
+                                )
+                            )
+                        for future in as_completed(futures):
+                            success, message = future.result()
+                            print(message, flush=True)
+                            total_count += 1
+                            if success:
+                                ok_count += 1
+            except KeyboardInterrupt:
+                print(
+                    f"\nStopped watching. {ok_count}/{total_count} total processed."
+                )
+                executor.shutdown(wait=False, cancel_futures=True)
+                return
+    except KeyboardInterrupt:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":
