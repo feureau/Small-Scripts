@@ -18,8 +18,8 @@ I have raw talking-head / video-essay recordings in DaVinci Resolve Studio (mult
      first_path = v1_items[0].GetMediaPoolItem().GetClipProperty("File Path")
      clip_dir = os.path.dirname(first_path)
      resolve_proj_dir = os.path.dirname(clip_dir) if os.path.basename(clip_dir).lower() == "v" else clip_dir
-     out_dir = os.path.join(resolve_proj_dir, "o")
-     os.makedirs(out_dir, exist_ok=True)
+     v_dir = os.path.join(resolve_proj_dir, "v")
+     os.makedirs(v_dir, exist_ok=True)
      ```
 
 3. **Locate Reference Script (`* - monologue.txt`) — Backbone, Not Verbatim Filter**:
@@ -37,13 +37,13 @@ I have raw talking-head / video-essay recordings in DaVinci Resolve Studio (mult
 
 1. **Extract Clean Vocal Stream (`0:a:0`) per Source `.mkv`**:
    - Each OBS `.mkv` recording contains 6 multi-channel audio streams (`36` channels total), where stream `0:a:0` carries the full-volume (`~ -18 dB`) vocal mix and streams `0:a:4` / `0:a:5` carry the raw mono tracks mapped to `A5 (Vocal 1)` and `A6 (Vocal 2)`.
-   - For each unique `.mkv` clip on `V1`, extract stream `0:a:0` to a 16kHz mono WAV file in `<resolve_proj_dir>/o/` (cache and reuse if already extracted):
+   - For each unique `.mkv` clip on `V1`, extract stream `0:a:0` to a temporary 16kHz mono WAV file in `<resolve_proj_dir>/v/` (or `tempfile.gettempdir()`) and cache word timestamps in `<resolve_proj_dir>/v/whisper_words_cache.json`:
      ```bash
-     ffmpeg -y -i "<clip.mkv>" -map 0:a:0 -ac 1 -ar 16000 -c:a pcm_s16le "<out_dir>/raw_<clip_stem>.wav"
+     ffmpeg -y -i "<clip.mkv>" -map 0:a:0 -ac 1 -ar 16000 -c:a pcm_s16le "<v_dir>/raw_<clip_stem>.wav"
      ```
 
 2. **Word-Level Transcription (`faster-whisper`)**:
-   - Run `faster-whisper` with `word_timestamps=True` and `vad_filter=False` across all extracted WAV files (cache results to `<out_dir>/whisper_words_cache.json`).
+   - Run `faster-whisper` with `word_timestamps=True` and `vad_filter=False` across all extracted WAV files (cache results to `<v_dir>/whisper_words_cache.json`, and clean up temporary `raw_*.wav` files after caching).
    - Capture every spoken word `[word, start_sec, end_sec, probability]` for every `.mkv` clip.
 
 3. **Waveform-Verified Edge Snapping (Anti-Clipping Protection)**:
@@ -134,9 +134,9 @@ I have raw talking-head / video-essay recordings in DaVinci Resolve Studio (mult
    - Leave **`A6 (Vocal 2)`** clips enabled (`True`) and **`A5 (Vocal 1)`** clips enabled (or disable `A5` clips via `item.SetClipEnabled(False)` if the project uses `Vocal 2` as the solo active mic).
    - Leave `V1`, `A5`, and `A6` unlocked so cuts can be inspected and tweaked before locking them for B-Roll insertion.
 
-3. **Export Assembled Master Timeline `.wav` & `.srt` to `<resolve_proj_dir>/o/`**:
-   - Automatically generate `<resolve_proj_dir>/o/<timeline_name>.srt` and `<resolve_proj_dir>/o/<timeline_name>.wav` by shifting the kept word timestamps and audio slices to their exact new timeline-relative positions (`00:00:00,000` to end).
-   - This ensures downstream prompts (**Frame-Accurate B-Roll Creation/Editing** and **Shorts Chapter Markers**) can immediately read `<resolve_proj_dir>/o/<timeline_name>.srt` without needing a manual Deliver-page render.
+3. **Export Assembled Master Timeline `.srt` to `<resolve_proj_dir>/v/` (NEVER Create an `o/` Folder)**:
+   - Automatically generate `<resolve_proj_dir>/v/<timeline_name>.srt` by shifting the kept word timestamps to their exact new timeline-relative positions (`00:00:00,000` to end).
+   - **Strictly NEVER create or write files into an `o/` subfolder**—all recording caches and timeline `.srt` files belong in `<resolve_proj_dir>/v/`. This ensures downstream prompts (**Visuals (`V7`/`V9`)**, **Frame-Accurate B-Roll Creation/Editing**, and **Shorts Chapter Markers**) can immediately read the assembled timeline transcript from `<resolve_proj_dir>/v/`.
 
 ---
 

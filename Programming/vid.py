@@ -891,6 +891,11 @@ DEFAULT_NVENCC_COLOR_TRANSFER = "bt709"
 DEFAULT_NVENCC_COLOR_MATRIX = "bt709"
 DEFAULT_NVENCC_OUTPUT_DEPTH = "auto"
 DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING = False
+DEFAULT_NVENCC_SUBBURN_SHAPING = "complex"
+DEFAULT_NVENCC_SUBBURN_BRIGHTNESS = "0.0"
+DEFAULT_NVENCC_SUBBURN_CONTRAST = "1.0"
+DEFAULT_NVENCC_SUBBURN_TRANSPARENCY = "0.0"
+DEFAULT_NVENCC_SUBBURN_TS_OFFSET = "0.0"
 DEFAULT_FFMPEG_THREADS = "0"
 DEFAULT_FFMPEG_PRIORITY = "normal"
 DEFAULT_SHARPENING_ALGO = "unsharp"
@@ -952,6 +957,7 @@ DEFAULT_LOUDNESS_APPLY_ECLIPSA = True
 
 DEFAULT_SUBTITLE_FONT = "Futura"
 DEFAULT_LANGUAGE_FONT_OVERRIDES = {
+    "-zh": "FZCuSong-B09S",
     "-cn": "FZCuSong-B09S",
     "-tw": "FOT-Matisse Pro DB",
     "-jp": "FOT-Matisse Pro DB",
@@ -959,7 +965,7 @@ DEFAULT_LANGUAGE_FONT_OVERRIDES = {
 }
 DEFAULT_SUBTITLE_FONT_SIZE = "32"
 DEFAULT_SUBTITLE_ALIGNMENT = "bottom"
-DEFAULT_SUBTITLE_PIPELINE = "cpu_libass"
+DEFAULT_SUBTITLE_PIPELINE = "gpu_cuda"
 DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY = True
 DEFAULT_SUBTITLE_BOLD = True
 DEFAULT_SUBTITLE_ITALIC = False
@@ -969,6 +975,8 @@ DEFAULT_SUBTITLE_MARGIN_L = "50"
 DEFAULT_SUBTITLE_MARGIN_R = "100"
 DEFAULT_SUBTITLE_SEAM_H_OFFSET = "0"
 DEFAULT_SUBTITLE_SEAM_V_OFFSET = "0"
+DEFAULT_SUBTITLE_SPACING = "0"
+DEFAULT_SUBTITLE_LINE_SPACING = "0"
 DEFAULT_REFORMAT_SUBTITLES = True
 DEFAULT_WRAP_LIMIT = "42"
 DEFAULT_SUBTITLE_MAX_LINES = "0"
@@ -985,7 +993,20 @@ DEFAULT_SHADOW_COLOR = "#202020"
 DEFAULT_SHADOW_ALPHA = 120
 DEFAULT_SHADOW_OFFSET_X = "2"
 DEFAULT_SHADOW_OFFSET_Y = "4"
-DEFAULT_SHADOW_BLUR = "5"
+DEFAULT_SHADOW_BLUR = "2"
+# Blur only the shadow (separate ASS layer) instead of softening the outline too.
+DEFAULT_SHADOW_BLUR_ONLY = False
+DEFAULT_SHADOW_SPREAD = "0"
+DEFAULT_SHADOW_BLUR_MODE = "gaussian"
+DEFAULT_SUBTITLE_BORDER_STYLE = "1"
+
+DEFAULT_SUBTITLE_BG_ENABLED = False
+DEFAULT_SUBTITLE_BG_MODE = "pill"
+DEFAULT_SUBTITLE_BG_COLOR = "#000000"
+DEFAULT_SUBTITLE_BG_ALPHA = 0
+DEFAULT_SUBTITLE_BG_RADIUS = "16"
+DEFAULT_SUBTITLE_BG_PAD_X = "20"
+DEFAULT_SUBTITLE_BG_PAD_Y = "10"
 
 DEFAULT_TITLE_BURN_ENABLED = False
 DEFAULT_TITLE_JSON_SUFFIX = ""
@@ -1008,9 +1029,23 @@ DEFAULT_TITLE_BOLD = True
 DEFAULT_TITLE_ITALIC = False
 DEFAULT_TITLE_UNDERLINE = False
 DEFAULT_TITLE_ALIGNMENT = "top"
+DEFAULT_TITLE_SEAM_H_OFFSET = "0"
+DEFAULT_TITLE_SEAM_V_OFFSET = "0"
 DEFAULT_TITLE_MARGIN_V = "50"
 DEFAULT_TITLE_MARGIN_L = "50"
 DEFAULT_TITLE_MARGIN_R = "50"
+DEFAULT_TITLE_REFORMAT = False
+DEFAULT_TITLE_MAX_LINES = "0"
+DEFAULT_TITLE_PRESERVE_LINE_BREAKS = True
+DEFAULT_TITLE_PIPELINE = "gpu_cuda"
+DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY = False
+DEFAULT_TITLE_LANGUAGE_FONT_OVERRIDES = {
+    "-zh": "FZCuSong-B09S",
+    "-cn": "FZCuSong-B09S",
+    "-tw": "FOT-Matisse Pro DB",
+    "-jp": "FOT-Matisse Pro DB",
+    "-ko": "FOT-Matisse Pro DB"
+}
 DEFAULT_TITLE_FILL_COLOR = "#FFFFFF"
 DEFAULT_TITLE_FILL_ALPHA = 0
 DEFAULT_TITLE_OUTLINE_COLOR = "#000000"
@@ -1021,6 +1056,10 @@ DEFAULT_TITLE_SHADOW_ALPHA = 128
 DEFAULT_TITLE_SHADOW_OFFSET_X = "2"
 DEFAULT_TITLE_SHADOW_OFFSET_Y = "3"
 DEFAULT_TITLE_SHADOW_BLUR = "4"
+DEFAULT_TITLE_SHADOW_BLUR_ONLY = True
+DEFAULT_TITLE_SHADOW_SPREAD = "0"
+DEFAULT_TITLE_SHADOW_BLUR_MODE = "gaussian"
+DEFAULT_TITLE_BORDER_STYLE = "1"
 DEFAULT_TITLE_SPACING = "0"
 DEFAULT_TITLE_LINE_SPACING = "0"
 DEFAULT_TITLE_WRAP_LIMIT = "0"
@@ -1967,6 +2006,70 @@ def alpha_to_libass_alpha(alpha_val):
     return f"&H{alpha_val:02X}"
 
 
+def _safe_alpha(val, default=0):
+    """Coerce an alpha value (0 = opaque, 255 = invisible) to a clamped int."""
+    try:
+        return max(0, min(255, int(float(val))))
+    except (ValueError, TypeError):
+        return default
+
+
+def build_ass_text_events(layer, start_ass, end_ass, style, text, *, fill_alpha, outline_alpha,
+                          shadow_alpha, shadow_x, shadow_y, shadow_blur, blur_shadow_only,
+                          pre_tags="", post_override="", shadow_spread=0, blur_mode="gaussian",
+                          outline_width=None, border_style="1"):
+    """Build ASS Dialogue line(s) for a text event with shadow styling.
+
+    blur_shadow_only=False -> single line; \\blur softens outline AND shadow (legacy look).
+    blur_shadow_only=True  -> two layers: `layer` holds only the blurred shadow (fill and
+                              outline fully transparent), `layer + 1` holds the crisp text
+                              with no shadow and no blur. Both share the same positioning,
+                              and libass collision handling is per-layer, so they stay aligned.
+    Returns a list of Dialogue strings.
+    """
+    fa = alpha_to_libass_alpha(_safe_alpha(fill_alpha))
+    oa = alpha_to_libass_alpha(_safe_alpha(outline_alpha))
+    sa_val = _safe_alpha(shadow_alpha)
+    sa = alpha_to_libass_alpha(sa_val)
+    blur_cmd = "\\be" if str(blur_mode).lower() == "edge" else "\\blur"
+    blur_tag = f"{blur_cmd}{shadow_blur}"
+
+    spread_val = 0.0
+    try:
+        if shadow_spread is not None:
+            spread_val = float(shadow_spread)
+    except (ValueError, TypeError):
+        spread_val = 0.0
+
+    base_outline = 0.0
+    if outline_width is not None:
+        try:
+            base_outline = float(outline_width)
+        except (ValueError, TypeError):
+            base_outline = 0.0
+
+    shadow_tags = f"\\xshad{shadow_x}\\yshad{shadow_y}"
+    if not blur_shadow_only:
+        bord_tag = f"\\bord{base_outline + spread_val:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+        tags = f"{pre_tags}\\1a{fa}\\3a{oa}\\4a{sa}{shadow_tags}{bord_tag}{blur_tag}"
+        return [f"Dialogue: {layer},{start_ass},{end_ass},{style},,0,0,0,,{{{tags}}}{post_override}{text}"]
+    events = []
+    if sa_val < 255:
+        shadow_bord = f"\\bord{base_outline + spread_val:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+        # NOTE: fill/outline must be &HFE& (1/255 opacity, visually invisible), NOT &HFF&.
+        # libass knocks the fill shape out of the shadow when \1a is fully transparent,
+        # which leaves only a thin hollow outline-ring shadow that blur/alpha then erase.
+        # The near-invisible fill is fully covered by the crisp text on `layer + 1`.
+        shadow_only_tags = (f"{pre_tags}\\1a&HFE&\\3a&HFE&\\4a{sa}{shadow_tags}{shadow_bord}{blur_tag}")
+        events.append(
+            f"Dialogue: {layer},{start_ass},{end_ass},{style},,0,0,0,,{{{shadow_only_tags}}}{post_override}{text}")
+    text_bord = f"\\bord{base_outline:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+    text_tags = f"{pre_tags}\\1a{fa}\\3a{oa}\\4a&HFF&\\shad0\\blur0{text_bord}"
+    events.append(
+        f"Dialogue: {layer + 1},{start_ass},{end_ass},{style},,0,0,0,,{{{text_tags}}}{post_override}{text}")
+    return events
+
+
 REF_SHORT_SIDE = 1080.0
 
 
@@ -2033,6 +2136,33 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     margin_r = options.get('subtitle_margin_r', DEFAULT_SUBTITLE_MARGIN_R)
     seam_h_offset = options.get('subtitle_seam_h_offset', DEFAULT_SUBTITLE_SEAM_H_OFFSET)
     seam_v_offset = options.get('subtitle_seam_v_offset', DEFAULT_SUBTITLE_SEAM_V_OFFSET)
+    try:
+        sub_spacing = round(float(options.get('subtitle_spacing', DEFAULT_SUBTITLE_SPACING)) * res_scale, 2)
+    except (ValueError, TypeError):
+        sub_spacing = 0.0
+    try:
+        sub_line_spacing = float(options.get('subtitle_line_spacing', DEFAULT_SUBTITLE_LINE_SPACING)) * res_scale
+    except (ValueError, TypeError):
+        sub_line_spacing = 0.0
+    sub_bg_enabled = bool(options.get('subtitle_bg_enabled', DEFAULT_SUBTITLE_BG_ENABLED))
+    sub_bg_mode = options.get('subtitle_bg_mode', DEFAULT_SUBTITLE_BG_MODE)
+    sub_bg_color_hex = options.get('subtitle_bg_color', DEFAULT_SUBTITLE_BG_COLOR)
+    try:
+        sub_bg_alpha_val = int(options.get('subtitle_bg_alpha', DEFAULT_SUBTITLE_BG_ALPHA))
+    except (ValueError, TypeError):
+        sub_bg_alpha_val = 0
+    try:
+        sub_bg_radius = float(options.get('subtitle_bg_radius', DEFAULT_SUBTITLE_BG_RADIUS)) * res_scale
+    except (ValueError, TypeError):
+        sub_bg_radius = 16.0 * res_scale
+    try:
+        sub_pad_x = float(options.get('subtitle_bg_pad_x', DEFAULT_SUBTITLE_BG_PAD_X)) * res_scale
+    except (ValueError, TypeError):
+        sub_pad_x = 20.0 * res_scale
+    try:
+        sub_pad_y = float(options.get('subtitle_bg_pad_y', DEFAULT_SUBTITLE_BG_PAD_Y)) * res_scale
+    except (ValueError, TypeError):
+        sub_pad_y = 10.0 * res_scale
     align_map = {"top": 8, "middle": 5, "bottom": 2, "seam": 2}
     alignment = align_map.get(options.get('subtitle_alignment', 'bottom'), 2)
     reformat_subs = options.get('reformat_subtitles', DEFAULT_REFORMAT_SUBTITLES)
@@ -2113,6 +2243,8 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
     shadow_color_hex = options.get('shadow_color', DEFAULT_SHADOW_COLOR)
     if _is_hdr:
         shadow_color_hex = srgb_hex_to_bt2020_pq_hex(shadow_color_hex)
+        if sub_bg_color_hex:
+            sub_bg_color_hex = srgb_hex_to_bt2020_pq_hex(sub_bg_color_hex)
 
     shadow_alpha_val = options.get('shadow_alpha', DEFAULT_SHADOW_ALPHA)
     try:
@@ -2127,14 +2259,29 @@ def create_temporary_ass_file(srt_path, options, target_res=None):
         shadow_blur = round(float(options.get('shadow_blur', DEFAULT_SHADOW_BLUR)) * res_scale, 2)
     except (ValueError, TypeError):
         shadow_blur = round(float(DEFAULT_SHADOW_BLUR) * res_scale, 2)
+    try:
+        shadow_spread_val = round(float(options.get('shadow_spread', DEFAULT_SHADOW_SPREAD)) * res_scale, 2)
+    except (ValueError, TypeError):
+        shadow_spread_val = round(float(DEFAULT_SHADOW_SPREAD) * res_scale, 2)
+    shadow_blur_mode_val = options.get('shadow_blur_mode', DEFAULT_SHADOW_BLUR_MODE)
+    border_style_val = str(options.get('subtitle_border_style', DEFAULT_SUBTITLE_BORDER_STYLE)).strip()
+    if border_style_val not in ("1", "3"):
+        border_style_val = "1"
     style_main = (
         f"Style: Main,{font_name},{scaled_font_size},"
         f"{hex_to_libass_color(fill_color_hex)},&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
-        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,0,0,1,"
+        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,{sub_spacing},0,{border_style_val},"
         f"{outline_width},{shadow_offset_y},{alignment},{scaled_margin_l},{scaled_margin_r},{scaled_margin_v},1"
     )
+    sub_bg_style = ""
+    if sub_bg_enabled:
+        sub_bg_style = (
+            f"Style: __VID_SUB_BG__,{font_name},{scaled_font_size},"
+            f"&H00000000,&HFF000000,&HFF000000,&HFF000000,"
+            f"0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n"
+        )
     header = f"""[Script Info]
 Title: Corrected Single-Layer Subtitle File
 ScriptType: v4.00+
@@ -2144,7 +2291,7 @@ PlayResY: {play_res_y}
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {style_main}
-[Events]
+{sub_bg_style}[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dialogue_lines = []
@@ -2232,19 +2379,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     last = last[:max(0, final_limit - len(truncate_suffix))]
                 wrapped_lines[-1] = last + truncate_suffix
             text_ass = '\\N'.join(wrapped_lines)
-        tags = (
-            f"\\1a{alpha_to_libass_alpha(fill_alpha_val)}"
-            f"\\3a{alpha_to_libass_alpha(outline_alpha_val)}"
-            f"\\4a{alpha_to_libass_alpha(shadow_alpha_val)}"
-            f"\\xshad{shadow_offset_x}"
-            f"\\yshad{shadow_offset_y}"
-            f"\\blur{shadow_blur}"
-        )
+        # Fill/outline/shadow alpha, shadow offsets and blur are emitted by build_ass_text_events().
         pos_override = ""
-        cx = (m_l + (play_res_x - m_r)) / 2
+        cx = (m_l + (play_res_x - m_r)) / 2.0
         align_mode = options.get("subtitle_alignment", "bottom")
-        if align_mode == "seam" and "calculated_pos" in options:
-            x, y = options["calculated_pos"]
+        if align_mode == "seam" and ("calculated_pos" in options or "seam_pos" in options):
+            x, y = options.get("calculated_pos") or options.get("seam_pos")
             try:
                 ho = float(seam_h_offset) * res_scale
                 vo = float(seam_v_offset) * res_scale
@@ -2255,8 +2395,82 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         elif align_mode == "middle":
             cy = (play_res_y / 2.0) + m_v_offset
             pos_override = fr"{{\an5\pos({cx:.1f},{cy:.1f})}}"
-        dialogue_lines.append(
-            f"Dialogue: 0,{start_ass},{end_ass},Main,,0,0,0,,{{{tags}}}{pos_override}{text_ass}")
+
+        if sub_bg_enabled or abs(sub_line_spacing) > 1e-4:
+            raw_lines = [l.strip() for l in re.split(r'\\N|\\n|\n', text_ass) if l.strip()]
+            if not raw_lines:
+                raw_lines = [text_ass] if text_ass else []
+            if raw_lines:
+                widths, line_h = measure_text_lines(
+                    raw_lines, font_name, scaled_font_size,
+                    is_bold=bool(options.get('subtitle_bold', DEFAULT_SUBTITLE_BOLD)),
+                    is_italic=bool(options.get('subtitle_italic', DEFAULT_SUBTITLE_ITALIC))
+                )
+                widths = [w + sub_spacing * max(0, len(l) - 1) for w, l in zip(widths, raw_lines)]
+                eff_widths = [w + (outline_width * 2) for w in widths]
+                eff_line_h = line_h + (outline_width * 2)
+                line_spacing_calc = max(eff_line_h, int(round(scaled_font_size * 1.25)))
+                if sub_bg_enabled and sub_bg_mode == "pill":
+                    line_spacing_calc = max(line_spacing_calc, eff_line_h + (sub_pad_y * 2) + (4.0 * res_scale))
+                line_spacing_calc += sub_line_spacing
+                total_h = ((len(raw_lines) - 1) * line_spacing_calc) + eff_line_h
+                cue_cx = cx
+                if align_mode == "seam" and ("calculated_pos" in options or "seam_pos" in options):
+                    x, y = options.get("calculated_pos") or options.get("seam_pos")
+                    try:
+                        ho = float(seam_h_offset) * res_scale
+                        vo = float(seam_v_offset) * res_scale
+                    except (ValueError, TypeError):
+                        ho = 0.0
+                        vo = 0.0
+                    cue_cx = x + ho
+                    block_top = (y - vo) - (total_h / 2.0)
+                elif align_mode == "top":
+                    block_top = m_v_offset
+                elif align_mode == "middle":
+                    block_top = (play_res_y / 2.0) + m_v_offset - (total_h / 2.0)
+                else:
+                    block_top = (play_res_y - m_v_offset) - total_h
+
+                if sub_bg_enabled:
+                    color_tag = f"\\1c{hex_to_libass_color(sub_bg_color_hex)}\\1a&H{sub_bg_alpha_val:02X}"
+                    if sub_bg_mode == "box":
+                        max_w = max(eff_widths) if eff_widths else 100.0
+                        path = generate_ass_rounded_rect(cue_cx - (max_w / 2.0) - sub_pad_x,
+                                                         block_top - sub_pad_y,
+                                                         cue_cx + (max_w / 2.0) + sub_pad_x,
+                                                         block_top + total_h + sub_pad_y,
+                                                         sub_bg_radius)
+                        dialogue_lines.append(
+                            f"Dialogue: 0,{start_ass},{end_ass},__VID_SUB_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+                    else:
+                        for lw, lcy in zip(eff_widths, [block_top + (eff_line_h / 2.0) + (i * line_spacing_calc) for i in range(len(raw_lines))]):
+                            path = generate_ass_rounded_rect(cue_cx - (lw / 2.0) - sub_pad_x,
+                                                             lcy - (eff_line_h / 2.0) - sub_pad_y,
+                                                             cue_cx + (lw / 2.0) + sub_pad_x,
+                                                             lcy + (eff_line_h / 2.0) + sub_pad_y,
+                                                             sub_bg_radius)
+                            dialogue_lines.append(
+                                f"Dialogue: 0,{start_ass},{end_ass},__VID_SUB_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+                for i, l_text in enumerate(raw_lines):
+                    line_cy = block_top + (eff_line_h / 2.0) + (i * line_spacing_calc)
+                    dialogue_lines.extend(build_ass_text_events(
+                        1, start_ass, end_ass, "Main", l_text,
+                        fill_alpha=fill_alpha_val, outline_alpha=outline_alpha_val, shadow_alpha=shadow_alpha_val,
+                        shadow_x=shadow_offset_x, shadow_y=shadow_offset_y, shadow_blur=shadow_blur,
+                        blur_shadow_only=bool(options.get("shadow_blur_only", DEFAULT_SHADOW_BLUR_ONLY)),
+                        pre_tags="", post_override=fr"{{\an5\pos({cue_cx:.1f},{line_cy:.1f})}}",
+                        shadow_spread=shadow_spread_val, blur_mode=shadow_blur_mode_val,
+                        outline_width=outline_width, border_style=border_style_val))
+        else:
+            dialogue_lines.extend(build_ass_text_events(
+                1, start_ass, end_ass, "Main", text_ass,
+                fill_alpha=fill_alpha_val, outline_alpha=outline_alpha_val, shadow_alpha=shadow_alpha_val,
+                shadow_x=shadow_offset_x, shadow_y=shadow_offset_y, shadow_blur=shadow_blur,
+                blur_shadow_only=bool(options.get("shadow_blur_only", DEFAULT_SHADOW_BLUR_ONLY)),
+                pre_tags="", post_override=pos_override,
+                shadow_spread=shadow_spread_val, blur_mode=shadow_blur_mode_val,
+                outline_width=outline_width, border_style=border_style_val))
     full_ass_content = header + "\n".join(dialogue_lines)
     filename = f"vid_temp_sub_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(get_temp_work_dir(), filename)
@@ -2366,20 +2580,15 @@ def create_merged_ass_for_nvencc(sub_ass_path, title_ass_path):
         return sub_ass_path
 
 
-def check_subtitle_font_compatibility(subtitle_file, font_name):
+def check_font_compatibility_for_text(text, font_name):
     """
-    Checks if characters in a subtitle file are supported by font_name.
+    Checks if characters in `text` are supported by font_name.
     Returns a dictionary with missing character info if incompatible glyphs exist.
     """
-    if not subtitle_file or not os.path.exists(subtitle_file):
-        return None
-    try:
-        with open(subtitle_file, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-    except Exception:
+    if not text or not font_name:
         return None
 
-    clean_text = re.sub(r'<[^>]+>', '', content)
+    clean_text = re.sub(r'<[^>]+>', '', text)
     clean_text = re.sub(r'\{[^}]+\}', '', clean_text)
     clean_text = re.sub(r'\d{2}:\d{2}:\d{2}[.,]\d{3}', '', clean_text)
 
@@ -2428,6 +2637,21 @@ def check_subtitle_font_compatibility(subtitle_file, font_name):
             "font_name": font_name
         }
     return None
+
+
+def check_subtitle_font_compatibility(subtitle_file, font_name):
+    """
+    Checks if characters in a subtitle file are supported by font_name.
+    Returns a dictionary with missing character info if incompatible glyphs exist.
+    """
+    if not subtitle_file or not os.path.exists(subtitle_file):
+        return None
+    try:
+        with open(subtitle_file, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    except Exception:
+        return None
+    return check_font_compatibility_for_text(content, font_name)
 
 
 def generate_ass_rounded_rect(x1, y1, x2, y2, radius):
@@ -2554,6 +2778,15 @@ def create_title_ass_file(title_text, options, target_res=None):
     play_res_x, play_res_y = target_res if target_res else (1920, 1080)
     res_scale = compute_resolution_scale_factor(play_res_x, play_res_y, options)
     font_name = options.get('title_font', DEFAULT_TITLE_FONT)
+    title_overrides = options.get('title_language_font_overrides')
+    if title_overrides and isinstance(title_overrides, dict):
+        sub_path = options.get('segment_subtitle_path') or options.get('subtitle_path') or ''
+        if sub_path:
+            base_name = os.path.basename(sub_path).lower()
+            for sfx, f_override in title_overrides.items():
+                if sfx and (sfx.lower() in base_name):
+                    font_name = f_override
+                    break
     try:
         font_size = float(options.get('title_font_size', DEFAULT_TITLE_FONT_SIZE)) * res_scale
     except (ValueError, TypeError):
@@ -2573,8 +2806,16 @@ def create_title_ass_file(title_text, options, target_res=None):
     margin_v = str(int(round(m_v_offset)))
     margin_l = str(int(round(m_l)))
     margin_r = str(int(round(m_r)))
-    align_map = {"top": 8, "middle": 5, "bottom": 2}
+    align_map = {"top": 8, "middle": 5, "bottom": 2, "seam": 2}
     alignment = align_map.get(options.get('title_alignment', 'top'), 8)
+    seam_h_offset = options.get('title_seam_h_offset', DEFAULT_TITLE_SEAM_H_OFFSET)
+    seam_v_offset = options.get('title_seam_v_offset', DEFAULT_TITLE_SEAM_V_OFFSET)
+    title_reformat = bool(options.get('title_reformat', DEFAULT_TITLE_REFORMAT))
+    title_preserve_breaks = bool(options.get('title_preserve_line_breaks', DEFAULT_TITLE_PRESERVE_LINE_BREAKS))
+    try:
+        title_max_lines = int(options.get('title_max_lines', DEFAULT_TITLE_MAX_LINES))
+    except (ValueError, TypeError):
+        title_max_lines = 0
     try:
         title_spacing = round(float(options.get('title_spacing', DEFAULT_TITLE_SPACING)) * res_scale, 2)
     except (ValueError, TypeError):
@@ -2607,6 +2848,26 @@ def create_title_ass_file(title_text, options, target_res=None):
         shadow_offset_y = round(float(options.get('title_shadow_offset_y', DEFAULT_TITLE_SHADOW_OFFSET_Y)) * res_scale, 2)
     except (ValueError, TypeError):
         shadow_offset_y = round(3.0 * res_scale, 2)
+    try:
+        shadow_offset_x = round(float(options.get('title_shadow_offset_x', DEFAULT_TITLE_SHADOW_OFFSET_X)) * res_scale, 2)
+    except (ValueError, TypeError):
+        shadow_offset_x = round(float(DEFAULT_TITLE_SHADOW_OFFSET_X) * res_scale, 2)
+    try:
+        title_shadow_blur = round(float(options.get('title_shadow_blur', DEFAULT_TITLE_SHADOW_BLUR)) * res_scale, 2)
+    except (ValueError, TypeError):
+        title_shadow_blur = round(float(DEFAULT_TITLE_SHADOW_BLUR) * res_scale, 2)
+    try:
+        title_shadow_spread = round(float(options.get('title_shadow_spread', DEFAULT_TITLE_SHADOW_SPREAD)) * res_scale, 2)
+    except (ValueError, TypeError):
+        title_shadow_spread = round(float(DEFAULT_TITLE_SHADOW_SPREAD) * res_scale, 2)
+    title_shadow_blur_mode = options.get('title_shadow_blur_mode', DEFAULT_TITLE_SHADOW_BLUR_MODE)
+    title_border_style = str(options.get('title_border_style', DEFAULT_TITLE_BORDER_STYLE)).strip()
+    if title_border_style not in ("1", "3"):
+        title_border_style = "1"
+    title_fill_alpha = _safe_alpha(options.get('title_fill_alpha', DEFAULT_TITLE_FILL_ALPHA))
+    title_outline_alpha = _safe_alpha(options.get('title_outline_alpha', DEFAULT_TITLE_OUTLINE_ALPHA))
+    title_shadow_alpha = _safe_alpha(options.get('title_shadow_alpha', DEFAULT_TITLE_SHADOW_ALPHA))
+    title_blur_shadow_only = bool(options.get('title_shadow_blur_only', DEFAULT_TITLE_SHADOW_BLUR_ONLY))
     bg_enabled = options.get('title_bg_enabled', DEFAULT_TITLE_BG_ENABLED)
     bg_mode = options.get('title_bg_mode', DEFAULT_TITLE_BG_MODE)
 
@@ -2648,7 +2909,7 @@ def create_title_ass_file(title_text, options, target_res=None):
         f"{hex_to_libass_color(fill_color_hex)},&HFF000000,"
         f"{hex_to_libass_color(outline_color_hex)},"
         f"{hex_to_libass_color(shadow_color_hex)},"
-        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,{title_spacing},0,1,"
+        f"{bold_flag},{italic_flag},{underline_flag},0,100,100,{title_spacing},0,{title_border_style},"
         f"{outline_width},{shadow_offset_y},{alignment},{margin_l},{margin_r},{margin_v},1"
     )
     bg_style = (
@@ -2674,6 +2935,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     raw_lines = [l.strip() for l in re.split(r'\r?\n|\\N', title_text) if l.strip()]
     if not raw_lines:
         raw_lines = [title_text.strip()] if title_text.strip() else [""]
+    if title_reformat:
+        if not title_preserve_breaks:
+            single = ' '.join(' '.join(raw_lines).split())
+            raw_lines = [single] if single else [""]
     available_width = play_res_x - m_l - m_r
     try:
         user_wrap_limit = int(options.get('title_wrap_limit', DEFAULT_TITLE_WRAP_LIMIT))
@@ -2724,6 +2989,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if not wrapped_raw_lines:
         wrapped_raw_lines = [""]
     raw_lines = wrapped_raw_lines
+    if title_max_lines > 0 and len(raw_lines) > title_max_lines:
+        raw_lines = raw_lines[:title_max_lines]
+        raw_lines[-1] = raw_lines[-1].rstrip() + "..."
     num_lines = len(raw_lines)
     widths, line_h = measure_text_lines(raw_lines, font_name, font_size,
                                         is_bold=options.get('title_bold', DEFAULT_TITLE_BOLD),
@@ -2735,7 +3003,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         line_spacing = max(line_spacing, eff_line_h + (pad_y * 2) + (4.0 * res_scale))
     line_spacing += line_spacing_offset
     total_h = ((num_lines - 1) * line_spacing) + eff_line_h
-    if align_mode == "top":
+    if align_mode == "seam" and ("calculated_pos" in options or "seam_pos" in options):
+        x, y = options.get("calculated_pos") or options.get("seam_pos")
+        try:
+            ho = float(seam_h_offset) * res_scale
+            vo = float(seam_v_offset) * res_scale
+        except (ValueError, TypeError):
+            ho = 0.0
+            vo = 0.0
+        cx = x + ho
+        block_top = (y - vo) - (total_h / 2.0)
+    elif align_mode == "top":
         block_top = m_v_offset
     elif align_mode == "middle":
         block_top = (play_res_y / 2.0) + m_v_offset - (total_h / 2.0)
@@ -2750,7 +3028,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             path = generate_ass_rounded_rect(cx - (max_w/2.0) - pad_x, block_top - pad_y,
                                              cx + (max_w/2.0) + pad_x, block_top + total_h + pad_y, bg_radius)
             dialogue_lines.append(
-                f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+                f"Dialogue: 3,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
         else:
             for line_w, line_cy in zip(eff_widths, line_cy_list):
                 path = generate_ass_rounded_rect(cx - (line_w/2.0) - pad_x,
@@ -2758,11 +3036,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                                  cx + (line_w/2.0) + pad_x,
                                                  line_cy + (eff_line_h/2.0) + pad_y, bg_radius)
                 dialogue_lines.append(
-                    f"Dialogue: 0,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
+                    f"Dialogue: 3,{start_ass},{end_ass},__VID_TITLE_BG__,,0,0,0,,{{\\an7\\pos(0,0){color_tag}\\p1}}{path}")
     for line_str, line_cy in zip(raw_lines, line_cy_list):
         line_escaped = line_str.replace("{", "\\{").replace("}", "\\}")
-        dialogue_lines.append(
-            f"Dialogue: 1,{start_ass},{end_ass},__VID_TITLE__,,0,0,0,,{{\\an5\\pos({cx:.1f},{line_cy:.1f})}}{line_escaped}")
+        # Layers: 3 = title background, 4 = (blurred) shadow, 5 = text.
+        # Subtitle uses layers 0 (bg), 1 (shadow), 2 (text), so title always stays on top.
+        dialogue_lines.extend(build_ass_text_events(
+            4, start_ass, end_ass, "__VID_TITLE__", line_escaped,
+            fill_alpha=title_fill_alpha, outline_alpha=title_outline_alpha,
+            shadow_alpha=title_shadow_alpha, shadow_x=shadow_offset_x, shadow_y=shadow_offset_y,
+            shadow_blur=title_shadow_blur, blur_shadow_only=title_blur_shadow_only,
+            pre_tags=f"\\an5\\pos({cx:.1f},{line_cy:.1f})",
+            shadow_spread=title_shadow_spread, blur_mode=title_shadow_blur_mode,
+            outline_width=outline_width, border_style=title_border_style))
     full_ass_content = header + "\n".join(dialogue_lines) + "\n"
     filename = f"vid_temp_title_{int(time.time() * 1000)}.ass"
     filepath = os.path.join(get_temp_work_dir(), filename)
@@ -3064,6 +3350,7 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('sofa_limiter_limit', DEFAULT_SOFA_LIMITER_LIMIT),
         job_options.get('sofa_speakers', ''),
         job_options.get('subtitle_alignment', ''),
+        job_options.get('subtitle_pipeline', DEFAULT_SUBTITLE_PIPELINE),
         job_options.get('hybrid_top_aspect', ''),
         job_options.get('hybrid_top_path', ''),
         job_options.get('hybrid_top_mode', DEFAULT_HYBRID_TOP_MODE),
@@ -3094,6 +3381,24 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('shadow_offset_x', ''),
         job_options.get('shadow_offset_y', ''),
         job_options.get('shadow_blur', ''),
+        job_options.get('shadow_blur_only', DEFAULT_SHADOW_BLUR_ONLY),
+        job_options.get('shadow_spread', DEFAULT_SHADOW_SPREAD),
+        job_options.get('shadow_blur_mode', DEFAULT_SHADOW_BLUR_MODE),
+        job_options.get('subtitle_border_style', DEFAULT_SUBTITLE_BORDER_STYLE),
+        job_options.get('subtitle_spacing', DEFAULT_SUBTITLE_SPACING),
+        job_options.get('subtitle_line_spacing', DEFAULT_SUBTITLE_LINE_SPACING),
+        str(job_options.get('subtitle_bg_enabled', DEFAULT_SUBTITLE_BG_ENABLED)),
+        job_options.get('subtitle_bg_mode', DEFAULT_SUBTITLE_BG_MODE),
+        job_options.get('subtitle_bg_color', DEFAULT_SUBTITLE_BG_COLOR),
+        str(job_options.get('subtitle_bg_alpha', DEFAULT_SUBTITLE_BG_ALPHA)),
+        job_options.get('subtitle_bg_radius', DEFAULT_SUBTITLE_BG_RADIUS),
+        job_options.get('subtitle_bg_pad_x', DEFAULT_SUBTITLE_BG_PAD_X),
+        job_options.get('subtitle_bg_pad_y', DEFAULT_SUBTITLE_BG_PAD_Y),
+        job_options.get('nvencc_subburn_shaping', DEFAULT_NVENCC_SUBBURN_SHAPING),
+        job_options.get('nvencc_subburn_brightness', DEFAULT_NVENCC_SUBBURN_BRIGHTNESS),
+        job_options.get('nvencc_subburn_contrast', DEFAULT_NVENCC_SUBBURN_CONTRAST),
+        job_options.get('nvencc_subburn_transparency', DEFAULT_NVENCC_SUBBURN_TRANSPARENCY),
+        job_options.get('nvencc_subburn_ts_offset', DEFAULT_NVENCC_SUBBURN_TS_OFFSET),
         job_options.get('wrap_limit', ''),
         job_options.get('subtitle_max_lines', ''),
         job_options.get('subtitle_margin_l', ''),
@@ -3124,6 +3429,12 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('title_italic', False)),
         str(job_options.get('title_underline', False)),
         job_options.get('title_alignment', ''),
+        job_options.get('title_seam_h_offset', DEFAULT_TITLE_SEAM_H_OFFSET),
+        job_options.get('title_seam_v_offset', DEFAULT_TITLE_SEAM_V_OFFSET),
+        str(job_options.get('title_reformat', DEFAULT_TITLE_REFORMAT)),
+        job_options.get('title_max_lines', DEFAULT_TITLE_MAX_LINES),
+        str(job_options.get('title_preserve_line_breaks', DEFAULT_TITLE_PRESERVE_LINE_BREAKS)),
+        str(job_options.get('title_check_font_compatibility', DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY)),
         job_options.get('title_margin_v', ''),
         job_options.get('title_margin_l', ''),
         job_options.get('title_margin_r', ''),
@@ -3137,6 +3448,11 @@ def get_job_hash(job_options, extra_data=""):
         job_options.get('title_shadow_offset_x', ''),
         job_options.get('title_shadow_offset_y', ''),
         job_options.get('title_shadow_blur', ''),
+        job_options.get('title_shadow_blur_only', DEFAULT_TITLE_SHADOW_BLUR_ONLY),
+        job_options.get('title_shadow_spread', DEFAULT_TITLE_SHADOW_SPREAD),
+        job_options.get('title_shadow_blur_mode', DEFAULT_TITLE_SHADOW_BLUR_MODE),
+        job_options.get('title_border_style', DEFAULT_TITLE_BORDER_STYLE),
+        job_options.get('title_pipeline', DEFAULT_TITLE_PIPELINE),
         str(job_options.get('title_bg_enabled', False)),
         job_options.get('title_bg_mode', ''),
         job_options.get('title_bg_color', ''),
@@ -3644,6 +3960,19 @@ class WorkflowPresetManager:
             "shadow_offset_x": DEFAULT_SHADOW_OFFSET_X,
             "shadow_offset_y": DEFAULT_SHADOW_OFFSET_Y,
             "shadow_blur": DEFAULT_SHADOW_BLUR,
+            "shadow_blur_only": DEFAULT_SHADOW_BLUR_ONLY,
+            "shadow_spread": DEFAULT_SHADOW_SPREAD,
+            "shadow_blur_mode": DEFAULT_SHADOW_BLUR_MODE,
+            "subtitle_border_style": DEFAULT_SUBTITLE_BORDER_STYLE,
+            "subtitle_spacing": DEFAULT_SUBTITLE_SPACING,
+            "subtitle_line_spacing": DEFAULT_SUBTITLE_LINE_SPACING,
+            "subtitle_bg_enabled": DEFAULT_SUBTITLE_BG_ENABLED,
+            "subtitle_bg_mode": DEFAULT_SUBTITLE_BG_MODE,
+            "subtitle_bg_color": DEFAULT_SUBTITLE_BG_COLOR,
+            "subtitle_bg_alpha": DEFAULT_SUBTITLE_BG_ALPHA,
+            "subtitle_bg_radius": DEFAULT_SUBTITLE_BG_RADIUS,
+            "subtitle_bg_pad_x": DEFAULT_SUBTITLE_BG_PAD_X,
+            "subtitle_bg_pad_y": DEFAULT_SUBTITLE_BG_PAD_Y,
             "reformat_subtitles": DEFAULT_REFORMAT_SUBTITLES,
             "wrap_limit": DEFAULT_WRAP_LIMIT,
             "subtitle_max_lines": DEFAULT_SUBTITLE_MAX_LINES,
@@ -3665,6 +3994,11 @@ class WorkflowPresetManager:
             "nvencc_color_matrix": DEFAULT_NVENCC_COLOR_MATRIX,
             "nvencc_output_depth": DEFAULT_NVENCC_OUTPUT_DEPTH,
             "nvencc_strict_no_color_tagging": DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING,
+            "nvencc_subburn_shaping": DEFAULT_NVENCC_SUBBURN_SHAPING,
+            "nvencc_subburn_brightness": DEFAULT_NVENCC_SUBBURN_BRIGHTNESS,
+            "nvencc_subburn_contrast": DEFAULT_NVENCC_SUBBURN_CONTRAST,
+            "nvencc_subburn_transparency": DEFAULT_NVENCC_SUBBURN_TRANSPARENCY,
+            "nvencc_subburn_ts_offset": DEFAULT_NVENCC_SUBBURN_TS_OFFSET,
             "ffmpeg_threads": DEFAULT_FFMPEG_THREADS,
             "ffmpeg_priority": DEFAULT_FFMPEG_PRIORITY,
             "encoder_family": DEFAULT_ENCODER_FAMILY,
@@ -3688,6 +4022,14 @@ class WorkflowPresetManager:
             "title_italic": DEFAULT_TITLE_ITALIC,
             "title_underline": DEFAULT_TITLE_UNDERLINE,
             "title_alignment": DEFAULT_TITLE_ALIGNMENT,
+            "title_seam_h_offset": DEFAULT_TITLE_SEAM_H_OFFSET,
+            "title_seam_v_offset": DEFAULT_TITLE_SEAM_V_OFFSET,
+            "title_reformat": DEFAULT_TITLE_REFORMAT,
+            "title_max_lines": DEFAULT_TITLE_MAX_LINES,
+            "title_preserve_line_breaks": DEFAULT_TITLE_PRESERVE_LINE_BREAKS,
+            "title_check_font_compatibility": DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY,
+            "title_pipeline": DEFAULT_TITLE_PIPELINE,
+            "title_language_font_overrides": DEFAULT_TITLE_LANGUAGE_FONT_OVERRIDES,
             "title_margin_v": DEFAULT_TITLE_MARGIN_V,
             "title_margin_l": DEFAULT_TITLE_MARGIN_L,
             "title_margin_r": DEFAULT_TITLE_MARGIN_R,
@@ -3701,6 +4043,10 @@ class WorkflowPresetManager:
             "title_shadow_offset_x": DEFAULT_TITLE_SHADOW_OFFSET_X,
             "title_shadow_offset_y": DEFAULT_TITLE_SHADOW_OFFSET_Y,
             "title_shadow_blur": DEFAULT_TITLE_SHADOW_BLUR,
+            "title_shadow_blur_only": DEFAULT_TITLE_SHADOW_BLUR_ONLY,
+            "title_shadow_spread": DEFAULT_TITLE_SHADOW_SPREAD,
+            "title_shadow_blur_mode": DEFAULT_TITLE_SHADOW_BLUR_MODE,
+            "title_border_style": DEFAULT_TITLE_BORDER_STYLE,
             "title_spacing": DEFAULT_TITLE_SPACING,
             "title_line_spacing": DEFAULT_TITLE_LINE_SPACING,
             "title_wrap_limit": DEFAULT_TITLE_WRAP_LIMIT,
@@ -3837,11 +4183,11 @@ class WorkflowPresetManager:
         h_hardsub_opts["orientation"] = "horizontal + vertical"
         h_hardsub = {"options": h_hardsub_opts,
                      "triggers": {"video_trigger": "Never", "on_scan_subs": True,
-                                  "auto_detect_subs": False, "suffix_filter": "-cn",
+                                  "auto_detect_subs": False, "suffix_filter": "-zh",
                                   "exclude_suffix_filter": None}}
         return {"Horizontal Clean": h_clean,
                 "Vertical Hybrid Seam Hardsub": v_hybrid,
-                "Horizontal Hardsub (-cn)": h_hardsub}
+                "Horizontal Hardsub (-zh)": h_hardsub}
 
 DENOISE_PRESETS = {
     "Custom": {},
@@ -4238,6 +4584,21 @@ class VideoProcessorApp:
         self.nvencc_output_depth_var.trace_add('write',
                                                lambda *args: self._update_selected_jobs('nvencc_output_depth'))
         self.nvencc_strict_no_color_tagging_var = tk.BooleanVar(value=DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING)
+        self.nvencc_subburn_shaping_var = tk.StringVar(value=DEFAULT_NVENCC_SUBBURN_SHAPING)
+        self.nvencc_subburn_shaping_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvencc_subburn_shaping'))
+        self.nvencc_subburn_brightness_var = tk.StringVar(value=DEFAULT_NVENCC_SUBBURN_BRIGHTNESS)
+        self.nvencc_subburn_brightness_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvencc_subburn_brightness'))
+        self.nvencc_subburn_contrast_var = tk.StringVar(value=DEFAULT_NVENCC_SUBBURN_CONTRAST)
+        self.nvencc_subburn_contrast_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvencc_subburn_contrast'))
+        self.nvencc_subburn_transparency_var = tk.StringVar(value=DEFAULT_NVENCC_SUBBURN_TRANSPARENCY)
+        self.nvencc_subburn_transparency_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvencc_subburn_transparency'))
+        self.nvencc_subburn_ts_offset_var = tk.StringVar(value=DEFAULT_NVENCC_SUBBURN_TS_OFFSET)
+        self.nvencc_subburn_ts_offset_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('nvencc_subburn_ts_offset'))
         self.ffmpeg_threads_var = tk.StringVar(value=DEFAULT_FFMPEG_THREADS)
         self.ffmpeg_threads_var.trace_add('write', lambda *args: self._update_selected_jobs('ffmpeg_threads'))
         self.ffmpeg_priority_var = tk.StringVar(value=DEFAULT_FFMPEG_PRIORITY)
@@ -4415,6 +4776,11 @@ class VideoProcessorApp:
         self.subtitle_font_size_var = tk.StringVar(value=DEFAULT_SUBTITLE_FONT_SIZE)
         self.subtitle_font_size_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('subtitle_font_size'))
+        self.subtitle_spacing_var = tk.StringVar(value=DEFAULT_SUBTITLE_SPACING)
+        self.subtitle_spacing_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_spacing'))
+        self.subtitle_line_spacing_var = tk.StringVar(value=DEFAULT_SUBTITLE_LINE_SPACING)
+        self.subtitle_line_spacing_var.trace_add('write',
+                                              lambda *args: self._update_selected_jobs('subtitle_line_spacing'))
         self.subtitle_alignment_var = tk.StringVar(value=DEFAULT_SUBTITLE_ALIGNMENT)
         self.subtitle_pipeline_var = tk.StringVar(value=DEFAULT_SUBTITLE_PIPELINE)
         self.subtitle_pipeline_var.trace_add(
@@ -4452,6 +4818,24 @@ class VideoProcessorApp:
         self.shadow_offset_y_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_offset_y'))
         self.shadow_blur_var = tk.StringVar(value=DEFAULT_SHADOW_BLUR)
         self.shadow_blur_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_blur'))
+        self.shadow_blur_only_var = tk.BooleanVar(value=DEFAULT_SHADOW_BLUR_ONLY)
+        self.shadow_blur_only_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_blur_only'))
+        self.shadow_spread_var = tk.StringVar(value=DEFAULT_SHADOW_SPREAD)
+        self.shadow_spread_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_spread'))
+        self.shadow_blur_mode_var = tk.StringVar(value=DEFAULT_SHADOW_BLUR_MODE)
+        self.shadow_blur_mode_var.trace_add('write', lambda *args: self._update_selected_jobs('shadow_blur_mode'))
+        self.subtitle_border_style_var = tk.StringVar(value="1 - Drop Shadow")
+        self.subtitle_border_style_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_border_style'))
+        self.subtitle_bg_enabled_var = tk.BooleanVar(value=DEFAULT_SUBTITLE_BG_ENABLED)
+        self.subtitle_bg_mode_var = tk.StringVar(value=DEFAULT_SUBTITLE_BG_MODE)
+        self.subtitle_bg_color_var = tk.StringVar(value=DEFAULT_SUBTITLE_BG_COLOR)
+        self.subtitle_bg_alpha_var = tk.IntVar(value=DEFAULT_SUBTITLE_BG_ALPHA)
+        self.subtitle_bg_radius_var = tk.StringVar(value=DEFAULT_SUBTITLE_BG_RADIUS)
+        self.subtitle_bg_radius_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_bg_radius'))
+        self.subtitle_bg_pad_x_var = tk.StringVar(value=DEFAULT_SUBTITLE_BG_PAD_X)
+        self.subtitle_bg_pad_x_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_bg_pad_x'))
+        self.subtitle_bg_pad_y_var = tk.StringVar(value=DEFAULT_SUBTITLE_BG_PAD_Y)
+        self.subtitle_bg_pad_y_var.trace_add('write', lambda *args: self._update_selected_jobs('subtitle_bg_pad_y'))
         self.reformat_subtitles_var = tk.BooleanVar(value=DEFAULT_REFORMAT_SUBTITLES)
         self.wrap_limit_var = tk.StringVar(value=DEFAULT_WRAP_LIMIT)
         self.wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('wrap_limit'))
@@ -4483,6 +4867,10 @@ class VideoProcessorApp:
         self.title_end_time_var = tk.StringVar(value=DEFAULT_TITLE_END_TIME)
         self.title_end_time_var.trace_add('write', lambda *args: self._update_selected_jobs('title_end_time'))
         self.title_font_var = tk.StringVar(value=DEFAULT_TITLE_FONT)
+        self.title_language_font_overrides = copy.deepcopy(DEFAULT_TITLE_LANGUAGE_FONT_OVERRIDES)
+        self.title_check_font_compatibility_var = tk.BooleanVar(value=DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY)
+        self.title_check_font_compatibility_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_check_font_compatibility'))
         self.title_font_size_var = tk.StringVar(value=DEFAULT_TITLE_FONT_SIZE)
         self.title_font_size_var.trace_add('write', lambda *args: self._update_selected_jobs('title_font_size'))
         self.title_spacing_var = tk.StringVar(value=DEFAULT_TITLE_SPACING)
@@ -4490,8 +4878,16 @@ class VideoProcessorApp:
         self.title_line_spacing_var = tk.StringVar(value=DEFAULT_TITLE_LINE_SPACING)
         self.title_line_spacing_var.trace_add('write',
                                               lambda *args: self._update_selected_jobs('title_line_spacing'))
+        self.title_reformat_var = tk.BooleanVar(value=DEFAULT_TITLE_REFORMAT)
+        self.title_reformat_var.trace_add('write', lambda *args: self._update_selected_jobs('title_reformat'))
         self.title_wrap_limit_var = tk.StringVar(value=DEFAULT_TITLE_WRAP_LIMIT)
         self.title_wrap_limit_var.trace_add('write', lambda *args: self._update_selected_jobs('title_wrap_limit'))
+        self.title_preserve_line_breaks_var = tk.BooleanVar(value=DEFAULT_TITLE_PRESERVE_LINE_BREAKS)
+        self.title_preserve_line_breaks_var.trace_add('write',
+                                                      lambda *args: self._update_selected_jobs('title_preserve_line_breaks'))
+        self.title_max_lines_var = tk.StringVar(value=DEFAULT_TITLE_MAX_LINES)
+        self.title_max_lines_var.trace_add('write',
+                                           lambda *args: self._update_selected_jobs('title_max_lines'))
         self.title_bold_var = tk.BooleanVar(value=DEFAULT_TITLE_BOLD)
         self.title_italic_var = tk.BooleanVar(value=DEFAULT_TITLE_ITALIC)
         self.title_underline_var = tk.BooleanVar(value=DEFAULT_TITLE_UNDERLINE)
@@ -4502,6 +4898,12 @@ class VideoProcessorApp:
         self.title_margin_l_var.trace_add('write', lambda *args: self._update_selected_jobs('title_margin_l'))
         self.title_margin_r_var = tk.StringVar(value=DEFAULT_TITLE_MARGIN_R)
         self.title_margin_r_var.trace_add('write', lambda *args: self._update_selected_jobs('title_margin_r'))
+        self.title_seam_h_offset_var = tk.StringVar(value=DEFAULT_TITLE_SEAM_H_OFFSET)
+        self.title_seam_h_offset_var.trace_add('write',
+                                                  lambda *args: self._update_selected_jobs('title_seam_h_offset'))
+        self.title_seam_v_offset_var = tk.StringVar(value=DEFAULT_TITLE_SEAM_V_OFFSET)
+        self.title_seam_v_offset_var.trace_add('write',
+                                                  lambda *args: self._update_selected_jobs('title_seam_v_offset'))
         self.title_fill_color_var = tk.StringVar(value=DEFAULT_TITLE_FILL_COLOR)
         self.title_fill_alpha_var = tk.IntVar(value=DEFAULT_TITLE_FILL_ALPHA)
         self.title_outline_color_var = tk.StringVar(value=DEFAULT_TITLE_OUTLINE_COLOR)
@@ -4520,6 +4922,17 @@ class VideoProcessorApp:
         self.title_shadow_blur_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_BLUR)
         self.title_shadow_blur_var.trace_add('write',
                                              lambda *args: self._update_selected_jobs('title_shadow_blur'))
+        self.title_shadow_blur_only_var = tk.BooleanVar(value=DEFAULT_TITLE_SHADOW_BLUR_ONLY)
+        self.title_shadow_blur_only_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_shadow_blur_only'))
+        self.title_shadow_spread_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_SPREAD)
+        self.title_shadow_spread_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_shadow_spread'))
+        self.title_shadow_blur_mode_var = tk.StringVar(value=DEFAULT_TITLE_SHADOW_BLUR_MODE)
+        self.title_shadow_blur_mode_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('title_shadow_blur_mode'))
+        self.title_border_style_var = tk.StringVar(value="1 - Drop Shadow")
+        self.title_border_style_var.trace_add('write', lambda *args: self._update_selected_jobs('title_border_style'))
         self.title_bg_enabled_var = tk.BooleanVar(value=DEFAULT_TITLE_BG_ENABLED)
         self.title_bg_mode_var = tk.StringVar(value=DEFAULT_TITLE_BG_MODE)
         self.title_bg_color_var = tk.StringVar(value=DEFAULT_TITLE_BG_COLOR)
@@ -6682,6 +7095,23 @@ class VideoProcessorApp:
         main_style_group.pack(fill=tk.BOTH, expand=True)
         general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
         general_style_frame.pack(fill=tk.X, pady=5)
+
+        pipeline_frame = ttk.Frame(general_style_frame)
+        pipeline_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(pipeline_frame, text="Pipeline:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(pipeline_frame, text="CPU (libass Live)",
+                        variable=self.subtitle_pipeline_var, value="cpu_libass",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT)
+        ttk.Radiobutton(pipeline_frame, text="GPU (Direct CUDA)",
+                        variable=self.subtitle_pipeline_var, value="gpu_cuda",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT, padx=10)
+        ttk.Label(pipeline_frame, text="(shared with Subtitles)").pack(side=tk.LEFT, padx=(0, 10))
+        self.title_check_font_compatibility_cb = ttk.Checkbutton(
+            pipeline_frame, text="Check Font Compatibility",
+            variable=self.title_check_font_compatibility_var,
+            command=lambda: self._update_selected_jobs("title_check_font_compatibility"))
+        self.title_check_font_compatibility_cb.pack(side=tk.LEFT, padx=5)
+
         font_frame = ttk.Frame(general_style_frame)
         font_frame.pack(fill=tk.X, pady=2)
         font_row1 = ttk.Frame(font_frame)
@@ -6695,12 +7125,16 @@ class VideoProcessorApp:
         ttk.Label(font_row1, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(font_row1, textvariable=self.title_font_size_var, width=5).pack(side=tk.LEFT)
         ttk.Label(font_row1, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
+        self.title_language_font_btn = ttk.Button(font_row1, text="Lang Overrides...", command=self.open_title_language_font_overrides_dialog)
+        self.title_language_font_btn.pack(side=tk.LEFT, padx=(10, 0))
+
         font_row2 = ttk.Frame(font_frame)
         font_row2.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(font_row2, text="Kerning:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(font_row2, textvariable=self.title_spacing_var, width=4).pack(side=tk.LEFT)
         ttk.Label(font_row2, text="Line Spacing:").pack(side=tk.LEFT, padx=(15, 5))
         ttk.Entry(font_row2, textvariable=self.title_line_spacing_var, width=4).pack(side=tk.LEFT)
+
         style_frame = ttk.Frame(general_style_frame)
         style_frame.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(style_frame, text="Bold", variable=self.title_bold_var,
@@ -6709,6 +7143,7 @@ class VideoProcessorApp:
                         command=lambda: self._update_selected_jobs("title_italic")).pack(side=tk.LEFT, padx=15)
         ttk.Checkbutton(style_frame, text="Underline", variable=self.title_underline_var,
                         command=lambda: self._update_selected_jobs("title_underline")).pack(side=tk.LEFT)
+
         align_frame = ttk.Frame(general_style_frame)
         align_frame.pack(fill=tk.X, pady=2)
         align_row1 = ttk.Frame(align_frame)
@@ -6720,6 +7155,22 @@ class VideoProcessorApp:
                         command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(align_row1, text="Bot", variable=self.title_alignment_var, value="bottom",
                         command=lambda: self._update_selected_jobs("title_alignment")).pack(side=tk.LEFT)
+        self.title_seam_align_rb = ttk.Radiobutton(align_row1, text="At Seam (Hybrid Only)",
+                                                   variable=self.title_alignment_var, value="seam",
+                                                   command=lambda: self._update_selected_jobs("title_alignment"))
+        self.title_seam_align_rb.pack(side=tk.LEFT, padx=5)
+        self.title_seam_align_rb.config(state="disabled")
+        self.title_seam_h_lbl = ttk.Label(align_row1, text="H-Offset:")
+        self.title_seam_h_lbl.pack(side=tk.LEFT, padx=(5, 2))
+        self.title_seam_h_entry = ttk.Entry(align_row1,
+                                            textvariable=self.title_seam_h_offset_var, width=5)
+        self.title_seam_h_entry.pack(side=tk.LEFT)
+        self.title_seam_v_lbl = ttk.Label(align_row1, text="V-Offset:")
+        self.title_seam_v_lbl.pack(side=tk.LEFT, padx=(5, 2))
+        self.title_seam_v_entry = ttk.Entry(align_row1,
+                                            textvariable=self.title_seam_v_offset_var, width=5)
+        self.title_seam_v_entry.pack(side=tk.LEFT)
+
         align_row2 = ttk.Frame(align_frame)
         align_row2.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(align_row2, text="Margins:").pack(side=tk.LEFT, padx=(0, 5))
@@ -6729,17 +7180,30 @@ class VideoProcessorApp:
         ttk.Entry(align_row2, textvariable=self.title_margin_l_var, width=5).pack(side=tk.LEFT)
         ttk.Label(align_row2, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 2))
         ttk.Entry(align_row2, textvariable=self.title_margin_r_var, width=5).pack(side=tk.LEFT)
-        format_frame = ttk.Frame(general_style_frame)
-        format_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(format_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Entry(format_frame, textvariable=self.title_wrap_limit_var, width=5).pack(side=tk.LEFT)
-        ttk.Label(format_frame, text="chars (0 = auto pixels)").pack(side=tk.LEFT, padx=(5, 0))
+
+        reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
+        reformat_frame.pack(fill=tk.X, pady=5)
+        ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line",
+                        variable=self.title_reformat_var,
+                        command=lambda: self._update_selected_jobs("title_reformat")).pack(side=tk.LEFT)
+        ttk.Checkbutton(reformat_frame, text="Keep title line breaks when wrapping",
+                        variable=self.title_preserve_line_breaks_var,
+                        command=lambda: self._update_selected_jobs("title_preserve_line_breaks")).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(reformat_frame, text="Wrap at:").pack(side=tk.LEFT, padx=(10, 5))
+        self.title_wrap_limit_entry = ttk.Entry(reformat_frame, textvariable=self.title_wrap_limit_var, width=5)
+        self.title_wrap_limit_entry.pack(side=tk.LEFT)
+        ttk.Label(reformat_frame, text="chars (0 = auto pixels)").pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Label(reformat_frame, text="Max lines:").pack(side=tk.LEFT, padx=(12, 5))
+        ttk.Entry(reformat_frame, textvariable=self.title_max_lines_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(reformat_frame, text="(0 = unlimited)").pack(side=tk.LEFT, padx=(2, 0))
+
         fill_pane = CollapsiblePane(main_style_group, "Fill Properties", initial_state='expanded')
         fill_pane.pack(fill=tk.X, pady=2, padx=2)
         outline_pane = CollapsiblePane(main_style_group, "Outline Properties")
         outline_pane.pack(fill=tk.X, pady=2, padx=2)
         shadow_pane = CollapsiblePane(main_style_group, "Shadow Properties")
         shadow_pane.pack(fill=tk.X, pady=2, padx=2)
+
         fill_pane.container.columnconfigure(3, weight=1)
         ttk.Label(fill_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.title_fill_swatch = tk.Label(fill_pane.container, text="    ",
@@ -6753,6 +7217,7 @@ class VideoProcessorApp:
                   orient=tk.HORIZONTAL,
                   command=lambda v: self._update_selected_jobs("title_fill_alpha")
                   ).grid(row=0, column=4, sticky="ew")
+
         outline_pane.container.columnconfigure(3, weight=1)
         ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.title_outline_swatch = tk.Label(outline_pane.container, text="    ",
@@ -6771,6 +7236,7 @@ class VideoProcessorApp:
                                                                pady=(5, 0))
         ttk.Entry(outline_pane.container, textvariable=self.title_outline_width_var, width=5
                   ).grid(row=1, column=1, pady=(5, 0))
+
         shadow_pane.container.columnconfigure(3, weight=1)
         ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.title_shadow_swatch = tk.Label(shadow_pane.container, text="    ",
@@ -6785,18 +7251,37 @@ class VideoProcessorApp:
                   orient=tk.HORIZONTAL,
                   command=lambda v: self._update_selected_jobs("title_shadow_alpha")
                   ).grid(row=0, column=4, sticky="ew")
-        ttk.Label(shadow_pane.container, text="Offset X:").grid(row=1, column=0, sticky="w",
-                                                                 padx=(0, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_x_var, width=5
-                  ).grid(row=1, column=1, pady=(5, 0))
-        ttk.Label(shadow_pane.container, text="Offset Y:").grid(row=1, column=2, sticky="w",
-                                                                 padx=(10, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_offset_y_var, width=5
-                  ).grid(row=1, column=3, pady=(5, 0), sticky="w")
-        ttk.Label(shadow_pane.container, text="Blur:").grid(row=2, column=0, sticky="w",
-                                                             padx=(0, 5), pady=(5, 0))
-        ttk.Entry(shadow_pane.container, textvariable=self.title_shadow_blur_var, width=5
-                  ).grid(row=2, column=1, pady=(5, 0))
+
+        # Row 1: Mode & Offsets
+        row1_frame = ttk.Frame(shadow_pane.container)
+        row1_frame.grid(row=1, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(row1_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 5))
+        mode_cb = ttk.Combobox(row1_frame, textvariable=self.title_border_style_var,
+                               values=["1 - Drop Shadow", "3 - Bounding Box"], width=17, state="readonly")
+        mode_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(mode_cb, "Border / Shadow Style: 1 = Outline with Drop Shadow, 3 = Opaque/Translucent Bounding Box around text.")
+        ttk.Label(row1_frame, text="Offset X:").pack(side=tk.LEFT)
+        ttk.Entry(row1_frame, textvariable=self.title_shadow_offset_x_var, width=5).pack(side=tk.LEFT, padx=(5, 10))
+        ttk.Label(row1_frame, text="Y:").pack(side=tk.LEFT)
+        ttk.Entry(row1_frame, textvariable=self.title_shadow_offset_y_var, width=5).pack(side=tk.LEFT, padx=(5, 0))
+
+        # Row 2: Blur, Blur Mode, Spread, Blur Shadow Only
+        row2_frame = ttk.Frame(shadow_pane.container)
+        row2_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(row2_frame, text="Blur:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(row2_frame, textvariable=self.title_shadow_blur_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(row2_frame, text="Type:").pack(side=tk.LEFT, padx=(0, 5))
+        blur_mode_cb = ttk.Combobox(row2_frame, textvariable=self.title_shadow_blur_mode_var,
+                                    values=["gaussian", "edge"], width=9, state="readonly")
+        blur_mode_cb.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(blur_mode_cb, "Blur mode: gaussian = LibASS \\blur (smooth gaussian diffusion), edge = LibASS \\be (fast edge box blur).")
+        ttk.Label(row2_frame, text="Spread:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(row2_frame, textvariable=self.title_shadow_spread_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(row2_frame, "Spread: Expands the silhouette size of the shadow before blur is applied.")
+        ttk.Checkbutton(row2_frame, text="Blur Shadow Only", variable=self.title_shadow_blur_only_var,
+                        command=lambda: self._update_selected_jobs("title_shadow_blur_only")
+                        ).pack(side=tk.LEFT, padx=(5, 0))
+
         bg_pane = CollapsiblePane(main_style_group, "Background Properties")
         bg_pane.pack(fill=tk.X, pady=2, padx=2)
         bg_pane.container.columnconfigure(4, weight=1)
@@ -6832,6 +7317,40 @@ class VideoProcessorApp:
         ttk.Entry(dim_frame, textvariable=self.title_bg_pad_x_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Label(dim_frame, text="Pad Y:").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Entry(dim_frame, textvariable=self.title_bg_pad_y_var, width=5).pack(side=tk.LEFT)
+
+        nvencc_title_pane = CollapsiblePane(main_style_group, "NVEncC GPU Subburn Modifiers (Direct CUDA) (shared)",
+                                            initial_state='collapsed')
+        nvencc_title_pane.pack(fill=tk.X, pady=2, padx=2)
+
+        t_row0 = ttk.Frame(nvencc_title_pane.container)
+        t_row0.pack(fill=tk.X, pady=2)
+        ttk.Label(t_row0, text="Shaping:").pack(side=tk.LEFT, padx=(0, 5))
+        t_shaping_combo = ttk.Combobox(t_row0, textvariable=self.nvencc_subburn_shaping_var,
+                                     values=["complex", "simple"], width=10, state="readonly")
+        t_shaping_combo.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(t_shaping_combo, "Text shaping engine: complex = HarfBuzz advanced shaping (kerning, ligatures, CJK); simple = standard.")
+
+        ttk.Label(t_row0, text="Brightness:").pack(side=tk.LEFT, padx=(0, 5))
+        t_b_entry = ttk.Entry(t_row0, textvariable=self.nvencc_subburn_brightness_var, width=6)
+        t_b_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(t_b_entry, "Overall brightness adjustment for burned subtitles/titles (-1.0 to 1.0, default 0.0). Useful to dim subtitles on HDR.")
+
+        ttk.Label(t_row0, text="Contrast:").pack(side=tk.LEFT, padx=(0, 5))
+        t_c_entry = ttk.Entry(t_row0, textvariable=self.nvencc_subburn_contrast_var, width=6)
+        t_c_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(t_c_entry, "Overall contrast multiplier for burned subtitles/titles (-2.0 to 2.0, default 1.0).")
+
+        t_row1 = ttk.Frame(nvencc_title_pane.container)
+        t_row1.pack(fill=tk.X, pady=2)
+        ttk.Label(t_row1, text="Transparency:").pack(side=tk.LEFT, padx=(0, 5))
+        t_t_entry = ttk.Entry(t_row1, textvariable=self.nvencc_subburn_transparency_var, width=6)
+        t_t_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(t_t_entry, "Additional overall transparency for burned subtitles/titles (0.0 = fully opaque, 1.0 = invisible).")
+
+        ttk.Label(t_row1, text="Time Offset (s):").pack(side=tk.LEFT, padx=(0, 5))
+        t_ts_entry = ttk.Entry(t_row1, textvariable=self.nvencc_subburn_ts_offset_var, width=6)
+        t_ts_entry.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(t_ts_entry, "Add timestamp offset in seconds to subtitle timestamps (e.g. 0.5 or -1.0).")
 
     def _populate_title_fonts(self):
         try:
@@ -6869,21 +7388,44 @@ class VideoProcessorApp:
         main_style_group.pack(fill=tk.BOTH, expand=True)
         general_style_frame = ttk.LabelFrame(main_style_group, text="General Style", padding=10)
         general_style_frame.pack(fill=tk.X, pady=5)
+        pipeline_frame = ttk.Frame(general_style_frame)
+        pipeline_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(pipeline_frame, text="Pipeline:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(pipeline_frame, text="CPU (libass Live)",
+                        variable=self.subtitle_pipeline_var, value="cpu_libass",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT)
+        ttk.Radiobutton(pipeline_frame, text="GPU (Direct CUDA)",
+                        variable=self.subtitle_pipeline_var, value="gpu_cuda",
+                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT, padx=10)
+        self.check_font_compatibility_cb = ttk.Checkbutton(
+            pipeline_frame, text="Check Font Compatibility",
+            variable=self.subtitle_check_font_compatibility_var,
+            command=lambda: self._update_selected_jobs("subtitle_check_font_compatibility"))
+        self.check_font_compatibility_cb.pack(side=tk.LEFT, padx=10)
         font_frame = ttk.Frame(general_style_frame)
         font_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(font_frame, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
-        self.font_combo = ttk.Combobox(font_frame, textvariable=self.subtitle_font_var, width=25)
+        font_row1 = ttk.Frame(font_frame)
+        font_row1.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(font_row1, text="Font:").pack(side=tk.LEFT, padx=(0, 19))
+        self.font_combo = ttk.Combobox(font_row1, textvariable=self.subtitle_font_var, width=25)
         self.font_combo.pack(side=tk.LEFT, padx=5)
         self.font_combo.bind("<<ComboboxSelected>>",
                              lambda e: self._update_selected_jobs("subtitle_font"))
         self.populate_fonts()
-        ttk.Label(font_frame, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
-        font_size_entry = ttk.Entry(font_frame, textvariable=self.subtitle_font_size_var, width=5)
+        ttk.Label(font_row1, text="Size:").pack(side=tk.LEFT, padx=(10, 5))
+        font_size_entry = ttk.Entry(font_row1, textvariable=self.subtitle_font_size_var, width=5)
         font_size_entry.pack(side=tk.LEFT)
-        ttk.Label(font_frame, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(font_row1, text="(1080p ref, auto-scales)").pack(side=tk.LEFT, padx=(6, 0))
 
-        self.language_font_btn = ttk.Button(font_frame, text="Lang Overrides...", command=self.open_language_font_overrides_dialog)
+        self.language_font_btn = ttk.Button(font_row1, text="Lang Overrides...", command=self.open_language_font_overrides_dialog)
         self.language_font_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        font_row2 = ttk.Frame(font_frame)
+        font_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(font_row2, text="Kerning:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(font_row2, textvariable=self.subtitle_spacing_var, width=4).pack(side=tk.LEFT)
+        ttk.Label(font_row2, text="Line Spacing:").pack(side=tk.LEFT, padx=(15, 5))
+        ttk.Entry(font_row2, textvariable=self.subtitle_line_spacing_var, width=4).pack(side=tk.LEFT)
 
         style_frame = ttk.Frame(general_style_frame)
         style_frame.pack(fill=tk.X, pady=2)
@@ -6933,20 +7475,6 @@ class VideoProcessorApp:
         ttk.Label(align_sub_row2, text="R-Margin:").pack(side=tk.LEFT, padx=(10, 2))
         margin_r_entry = ttk.Entry(align_sub_row2, textvariable=self.subtitle_margin_r_var, width=5)
         margin_r_entry.pack(side=tk.LEFT)
-        pipeline_frame = ttk.Frame(general_style_frame)
-        pipeline_frame.pack(fill=tk.X, pady=(4, 2))
-        ttk.Label(pipeline_frame, text="Pipeline:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Radiobutton(pipeline_frame, text="CPU (libass Live)",
-                        variable=self.subtitle_pipeline_var, value="cpu_libass",
-                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT)
-        ttk.Radiobutton(pipeline_frame, text="GPU (Direct CUDA)",
-                        variable=self.subtitle_pipeline_var, value="gpu_cuda",
-                        command=lambda: self._update_selected_jobs("subtitle_pipeline")).pack(side=tk.LEFT, padx=10)
-        self.check_font_compatibility_cb = ttk.Checkbutton(
-            pipeline_frame, text="Check Font Compatibility",
-            variable=self.subtitle_check_font_compatibility_var,
-            command=lambda: self._update_selected_jobs("subtitle_check_font_compatibility"))
-        self.check_font_compatibility_cb.pack(side=tk.LEFT, padx=10)
         reformat_frame = ttk.LabelFrame(main_style_group, text="Line Formatting", padding=10)
         reformat_frame.pack(fill=tk.X, pady=5)
         ttk.Checkbutton(reformat_frame, text="Reformat to Single Wrapped Line",
@@ -6969,7 +7497,7 @@ class VideoProcessorApp:
         outline_pane.pack(fill=tk.X, pady=2, padx=2)
         shadow_pane = CollapsiblePane(main_style_group, "Shadow Properties")
         shadow_pane.pack(fill=tk.X, pady=2, padx=2)
-        fill_pane.container.columnconfigure(3, weight=1)
+        fill_pane.container.columnconfigure(4, weight=1)
         ttk.Label(fill_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.fill_swatch = tk.Label(fill_pane.container, text="    ", bg=self.fill_color_var.get(),
                                     relief="sunken")
@@ -6977,11 +7505,12 @@ class VideoProcessorApp:
         ttk.Button(fill_pane.container, text="..",
                    command=lambda: self.choose_color(self.fill_color_var, self.fill_swatch, "fill_color"),
                    width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(fill_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(fill_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
                   variable=self.fill_alpha_var,
                   command=lambda val: self._update_selected_jobs("fill_alpha")
-                  ).grid(row=0, column=3, sticky="ew")
-        outline_pane.container.columnconfigure(3, weight=1)
+                  ).grid(row=0, column=4, sticky="ew")
+        outline_pane.container.columnconfigure(4, weight=1)
         ttk.Label(outline_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.outline_swatch = tk.Label(outline_pane.container, text="    ",
                                        bg=self.outline_color_var.get(), relief="sunken")
@@ -6989,14 +7518,15 @@ class VideoProcessorApp:
         ttk.Button(outline_pane.container, text="..",
                    command=lambda: self.choose_color(self.outline_color_var, self.outline_swatch,
                                                      "outline_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(outline_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(outline_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
                   variable=self.outline_alpha_var,
                   command=lambda val: self._update_selected_jobs("outline_alpha")
-                  ).grid(row=0, column=3, sticky="ew")
+                  ).grid(row=0, column=4, sticky="ew")
         ttk.Label(outline_pane.container, text="Width:").grid(row=1, column=0, sticky="w", pady=(5, 0))
         ttk.Entry(outline_pane.container, textvariable=self.outline_width_var, width=5).grid(
             row=1, column=1, columnspan=2, sticky="w", pady=(5, 0), padx=(0, 5))
-        shadow_pane.container.columnconfigure(3, weight=1)
+        shadow_pane.container.columnconfigure(4, weight=1)
         ttk.Label(shadow_pane.container, text="Color:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         self.shadow_swatch = tk.Label(shadow_pane.container, text="    ",
                                       bg=self.shadow_color_var.get(), relief="sunken")
@@ -7004,18 +7534,111 @@ class VideoProcessorApp:
         ttk.Button(shadow_pane.container, text="..",
                    command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch,
                                                      "shadow_color"), width=3).grid(row=0, column=2, padx=5)
+        ttk.Label(shadow_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
         ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
                   variable=self.shadow_alpha_var,
                   command=lambda val: self._update_selected_jobs("shadow_alpha")
-                  ).grid(row=0, column=3, sticky="ew")
-        offset_frame = ttk.Frame(shadow_pane.container)
-        offset_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
-        ttk.Label(offset_frame, text="Offset X:").pack(side=tk.LEFT)
-        ttk.Entry(offset_frame, textvariable=self.shadow_offset_x_var, width=5).pack(side=tk.LEFT, padx=(5, 10))
-        ttk.Label(offset_frame, text="Y:").pack(side=tk.LEFT)
-        ttk.Entry(offset_frame, textvariable=self.shadow_offset_y_var, width=5).pack(side=tk.LEFT, padx=5)
-        ttk.Label(offset_frame, text="Blur:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(offset_frame, textvariable=self.shadow_blur_var, width=5).pack(side=tk.LEFT, padx=5)
+                  ).grid(row=0, column=4, sticky="ew")
+
+        # Row 1: Mode & Offsets
+        row1_frame = ttk.Frame(shadow_pane.container)
+        row1_frame.grid(row=1, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(row1_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 5))
+        mode_cb = ttk.Combobox(row1_frame, textvariable=self.subtitle_border_style_var,
+                               values=["1 - Drop Shadow", "3 - Bounding Box"], width=17, state="readonly")
+        mode_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(mode_cb, "Border / Shadow Style: 1 = Outline with Drop Shadow, 3 = Opaque/Translucent Bounding Box around text.")
+        ttk.Label(row1_frame, text="Offset X:").pack(side=tk.LEFT)
+        ttk.Entry(row1_frame, textvariable=self.shadow_offset_x_var, width=5).pack(side=tk.LEFT, padx=(5, 10))
+        ttk.Label(row1_frame, text="Y:").pack(side=tk.LEFT)
+        ttk.Entry(row1_frame, textvariable=self.shadow_offset_y_var, width=5).pack(side=tk.LEFT, padx=(5, 0))
+
+        # Row 2: Blur, Blur Mode, Spread, Blur Shadow Only
+        row2_frame = ttk.Frame(shadow_pane.container)
+        row2_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(row2_frame, text="Blur:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(row2_frame, textvariable=self.shadow_blur_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(row2_frame, text="Type:").pack(side=tk.LEFT, padx=(0, 5))
+        blur_mode_cb = ttk.Combobox(row2_frame, textvariable=self.shadow_blur_mode_var,
+                                    values=["gaussian", "edge"], width=9, state="readonly")
+        blur_mode_cb.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(blur_mode_cb, "Blur mode: gaussian = LibASS \\blur (smooth gaussian diffusion), edge = LibASS \\be (fast edge box blur).")
+        ttk.Label(row2_frame, text="Spread:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(row2_frame, textvariable=self.shadow_spread_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(row2_frame, "Spread: Expands the silhouette size of the shadow before blur is applied.")
+        ttk.Checkbutton(row2_frame, text="Blur Shadow Only", variable=self.shadow_blur_only_var,
+                        command=lambda: self._update_selected_jobs("shadow_blur_only")
+                        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        bg_pane = CollapsiblePane(main_style_group, "Background Properties")
+        bg_pane.pack(fill=tk.X, pady=2, padx=2)
+        bg_pane.container.columnconfigure(4, weight=1)
+        ttk.Checkbutton(bg_pane.container, text="Enable Background Shape",
+                        variable=self.subtitle_bg_enabled_var,
+                        command=lambda: self._update_selected_jobs("subtitle_bg_enabled")
+                        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=(0, 5), pady=(0, 5))
+        mode_frame = ttk.Frame(bg_pane.container)
+        mode_frame.grid(row=0, column=2, columnspan=3, sticky="w", padx=(10, 0), pady=(0, 5))
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(mode_frame, text="Per-Line Pill", variable=self.subtitle_bg_mode_var, value="pill",
+                        command=lambda: self._update_selected_jobs("subtitle_bg_mode")
+                        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Radiobutton(mode_frame, text="Single Box", variable=self.subtitle_bg_mode_var, value="box",
+                        command=lambda: self._update_selected_jobs("subtitle_bg_mode")).pack(side=tk.LEFT)
+        ttk.Label(bg_pane.container, text="Color:").grid(row=1, column=0, sticky="w", padx=(0, 5))
+        self.subtitle_bg_swatch = tk.Label(bg_pane.container, text="    ",
+                                            bg=self.subtitle_bg_color_var.get(), relief="sunken")
+        self.subtitle_bg_swatch.grid(row=1, column=1)
+        ttk.Button(bg_pane.container, text="..",
+                   command=lambda: self.choose_color(self.subtitle_bg_color_var, self.subtitle_bg_swatch,
+                                                     "subtitle_bg_color"), width=3).grid(row=1, column=2, padx=5)
+        ttk.Label(bg_pane.container, text="Alpha:").grid(row=1, column=3, sticky="w", padx=(10, 5))
+        ttk.Scale(bg_pane.container, from_=0, to=255, variable=self.subtitle_bg_alpha_var,
+                  orient=tk.HORIZONTAL,
+                  command=lambda v: self._update_selected_jobs("subtitle_bg_alpha")
+                  ).grid(row=1, column=4, sticky="ew")
+        dim_frame = ttk.Frame(bg_pane.container)
+        dim_frame.grid(row=2, column=0, columnspan=5, sticky="w", pady=(5, 0))
+        ttk.Label(dim_frame, text="Radius:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.subtitle_bg_radius_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(dim_frame, text="Pad X:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.subtitle_bg_pad_x_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(dim_frame, text="Pad Y:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(dim_frame, textvariable=self.subtitle_bg_pad_y_var, width=5).pack(side=tk.LEFT)
+
+        nvencc_pane = CollapsiblePane(main_style_group, "NVEncC GPU Subburn Modifiers (Direct CUDA)",
+                                      initial_state='collapsed')
+        nvencc_pane.pack(fill=tk.X, pady=2, padx=2)
+
+        row0 = ttk.Frame(nvencc_pane.container)
+        row0.pack(fill=tk.X, pady=2)
+        ttk.Label(row0, text="Shaping:").pack(side=tk.LEFT, padx=(0, 5))
+        shaping_combo = ttk.Combobox(row0, textvariable=self.nvencc_subburn_shaping_var,
+                                     values=["complex", "simple"], width=10, state="readonly")
+        shaping_combo.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(shaping_combo, "Text shaping engine: complex = HarfBuzz advanced shaping (kerning, ligatures, CJK); simple = standard.")
+
+        ttk.Label(row0, text="Brightness:").pack(side=tk.LEFT, padx=(0, 5))
+        b_entry = ttk.Entry(row0, textvariable=self.nvencc_subburn_brightness_var, width=6)
+        b_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(b_entry, "Overall brightness adjustment for burned subtitles (-1.0 to 1.0, default 0.0). Useful to dim subtitles on HDR.")
+
+        ttk.Label(row0, text="Contrast:").pack(side=tk.LEFT, padx=(0, 5))
+        c_entry = ttk.Entry(row0, textvariable=self.nvencc_subburn_contrast_var, width=6)
+        c_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(c_entry, "Overall contrast multiplier for burned subtitles (-2.0 to 2.0, default 1.0).")
+
+        row1 = ttk.Frame(nvencc_pane.container)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="Transparency:").pack(side=tk.LEFT, padx=(0, 5))
+        t_entry = ttk.Entry(row1, textvariable=self.nvencc_subburn_transparency_var, width=6)
+        t_entry.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(t_entry, "Additional overall transparency for burned subtitles (0.0 = fully opaque, 1.0 = invisible).")
+
+        ttk.Label(row1, text="Time Offset (s):").pack(side=tk.LEFT, padx=(0, 5))
+        ts_entry = ttk.Entry(row1, textvariable=self.nvencc_subburn_ts_offset_var, width=6)
+        ts_entry.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(ts_entry, "Add timestamp offset in seconds to subtitle timestamps (e.g. 0.5 or -1.0).")
 
     def setup_button_row(self, parent):
         style = ttk.Style(self.root)
@@ -7051,7 +7674,7 @@ class VideoProcessorApp:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        ttk.Label(dialog, text="Map subtitle language suffixes (e.g., '-cn', '-jp') to specific fonts.").pack(pady=(10, 5))
+        ttk.Label(dialog, text="Map subtitle language suffixes (e.g., '-zh', '-jp') to specific fonts.").pack(pady=(10, 5))
 
         list_frame = ttk.Frame(dialog)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -7084,7 +7707,7 @@ class VideoProcessorApp:
             add_dialog.transient(dialog)
             add_dialog.grab_set()
 
-            ttk.Label(add_dialog, text="Suffix (e.g. -cn):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            ttk.Label(add_dialog, text="Suffix (e.g. -zh):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
             suffix_entry = ttk.Entry(add_dialog, width=15)
             suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
 
@@ -7120,7 +7743,7 @@ class VideoProcessorApp:
             edit_dialog.transient(dialog)
             edit_dialog.grab_set()
 
-            ttk.Label(edit_dialog, text="Suffix (e.g. -cn):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            ttk.Label(edit_dialog, text="Suffix (e.g. -zh):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
             suffix_entry = ttk.Entry(edit_dialog, width=15)
             suffix_entry.insert(0, old_suffix)
             suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
@@ -7152,6 +7775,118 @@ class VideoProcessorApp:
                 if suffix in self.language_font_overrides:
                     del self.language_font_overrides[suffix]
                     self._update_selected_jobs('language_font_overrides')
+                    refresh_list()
+
+        ttk.Button(btn_frame, text="Add...", command=add_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Edit...", command=edit_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Remove", command=remove_override).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def open_title_language_font_overrides_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Title Language Font Overrides")
+        dialog.geometry("500x350")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Map subtitle language suffixes (e.g., '-zh', '-jp') to specific title fonts.").pack(pady=(10, 5))
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        tree = ttk.Treeview(list_frame, columns=("Suffix", "Font"), show="headings", height=10)
+        tree.heading("Suffix", text="Suffix")
+        tree.heading("Font", text="Font Family")
+        tree.column("Suffix", width=100, anchor=tk.CENTER)
+        tree.column("Font", width=350)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def refresh_list():
+            for row in tree.get_children():
+                tree.delete(row)
+            for suffix, font_name in self.title_language_font_overrides.items():
+                tree.insert("", tk.END, values=(suffix, font_name))
+        refresh_list()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def add_override():
+            add_dialog = tk.Toplevel(dialog)
+            add_dialog.title("Add Title Override")
+            add_dialog.geometry("350x150")
+            add_dialog.transient(dialog)
+            add_dialog.grab_set()
+
+            ttk.Label(add_dialog, text="Suffix (e.g. -zh):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            suffix_entry = ttk.Entry(add_dialog, width=15)
+            suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+            ttk.Label(add_dialog, text="Font:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+            font_combo = ttk.Combobox(add_dialog, values=sorted(list(font.families())), width=30)
+            font_combo.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+            def save_new():
+                s = suffix_entry.get().strip()
+                f = font_combo.get().strip()
+                if s and f:
+                    self.title_language_font_overrides[s] = f
+                    self._update_selected_jobs('title_language_font_overrides')
+                    refresh_list()
+                    add_dialog.destroy()
+
+            ttk.Button(add_dialog, text="Save", command=save_new).grid(row=2, column=1, pady=10, sticky="e", padx=10)
+
+        def edit_override():
+            selected = tree.selection()
+            if not selected:
+                return
+
+            item = tree.item(selected[0])
+            old_suffix = item['values'][0]
+            old_font = item['values'][1]
+
+            edit_dialog = tk.Toplevel(dialog)
+            edit_dialog.title("Edit Title Override")
+            edit_dialog.geometry("350x150")
+            edit_dialog.transient(dialog)
+            edit_dialog.grab_set()
+
+            ttk.Label(edit_dialog, text="Suffix (e.g. -zh):").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            suffix_entry = ttk.Entry(edit_dialog, width=15)
+            suffix_entry.insert(0, old_suffix)
+            suffix_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+            ttk.Label(edit_dialog, text="Font:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+            font_combo = ttk.Combobox(edit_dialog, values=sorted(list(font.families())), width=30)
+            font_combo.set(old_font)
+            font_combo.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+            def save_edit():
+                s = suffix_entry.get().strip()
+                f = font_combo.get().strip()
+                if s and f:
+                    if s != old_suffix and old_suffix in self.title_language_font_overrides:
+                        del self.title_language_font_overrides[old_suffix]
+                    self.title_language_font_overrides[s] = f
+                    self._update_selected_jobs('title_language_font_overrides')
+                    refresh_list()
+                    edit_dialog.destroy()
+
+            ttk.Button(edit_dialog, text="Save", command=save_edit).grid(row=2, column=1, pady=10, sticky="e", padx=10)
+
+        def remove_override():
+            selected = tree.selection()
+            if selected:
+                item = tree.item(selected[0])
+                suffix = item['values'][0]
+                if suffix in self.title_language_font_overrides:
+                    del self.title_language_font_overrides[suffix]
+                    self._update_selected_jobs('title_language_font_overrides')
                     refresh_list()
 
         ttk.Button(btn_frame, text="Add...", command=add_override).pack(side=tk.LEFT, padx=5)
@@ -7658,12 +8393,22 @@ class VideoProcessorApp:
             self.seam_align_rb.config(state="normal")
             self.seam_h_entry.config(state="normal")
             self.seam_v_entry.config(state="normal")
+            if hasattr(self, 'title_seam_align_rb'):
+                self.title_seam_align_rb.config(state="normal")
+                self.title_seam_h_entry.config(state="normal")
+                self.title_seam_v_entry.config(state="normal")
         else:
             if current_alignment == "seam":
                 self.subtitle_alignment_var.set(self.last_standard_alignment.get())
             self.seam_align_rb.config(state="disabled")
             self.seam_h_entry.config(state="disabled")
             self.seam_v_entry.config(state="disabled")
+            if hasattr(self, 'title_seam_align_rb'):
+                if self.title_alignment_var.get() == "seam":
+                    self.title_alignment_var.set("top")
+                self.title_seam_align_rb.config(state="disabled")
+                self.title_seam_h_entry.config(state="disabled")
+                self.title_seam_v_entry.config(state="disabled")
         self.aspect_ratio_frame.pack_forget()
         self.aspect_columns_frame.pack_forget()
         self.horizontal_rb_frame.pack_forget()
@@ -9054,6 +9799,8 @@ class VideoProcessorApp:
             "subtitle_font": self.subtitle_font_var.get(),
             "language_font_overrides": self.language_font_overrides,
             "subtitle_font_size": self.subtitle_font_size_var.get(),
+            "subtitle_spacing": self.subtitle_spacing_var.get(),
+            "subtitle_line_spacing": self.subtitle_line_spacing_var.get(),
             "subtitle_alignment": self.subtitle_alignment_var.get(),
             "subtitle_pipeline": self.subtitle_pipeline_var.get(),
             "subtitle_check_font_compatibility": self.subtitle_check_font_compatibility_var.get(),
@@ -9072,6 +9819,17 @@ class VideoProcessorApp:
             "shadow_offset_x": self.shadow_offset_x_var.get(),
             "shadow_offset_y": self.shadow_offset_y_var.get(),
             "shadow_blur": self.shadow_blur_var.get(),
+            "shadow_blur_only": self.shadow_blur_only_var.get(),
+            "shadow_spread": self.shadow_spread_var.get(),
+            "shadow_blur_mode": self.shadow_blur_mode_var.get(),
+            "subtitle_border_style": "3" if "3" in self.subtitle_border_style_var.get() else "1",
+            "subtitle_bg_enabled": self.subtitle_bg_enabled_var.get(),
+            "subtitle_bg_mode": self.subtitle_bg_mode_var.get(),
+            "subtitle_bg_color": self.subtitle_bg_color_var.get(),
+            "subtitle_bg_alpha": self.subtitle_bg_alpha_var.get(),
+            "subtitle_bg_radius": self.subtitle_bg_radius_var.get(),
+            "subtitle_bg_pad_x": self.subtitle_bg_pad_x_var.get(),
+            "subtitle_bg_pad_y": self.subtitle_bg_pad_y_var.get(),
             "reformat_subtitles": self.reformat_subtitles_var.get(),
             "wrap_limit": self.wrap_limit_var.get(),
             "subtitle_max_lines": self.subtitle_max_lines_var.get(),
@@ -9106,6 +9864,11 @@ class VideoProcessorApp:
             "nvencc_color_matrix": self.nvencc_color_matrix_var.get(),
             "nvencc_output_depth": self.nvencc_output_depth_var.get(),
             "nvencc_strict_no_color_tagging": self.nvencc_strict_no_color_tagging_var.get(),
+            "nvencc_subburn_shaping": self.nvencc_subburn_shaping_var.get(),
+            "nvencc_subburn_brightness": self.nvencc_subburn_brightness_var.get(),
+            "nvencc_subburn_contrast": self.nvencc_subburn_contrast_var.get(),
+            "nvencc_subburn_transparency": self.nvencc_subburn_transparency_var.get(),
+            "nvencc_subburn_ts_offset": self.nvencc_subburn_ts_offset_var.get(),
             "ffmpeg_threads": self.ffmpeg_threads_var.get(),
             "ffmpeg_priority": self.ffmpeg_priority_var.get(),
             "encoder_family": self.encoder_family_var.get(),
@@ -9124,10 +9887,16 @@ class VideoProcessorApp:
             "title_start_time": self.title_start_time_var.get(),
             "title_end_time": self.title_end_time_var.get(),
             "title_font": self.title_font_var.get(),
+            "title_language_font_overrides": self.title_language_font_overrides,
+            "title_check_font_compatibility": self.title_check_font_compatibility_var.get(),
+            "title_pipeline": self.subtitle_pipeline_var.get(),
             "title_font_size": self.title_font_size_var.get(),
             "title_spacing": self.title_spacing_var.get(),
             "title_line_spacing": self.title_line_spacing_var.get(),
+            "title_reformat": self.title_reformat_var.get(),
             "title_wrap_limit": self.title_wrap_limit_var.get(),
+            "title_preserve_line_breaks": self.title_preserve_line_breaks_var.get(),
+            "title_max_lines": self.title_max_lines_var.get(),
             "title_bold": self.title_bold_var.get(),
             "title_italic": self.title_italic_var.get(),
             "title_underline": self.title_underline_var.get(),
@@ -9135,6 +9904,8 @@ class VideoProcessorApp:
             "title_margin_v": self.title_margin_v_var.get(),
             "title_margin_l": self.title_margin_l_var.get(),
             "title_margin_r": self.title_margin_r_var.get(),
+            "title_seam_h_offset": self.title_seam_h_offset_var.get(),
+            "title_seam_v_offset": self.title_seam_v_offset_var.get(),
             "title_fill_color": self.title_fill_color_var.get(),
             "title_fill_alpha": self.title_fill_alpha_var.get(),
             "title_outline_color": self.title_outline_color_var.get(),
@@ -9145,6 +9916,10 @@ class VideoProcessorApp:
             "title_shadow_offset_x": self.title_shadow_offset_x_var.get(),
             "title_shadow_offset_y": self.title_shadow_offset_y_var.get(),
             "title_shadow_blur": self.title_shadow_blur_var.get(),
+            "title_shadow_blur_only": self.title_shadow_blur_only_var.get(),
+            "title_shadow_spread": self.title_shadow_spread_var.get(),
+            "title_shadow_blur_mode": self.title_shadow_blur_mode_var.get(),
+            "title_border_style": "3" if "3" in self.title_border_style_var.get() else "1",
             "title_bg_enabled": self.title_bg_enabled_var.get(),
             "title_bg_mode": self.title_bg_mode_var.get(),
             "title_bg_color": self.title_bg_color_var.get(),
@@ -9649,7 +10424,13 @@ class VideoProcessorApp:
                                         if self._matches_suffix_pattern(sub, [specific]):
                                             is_claimed_specifically = True
                                             claimed_by.append(f"{specific!r} ({suffix_owners.get(specific, [])})")
-                                if not is_claimed_specifically:
+                                # A preset with no suffix list only takes the unsuffixed (Default)
+                                # subtitle. Suffixed subtitles (e.g. '-cn') must be named explicitly
+                                # by a preset's suffix filter to be used anywhere.
+                                if sub['suffix'] != "":
+                                    reject_reason = (f"mode='all' (no suffix list -> unsuffixed only), "
+                                                     f"suffix {sub['suffix']!r} is not named by this preset")
+                                elif not is_claimed_specifically:
                                     match = True
                                 else:
                                     reject_reason = f"mode='all' (unclaimed only), but suffix {sub['suffix']!r} is claimed by {', '.join(claimed_by)}"
@@ -9658,25 +10439,14 @@ class VideoProcessorApp:
                                 valid_patterns = [s.strip() for s in filter_suffix.split(',') if s.strip()] if filter_suffix else []
                                 if valid_patterns and self._matches_suffix_pattern(sub, valid_patterns):
                                     is_specific_match = True
+                                # Strict include: only subtitles whose suffix matches one of the
+                                # listed patterns are accepted. Unclaimed suffixes (e.g. a stray
+                                # '-cn' or the unsuffixed default) are NOT picked up as leftovers.
                                 if is_specific_match:
                                     match = True
                                 else:
-                                    is_claimed_specifically = False
-                                    claimed_by = []
-                                    for specific in specific_suffix_filters:
-                                        if specific == "":
-                                            if sub['suffix'] == "":
-                                                is_claimed_specifically = True
-                                                claimed_by.append(f"'' ({suffix_owners.get('', [])})")
-                                        else:
-                                            if self._matches_suffix_pattern(sub, [specific]):
-                                                is_claimed_specifically = True
-                                                claimed_by.append(f"{specific!r} ({suffix_owners.get(specific, [])})")
-                                    if not is_claimed_specifically:
-                                        match = True
-                                    else:
-                                        reject_reason = (f"mode='include' (patterns={valid_patterns} + unclaimed), "
-                                                         f"suffix {sub['suffix']!r} did not match patterns and is claimed by {', '.join(claimed_by)}")
+                                    reject_reason = (f"mode='include' (patterns={valid_patterns}), "
+                                                     f"suffix {sub['suffix']!r} did not match any listed pattern")
                             elif filter_mode == 'restrict':
                                 if filter_suffix == "":
                                     if sub['suffix'] == "":
@@ -10246,8 +11016,10 @@ class VideoProcessorApp:
         self.subtitle_font_var.set(options.get("subtitle_font", DEFAULT_SUBTITLE_FONT))
         self.language_font_overrides = options.get("language_font_overrides", copy.deepcopy(DEFAULT_LANGUAGE_FONT_OVERRIDES))
         self.subtitle_font_size_var.set(options.get("subtitle_font_size", DEFAULT_SUBTITLE_FONT_SIZE))
+        self.subtitle_spacing_var.set(options.get("subtitle_spacing", DEFAULT_SUBTITLE_SPACING))
+        self.subtitle_line_spacing_var.set(options.get("subtitle_line_spacing", DEFAULT_SUBTITLE_LINE_SPACING))
         self.subtitle_alignment_var.set(options.get("subtitle_alignment", DEFAULT_SUBTITLE_ALIGNMENT))
-        self.subtitle_pipeline_var.set(options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE))
+        self.subtitle_pipeline_var.set(options.get("subtitle_pipeline", options.get("title_pipeline", DEFAULT_SUBTITLE_PIPELINE)))
         self.subtitle_check_font_compatibility_var.set(
             options.get("subtitle_check_font_compatibility", DEFAULT_SUBTITLE_CHECK_FONT_COMPATIBILITY))
         self.update_subtitle_pipeline_ui()
@@ -10271,6 +11043,20 @@ class VideoProcessorApp:
         self.shadow_offset_x_var.set(options.get("shadow_offset_x", DEFAULT_SHADOW_OFFSET_X))
         self.shadow_offset_y_var.set(options.get("shadow_offset_y", DEFAULT_SHADOW_OFFSET_Y))
         self.shadow_blur_var.set(options.get("shadow_blur", DEFAULT_SHADOW_BLUR))
+        self.shadow_blur_only_var.set(options.get("shadow_blur_only", DEFAULT_SHADOW_BLUR_ONLY))
+        self.shadow_spread_var.set(options.get("shadow_spread", DEFAULT_SHADOW_SPREAD))
+        self.shadow_blur_mode_var.set(options.get("shadow_blur_mode", DEFAULT_SHADOW_BLUR_MODE))
+        _bs = str(options.get("subtitle_border_style", DEFAULT_SUBTITLE_BORDER_STYLE))
+        self.subtitle_border_style_var.set("3 - Bounding Box" if _bs.startswith("3") else "1 - Drop Shadow")
+        self.subtitle_bg_enabled_var.set(options.get("subtitle_bg_enabled", DEFAULT_SUBTITLE_BG_ENABLED))
+        self.subtitle_bg_mode_var.set(options.get("subtitle_bg_mode", DEFAULT_SUBTITLE_BG_MODE))
+        self.subtitle_bg_color_var.set(options.get("subtitle_bg_color", DEFAULT_SUBTITLE_BG_COLOR))
+        self.subtitle_bg_alpha_var.set(options.get("subtitle_bg_alpha", DEFAULT_SUBTITLE_BG_ALPHA))
+        self.subtitle_bg_radius_var.set(options.get("subtitle_bg_radius", DEFAULT_SUBTITLE_BG_RADIUS))
+        self.subtitle_bg_pad_x_var.set(options.get("subtitle_bg_pad_x", DEFAULT_SUBTITLE_BG_PAD_X))
+        self.subtitle_bg_pad_y_var.set(options.get("subtitle_bg_pad_y", DEFAULT_SUBTITLE_BG_PAD_Y))
+        if hasattr(self, 'subtitle_bg_swatch'):
+            self.subtitle_bg_swatch.config(bg=self.subtitle_bg_color_var.get())
         self.lut_file_var.set(options.get("lut_file", DEFAULT_LUT_PATH))
         self.reformat_subtitles_var.set(options.get("reformat_subtitles", DEFAULT_REFORMAT_SUBTITLES))
         self.wrap_limit_var.set(options.get("wrap_limit", DEFAULT_WRAP_LIMIT))
@@ -10309,6 +11095,16 @@ class VideoProcessorApp:
         self.nvencc_output_depth_var.set(options.get("nvencc_output_depth", DEFAULT_NVENCC_OUTPUT_DEPTH))
         self.nvencc_strict_no_color_tagging_var.set(
             options.get("nvencc_strict_no_color_tagging", DEFAULT_NVENCC_STRICT_NO_COLOR_TAGGING))
+        self.nvencc_subburn_shaping_var.set(
+            options.get("nvencc_subburn_shaping", DEFAULT_NVENCC_SUBBURN_SHAPING))
+        self.nvencc_subburn_brightness_var.set(
+            options.get("nvencc_subburn_brightness", DEFAULT_NVENCC_SUBBURN_BRIGHTNESS))
+        self.nvencc_subburn_contrast_var.set(
+            options.get("nvencc_subburn_contrast", DEFAULT_NVENCC_SUBBURN_CONTRAST))
+        self.nvencc_subburn_transparency_var.set(
+            options.get("nvencc_subburn_transparency", DEFAULT_NVENCC_SUBBURN_TRANSPARENCY))
+        self.nvencc_subburn_ts_offset_var.set(
+            options.get("nvencc_subburn_ts_offset", DEFAULT_NVENCC_SUBBURN_TS_OFFSET))
         self.ffmpeg_threads_var.set(options.get("ffmpeg_threads", DEFAULT_FFMPEG_THREADS))
         self.ffmpeg_priority_var.set(normalize_ffmpeg_priority(
             options.get("ffmpeg_priority", DEFAULT_FFMPEG_PRIORITY)))
@@ -10338,10 +11134,16 @@ class VideoProcessorApp:
         self.title_start_time_var.set(options.get("title_start_time", DEFAULT_TITLE_START_TIME))
         self.title_end_time_var.set(options.get("title_end_time", DEFAULT_TITLE_END_TIME))
         self.title_font_var.set(options.get("title_font", DEFAULT_TITLE_FONT))
+        self.title_language_font_overrides = copy.deepcopy(options.get("title_language_font_overrides", DEFAULT_TITLE_LANGUAGE_FONT_OVERRIDES))
+        self.title_check_font_compatibility_var.set(
+            options.get("title_check_font_compatibility", DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY))
         self.title_font_size_var.set(options.get("title_font_size", DEFAULT_TITLE_FONT_SIZE))
         self.title_spacing_var.set(options.get("title_spacing", DEFAULT_TITLE_SPACING))
         self.title_line_spacing_var.set(options.get("title_line_spacing", DEFAULT_TITLE_LINE_SPACING))
+        self.title_reformat_var.set(options.get("title_reformat", DEFAULT_TITLE_REFORMAT))
         self.title_wrap_limit_var.set(options.get("title_wrap_limit", DEFAULT_TITLE_WRAP_LIMIT))
+        self.title_preserve_line_breaks_var.set(options.get("title_preserve_line_breaks", DEFAULT_TITLE_PRESERVE_LINE_BREAKS))
+        self.title_max_lines_var.set(options.get("title_max_lines", DEFAULT_TITLE_MAX_LINES))
         self.title_bold_var.set(options.get("title_bold", DEFAULT_TITLE_BOLD))
         self.title_italic_var.set(options.get("title_italic", DEFAULT_TITLE_ITALIC))
         self.title_underline_var.set(options.get("title_underline", DEFAULT_TITLE_UNDERLINE))
@@ -10349,6 +11151,10 @@ class VideoProcessorApp:
         self.title_margin_v_var.set(options.get("title_margin_v", DEFAULT_TITLE_MARGIN_V))
         self.title_margin_l_var.set(options.get("title_margin_l", DEFAULT_TITLE_MARGIN_L))
         self.title_margin_r_var.set(options.get("title_margin_r", DEFAULT_TITLE_MARGIN_R))
+        self.title_seam_h_offset_var.set(
+            options.get("title_seam_h_offset", DEFAULT_TITLE_SEAM_H_OFFSET))
+        self.title_seam_v_offset_var.set(
+            options.get("title_seam_v_offset", DEFAULT_TITLE_SEAM_V_OFFSET))
         self.title_fill_color_var.set(options.get("title_fill_color", DEFAULT_TITLE_FILL_COLOR))
         self.title_fill_alpha_var.set(options.get("title_fill_alpha", DEFAULT_TITLE_FILL_ALPHA))
         self.title_outline_color_var.set(options.get("title_outline_color", DEFAULT_TITLE_OUTLINE_COLOR))
@@ -10361,6 +11167,11 @@ class VideoProcessorApp:
         self.title_shadow_offset_y_var.set(
             options.get("title_shadow_offset_y", DEFAULT_TITLE_SHADOW_OFFSET_Y))
         self.title_shadow_blur_var.set(options.get("title_shadow_blur", DEFAULT_TITLE_SHADOW_BLUR))
+        self.title_shadow_blur_only_var.set(options.get("title_shadow_blur_only", DEFAULT_TITLE_SHADOW_BLUR_ONLY))
+        self.title_shadow_spread_var.set(options.get("title_shadow_spread", DEFAULT_TITLE_SHADOW_SPREAD))
+        self.title_shadow_blur_mode_var.set(options.get("title_shadow_blur_mode", DEFAULT_TITLE_SHADOW_BLUR_MODE))
+        _tbs = str(options.get("title_border_style", DEFAULT_TITLE_BORDER_STYLE))
+        self.title_border_style_var.set("3 - Bounding Box" if _tbs.startswith("3") else "1 - Drop Shadow")
         self.title_bg_enabled_var.set(options.get("title_bg_enabled", DEFAULT_TITLE_BG_ENABLED))
         self.title_bg_mode_var.set(options.get("title_bg_mode", DEFAULT_TITLE_BG_MODE))
         self.title_bg_color_var.set(options.get("title_bg_color", DEFAULT_TITLE_BG_COLOR))
@@ -11335,7 +12146,7 @@ class VideoProcessorApp:
                         sub_target_w, sub_target_h, verbose=False)
                     sub_target_w = _seam_layout["canvas_w"]
                     sub_target_h = _seam_layout["canvas_h"]
-                    if options.get("subtitle_alignment") == "seam":
+                    if options.get("subtitle_alignment") == "seam" or options.get("title_alignment") == "seam":
                         options["calculated_pos"] = (
                             _seam_layout["seam_x"], _seam_layout["seam_y"])
                 except Exception as _e:
@@ -11423,6 +12234,22 @@ class VideoProcessorApp:
                             title_text = sanitize_title(fallback_title, remove_hashtags=False,
                                                         keep_emoji=keep_emoji)
                 if title_text:
+                    if options.get("title_check_font_compatibility", DEFAULT_TITLE_CHECK_FONT_COMPATIBILITY):
+                        chk_font = options.get("title_font", DEFAULT_TITLE_FONT)
+                        title_overrides = options.get("title_language_font_overrides")
+                        sub_path = job.get('subtitle_path') or options.get('segment_subtitle_path') or ''
+                        if title_overrides and isinstance(title_overrides, dict) and sub_path:
+                            base_name = os.path.basename(sub_path).lower()
+                            for sfx, f_override in title_overrides.items():
+                                if sfx and (sfx.lower() in base_name):
+                                    chk_font = f_override
+                                    break
+                        chk_res = check_font_compatibility_for_text(title_text, chk_font)
+                        if chk_res:
+                            sample_str = "', '".join(chk_res["samples"])
+                            print(f"[WARN] Title font compatibility notice: "
+                                  f"{chk_res['total_missing']} character(s) (e.g. '{sample_str}') are missing from font '{chk_font}'.")
+                            print(f"[WARN] In CPU mode, Windows DirectWrite font fallback searching may significantly slow down burn speed.")
                     title_ass_path = create_title_ass_file(title_text, options,
                                                            target_res=(sub_target_w, sub_target_h))
                     if title_ass_path:
@@ -11679,16 +12506,19 @@ class VideoProcessorApp:
                 os.close(fd)
                 CURRENT_TEMP_FILE = temp_preproc
                 register_temp_file(temp_preproc)
-                _defer_lut = _can_defer_hdr_to_sdr_lut_to_nvencc(
-                    options, effective_info, _seam_info_bot, orientation)
-                _defer_subs_to_nvencc = (
-                    not (_is_dv and _is_hybrid)
-                    and not (do_sdr_conv and _is_hybrid)
-                    and (
-                        _defer_lut
-                        or options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) == "gpu_cuda"
+                _pipeline = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE)
+                has_subs = bool(ass_burn_path or title_ass_path)
+                if _pipeline == "cpu_libass":
+                    _defer_subs_to_nvencc = False
+                    _defer_lut = False if has_subs else _can_defer_hdr_to_sdr_lut_to_nvencc(
+                        options, effective_info, _seam_info_bot, orientation)
+                else:
+                    _defer_lut = _can_defer_hdr_to_sdr_lut_to_nvencc(
+                        options, effective_info, _seam_info_bot, orientation)
+                    _defer_subs_to_nvencc = (
+                        not (_is_dv and _is_hybrid)
+                        and not (do_sdr_conv and _is_hybrid)
                     )
-                )
                 pre_ass = None if _defer_subs_to_nvencc else ass_burn_path
                 pre_title_ass = None if _defer_subs_to_nvencc else title_ass_path
                 pre_cmd = self.construct_ffmpeg_command(effective_job, temp_preproc, orientation,
@@ -11749,17 +12579,46 @@ class VideoProcessorApp:
                     raise VideoProcessingError(
                         f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_only":
-                nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
-                if nvencc_subburn_path:
-                    created_ass_files.append(nvencc_subburn_path)
-                nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
-                                                           orientation,
-                                                           subtitle_burn_path=nvencc_subburn_path,
-                                                           info=effective_info, base_dir=base_dir)
-                if self.run_nvencc_command(nvencc_cmd, duration=duration,
-                                           progress_callback=self.update_progress, cwd=base_dir) != 0:
-                    raise VideoProcessingError(
-                        f"Error encoding {job['video_path']} with NVEncC")
+                _pipeline = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE)
+                has_subs = bool(ass_burn_path or title_ass_path)
+                if has_subs and _pipeline == "cpu_libass":
+                    print("[INFO] Routing CPU libass subtitle burning via FFmpeg prepass for NVEncC...")
+                    fd, temp_sub_preproc = tempfile.mkstemp(suffix=".mkv", prefix="vid_temp_libass_", dir=output_dir)
+                    os.close(fd)
+                    CURRENT_TEMP_FILE = temp_sub_preproc
+                    register_temp_file(temp_sub_preproc)
+                    sub_pre_cmd = self.construct_ffmpeg_command(
+                        effective_job, temp_sub_preproc, orientation,
+                        ass_burn_path, options, title_ass_path,
+                        encoder_backend="preprocess", base_dir=base_dir
+                    )
+                    if self.run_ffmpeg_command(sub_pre_cmd, duration, options=options, cwd=base_dir) != 0:
+                        raise VideoProcessingError(f"Error burning libass subtitles in prepass for {job['video_path']}")
+                    sub_info = get_video_info(temp_sub_preproc)
+                    nvencc_options = copy.deepcopy(options)
+                    nvencc_options.pop("seek_start", None)
+                    nvencc_options.pop("seek_duration", None)
+                    nvencc_options["_audio_already_processed"] = True
+                    nvencc_cmd = self.construct_nvencc_command(
+                        temp_sub_preproc, output_file, nvencc_options,
+                        orientation, subtitle_burn_path=None,
+                        info=sub_info, base_dir=base_dir
+                    )
+                    if self.run_nvencc_command(nvencc_cmd, duration=duration,
+                                               progress_callback=self.update_progress, cwd=base_dir) != 0:
+                        raise VideoProcessingError(f"Error encoding {job['video_path']} with NVEncC")
+                else:
+                    nvencc_subburn_path = create_merged_ass_for_nvencc(ass_burn_path, title_ass_path)
+                    if nvencc_subburn_path:
+                        created_ass_files.append(nvencc_subburn_path)
+                    nvencc_cmd = self.construct_nvencc_command(effective_job['video_path'], output_file, options,
+                                                               orientation,
+                                                               subtitle_burn_path=nvencc_subburn_path,
+                                                               info=effective_info, base_dir=base_dir)
+                    if self.run_nvencc_command(nvencc_cmd, duration=duration,
+                                               progress_callback=self.update_progress, cwd=base_dir) != 0:
+                        raise VideoProcessingError(
+                            f"Error encoding {job['video_path']} with NVEncC")
             elif encoder_backend == "nvencc_video_with_ffmpeg_audio":
                 fd, temp_audio = tempfile.mkstemp(suffix=".mka", prefix="vid_temp_audio_",
                                                   dir=output_dir)
@@ -12101,6 +12960,37 @@ class VideoProcessorApp:
             return "main422-10"
         return "main10" if is_hdr else "main"
 
+    @staticmethod
+    def build_nvencc_subburn_arg(safe_sub, options):
+        opts = options or {}
+        shaping = str(opts.get("nvencc_subburn_shaping", DEFAULT_NVENCC_SUBBURN_SHAPING)).strip().lower() or "complex"
+        parts = [f"filename={safe_sub}", "charcode=utf-8", f"shaping={shaping}"]
+        try:
+            b = float(opts.get("nvencc_subburn_brightness", DEFAULT_NVENCC_SUBBURN_BRIGHTNESS))
+            if abs(b) > 1e-4:
+                parts.append(f"brightness={b:.2f}")
+        except (ValueError, TypeError):
+            pass
+        try:
+            c = float(opts.get("nvencc_subburn_contrast", DEFAULT_NVENCC_SUBBURN_CONTRAST))
+            if abs(c - 1.0) > 1e-4:
+                parts.append(f"contrast={c:.2f}")
+        except (ValueError, TypeError):
+            pass
+        try:
+            t = float(opts.get("nvencc_subburn_transparency", DEFAULT_NVENCC_SUBBURN_TRANSPARENCY))
+            if t > 1e-4:
+                parts.append(f"transparency={t:.2f}")
+        except (ValueError, TypeError):
+            pass
+        try:
+            ts = float(opts.get("nvencc_subburn_ts_offset", DEFAULT_NVENCC_SUBBURN_TS_OFFSET))
+            if abs(ts) > 1e-4:
+                parts.append(f"ts_offset={ts:.2f}")
+        except (ValueError, TypeError):
+            pass
+        return ",".join(parts)
+
     def construct_nvencc_command(self, input_file, output_file, options, orientation,
                                  audio_source_path=None, subtitle_burn_path=None,
                                  info=None, base_dir=None):
@@ -12432,7 +13322,7 @@ class VideoProcessorApp:
             pipeline_mode = options.get("subtitle_pipeline", DEFAULT_SUBTITLE_PIPELINE) if options else DEFAULT_SUBTITLE_PIPELINE
             mode_lbl = "GPU (Direct CUDA)" if pipeline_mode == "gpu_cuda" else "CPU (libass Live)"
             print(f"[INFO] NVEncC Subtitle Burn Pipeline: {mode_lbl} [sub={os.path.basename(subtitle_burn_path)}]")
-            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
+            cmd.extend(["--vpp-subburn", self.build_nvencc_subburn_arg(safe_sub, options)])
         if options.get("_inline_truehdr", False):
             th_c = options.get("truehdr_contrast", DEFAULT_TRUEHDR_CONTRAST)
             th_s = options.get("truehdr_saturation", DEFAULT_TRUEHDR_SATURATION)
@@ -12999,7 +13889,7 @@ class VideoProcessorApp:
 
         if subtitle_burn_path:
             safe_sub = get_safe_filter_path(subtitle_burn_path, base_dir=base_dir or work_dir)
-            cmd.extend(["--vpp-subburn", f"filename={safe_sub},charcode=utf-8"])
+            cmd.extend(["--vpp-subburn", self.build_nvencc_subburn_arg(safe_sub, options)])
 
         cmd.extend([
                "--colorprim", "bt2020", "--transfer", "smpte2084",
