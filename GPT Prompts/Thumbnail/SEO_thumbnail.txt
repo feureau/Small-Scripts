@@ -1,14 +1,20 @@
 
 
 
-full image, no red border. research the best practices for these thumbnails, do not use my previous thumbnails as referecnce, come up with new designes for this video
-
-design a mrbeast like thumbnail series. face should be emoting accordingly, mouth closed
+full image, no red border. research the best practices for these thumbnails, do not use my previous thumbnails as reference, come up with new designes for this video
+don't do abstract thumbnail
+don't do 3d rendered looking design
+make it look real, photorealistic.
+make it look cinematic.
+design a mrbeast like thumbnail series. face should be emoting accordingly, make face smooth and aesthetic while maintaining likeness.
 Generate 3 version
+
+
+
 
 no text
 no person
-
+mouth closed
 
 
 

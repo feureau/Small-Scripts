@@ -995,7 +995,7 @@ DEFAULT_SHADOW_OFFSET_X = "2"
 DEFAULT_SHADOW_OFFSET_Y = "4"
 DEFAULT_SHADOW_BLUR = "2"
 # Blur only the shadow (separate ASS layer) instead of softening the outline too.
-DEFAULT_SHADOW_BLUR_ONLY = False
+DEFAULT_SHADOW_BLUR_ONLY = True
 DEFAULT_SHADOW_SPREAD = "0"
 DEFAULT_SHADOW_BLUR_MODE = "gaussian"
 DEFAULT_SUBTITLE_BORDER_STYLE = "1"
@@ -2049,13 +2049,14 @@ def build_ass_text_events(layer, start_ass, end_ass, style, text, *, fill_alpha,
             base_outline = 0.0
 
     shadow_tags = f"\\xshad{shadow_x}\\yshad{shadow_y}"
-    if not blur_shadow_only:
-        bord_tag = f"\\bord{base_outline + spread_val:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+    effective_blur_shadow_only = blur_shadow_only or (spread_val != 0.0)
+    if not effective_blur_shadow_only:
+        bord_tag = f"\\bord{max(0.0, base_outline + spread_val):.2f}" if (spread_val != 0.0 and outline_width is not None) else ""
         tags = f"{pre_tags}\\1a{fa}\\3a{oa}\\4a{sa}{shadow_tags}{bord_tag}{blur_tag}"
         return [f"Dialogue: {layer},{start_ass},{end_ass},{style},,0,0,0,,{{{tags}}}{post_override}{text}"]
     events = []
     if sa_val < 255:
-        shadow_bord = f"\\bord{base_outline + spread_val:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+        shadow_bord = f"\\bord{max(0.0, base_outline + spread_val):.2f}" if (spread_val != 0.0 and outline_width is not None) else ""
         # NOTE: fill/outline must be &HFE& (1/255 opacity, visually invisible), NOT &HFF&.
         # libass knocks the fill shape out of the shadow when \1a is fully transparent,
         # which leaves only a thin hollow outline-ring shadow that blur/alpha then erase.
@@ -2063,7 +2064,7 @@ def build_ass_text_events(layer, start_ass, end_ass, style, text, *, fill_alpha,
         shadow_only_tags = (f"{pre_tags}\\1a&HFE&\\3a&HFE&\\4a{sa}{shadow_tags}{shadow_bord}{blur_tag}")
         events.append(
             f"Dialogue: {layer},{start_ass},{end_ass},{style},,0,0,0,,{{{shadow_only_tags}}}{post_override}{text}")
-    text_bord = f"\\bord{base_outline:.2f}" if (spread_val > 0 and outline_width is not None) else ""
+    text_bord = f"\\bord{base_outline:.2f}" if (spread_val != 0.0 and outline_width is not None) else ""
     text_tags = f"{pre_tags}\\1a{fa}\\3a{oa}\\4a&HFF&\\shad0\\blur0{text_bord}"
     events.append(
         f"Dialogue: {layer + 1},{start_ass},{end_ass},{style},,0,0,0,,{{{text_tags}}}{post_override}{text}")
@@ -7246,11 +7247,15 @@ class VideoProcessorApp:
                    command=lambda: self.choose_color(self.title_shadow_color_var,
                                                      self.title_shadow_swatch, "title_shadow_color"),
                    width=3).grid(row=0, column=2, padx=5)
-        ttk.Label(shadow_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
-        ttk.Scale(shadow_pane.container, from_=0, to=255, variable=self.title_shadow_alpha_var,
+        title_shad_alpha_lbl = ttk.Label(shadow_pane.container, text="Alpha:")
+        title_shad_alpha_lbl.grid(row=0, column=3, sticky="w", padx=(10, 5))
+        ToolTip(title_shad_alpha_lbl, "Shadow Alpha: 0 = fully opaque (solid), 255 = fully transparent (invisible).")
+        title_shad_scale = ttk.Scale(shadow_pane.container, from_=0, to=255, variable=self.title_shadow_alpha_var,
                   orient=tk.HORIZONTAL,
                   command=lambda v: self._update_selected_jobs("title_shadow_alpha")
-                  ).grid(row=0, column=4, sticky="ew")
+                  )
+        title_shad_scale.grid(row=0, column=4, sticky="ew")
+        ToolTip(title_shad_scale, "Shadow Alpha: 0 = fully opaque (solid), 255 = fully transparent (invisible).")
 
         # Row 1: Mode & Offsets
         row1_frame = ttk.Frame(shadow_pane.container)
@@ -7276,8 +7281,9 @@ class VideoProcessorApp:
         blur_mode_cb.pack(side=tk.LEFT, padx=(0, 10))
         ToolTip(blur_mode_cb, "Blur mode: gaussian = LibASS \\blur (smooth gaussian diffusion), edge = LibASS \\be (fast edge box blur).")
         ttk.Label(row2_frame, text="Spread:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(row2_frame, textvariable=self.title_shadow_spread_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
-        ToolTip(row2_frame, "Spread: Expands the silhouette size of the shadow before blur is applied.")
+        title_spread_entry = ttk.Entry(row2_frame, textvariable=self.title_shadow_spread_var, width=5)
+        title_spread_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(title_spread_entry, "Shadow Spread: Expands (+) or contracts (-) the shadow silhouette size relative to text outline width.")
         ttk.Checkbutton(row2_frame, text="Blur Shadow Only", variable=self.title_shadow_blur_only_var,
                         command=lambda: self._update_selected_jobs("title_shadow_blur_only")
                         ).pack(side=tk.LEFT, padx=(5, 0))
@@ -7534,11 +7540,15 @@ class VideoProcessorApp:
         ttk.Button(shadow_pane.container, text="..",
                    command=lambda: self.choose_color(self.shadow_color_var, self.shadow_swatch,
                                                      "shadow_color"), width=3).grid(row=0, column=2, padx=5)
-        ttk.Label(shadow_pane.container, text="Alpha:").grid(row=0, column=3, sticky="w", padx=(10, 5))
-        ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
+        sub_shad_alpha_lbl = ttk.Label(shadow_pane.container, text="Alpha:")
+        sub_shad_alpha_lbl.grid(row=0, column=3, sticky="w", padx=(10, 5))
+        ToolTip(sub_shad_alpha_lbl, "Shadow Alpha: 0 = fully opaque (solid), 255 = fully transparent (invisible).")
+        sub_shad_scale = ttk.Scale(shadow_pane.container, from_=0, to=255, orient=tk.HORIZONTAL,
                   variable=self.shadow_alpha_var,
                   command=lambda val: self._update_selected_jobs("shadow_alpha")
-                  ).grid(row=0, column=4, sticky="ew")
+                  )
+        sub_shad_scale.grid(row=0, column=4, sticky="ew")
+        ToolTip(sub_shad_scale, "Shadow Alpha: 0 = fully opaque (solid), 255 = fully transparent (invisible).")
 
         # Row 1: Mode & Offsets
         row1_frame = ttk.Frame(shadow_pane.container)
@@ -7564,8 +7574,9 @@ class VideoProcessorApp:
         blur_mode_cb.pack(side=tk.LEFT, padx=(0, 10))
         ToolTip(blur_mode_cb, "Blur mode: gaussian = LibASS \\blur (smooth gaussian diffusion), edge = LibASS \\be (fast edge box blur).")
         ttk.Label(row2_frame, text="Spread:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(row2_frame, textvariable=self.shadow_spread_var, width=5).pack(side=tk.LEFT, padx=(0, 10))
-        ToolTip(row2_frame, "Spread: Expands the silhouette size of the shadow before blur is applied.")
+        sub_spread_entry = ttk.Entry(row2_frame, textvariable=self.shadow_spread_var, width=5)
+        sub_spread_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(sub_spread_entry, "Shadow Spread: Expands (+) or contracts (-) the shadow silhouette size relative to text outline width.")
         ttk.Checkbutton(row2_frame, text="Blur Shadow Only", variable=self.shadow_blur_only_var,
                         command=lambda: self._update_selected_jobs("shadow_blur_only")
                         ).pack(side=tk.LEFT, padx=(5, 0))

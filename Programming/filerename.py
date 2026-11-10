@@ -4,12 +4,13 @@ r"""
 # 📂 FileRename.py
 > **A powerful, safety-first bulk rename utility for power users.**
 
-Recursively searches directories for files matching a pattern and replaces specific strings or regex patterns within their names. Designed to be fast, recursive by default, and interactive for safety.
+Searches the current working directory (or subfolders recursively with -R/--recursive) for files matching a pattern and replaces specific strings or regex patterns within their names. Designed to be fast, safe by default, and interactive for safety.
 
 ---
 
 ## 🚀 Key Features
-- 🔄 **Recursive by Default:** Automatically dives into subfolders.
+- 🛡️ **Current Directory by Default:** Safe by default, only renames files in the current working folder.
+- 🔄 **Recursive Subfolder Crawling:** Opt-in to crawl subfolders with `-R` or `--recursive`.
 - 🛡️ **Interactive Safety:** Preview all changes before committing.
 - 🔍 **Flexible Matching:** Supports standard wildcards (*, ?) and Regular Expressions.
 - 🔠 **Case Sensitivity Control:** Optionally ignore case matching with `-i`.
@@ -33,7 +34,7 @@ python filerename.py [file_pattern] [old_string] [new_string] [options]
 | :--- | :--- | :--- |
 | `-i` | `--ignore-case` | Perform case-insensitive matching/replacement. |
 | `-r` | `--regex` | Treat `old_string` as a Regular Expression. |
-| `-n` | `--non-recursive` | Look only in the current directory (disable recursion). |
+| `-R` | `--recursive` | Crawl into subfolder tree (recursive search). |
 | `-p` | `--prefix` | Prepends a string to the filename. |
 | `-s` | `--suffix` | Appends a string before the file extension. |
 | `-e` | `--extension` | Changes the file extension (e.g., `jpg`). |
@@ -51,9 +52,9 @@ python filerename.py *.LRF .lrf _lowres.mp4 -i
 ```
 
 ### 2. Recursive String Deletion
-Remove "_draft" from all `.docx` files in all subfolders.
+Remove "_draft" from all `.docx` files in all subfolders using `-R`.
 ```bash
-python filerename.py *.docx "_draft" ""
+python filerename.py *.docx "_draft" "" -R
 ```
 
 ### 3. Regex Replacement
@@ -65,7 +66,7 @@ python filerename.py * "\d{4}-\d{2}-\d{2}_" "" -r
 ### 4. Changing Extensions
 Convert all `.jpeg` files in the current folder to `.jpg`.
 ```bash
-python filerename.py *.jpeg -e jpg -n
+python filerename.py *.jpeg -e jpg
 ```
 
 ---
@@ -94,15 +95,15 @@ def display_help():
           CLI tool documentation.
     """
     print("Usage: python FileRename.py [file_pattern] [old_string] [new_string] [options]")
-    print("\nRecursively renames files by replacing a string in their names or reordering them.")
-    print("The search is RECURSIVE BY DEFAULT.")
+    print("\nRenames files by replacing a string in their names or reordering them.")
+    print("The search works ONLY on the current folder by default.")
     print("\nArguments:")
     print("  file_pattern   The file pattern to match (e.g., *.txt, \"**/*.log\").")
     print("  old_string     The string (or regex pattern) to be replaced. (Optional if using flags)")
     print("  new_string     The string to replace with. (Optional if using flags)")
     print("\nOptions:")
     print("  -i, --ignore-case    Perform case-insensitive matching/replacement")
-    print("  -n, --non-recursive  Disables recursion and searches ONLY the current directory.")
+    print("  -R, --recursive      Enables recursion and crawls into the subfolder tree.")
     print("  -s, --suffix         Appends a suffix before file extension.")
     print("  -r, --regex          Treats old_string as a Regular Expression.")
     print("  -p, --prefix         Prepends a string to the filenames.")
@@ -113,10 +114,10 @@ def display_help():
     print("  # Reverse the numbering of all .jpg files")
     print("  python FileRename.py *.jpg --order reverse")
     print("\nExamples:")
-    print("  # Recursively rename all .txt files in current folder and all subfolders")
+    print("  # Rename all .txt files in the current folder (default)")
     print("  python FileRename.py *.txt draft final")
-    print("\n  # Rename .jpg files ONLY in the current folder (shallow search)")
-    print("  python FileRename.py *.jpg vacation holiday -n")
+    print("\n  # Recursively rename all .txt files in current folder and all subfolders")
+    print("  python FileRename.py *.txt draft final -R")
     print("\n  # Use Regex to remove a date pattern (e.g., 20240415) from filenames")
     print("  python FileRename.py * \" - \\d{8}\" \"\" -r")
     print("\n  # Add a prefix to all .jpg files")
@@ -299,13 +300,18 @@ def main():
     print(f"--- File Rename Script ---")
     print(f"Working Directory: {os.getcwd()}")
     
-    # --- LOGIC CHANGE HERE ---
-    # Recursion is now ON by default. The '-n' flag turns it OFF.
-    recursive = True
-    if '-n' in args or '--non-recursive' in args:
-        recursive = False
-        if '-n' in args: args.remove('-n')
-        if '--non-recursive' in args: args.remove('--non-recursive')
+    # Recursion is OFF by default. The '-R' or '--recursive' flag enables subfolder crawling.
+    recursive = False
+    for flag in ('-R', '--recursive', '--recurse', '--subfolders'):
+        if flag in args:
+            recursive = True
+            while flag in args:
+                args.remove(flag)
+    for flag in ('-n', '--non-recursive'):
+        if flag in args:
+            recursive = False
+            while flag in args:
+                args.remove(flag)
     
     # Regex support
     use_regex = False
@@ -398,8 +404,11 @@ def main():
 
     for pattern in file_inputs:
         # If the user enters `*.txt`, the shell might expand it.
-        # The '**/' prefix is what enables glob to search subdirectories.
-        pathname = os.path.join('**', pattern) if recursive else pattern
+        # The '**/' prefix is what enables glob to search subdirectories when recursive is True.
+        if recursive:
+            pathname = pattern if pattern.startswith('**') else os.path.join('**', pattern)
+        else:
+            pathname = pattern
         matched = glob.glob(pathname, recursive=recursive)
         for f in matched:
             if os.path.isfile(f) and f not in seen_files:
@@ -425,7 +434,7 @@ def main():
         print(f"Changing extension to: '{display_ext}'")
     if replay_format:
         print("Applying Replay format conversion: Replay_<timestamp>.<ext> -> <timestamp>_Rec-Replay.<ext>")
-    print(f"Recursive mode: {'On (Default)' if recursive else 'Off (-n flag used)'}")
+    print(f"Recursive mode: {'On (-R/--recursive flag used)' if recursive else 'Off (Default)'}")
     print("---------------------------------")
     
     rename_files(files_to_process, old_string, new_string, use_regex=use_regex, prefix=prefix, suffix=suffix, order=order, extension=extension, replay_format=replay_format, ignore_case=ignore_case)
