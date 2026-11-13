@@ -606,8 +606,8 @@ class MainApp:
         ttk.Label(list_controls, text="Search:").pack(side=tk.LEFT, padx=(0, 2))
         self.search_var = tk.StringVar(); self.search_var.trace_add("write", lambda *args: self.apply_filters())
         self.search_entry = ttk.Entry(list_controls, textvariable=self.search_var, width=20); self.search_entry.pack(side=tk.LEFT, padx=(0, 10))
-        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
-        ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Export Data', command=self.export_data).pack(side=tk.RIGHT, padx=2)
+        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_main_json", "no_main_json", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Main JSON Match", variable=self.filter_vars["has_main_json"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Main JSON Match", variable=self.filter_vars["no_main_json"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
+        ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Select Main JSON', command=self.select_main_json_matches).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Export Data', command=self.export_data).pack(side=tk.RIGHT, padx=2)
 
         bottom_frame = ttk.Frame(frm); bottom_frame.pack(fill=tk.X, pady=5)
         sched = ttk.LabelFrame(bottom_frame, text='Scheduling & Visibility', padding=10); sched.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
@@ -634,24 +634,37 @@ class MainApp:
         def _on_remove_toggle():
             if getattr(self, 'remove_schedule_var', None) and self.remove_schedule_var.get(): self.update_schedule_var.set(False)
             self._update_ui_states()
+        def _on_vis_toggle():
+            if getattr(self, 'update_visibility_var', None) and self.update_visibility_var.get() and getattr(self, 'update_schedule_var', None) and self.update_schedule_var.get():
+                self.update_schedule_var.set(False)
+            self._update_ui_states()
+        def _on_vis_radio_select():
+            if getattr(self, 'update_schedule_var', None) and self.update_schedule_var.get():
+                self.update_schedule_var.set(False)
+            self.update_visibility_var.set(True)
+            self._update_ui_states()
         self.update_schedule_var = tk.BooleanVar(value=True); ttk.Checkbutton(sched, text="Update Schedule", variable=self.update_schedule_var, command=_on_update_toggle).grid(row=4, column=0, sticky='w')
         self.remove_schedule_var = tk.BooleanVar(value=False); ttk.Checkbutton(sched, text="Remove Schedule", variable=self.remove_schedule_var, command=_on_remove_toggle).grid(row=4, column=1, sticky='w')
-        self.update_visibility_var = tk.BooleanVar(value=False); self.vis_cb = ttk.Checkbutton(sched, text="Update Visibility Status", variable=self.update_visibility_var, command=self._update_ui_states); self.vis_cb.grid(row=5, column=0, columnspan=2, sticky='w')
-        self.visibility_choice_var = tk.StringVar(value='private'); self.rad_private = ttk.Radiobutton(sched, text="Private", variable=self.visibility_choice_var, value='private'); self.rad_private.grid(row=6, column=0, columnspan=2, sticky='w', padx=10); self.rad_unlisted = ttk.Radiobutton(sched, text="Unlisted", variable=self.visibility_choice_var, value='unlisted'); self.rad_unlisted.grid(row=7, column=0, columnspan=2, sticky='w', padx=10); self.rad_public = ttk.Radiobutton(sched, text="Public", variable=self.visibility_choice_var, value='public'); self.rad_public.grid(row=8, column=0, columnspan=2, sticky='w', padx=10)
+        self.update_visibility_var = tk.BooleanVar(value=False); self.vis_cb = ttk.Checkbutton(sched, text="Update Visibility Status", variable=self.update_visibility_var, command=_on_vis_toggle); self.vis_cb.grid(row=5, column=0, columnspan=2, sticky='w')
+        self.visibility_choice_var = tk.StringVar(value='private'); self.rad_private = ttk.Radiobutton(sched, text="Private", variable=self.visibility_choice_var, value='private', command=_on_vis_radio_select); self.rad_private.grid(row=6, column=0, columnspan=2, sticky='w', padx=10); self.rad_unlisted = ttk.Radiobutton(sched, text="Unlisted", variable=self.visibility_choice_var, value='unlisted', command=_on_vis_radio_select); self.rad_unlisted.grid(row=7, column=0, columnspan=2, sticky='w', padx=10); self.rad_public = ttk.Radiobutton(sched, text="Public", variable=self.visibility_choice_var, value='public', command=_on_vis_radio_select); self.rad_public.grid(row=8, column=0, columnspan=2, sticky='w', padx=10)
         ttk.Label(sched, text='Schedule Order:').grid(row=9, column=0, sticky='w', pady=(5,0))
         self.schedule_order_var = tk.StringVar(value='Random')
         self.schedule_order_cb = ttk.Combobox(sched, textvariable=self.schedule_order_var, values=['As is', 'File Name (Asc)', 'File Name (Desc)', 'Random'], state="readonly", width=15)
         self.schedule_order_cb.grid(row=9, column=1, sticky='w', padx=5, pady=(5,0), columnspan=3)
 
-        ttk.Label(meta, text='Description:').grid(row=0, column=0, sticky='nw'); self.desc_txt = tk.Text(meta, height=3, width=40, wrap=tk.WORD); self.desc_txt.grid(row=0, column=1, sticky='ew', columnspan=3)
-        ttk.Label(meta, text='Tags (comma-sep):').grid(row=1, column=0, sticky='w', pady=(5,0)); self.tags_ent = ttk.Entry(meta); self.tags_ent.grid(row=1, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        ttk.Label(meta, text='Video Category:').grid(row=2, column=0, sticky='w', pady=(5,0)); self.category_var = tk.StringVar(); self.category_cb = ttk.Combobox(meta, textvariable=self.category_var, values=["Don't Change"], state="readonly"); self.category_cb.set("Don't Change"); self.category_cb.grid(row=2, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        ttk.Label(meta, text='Metadata Lang:').grid(row=3, column=0, sticky='w', pady=(5,0)); self.metadata_lang_var = tk.StringVar(); self.metadata_lang_cb = ttk.Combobox(meta, textvariable=self.metadata_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.metadata_lang_cb.set('English'); self.metadata_lang_cb.grid(row=3, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        ttk.Label(meta, text='Audio Language:').grid(row=4, column=0, sticky='w', pady=(5,0)); self.audio_lang_var = tk.StringVar(); self.audio_lang_cb = ttk.Combobox(meta, textvariable=self.audio_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.audio_lang_cb.set('English'); self.audio_lang_cb.grid(row=4, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        ttk.Label(meta, text='Recording Date (YYYY-MM-DD):').grid(row=5, column=0, sticky='w', pady=(5,0)); self.recording_date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d')); ttk.Entry(meta, textvariable=self.recording_date_var).grid(row=5, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        ttk.Label(meta, text='Playlist ID:').grid(row=6, column=0, sticky='w', pady=(5,0)); self.playlist_id_var = tk.StringVar(); ttk.Entry(meta, textvariable=self.playlist_id_var).grid(row=6, column=1, sticky='ew', pady=(5,0), columnspan=3)
-        option_frame = ttk.Frame(meta); option_frame.grid(row=7, column=0, columnspan=4, sticky='w', pady=(5,0)); self.allow_embedding_var = tk.BooleanVar(value=True); ttk.Checkbutton(option_frame, text="Allow Embedding", variable=self.allow_embedding_var).pack(side=tk.LEFT, padx=(0,10)); self.notify_subscribers_var = tk.BooleanVar(value=False); ttk.Checkbutton(option_frame, text="Notify Subscribers (on public)", variable=self.notify_subscribers_var).pack(side=tk.LEFT, padx=(0,10)); self.public_stats_var = tk.BooleanVar(value=False); ttk.Checkbutton(option_frame, text="Public Stats Visible", variable=self.public_stats_var).pack(side=tk.LEFT)
-        ttk.Label(meta, text='Made for Kids:').grid(row=9, column=0, sticky='w', pady=(5,0)); self.made_for_kids_var = tk.StringVar(value='no'); mfk_frame = ttk.Frame(meta); mfk_frame.grid(row=9, column=1, sticky='ew', pady=(5,0), columnspan=3); ttk.Radiobutton(mfk_frame, text="No", variable=self.made_for_kids_var, value='no').pack(side=tk.LEFT, padx=(0, 10)); ttk.Radiobutton(mfk_frame, text="Yes", variable=self.made_for_kids_var, value='yes').pack(side=tk.LEFT, padx=(0, 10)); ttk.Radiobutton(mfk_frame, text="Don't Change", variable=self.made_for_kids_var, value='dont_change').pack(side=tk.LEFT); meta.grid_columnconfigure(1, weight=1)
+        self.update_metadata_var = tk.BooleanVar(value=True)
+        self.update_metadata_cb = ttk.Checkbutton(meta, text="Update Metadata (Title / Desc / Tags / Settings) — uncheck for Visibility/Schedule only", variable=self.update_metadata_var, command=self._on_update_metadata_toggle)
+        self.update_metadata_cb.grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 6))
+
+        ttk.Label(meta, text='Description:').grid(row=1, column=0, sticky='nw'); self.desc_txt = tk.Text(meta, height=3, width=40, wrap=tk.WORD); self.desc_txt.grid(row=1, column=1, sticky='ew', columnspan=3)
+        ttk.Label(meta, text='Tags (comma-sep):').grid(row=2, column=0, sticky='w', pady=(5,0)); self.tags_ent = ttk.Entry(meta); self.tags_ent.grid(row=2, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Video Category:').grid(row=3, column=0, sticky='w', pady=(5,0)); self.category_var = tk.StringVar(); self.category_cb = ttk.Combobox(meta, textvariable=self.category_var, values=["Don't Change"], state="readonly"); self.category_cb.set("Don't Change"); self.category_cb.grid(row=3, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Metadata Lang:').grid(row=4, column=0, sticky='w', pady=(5,0)); self.metadata_lang_var = tk.StringVar(); self.metadata_lang_cb = ttk.Combobox(meta, textvariable=self.metadata_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.metadata_lang_cb.set('English'); self.metadata_lang_cb.grid(row=4, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Audio Language:').grid(row=5, column=0, sticky='w', pady=(5,0)); self.audio_lang_var = tk.StringVar(); self.audio_lang_cb = ttk.Combobox(meta, textvariable=self.audio_lang_var, values=list(LANGUAGES_MAP.keys()), state="readonly"); self.audio_lang_cb.set('English'); self.audio_lang_cb.grid(row=5, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Recording Date (YYYY-MM-DD):').grid(row=6, column=0, sticky='w', pady=(5,0)); self.recording_date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d')); self.recording_date_ent = ttk.Entry(meta, textvariable=self.recording_date_var); self.recording_date_ent.grid(row=6, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        ttk.Label(meta, text='Playlist ID:').grid(row=7, column=0, sticky='w', pady=(5,0)); self.playlist_id_var = tk.StringVar(); self.playlist_id_ent = ttk.Entry(meta, textvariable=self.playlist_id_var); self.playlist_id_ent.grid(row=7, column=1, sticky='ew', pady=(5,0), columnspan=3)
+        option_frame = ttk.Frame(meta); option_frame.grid(row=8, column=0, columnspan=4, sticky='w', pady=(5,0)); self.allow_embedding_var = tk.BooleanVar(value=True); self.allow_embedding_cb = ttk.Checkbutton(option_frame, text="Allow Embedding", variable=self.allow_embedding_var); self.allow_embedding_cb.pack(side=tk.LEFT, padx=(0,10)); self.notify_subscribers_var = tk.BooleanVar(value=False); self.notify_subscribers_cb = ttk.Checkbutton(option_frame, text="Notify Subscribers (on public)", variable=self.notify_subscribers_var); self.notify_subscribers_cb.pack(side=tk.LEFT, padx=(0,10)); self.public_stats_var = tk.BooleanVar(value=False); self.public_stats_cb = ttk.Checkbutton(option_frame, text="Public Stats Visible", variable=self.public_stats_var); self.public_stats_cb.pack(side=tk.LEFT)
+        ttk.Label(meta, text='Made for Kids:').grid(row=9, column=0, sticky='w', pady=(5,0)); self.made_for_kids_var = tk.StringVar(value='no'); mfk_frame = ttk.Frame(meta); mfk_frame.grid(row=9, column=1, sticky='ew', pady=(5,0), columnspan=3); self.mfk_no_rb = ttk.Radiobutton(mfk_frame, text="No", variable=self.made_for_kids_var, value='no'); self.mfk_no_rb.pack(side=tk.LEFT, padx=(0, 10)); self.mfk_yes_rb = ttk.Radiobutton(mfk_frame, text="Yes", variable=self.made_for_kids_var, value='yes'); self.mfk_yes_rb.pack(side=tk.LEFT, padx=(0, 10)); self.mfk_dc_rb = ttk.Radiobutton(mfk_frame, text="Don't Change", variable=self.made_for_kids_var, value='dont_change'); self.mfk_dc_rb.pack(side=tk.LEFT); meta.grid_columnconfigure(1, weight=1)
 
         action_frame = ttk.LabelFrame(frm, text="Execution", padding=10)
         action_frame.pack(fill=tk.X, pady=5)
@@ -774,14 +787,55 @@ class MainApp:
             self.update_status("UPLOAD MODE: Load local files or select from list to upload.")
         self._update_ui_states()
     
+    def _on_update_metadata_toggle(self):
+        self._update_ui_states()
+        if self.app_mode == "update" and self.videos_to_process:
+            update_meta = getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get()
+            for vd in self.videos_to_process:
+                if isinstance(vd, VideoData) and getattr(vd, 'main_json_dict', None):
+                    if update_meta:
+                        if "title" in vd.main_json_dict:
+                            vd.current_title = vd.main_json_dict["title"]
+                        hashtags = " ".join(vd.main_json_dict.get("hashtags", []))
+                        if "description" in vd.main_json_dict:
+                            vd.current_description = f"{vd.main_json_dict['description']}\n\n{hashtags}".strip()
+                        if "tags" in vd.main_json_dict:
+                            vd.current_tags = vd.main_json_dict["tags"]
+                    else:
+                        vd.current_title = vd.video_snippet.get('title', vd.original_title)
+                        vd.current_description = vd.video_snippet.get('description', '')
+                        vd.current_tags = vd.video_snippet.get('tags', [])
+            selected = self.tree.selection()
+            self.apply_filters()
+            if selected:
+                valid_iids = [iid for iid in selected if self.tree.exists(iid)]
+                if valid_iids:
+                    self.tree.selection_set(valid_iids)
+
     def _update_ui_states(self):
         is_scheduling = self.update_schedule_var.get()
         is_removing = getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get()
         if self.app_mode == "update":
-            state = tk.DISABLED if is_scheduling else tk.NORMAL
-            if is_scheduling: self.update_visibility_var.set(True); self.visibility_choice_var.set('private')
-            if is_removing: self.update_visibility_var.set(True)
-            self.vis_cb.config(state=state); self.rad_private.config(state=state); self.rad_unlisted.config(state=state); self.rad_public.config(state=state)
+            if is_scheduling:
+                self.update_visibility_var.set(True)
+                self.visibility_choice_var.set('private')
+            if is_removing:
+                self.update_visibility_var.set(True)
+            self.vis_cb.config(state=tk.NORMAL)
+            self.rad_private.config(state=tk.NORMAL)
+            self.rad_unlisted.config(state=tk.NORMAL)
+            self.rad_public.config(state=tk.NORMAL)
+        update_meta = getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get()
+        meta_state = tk.NORMAL if update_meta else tk.DISABLED
+        combo_state = "readonly" if update_meta else tk.DISABLED
+        if hasattr(self, 'desc_txt'):
+            self.desc_txt.config(state=meta_state)
+        for attr in ('tags_ent', 'recording_date_ent', 'playlist_id_ent', 'allow_embedding_cb', 'notify_subscribers_cb', 'public_stats_cb', 'mfk_no_rb', 'mfk_yes_rb', 'mfk_dc_rb'):
+            if hasattr(self, attr):
+                getattr(self, attr).config(state=meta_state)
+        for attr in ('category_cb', 'metadata_lang_cb', 'audio_lang_cb'):
+            if hasattr(self, attr):
+                getattr(self, attr).config(state=combo_state)
     
     def _sort_column(self, col, reverse):
         def get_sort_key(item_id):
@@ -823,7 +877,9 @@ class MainApp:
                 if search_text and search_text not in vd.current_title.lower() and search_text not in vd.original_title.lower():
                     continue
                 status = vd.video_status.get('privacyStatus'); has_schedule = bool(vd.video_status.get('publishAt'))
-                conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_desc_file": bool(vd.description_file_path), "no_desc_file": not vd.description_file_path, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path}
+                has_main = bool(getattr(vd, 'main_json_dict', None))
+                has_desc = bool(vd.description_file_path or has_main)
+                conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_main_json": has_main, "no_main_json": not has_main, "has_desc_file": has_desc, "no_desc_file": not has_desc, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path}
                 if vd.width > 0 and vd.height > 0: conditions.update({"is_horizontal": vd.width > vd.height, "is_vertical": vd.height >= vd.width})
                 if active_filters and not all(conditions.get(key, True) for key in active_filters): continue
                 filtered_list.append(vd)
@@ -884,13 +940,147 @@ class MainApp:
             channels_resp = self.service.channels().list(part="snippet", mine=True).execute(); categories_resp = self.service.videoCategories().list(part="snippet", regionCode=channels_resp["items"][0]["snippet"].get("country", "US")).execute(); self.dynamic_category_map = {item['snippet']['title']: item['id'] for item in categories_resp.get("items", []) if item.get('snippet', {}).get('assignable', False)}; sorted_categories = sorted(self.dynamic_category_map.keys()); self.category_cb['values'] = ["Don't Change"] + sorted_categories; self.update_status("Authentication successful. Categories loaded.")
         except Exception as e: logger.error(f"Failed to load video categories: {e}"); self.update_status("Error: Could not load categories.")
     
+    def _match_video_to_main_json(self, vd_obj: VideoData) -> dict | None:
+        if not getattr(self, 'main_json_data', None):
+            return None
+        orig_title = vd_obj.original_title or ""
+        orig_fn = vd_obj.original_upload_filename or ""
+        orig_fn_stem = Path(orig_fn).stem if orig_fn else ""
+        norm_orig_title = normalize_for_matching(orig_title)
+        norm_orig_fn = normalize_for_matching(orig_fn_stem)
+        nuc_orig_title = nuclear_clean(orig_title)
+        nuc_orig_fn = nuclear_clean(orig_fn)
+
+        for item in self.main_json_data:
+            if not isinstance(item, dict):
+                continue
+            item_vid = item.get("video_id") or item.get("id")
+            if item_vid and str(item_vid) == vd_obj.video_id:
+                return item
+
+            item_fn = str(item.get("filename", "") or "").strip()
+            if item_fn:
+                item_fn_stem = Path(item_fn).stem
+                nuc_fn = nuclear_clean(item_fn)
+                norm_fn = normalize_for_matching(item_fn_stem)
+                if (
+                    item_fn in (orig_title, orig_fn, orig_fn_stem)
+                    or item_fn_stem in (orig_title, orig_fn_stem)
+                    or (nuc_fn and nuc_fn in (nuc_orig_title, nuc_orig_fn))
+                    or (norm_fn and norm_fn in (norm_orig_title, norm_orig_fn))
+                ):
+                    return item
+
+            item_title = str(item.get("title", "") or "").strip()
+            if item_title:
+                sanitized_title = sanitize_for_youtube(item_title, YOUTUBE_TITLE_MAX_LENGTH)
+                nuc_item_title = nuclear_clean(item_title)
+                norm_item_title = normalize_for_matching(item_title)
+                if (
+                    orig_title in (item_title, sanitized_title)
+                    or (norm_item_title and norm_item_title == norm_orig_title)
+                    or (nuc_item_title and nuc_item_title == nuc_orig_title)
+                ):
+                    return item
+        return None
+
+    def _apply_main_json_to_video(self, vd_obj: VideoData, main_json_item: dict, apply_metadata: bool | None = None):
+        vd_obj.main_json_dict = main_json_item
+        vd_obj.description_filename = "main.json"
+        if apply_metadata is None:
+            apply_metadata = getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get()
+        if apply_metadata:
+            if "title" in main_json_item:
+                vd_obj.current_title = main_json_item["title"]
+            hashtags = " ".join(main_json_item.get("hashtags", []))
+            if "description" in main_json_item:
+                vd_obj.current_description = f"{main_json_item['description']}\n\n{hashtags}".strip()
+            if "tags" in main_json_item:
+                vd_obj.current_tags = main_json_item["tags"]
+
+    def _apply_main_json_matches_to_loaded_videos(self) -> int:
+        if self.app_mode != "update" or not self.videos_to_process:
+            return 0
+        apply_metadata = getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get()
+        if self.service and getattr(self, 'main_json_data', None):
+            existing_ids = {vd.video_id for vd in self.videos_to_process if isinstance(vd, VideoData)}
+            missing_ids = []
+            for item in self.main_json_data:
+                if isinstance(item, dict):
+                    vid = item.get("video_id") or item.get("id")
+                    if vid and str(vid) not in existing_ids and str(vid) not in missing_ids:
+                        missing_ids.append(str(vid))
+            if missing_ids:
+                logger.info(f"Fetching {len(missing_ids)} Main JSON video IDs missing from playlist load...")
+                try:
+                    for i in range(0, len(missing_ids), 50):
+                        resp = self.service.videos().list(
+                            id=",".join(missing_ids[i:i + 50]),
+                            part="snippet,status,fileDetails,contentDetails,statistics"
+                        ).execute()
+                        for item in resp.get("items", []):
+                            vd_obj = VideoData(
+                                item["id"],
+                                item["snippet"]["title"],
+                                item["snippet"],
+                                item["status"],
+                                item.get("fileDetails"),
+                                item.get("contentDetails"),
+                                item.get("statistics")
+                            )
+                            self.videos_to_process.append(vd_obj)
+                            existing_ids.add(item["id"])
+                except Exception as e:
+                    logger.error(f"Failed fetching missing Main JSON IDs: {e}")
+
+        matched_count = 0
+        for vd_obj in self.videos_to_process:
+            if not isinstance(vd_obj, VideoData):
+                continue
+            match = self._match_video_to_main_json(vd_obj)
+            if match:
+                self._apply_main_json_to_video(vd_obj, match, apply_metadata=apply_metadata)
+                matched_count += 1
+        self.apply_filters()
+        self.select_main_json_matches(silent=True)
+        return matched_count
+
+    def select_main_json_matches(self, silent=False):
+        if self.app_mode != "update":
+            return
+        matched_iids = [
+            vd.video_id
+            for vd in self.videos_to_process
+            if isinstance(vd, VideoData) and getattr(vd, 'main_json_dict', None) and self.tree.exists(vd.video_id)
+        ]
+        self.tree.selection_set(matched_iids)
+        if matched_iids:
+            self.tree.see(matched_iids[0])
+        if not silent:
+            self.update_status(f"Selected {len(matched_iids)} videos matching Main JSON.")
+
     def gui_load_main_json(self):
         path = filedialog.askopenfilename(title='Select main.json', filetypes=[('JSON files', '*.json')])
         if path:
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    self.main_json_data = json.load(f)
-                self.update_status(f"Loaded Main JSON with {len(self.main_json_data)} entries.")
+                    raw = f.read()
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = sanitize_and_parse_json(raw)
+                if isinstance(data, dict):
+                    data = data.get("videos") or data.get("items") or [data]
+                if not isinstance(data, list):
+                    raise ValueError("Main JSON must be a JSON list of video objects (or an object containing 'videos'/'items').")
+                self.main_json_data = data
+                if self.app_mode == "update" and self.videos_to_process:
+                    matched = self._apply_main_json_matches_to_loaded_videos()
+                    self.update_status(f"Loaded Main JSON ({len(self.main_json_data)} entries). Matched & selected {matched} loaded videos.")
+                    logger.info(f"Loaded Main JSON ({len(self.main_json_data)} entries). Matched {matched} loaded videos.")
+                else:
+                    self.update_status(f"Loaded Main JSON with {len(self.main_json_data)} entries.")
+                    logger.info(f"Loaded Main JSON with {len(self.main_json_data)} entries.")
             except Exception as e:
                 logger.error(f"Failed to load Main JSON: {e}")
                 self.update_status("Error loading Main JSON.")
@@ -901,14 +1091,25 @@ class MainApp:
         except ValueError: max_to_load = 50
         playlist_id = self.playlist_id_entry_var.get().strip()
         load_mode = self.playlist_load_mode_var.get()
+        apply_metadata = getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get()
         self.update_status(f"Loading up to {max_to_load or 'ALL'} videos..."); self.load_existing_button.config(state=tk.DISABLED)
-        threading.Thread(target=self.run_video_load, args=(max_to_load, playlist_id, load_mode), daemon=True).start()
+        threading.Thread(target=self.run_video_load, args=(max_to_load, playlist_id, load_mode, apply_metadata), daemon=True).start()
     
-    def run_video_load(self, max_to_load, playlist_id=None, load_mode="Playlist Only"):
-        self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load, playlist_id=playlist_id, load_mode=load_mode)
+    def run_video_load(self, max_to_load, playlist_id=None, load_mode="Playlist Only", apply_metadata=True):
+        self.videos_to_process = self.fetch_all_videos_from_api(max_videos_to_fetch=max_to_load, playlist_id=playlist_id, load_mode=load_mode, apply_metadata=apply_metadata)
         self.root.after(100, self.finish_video_load)
 
-    def finish_video_load(self): self.apply_filters(); self.process_button.config(state=tk.NORMAL); self.filter_menubutton.config(state=tk.NORMAL); self.load_existing_button.config(state=tk.NORMAL); self.update_status(f"Loaded {len(self.videos_to_process)} videos.")
+    def finish_video_load(self):
+        self.apply_filters()
+        self.process_button.config(state=tk.NORMAL)
+        self.filter_menubutton.config(state=tk.NORMAL)
+        self.load_existing_button.config(state=tk.NORMAL)
+        if getattr(self, 'main_json_data', None):
+            self.select_main_json_matches(silent=True)
+            matched_count = len(self.tree.selection())
+            self.update_status(f"Loaded {len(self.videos_to_process)} videos ({matched_count} matched & selected from Main JSON).")
+        else:
+            self.update_status(f"Loaded {len(self.videos_to_process)} videos.")
     
     def gui_load_files_for_upload(self):
         self.app_mode = "upload"; self._update_gui_for_mode(); self.videos_to_process = []; logger.info("Scanning for video files to upload...")
@@ -917,7 +1118,7 @@ class MainApp:
                 if f not in [v.filepath for v in self.videos_to_process]: self.videos_to_process.append(VideoEntry(f, self.main_json_data if hasattr(self, 'main_json_data') else None))
         logger.info(f"Found {len(self.videos_to_process)} videos to upload."); self._populate_treeview(self.videos_to_process); self.process_button.config(state=tk.NORMAL if self.videos_to_process else tk.DISABLED)
     
-    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None, load_mode="Playlist Only"):
+    def fetch_all_videos_from_api(self, max_videos_to_fetch=0, playlist_id=None, load_mode="Playlist Only", apply_metadata=True):
         all_video_data_map, video_ids = {}, []
         
         try:
@@ -963,6 +1164,14 @@ class MainApp:
                 if max_videos_to_fetch and len(video_ids) >= max_videos_to_fetch: break
     
             if max_videos_to_fetch: video_ids = video_ids[:max_videos_to_fetch]
+            if getattr(self, 'main_json_data', None):
+                existing_set = set(video_ids)
+                for item in self.main_json_data:
+                    if isinstance(item, dict):
+                        vid = item.get("video_id") or item.get("id")
+                        if vid and str(vid) not in existing_set:
+                            video_ids.append(str(vid))
+                            existing_set.add(str(vid))
             if not video_ids: return []
     
             local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
@@ -1016,22 +1225,11 @@ class MainApp:
                     nuclear_title = nuclear_clean(vd_obj.current_title)
                     marker_num_title = extract_marker_number(vd_obj.current_title)
                     
-                    main_json_item = None
-                    if hasattr(self, 'main_json_data') and self.main_json_data:
-                        for item in self.main_json_data:
-                            item_fn = item.get("filename", "")
-                            if item_fn and (item_fn == vd_obj.original_title or item_fn == vd_obj.original_upload_filename or nuclear_clean(item_fn) == nuclear_title):
-                                main_json_item = item
-                                break
+                    main_json_item = self._match_video_to_main_json(vd_obj)
 
                     if main_json_item:
-                        vd_obj.main_json_dict = main_json_item
-                        vd_obj.description_filename = "main.json"
+                        self._apply_main_json_to_video(vd_obj, main_json_item, apply_metadata=apply_metadata)
                         best_meta_match_name = "main.json"
-                        if "title" in main_json_item: vd_obj.current_title = main_json_item["title"]
-                        hashtags = " ".join(main_json_item.get("hashtags", []))
-                        if "description" in main_json_item: vd_obj.current_description = f"{main_json_item['description']}\n\n{hashtags}".strip()
-                        if "tags" in main_json_item: vd_obj.current_tags = main_json_item["tags"]
                         logger.info(f"  > MAIN JSON MATCH FOUND for '{vd_obj.original_title}'")
 
                     yt_hash_tokens = set()
@@ -1042,7 +1240,8 @@ class MainApp:
                     best_txt_match = None; best_sub_match = None
                     best_txt_score = float('inf')
                     best_sub_score = float('inf')
-                    best_meta_match_name = None
+                    if not main_json_item:
+                        best_meta_match_name = None
                     best_sub_match_name = None
                     best_txt_hash_tiebreak = -1
                     best_sub_hash_tiebreak = -1
@@ -1132,7 +1331,7 @@ class MainApp:
                              vd_obj.subtitle_filename = best_sub_match.name
                              used_subtitle_files.add(best_sub_match)
                          logger.info(f"  > MATCH FOUND -> metadata={best_meta_match_name or 'None'}, subtitle={best_sub_match_name or 'None'}")
-                    else:
+                    elif not main_json_item:
                          logger.info("  > NO LOCAL MATCH FOUND")
 
                     all_video_data_map[video_id] = vd_obj
@@ -1157,7 +1356,7 @@ class MainApp:
                 selected_videos.sort(key=lambda x: str(x.original_upload_filename or x.current_title).lower(), reverse=True)
             elif order == 'Random':
                 random.shuffle(selected_videos)
-            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_schedule": self.update_schedule_var.get(), "remove_schedule": getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
+            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_metadata": getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get(), "update_schedule": self.update_schedule_var.get(), "remove_schedule": getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
             self.update_status("Updating... Check console."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
         elif self.app_mode == "upload":
             selected_videos = []
@@ -1172,12 +1371,22 @@ class MainApp:
                 random.shuffle(selected_videos)
             self.update_status("Uploading... Check console."); threading.Thread(target=self.run_upload_processing, args=(selected_videos,), daemon=True).start()
 
+    def _finish_update_ui(self):
+        selected = self.tree.selection()
+        self.apply_filters()
+        if selected:
+            valid_iids = [iid for iid in selected if self.tree.exists(iid)]
+            if valid_iids:
+                self.tree.selection_set(valid_iids)
+        self.process_button.config(state=tk.NORMAL)
+        self.update_status("Update process complete.")
+
     def run_update_processing(self, processing_data):
         try:
             if self.service: update_videos_on_youtube(self.service, processing_data)
             else: self.update_status("Error: Not authenticated.")
         except Exception as e: logger.error(f"Overall update process failed: {e}"); self.update_status("Update process failed.")
-        finally: self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL)); self.root.after(100, lambda: self.update_status("Update process complete."))
+        finally: self.root.after(100, self._finish_update_ui)
 
     def run_upload_processing(self, selected_videos):
         try:
@@ -1193,42 +1402,63 @@ class MainApp:
 
 def update_videos_on_youtube(service, processing_data):
     videos = processing_data["videos"]; is_dry_run = processing_data["is_dry_run"]
-    try: start_dt = datetime.strptime(processing_data["start_time_str"], '%Y-%m-%d %H:%M').astimezone(timezone.utc); delta = timedelta(hours=processing_data["interval_hours"], minutes=processing_data["interval_mins"])
-    except ValueError: logger.error("Invalid date format."); return
+    update_metadata = processing_data.get("update_metadata", True)
+    start_dt, delta = None, None
+    if processing_data.get("update_schedule"):
+        try:
+            start_dt = datetime.strptime(processing_data["start_time_str"], '%Y-%m-%d %H:%M').astimezone(timezone.utc)
+            delta = timedelta(hours=processing_data["interval_hours"], minutes=processing_data["interval_mins"])
+        except ValueError:
+            logger.error("Invalid date format.")
+            return
     
     success_count = 0; failed_videos = []; skipped_videos = []
     
     for i, vd in enumerate(videos):
-        # Blank File Safety Guard
-        if vd.description_file_path:
+        # Blank File Safety Guard (only when updating metadata from a local file)
+        if update_metadata and vd.description_file_path and not getattr(vd, 'main_json_dict', None):
             if Path(vd.description_file_path).stat().st_size == 0:
                 logger.warning(f"SKIPPING '{vd.original_title}': Matched file is blank (0 KB).")
                 skipped_videos.append(vd.original_title)
                 continue
 
-        parts, body = [], {'id': vd.video_id}; description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
-        if processing_data["description_override"].strip(): description_content = processing_data["description_override"]
-        elif hasattr(vd, 'main_json_dict') and vd.main_json_dict:
-            data = vd.main_json_dict
-            title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
-        elif vd.description_file_path:
-            try:
-                file_content = Path(vd.description_file_path).read_text(encoding='utf-8'); data = sanitize_and_parse_json(file_content)
-                if data: title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
-                else: description_content = file_content
-            except Exception as e: logger.error(f"Error reading file: {e}")
-            
-        snippet = {'title': sanitize_for_youtube(title_content, YOUTUBE_TITLE_MAX_LENGTH), 'description': sanitize_description(description_content), 'tags': sanitize_tags(tags_content)}
-        snippet['categoryId'] = processing_data["category_id"] if processing_data["category_id"] else vd.current_category_id
-        body['snippet'] = snippet; parts.append('snippet')
+        parts, body = [], {'id': vd.video_id}
+        display_title = vd.current_title
+        if update_metadata:
+            description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
+            if processing_data["description_override"].strip(): description_content = processing_data["description_override"]
+            elif hasattr(vd, 'main_json_dict') and vd.main_json_dict:
+                data = vd.main_json_dict
+                title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
+            elif vd.description_file_path:
+                try:
+                    file_content = Path(vd.description_file_path).read_text(encoding='utf-8'); data = sanitize_and_parse_json(file_content)
+                    if data: title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
+                    else: description_content = file_content
+                except Exception as e: logger.error(f"Error reading file: {e}")
+                
+            snippet = {'title': sanitize_for_youtube(title_content, YOUTUBE_TITLE_MAX_LENGTH), 'description': sanitize_description(description_content), 'tags': sanitize_tags(tags_content)}
+            snippet['categoryId'] = processing_data["category_id"] if processing_data["category_id"] else vd.current_category_id
+            body['snippet'] = snippet; parts.append('snippet')
+            display_title = snippet['title']
         
-        status = {'publicStatsViewable': processing_data["public_stats_viewable"], 'embeddable': processing_data["allow_embedding"]}
+        if update_metadata:
+            status = {'publicStatsViewable': processing_data["public_stats_viewable"], 'embeddable': processing_data["allow_embedding"]}
+            if processing_data["made_for_kids"] != 'dont_change':
+                status['selfDeclaredMadeForKids'] = (processing_data["made_for_kids"] == 'yes')
+        else:
+            status = {}
+            for k in ('embeddable', 'publicStatsViewable', 'selfDeclaredMadeForKids'):
+                if k in vd.video_status:
+                    status[k] = vd.video_status[k]
+
+        status['privacyStatus'] = vd.video_status.get('privacyStatus', 'private')
         if processing_data["update_schedule"]:
             # YouTube API rejects scheduling for videos that are already public or if the time is in the past.
             target_time = start_dt + i * delta
             current_privacy = vd.video_status.get('privacyStatus', '')
             if current_privacy == 'public':
-                logger.warning(f"Skipping schedule update for '{vd.original_title}' (already {current_privacy}). Updating metadata only.")
+                logger.warning(f"Skipping schedule update for '{vd.original_title}' (already {current_privacy}).")
             elif target_time < datetime.now(timezone.utc):
                 logger.warning(f"Skipping schedule update for '{vd.original_title}' (calculated time {target_time.strftime('%Y-%m-%d %H:%M')} is in the past).")
             else:
@@ -1238,13 +1468,27 @@ def update_videos_on_youtube(service, processing_data):
             status['privacyStatus'] = processing_data["visibility_to_set"] if processing_data["update_visibility"] else vd.video_status.get('privacyStatus', 'private')
         elif processing_data["update_visibility"]: 
             status['privacyStatus'] = processing_data["visibility_to_set"]
+        elif vd.video_status.get('publishAt'):
+            status['publishAt'] = vd.video_status['publishAt']
             
-        if processing_data["made_for_kids"] != 'dont_change': status['selfDeclaredMadeForKids'] = (processing_data["made_for_kids"] == 'yes')
         body['status'] = status; parts.append('status')
         
-        if is_dry_run: logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}'"); success_count += 1; continue
+        if is_dry_run:
+            logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}' -> parts={','.join(parts)}, privacyStatus={status.get('privacyStatus')}, publishAt={status.get('publishAt')}")
+            success_count += 1
+            continue
         try:
-            service.videos().update(part=",".join(parts), body=body).execute(); logger.info(f"({i+1}/{len(videos)}) Updated '{snippet['title']}'.")
+            service.videos().update(part=",".join(parts), body=body).execute()
+            vd.video_status['privacyStatus'] = status['privacyStatus']
+            if 'publishAt' in status:
+                vd.video_status['publishAt'] = status['publishAt']
+            else:
+                vd.video_status.pop('publishAt', None)
+            if 'snippet' in body:
+                vd.current_title = body['snippet']['title']
+                vd.current_description = body['snippet']['description']
+                vd.current_tags = body['snippet']['tags']
+            logger.info(f"({i+1}/{len(videos)}) Updated '{display_title}' (parts={','.join(parts)}, privacy={status.get('privacyStatus')}).")
             success_count += 1
         except HttpError as e:
             logger.error(f"FAILED update: {e.reason}")

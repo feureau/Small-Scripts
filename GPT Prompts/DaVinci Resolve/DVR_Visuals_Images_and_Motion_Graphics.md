@@ -82,7 +82,7 @@ while keeping **`V6` strictly reserved for effects and color grading** and gener
          "iiurlwidth": 1600,
      }
      ```
-   - Save all downloaded images directly into **`<resolve_proj_dir>/img/<descriptive_slug>.jpg`** (or `.png`)—NEVER solely in the workspace or temp directory so the DaVinci Resolve project never goes `"Media Offline"`.
+   - Save all downloaded images directly into **`<resolve_proj_dir>/img/<alpha_slug>.jpg`** (or `.png`) using **strictly digit-free alphabetic-sort slugs** (e.g., `aa_subject_name` — **NEVER include numeric digits `[0-9]` anywhere in image filenames**, or Resolve's sequence detector may treat them as `Type: Video` sequences instead of `Still`)—NEVER solely in the workspace or temp directory so the DaVinci Resolve project never goes `"Media Offline"`.
 
 3. **Mandatory Pre-Import Image Validation Gate**:
    - Before importing into DaVinci Resolve, validate every file in `<resolve_proj_dir>/img/`:
@@ -92,7 +92,7 @@ while keeping **`V6` strictly reserved for effects and color grading** and gener
 
 4. **Idempotent Media Pool Bin `"B-Roll"` & `V7` Placement**:
    - Find or create the subfolder **`"B-Roll"`** at the root of the Media Pool (`root = mp.GetRootFolder()`), checking `root.GetSubFolderList()` first so duplicate `"B-Roll"` bins are never created.
-   - Import the verified images from `<resolve_proj_dir>/img/` into `"B-Roll"`.
+   - Import the verified images from `<resolve_proj_dir>/img/` into `"B-Roll"`, and assert right after `mp.ImportMedia(...)` that every image clip returns `img_mpi.GetClipProperty("Type") == "Still"` (if Resolve ever returns `"Video"` sequence, stop and ensure digit-free filenames and Media Storage *Frame Display Mode $\rightarrow$ Individual*).
    - Clamp `endFrame` to the still clip's MediaPool frame limit (`int(img_mpi.GetClipProperty("Frames") or 120) - 1`) and append onto **Video Track 7 (`V7`)** with `"mediaType": 1` (Video only):
      ```python
      max_still_frames = int(img_mpi.GetClipProperty("Frames") or 120)
@@ -126,7 +126,7 @@ while keeping **`V6` strictly reserved for effects and color grading** and gener
        - **Portrait (`aspect < 0.85`, e.g., official headshots/portraits)**: `Scaling = resolve.SCALE_FIT`, `ZoomX = 0.34–0.38`, `Pan = round(-560 * pan_scale)`, `Tilt = 40 to 80`, `CropTop = 0`, `CropBottom = 0`.
        - **Square / Compact (`0.85 <= aspect < 1.30`, or `4:3` single-person headshots kept as PiP)**: `Scaling = resolve.SCALE_FIT`, `ZoomX = 0.35–0.40`, `Pan = round(-550 * pan_scale)`, `Tilt = 40 to 100`.
        - **Landscape Kept as PiP (`aspect >= 1.30` for quick conversational entity tags)**: `Scaling = resolve.SCALE_FIT`, `ZoomX = 0.36–0.42`, `Pan = round(-520 * pan_scale)`, `Tilt = 40 to 100`.
-   - Apply a subtle `Cross Dissolve` (`6–8 frames`) transition on entry/exit where appropriate.
+   - **Subtle Animation & Per-Project Consistent Transitions:** Enable eased Ken Burns motion (`item.SetProperty("DynamicZoomEnabled", True)`, `item.SetProperty("DynamicZoomEase", 2)`) and design one cohesive `10`-frame transition style per project (consistently mapped by `pip` vs `fullscreen` framing via `AddTransition(..., category="simple")`): e.g., `Blur Dissolve`, `Edge Wipe`, `Split`, `Non-Additive Dissolve`, or `Cross Dissolve` (avoid `Push`, `Clock Wipe`, and mirror-tiled `Slide Up`/`Slide Down`/`Zoom In` on `RGBA` overlays).
 
 ---
 

@@ -1,21 +1,13 @@
+YouTube thumbnail entry point
 
+Read ../SEO/YouTube_Packaging_Common.md first. It owns action modes, source fidelity, visual preferences, limits, export profiles, and testing rules.
 
+For long videos, read and follow ./SEO_Thumbnail_Long.md.
+For YouTube Shorts, read and follow ./SEO_Thumbnail_Short.md.
+Resolve the intended asset from the actual source and request; do not rely on the folder name alone.
 
-full image, no red border. research the best practices for these thumbnails, do not use my previous thumbnails as reference, come up with new designes for this video
-don't do abstract thumbnail
-don't do 3d rendered looking design
-make it look real, photorealistic.
-make it look cinematic.
-design a mrbeast like thumbnail series. face should be emoting accordingly, make face smooth and aesthetic while maintaining likeness.
-Generate 3 version
+Honor the requested action: discussion produces discussion, concepts produce concepts, and explicit generation produces images. Editing these prompts does not execute them.
 
+Use the shared defaults unless the user overrides them. Keep title-copy coordination through ../SEO/SEO_yt_Long.md or ../SEO/SEO_yt_Short.md, then serialize approved metadata with ../SEO/SEO_yt_JSON.md when requested.
 
-
-
-no text
-no person
-mouth closed
-
-
-
-come up wiht new concepts never done before
+Do not maintain another independent set of thumbnail rules in this entry point.

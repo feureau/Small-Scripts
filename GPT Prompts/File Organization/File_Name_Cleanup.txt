@@ -1,0 +1,112 @@
+Here's a reusable prompt. Copy-paste it into a fresh chat, fill in the bracketed bits, and paste your `dir/b/s` output where marked.
+
+---
+
+```
+# MEDIA LIBRARY CLEANUP TASK
+
+## Context
+I'm cleaning up downloaded media files. I'll paste a `dir /b /s` listing of the folder. Rename, organise, and clean the files as described below.
+
+## MY FOLDER
+[Paste path here, e.g. F:\Completed Downloads\Show.Name]
+
+## DIRECTORY LISTING
+```
+[Paste dir /b /s output here]
+```
+
+---
+
+## NAMING CONVENTIONS
+
+### Videos — TV series
+`<Show Name> S<XX>E<YY> - <Episode Title>.<ext>`
+
+Example: `Star Trek The Next Generation S01E03 - The Naked Now.mkv`
+
+- Season/episode codes are zero-padded 2 digits.
+- Episode titles come from official sources — **look them up, don't invent them**.
+- Double episodes keep both codes: `S07E25E26`.
+- Specials go in a separate `Specials` folder with prefix `S00` or just the title: `<Show Name> - <Special Title>.<ext>`
+- Shorts/featurettes go in a `Shorts` folder: `<Show Name> - Short NN - <Title>.<ext>`
+
+### Videos — Movies
+`<Movie Title> (<Year>) [Extended/Remux/etc].<ext>`
+
+Example: `The Lord of the Rings - The Fellowship of the Ring (2001) Extended.mkv`
+
+- Keep the edition tag (`Extended`, `Director's Cut`, `IMAX`) only if it distinguishes from another version I already have.
+- Remove: resolution, codec, release group, source tags (`1080p`, `x265`, `BluRay`, `[YTS.MX]`, `-RAV1NE`, `AAC5.1`, etc.)
+
+### Subtitles
+- English: `<Video Base Name>.eng.srt`
+- All other languages: `<Video Base Name>.<3-letter-code>.srt` (e.g. `.spa`, `.fre`, `.ger`)
+- **One subtitle per language per episode** — keep the one with the lowest `(N)` duplicate number, discard the rest.
+- Delete `Unknown`, `und`, or unlabelled language subtitles by default — but ASK first if the count is large.
+
+### Series titles
+Use the **folder name** as the series title, expanded from dots: `Star.Trek.The.Next.Generation` → `Star Trek The Next Generation`.
+
+---
+
+## SAFETY RULES (learned the hard way)
+
+1. **Never delete media files without asking.** Move suspect files to a `_quarantine\` folder instead. Only the user empties it.
+2. **Never assume** — if a file's purpose is unclear (e.g. `Unknown.mkv`, `.mov` proxies), list what you plan to do and wait for confirmation.
+3. **Delete only these without asking:**
+   - `.txt`, `.nfo`, `.jpg` release notes / junk
+   - Empty folders
+   - Duplicate subtitles (`(1)`, `(2)` copies) when a clean version exists
+4. **Before any rename, verify the target doesn't already exist** — skip and warn instead of overwriting.
+5. **Preview mode first** for large batches (`-WhatIf` in PowerShell, or print-then-execute in Python).
+
+---
+
+## TECHNICAL GOTCHAS
+
+- **Windows forbids** `\ / : * ? " < > |` in filenames. Replace `:` with ` -`, drop `?`, and swap `/` for `-` (e.g. `YES/NO` → `YES-NO`).
+- **PowerShell:** file paths with `[` `]` need `-LiteralPath`, not `-Path`.
+- **Python** is preferred over PowerShell for anything non-trivial — less quoting hell, better error messages.
+- **Use Python** and write to a `.py` file; do not attempt a single CMD/PowerShell one-liner for anything beyond trivial renames.
+- When searching for episode codes, use regex like `S(\d+)E(\d+)` — it handles `S01E01`, `S01E01E02`, `S01E01.1080p...`, and `S01E01 - Title` all at once.
+- Watch for **full-width characters** (e.g. `：` `⧸⧸` `｜`) in filenames from some releases — normalise or replace them.
+
+---
+
+## DELIVERABLES
+
+Give me:
+
+1. **A short plan** — what you'll rename, what you'll move, what you'll delete/quarantine. Get my OK before writing code.
+2. **A single Python script** saved to the folder, with:
+   - Clear `print()` output showing every action
+   - `dest.exists()` checks before every `rename()`
+   - No file deletions except the safe list above
+   - Verification at the end (show the final `dir/b/s` equivalent)
+3. **One-line command to run it** (`python script.py`)
+4. If a rename fails, tell me **why** (encoding, lock, invalid char) and give a **targeted fix** — don't rewrite the whole script.
+
+---
+
+## OUTPUT I EXPECT
+
+- A clean folder tree showing videos, subtitles, specials, shorts, and quarantined files
+- All filenames following the conventions above
+- No leftover junk files or empty folders
+- A note of anything you quarantined or skipped, so I can review
+```
+
+---
+
+### Quick usage notes
+
+- **Paste the folder path and `dir /b /s` output** after the placeholders.
+- Add one-liners for anything special, e.g.:
+  - *"These are 4K movies, add `[4K]` before the extension."*
+  - *"Keep the release group tag on the movies."*
+  - *"Don't rename S03 — titles aren't announced yet."*
+- If the AI starts guessing titles, reply: **"Look them up or mark as TBD — don't invent."**
+- If it proposes a PowerShell one-liner, reply: **"Python script, saved to the folder, as per the prompt."**
+
+That should make each new folder a **single exchange** instead of a 20-message debugging session.

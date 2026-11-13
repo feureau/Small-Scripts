@@ -7,7 +7,7 @@ I have an edited talking-head / video-essay timeline in a project folder (`<proj
 ### QUICK CLARIFICATION CHECK (Ask Only If Ambiguous)
 
 Confirm or default cleanly to:
-1. **Marker Color & Style**: **`Cyan`** (`|C:ResolveColorCyan`) **point markers (`|D:1`)** with `Short 01: <Title>` ... + a closing **`Outro:`** marker bounding the end of the final Short *(unless range-duration `|D:<frames>` markers or another `ResolveColor<Name>` is requested)*.
+1. **Marker Color & Style**: **`Blue`** (`|C:ResolveColorBlue`) **point markers (`|D:1`)** with `Short 01: <Title>` ... + a closing **`Outro:`** marker bounding the end of the final Short *(unless range-duration `|D:<frames>` markers or another `ResolveColor<Name>` is requested)*.
 2. **Segmentation Density**: Group natural essay paragraphs/topic beats into **`~45s–75s`** self-contained Shorts (keeping crisp standalone `~25s–35s` beats intact rather than forcing awkward mid-thought splits or exceeding `~75s`), covering `100%` of the timeline cleanly.
 3. **Timeline Start Timecode Base**: Match the exact start timecode of the target timeline (`00:00:00:00` for `.otio` imports vs `01:00:00:00` / `86400` frames for FCP7 XML / CMX 3600 EDL imports) and `24.000` fps NDF *(or project timeline FPS)*.
 
@@ -59,10 +59,10 @@ TITLE: <STEM>_SHORTS_CHAPTER_MARKERS
 FCM: NON-DROP FRAME
 
 001  001      V     C        00:00:00:00 00:00:00:01 00:00:00:00 00:00:00:01
-|C:ResolveColorCyan |M:Short 01: <Title> (46.4s, 00:00:00:00-00:00:46:09) -- Hook: "<hook>" -> Close: "<close>" |D:1
+|C:ResolveColorBlue |M:Short 01: <Title> (46.4s, 00:00:00:00-00:00:46:09) -- Hook: "<hook>" -> Close: "<close>" |D:1
 
 002  001      V     C        00:00:46:09 00:00:46:10 00:00:46:09 00:00:46:10
-|C:ResolveColorCyan |M:Short 02: <Title> (71.3s, 00:00:46:09-00:01:57:17) -- Hook: "<hook>" -> Close: "<close>" |D:1
+|C:ResolveColorBlue |M:Short 02: <Title> (71.3s, 00:00:46:09-00:01:57:17) -- Hook: "<hook>" -> Close: "<close>" |D:1
 ```
 
 Follow these strict formatting rules:
@@ -71,7 +71,7 @@ Follow these strict formatting rules:
    - Point markers (`|D:1`): `[tc_in, tc_in + 1 frame]` for both source and record columns.
    - Range markers *(only if requested)*: `|D:<dur_frames>` with `[tc_in, tc_in + dur_frames]`.
 3. **Metadata Line (`|C:` / `|M:` / `|D:`)**:
-   - **`|C:`**: Valid Resolve color prefix (default `ResolveColorCyan`; others: `ResolveColorBlue`, `ResolveColorGreen`, `ResolveColorYellow`, `ResolveColorRed`, `ResolveColorPink`, `ResolveColorPurple`, `ResolveColorFuchsia`, `ResolveColorRose`, `ResolveColorLavender`, `ResolveColorSky`, `ResolveColorMint`, `ResolveColorLemon`, `ResolveColorSand`, `ResolveColorCocoa`, `ResolveColorCream`).
+   - **`|C:`**: Valid Resolve color prefix (default `ResolveColorBlue`; others: `ResolveColorCyan`, `ResolveColorGreen`, `ResolveColorYellow`, `ResolveColorRed`, `ResolveColorPink`, `ResolveColorPurple`, `ResolveColorFuchsia`, `ResolveColorRose`, `ResolveColorLavender`, `ResolveColorSky`, `ResolveColorMint`, `ResolveColorLemon`, `ResolveColorSand`, `ResolveColorCocoa`, `ResolveColorCream`).
    - **`|M:` Payload**: Pack `<Title> (<dur>s, <IN>-<OUT>) -- Hook: "<opening cue>" -> Close: "<closing cue>"` cleanly on **one physical unbroken line**.
    - **Pipe & Newline Sanitization Guard**: **NEVER leave literal newlines (`\n`/`\r`) or literal `|` pipe characters inside the `|M:` payload** (replace any `|` inside text with `/` or `--`), because Resolve's marker EDL parser splits tokens exclusively on `|` (`|C:`, `|M:`, `|D:`).
    - **`|D:`**: Integer frame duration (`1` for point chapter markers).
@@ -88,4 +88,7 @@ Before delivering the `.edl`, run an automated Python verification script assert
 Finish by presenting the Short segmentation summary table (`#`, `Timecode`, `Frame`, `Duration`, `Title`) and concise **DaVinci Resolve Import Instructions**:
 1. Open DaVinci Resolve and navigate to the **Media Pool**.
 2. **Right-click** your target timeline $\rightarrow$ **Timelines $\rightarrow$ Import $\rightarrow$ Timeline Markers from EDL...**
-3. Select **`04_Timelines/Markers/<stem>_chapter_markers.edl`** and verify all `Cyan` chapter markers appear directly on the exact B-roll / cut boundaries.
+3. Select **`04_Timelines/Markers/<stem>_chapter_markers.edl`** and verify all `Blue` chapter markers appear directly on the exact B-roll / cut boundaries.
+
+#### Optional: Direct Marker Insertion via DaVinci Resolve MCP
+When the user explicitly asks to insert the markers directly into their currently open DaVinci Resolve timeline via MCP, parse the validated `.edl` and call `tl.AddMarker(frame_rel, "Blue", name_part, note_part, 1)` (where `frame_rel` is 0-based relative to `tl.GetStartFrame()`), then assert `len(tl.GetMarkers() or {}) >= expected_count`.

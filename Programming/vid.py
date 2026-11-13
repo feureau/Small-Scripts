@@ -75,6 +75,24 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.72 - Adaptive aspect ratio for hybrid blocks (2026-11-XX)
+    • FEATURE: Added "Adaptive" to the per-block aspect ratio pickers
+      for Hybrid (stacked) and Hybrid-Duo (dual source) modes. When the
+      canvas aspect is fixed, an adaptive block takes whatever space
+      remains after fixed blocks resolve their natural size, so the
+      composite matches the requested canvas aspect ratio exactly. If
+      both blocks are adaptive, the canvas is split 50/50. Under "Auto"
+      canvas, adaptive falls back to the source aspect ratio (there is
+      no fixed canvas to fill).
+    • PIPELINE: _compute_hybrid_layout() and _compute_hybrid_block_dims()
+      resolve adaptive blocks in both side-by-side and stacked layouts via
+      shared _resolve_adaptive_span(). _resolve_aspect_ratio() treats
+      "adaptive" as "original" for every call site that has no fixed canvas
+      constraint (auto layout, superres prepass, target resolution math).
+    • PRESETS: "adaptive" is a per-block option (hybrid_top_aspect /
+      hybrid_bottom_aspect). get_job_hash() now also includes merged_aspect
+      so jobs differing only in canvas aspect (e.g. "auto" vs fixed) hash
+      distinctly.
 v8.71 - TrueHDR Middle Gray 44 Default, YouTube HDR .cube MKV Attachment & HDR-to-SDR 3D LUT (2026-11-XX)
     • FEATURE: YouTube HDR Matroska .cube 3D LUT attachment stream. When output
       format is HDR and "Embed .cube LUT in MKV (YouTube HDR)" is enabled,
@@ -630,6 +648,7 @@ TRIGGER_SOURCE_HDR_FILTER_LOOKUP = {
 }
 TRIGGER_SOURCE_HDR_FILTER_REVERSE = {v: k for k, v in TRIGGER_SOURCE_HDR_FILTER_LOOKUP.items()}
 DEFAULT_TRIGGER_SOURCE_HDR_FILTER = "any"
+DEFAULT_TRIGGER_REQUIRE_CHAPTERS = False
 
 DEFAULT_RESOLUTION = "2160p"
 DEFAULT_UPSCALE_ALGO = "bicubic"
@@ -1023,7 +1042,7 @@ TITLE_SOURCE_MANUAL = "manual"
 PER_JOB_TITLE_KEYS = ("title_override_text", "_title_source")
 DEFAULT_TITLE_START_TIME = "00:00:00.00"
 DEFAULT_TITLE_END_TIME = "00:00:03.00"
-DEFAULT_TITLE_FONT = "HelveticaNeueLT Std Blk"
+DEFAULT_TITLE_FONT = "Futura"
 DEFAULT_TITLE_FONT_SIZE = "48"
 DEFAULT_TITLE_BOLD = True
 DEFAULT_TITLE_ITALIC = False
@@ -3490,11 +3509,68 @@ def get_job_hash(job_options, extra_data=""):
         str(job_options.get('stage2_upscale_algo', DEFAULT_STAGE_UPSCALE_ALGO)),
         str(job_options.get('stage2_upscale_level', DEFAULT_STAGE_UPSCALE_LEVEL)),
         str(job_options.get('stage2_upscale_strength', DEFAULT_STAGE_UPSCALE_STRENGTH)),
+        # === v8.72 ===
+        job_options.get('merged_aspect', ''),
     ]
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
         hash_str += f"|{extra_data}"
     return hashlib.md5(hash_str.encode()).hexdigest()[:8]
+
+
+def _build_safe_output_base_chunk(output_dir, base_name_without_hash, ch_job_hash,
+                                  options, chapter_idx=None, safe_ch_title=""):
+    """Build an output filename stem that stays within NTFS (255-char component)
+    and Windows MAX_PATH (258-char safe ceiling) limits, including derived
+    sibling suffixes (_raw_pre_lut.mkv, .dolbyvision_metadata.xml, .srt).
+    """
+    if options.get("output_format") == "dolby_vision":
+        reserved_ext_len = 25  # len(".dolbyvision_metadata.xml")
+    elif _should_embed_hdr_lut(options):
+        reserved_ext_len = 16  # len("_raw_pre_lut.mkv")
+    else:
+        reserved_ext_len = 4   # len(".mp4") / len(".mkv") / len(".srt")
+
+    max_base_for_name = 255 - reserved_ext_len
+    if os.name == "nt":
+        dir_prefix_len = len(os.path.join(os.path.abspath(output_dir), ""))
+        max_base_for_path = max(1, 258 - dir_prefix_len - reserved_ext_len)
+        max_base_len = min(max_base_for_name, max_base_for_path)
+    else:
+        max_base_len = max_base_for_name
+
+    if chapter_idx is not None:
+        ch_num = f"{chapter_idx + 1:02d}"
+        ch_part = f"{ch_num}_{safe_ch_title}" if safe_ch_title else ch_num
+        full_stem = f"{base_name_without_hash}_{ch_part}_{ch_job_hash}"
+        if len(full_stem) <= max_base_len:
+            return full_stem
+        # Preserve chapter number, job hash, and base prefix while clamping
+        # long chapter titles (or base name if output_dir is very deep).
+        fixed_no_title = len(ch_num) + len(ch_job_hash) + 2
+        if max_base_len <= fixed_no_title + 1:
+            return f"{ch_num}_{ch_job_hash}"[:max_base_len]
+        min_base_keep = min(len(base_name_without_hash), 16)
+        avail_after_min_base = max_base_len - min_base_keep - fixed_no_title - 1
+        title_reserve = min(len(safe_ch_title), 32, max(0, avail_after_min_base))
+        title_sep = 1 if title_reserve > 0 else 0
+        base_budget = max_base_len - fixed_no_title - title_sep - title_reserve
+        trimmed_base = (base_name_without_hash[:base_budget].rstrip("._- ")
+                        or base_name_without_hash[:base_budget])
+        remaining_for_title = max_base_len - len(trimmed_base) - fixed_no_title - 1
+        if remaining_for_title > 0 and safe_ch_title:
+            trimmed_title = safe_ch_title[:remaining_for_title].rstrip("._- ")
+            if trimmed_title:
+                return f"{trimmed_base}_{ch_num}_{trimmed_title}_{ch_job_hash}"
+        return f"{trimmed_base}_{ch_num}_{ch_job_hash}"
+
+    full_stem = f"{base_name_without_hash}_{ch_job_hash}"
+    if len(full_stem) <= max_base_len:
+        return full_stem
+    base_max = max(1, max_base_len - len(ch_job_hash) - 1)
+    trimmed_base = (base_name_without_hash[:base_max].rstrip("._- ")
+                    or base_name_without_hash[:base_max])
+    return f"{trimmed_base}_{ch_job_hash}"
 
 
 def resolve_stage_upscale_algo(options, key):
@@ -4165,7 +4241,8 @@ class WorkflowPresetManager:
         h_clean = {"options": h_clean_opts,
                    "triggers": {"video_trigger": "Always (Clean/Backup)",
                                 "on_scan_subs": False, "auto_detect_subs": False,
-                                "suffix_filter": None, "exclude_suffix_filter": None}}
+                                "suffix_filter": None, "exclude_suffix_filter": None,
+                                "require_chapters": False}}
         v_hybrid_opts = {
             "orientation": "hybrid (stacked)",
             "resolution": "2160p", "normalize_audio": False,
@@ -4177,7 +4254,8 @@ class WorkflowPresetManager:
         v_hybrid = {"options": v_hybrid_opts,
                     "triggers": {"video_trigger": "Never", "on_scan_subs": True,
                                  "auto_detect_subs": False, "suffix_filter": None,
-                                 "exclude_suffix_filter": None}}
+                                 "exclude_suffix_filter": None,
+                                 "require_chapters": False}}
         h_hardsub_opts = copy.deepcopy(h_clean_opts)
         h_hardsub_opts["burn_subtitles"] = True
         h_hardsub_opts["subtitle_alignment"] = "bottom"
@@ -4185,7 +4263,8 @@ class WorkflowPresetManager:
         h_hardsub = {"options": h_hardsub_opts,
                      "triggers": {"video_trigger": "Never", "on_scan_subs": True,
                                   "auto_detect_subs": False, "suffix_filter": "-zh",
-                                  "exclude_suffix_filter": None}}
+                                  "exclude_suffix_filter": None,
+                                  "require_chapters": False}}
         return {"Horizontal Clean": h_clean,
                 "Vertical Hybrid Seam Hardsub": v_hybrid,
                 "Horizontal Hardsub (-zh)": h_hardsub}
@@ -4259,6 +4338,11 @@ class VideoProcessorApp:
 
         self.current_preset_var = tk.StringVar(
             value=self.preset_manager.get_preset_names()[0] if self.preset_manager.get_preset_names() else "")
+        self.preset_search_var = tk.StringVar(value="")
+        self.preset_search_var.trace_add("write", lambda *args: self._on_preset_search_changed())
+        self._preset_search_popup = None
+        self._preset_search_listbox = None
+        self._preset_search_has_matches = False
         self.trigger_video_always_var = tk.BooleanVar(value=False)
         self.trigger_video_fallback_var = tk.BooleanVar(value=False)
         self.trigger_scan_subs_var = tk.BooleanVar(value=False)
@@ -4269,6 +4353,7 @@ class VideoProcessorApp:
         self.trigger_exclude_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_exclude_suffix_var = tk.StringVar(value="")
         self.trigger_source_hdr_filter_var = tk.StringVar(value=TRIGGER_SOURCE_HDR_FILTER_ANY)
+        self.trigger_require_chapters_var = tk.BooleanVar(value=DEFAULT_TRIGGER_REQUIRE_CHAPTERS)
         self.output_suffix_override_var = tk.StringVar(value="")
         self.output_suffix_override_var.trace_add("write",
                                                   lambda *args: self._update_selected_jobs("output_suffix_override"))
@@ -5511,13 +5596,23 @@ class VideoProcessorApp:
         if hasattr(self, 'cb_group_preset'):
             self.cb_group_preset.config(state="disabled" if mode == "preset" else "normal")
 
+    def _filter_preset_names(self, query):
+        """Return preset names matching all whitespace-separated query tokens (case-insensitive)."""
+        all_names = self.preset_manager.get_preset_names() if hasattr(self, 'preset_manager') else []
+        terms = (query or "").strip().lower().split()
+        if not terms:
+            return all_names
+        return [n for n in all_names if all(t in n.lower() for t in terms)]
+
     def _adjust_preset_combo_width(self):
         if not hasattr(self, 'preset_combo') or not self.preset_combo:
             return
-        names = list(self.preset_combo['values'] or [])
-        if not names and hasattr(self, 'preset_manager'):
-            names = self.preset_manager.get_preset_names()
-            self.preset_combo['values'] = names
+        search_active = bool(hasattr(self, 'preset_search_var') and self.preset_search_var.get().strip())
+        all_names = self.preset_manager.get_preset_names() if hasattr(self, 'preset_manager') else []
+        current_values = list(self.preset_combo['values'] or [])
+        if not current_values and all_names and not search_active:
+            self.preset_combo['values'] = all_names
+        names = all_names or current_values
         if not names:
             self.preset_combo.config(width=24)
             return
@@ -5534,15 +5629,201 @@ class VideoProcessorApp:
         if self.preset_combo.cget('width') != new_width:
             self.preset_combo.config(width=new_width)
 
+    def _update_preset_search_count(self, filtered_count, total_count):
+        if not hasattr(self, 'preset_search_count_label'):
+            return
+        query = self.preset_search_var.get().strip() if hasattr(self, 'preset_search_var') else ""
+        if query:
+            self.preset_search_count_label.config(text=f"({filtered_count}/{total_count})")
+        else:
+            self.preset_search_count_label.config(text="")
+
     def _update_preset_combo_list(self):
         if hasattr(self, 'preset_manager') and hasattr(self, 'preset_combo'):
-            self.preset_combo['values'] = self.preset_manager.get_preset_names()
+            all_names = self.preset_manager.get_preset_names()
+            query = self.preset_search_var.get() if hasattr(self, 'preset_search_var') else ""
+            filtered = self._filter_preset_names(query)
+            self.preset_combo['values'] = filtered
+            self._update_preset_search_count(len(filtered), len(all_names))
             self._adjust_preset_combo_width()
+
+    def _close_preset_search_popup(self):
+        if getattr(self, '_preset_search_popup', None) is not None:
+            try:
+                self._preset_search_popup.destroy()
+            except tk.TclError:
+                pass
+            self._preset_search_popup = None
+            self._preset_search_listbox = None
+            self._preset_search_has_matches = False
+
+    def _check_close_preset_search_popup(self):
+        if getattr(self, '_preset_search_popup', None) is None:
+            return
+        try:
+            focused = self.root.focus_get()
+        except tk.TclError:
+            focused = None
+        if focused in (getattr(self, 'preset_search_entry', None), self._preset_search_listbox):
+            return
+        self._close_preset_search_popup()
+
+    def _show_preset_search_popup(self, matches):
+        if not hasattr(self, 'preset_search_entry') or not self.preset_search_entry.winfo_ismapped():
+            return
+        try:
+            x = self.preset_search_entry.winfo_rootx()
+            y = self.preset_search_entry.winfo_rooty() + self.preset_search_entry.winfo_height() + 2
+            entry_w = max(self.preset_search_entry.winfo_width(), 280)
+        except tk.TclError:
+            return
+
+        if self._preset_search_popup is None or not self._preset_search_popup.winfo_exists():
+            popup = tk.Toplevel(self.preset_search_entry)
+            popup.wm_overrideredirect(True)
+            frame = ttk.Frame(popup, relief=tk.SOLID, borderwidth=1)
+            frame.pack(fill=tk.BOTH, expand=True)
+            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            lb = tk.Listbox(frame, exportselection=False, activestyle="dotbox",
+                            yscrollcommand=scrollbar.set)
+            lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=lb.yview)
+            lb.bind("<ButtonRelease-1>", self._on_preset_search_listbox_click)
+            lb.bind("<Return>", self._on_preset_search_enter)
+            lb.bind("<Escape>", self._on_preset_search_escape)
+            self._preset_search_popup = popup
+            self._preset_search_listbox = lb
+
+        lb = self._preset_search_listbox
+        lb.delete(0, tk.END)
+        self._preset_search_has_matches = bool(matches)
+        if matches:
+            for name in matches:
+                lb.insert(tk.END, name)
+            lb.config(fg="black")
+            curr = self.current_preset_var.get()
+            sel_idx = matches.index(curr) if curr in matches else 0
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(sel_idx)
+            lb.activate(sel_idx)
+            lb.see(sel_idx)
+            rows = min(len(matches), 10)
+        else:
+            lb.insert(tk.END, "(No matching presets)")
+            lb.config(fg="gray")
+            rows = 1
+
+        max_chars = max((len(m) for m in matches), default=24)
+        popup_w = max(entry_w, min(max_chars * 8 + 28, 560))
+        popup_h = rows * 20 + 6
+        lb.config(height=rows)
+        self._preset_search_popup.wm_geometry(f"{popup_w}x{popup_h}+{x}+{y}")
+
+    def _on_preset_search_changed(self):
+        if not hasattr(self, 'preset_manager') or not hasattr(self, 'preset_combo'):
+            return
+        query = self.preset_search_var.get()
+        all_names = self.preset_manager.get_preset_names()
+        filtered = self._filter_preset_names(query)
+        self.preset_combo['values'] = filtered
+        self._update_preset_search_count(len(filtered), len(all_names))
+
+        if query.strip():
+            try:
+                focused = self.root.focus_get()
+            except tk.TclError:
+                focused = None
+            if focused == getattr(self, 'preset_search_entry', None):
+                self._show_preset_search_popup(filtered)
+        else:
+            self._close_preset_search_popup()
+
+    def _select_preset_from_search(self, preset_name):
+        if not preset_name or preset_name not in self.preset_manager.get_preset_names():
+            return
+        self._close_preset_search_popup()
+        self.current_preset_var.set(preset_name)
+        self.load_preset_to_gui(preset_name)
+
+    def _on_preset_search_listbox_click(self, event=None):
+        if not self._preset_search_has_matches or self._preset_search_listbox is None:
+            return
+        idx = self._preset_search_listbox.nearest(event.y) if event else None
+        if idx is None or idx < 0:
+            sel = self._preset_search_listbox.curselection()
+            idx = sel[0] if sel else None
+        if idx is not None and 0 <= idx < self._preset_search_listbox.size():
+            self._select_preset_from_search(self._preset_search_listbox.get(idx))
+
+    def _on_preset_search_nav(self, delta):
+        filtered = self._filter_preset_names(self.preset_search_var.get())
+        if self._preset_search_popup is None or not self._preset_search_popup.winfo_exists():
+            self._show_preset_search_popup(filtered)
+            return "break"
+        if not self._preset_search_has_matches or self._preset_search_listbox is None:
+            return "break"
+        lb = self._preset_search_listbox
+        size = lb.size()
+        if size == 0:
+            return "break"
+        sel = lb.curselection()
+        curr_idx = sel[0] if sel else -1
+        next_idx = max(0, min(size - 1, curr_idx + delta))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(next_idx)
+        lb.activate(next_idx)
+        lb.see(next_idx)
+        return "break"
+
+    def _on_preset_search_enter(self, event=None):
+        if (self._preset_search_popup is not None and self._preset_search_popup.winfo_exists()
+                and self._preset_search_has_matches and self._preset_search_listbox is not None):
+            sel = self._preset_search_listbox.curselection()
+            idx = sel[0] if sel else 0
+            if 0 <= idx < self._preset_search_listbox.size():
+                self._select_preset_from_search(self._preset_search_listbox.get(idx))
+                return "break"
+        filtered = self._filter_preset_names(self.preset_search_var.get())
+        if filtered and self.preset_search_var.get().strip():
+            self._select_preset_from_search(filtered[0])
+        return "break"
+
+    def _on_preset_search_escape(self, event=None):
+        if self._preset_search_popup is not None and self._preset_search_popup.winfo_exists():
+            self._close_preset_search_popup()
+        elif self.preset_search_var.get():
+            self.preset_search_var.set("")
+        return "break"
+
+    def _clear_preset_search(self):
+        self.preset_search_var.set("")
+        self._close_preset_search_popup()
+        if hasattr(self, 'preset_search_entry'):
+            self.preset_search_entry.focus_set()
 
     def setup_presets_ui(self, parent):
         preset_pane = CollapsiblePane(parent, text="Workflow Presets", initial_state='expanded')
         preset_pane.pack(fill=tk.X, side=tk.TOP, pady=(0, 2))
         preset_container = preset_pane.container
+        row_search = ttk.Frame(preset_container)
+        row_search.pack(fill=tk.X, pady=(0, 3))
+        ttk.Label(row_search, text="Search Preset:").pack(side=tk.LEFT, padx=(0, 5))
+        self.preset_search_entry = ttk.Entry(row_search, textvariable=self.preset_search_var, width=30)
+        self.preset_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+        self.preset_search_entry.bind("<Down>", lambda e: self._on_preset_search_nav(1))
+        self.preset_search_entry.bind("<Up>", lambda e: self._on_preset_search_nav(-1))
+        self.preset_search_entry.bind("<Return>", self._on_preset_search_enter)
+        self.preset_search_entry.bind("<KP_Enter>", self._on_preset_search_enter)
+        self.preset_search_entry.bind("<Escape>", self._on_preset_search_escape)
+        self.preset_search_entry.bind("<FocusOut>",
+                                      lambda e: self.root.after(150, self._check_close_preset_search_popup))
+        ToolTip(self.preset_search_entry,
+                "Type to filter presets dynamically (space-separated words match anywhere in name).\n"
+                "Use Up/Down + Enter or click a result to load it.")
+        ttk.Button(row_search, text="✕", width=3, command=self._clear_preset_search).pack(side=tk.LEFT, padx=(0, 4))
+        self.preset_search_count_label = ttk.Label(row_search, text="", foreground="gray")
+        self.preset_search_count_label.pack(side=tk.LEFT)
         row1a = ttk.Frame(preset_container)
         row1a.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(row1a, text="Active Preset:").pack(side=tk.LEFT, padx=(0, 5))
@@ -5583,6 +5864,15 @@ class VideoProcessorApp:
                 "Any Source = no filter (default). "
                 "SDR Only fires only when the source is SDR. "
                 "HDR Only fires only when the source is HDR (PQ or HLG).")
+        self.trigger_require_chapters_cb = ttk.Checkbutton(
+            row2_1b, text="Require Chapters",
+            variable=self.trigger_require_chapters_var)
+        self.trigger_require_chapters_cb.pack(side=tk.LEFT, padx=(12, 0))
+        ToolTip(self.trigger_require_chapters_cb,
+                "Gate condition: only allow this preset's auto-add triggers to fire when "
+                "the source video contains chapter markers.\n"
+                "If checked and the video has no chapters, the preset is skipped even if "
+                "Video or Subtitle triggers match.")
         row2_2a = ttk.Frame(row2)
         row2_2a.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(row2_2a, text="Trigger on Subtitle",
@@ -5929,9 +6219,19 @@ class VideoProcessorApp:
         top_aspect_frame.pack(fill=tk.X)
         ttk.Label(top_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0, 5))
         for label, val in [("16:9", "16:9"), ("9:16", "9:16"), ("4:5", "4:5"),
-                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original")]:
-            ttk.Radiobutton(top_aspect_frame, text=label, variable=self.hybrid_top_aspect_var, value=val,
-                            command=lambda: self._on_hybrid_aspect_change("top")).pack(side=tk.LEFT, padx=1)
+                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original"),
+                           ("Adaptive", "adaptive")]:
+            rb = ttk.Radiobutton(top_aspect_frame, text=label, variable=self.hybrid_top_aspect_var, value=val,
+                                 command=lambda: self._on_hybrid_aspect_change("top"))
+            rb.pack(side=tk.LEFT, padx=1)
+            if val == "adaptive":
+                ToolTip(rb,
+                        "Adaptive: this block fills the leftover space in the canvas "
+                        "after the other block (if fixed) takes its natural size, so "
+                        "the composite matches the requested canvas aspect ratio.\n"
+                        "If BOTH blocks are adaptive, the canvas is split 50/50.\n"
+                        "Falls back to the source aspect ratio when the canvas is "
+                        "\"Auto\" (no fixed canvas to fill).")
         ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
         self.hybrid_top_crop_rb = ttk.Radiobutton(top_aspect_frame, text="Crop",
                                                   variable=self.hybrid_top_mode_var, value="crop",
@@ -6014,9 +6314,19 @@ class VideoProcessorApp:
         bot_aspect_frame.pack(fill=tk.X)
         ttk.Label(bot_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0, 5))
         for label, val in [("16:9", "16:9"), ("9:16", "9:16"), ("4:5", "4:5"),
-                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original")]:
-            ttk.Radiobutton(bot_aspect_frame, text=label, variable=self.hybrid_bottom_aspect_var, value=val,
-                            command=lambda: self._on_hybrid_aspect_change("bottom")).pack(side=tk.LEFT, padx=1)
+                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original"),
+                           ("Adaptive", "adaptive")]:
+            rb = ttk.Radiobutton(bot_aspect_frame, text=label, variable=self.hybrid_bottom_aspect_var, value=val,
+                                 command=lambda: self._on_hybrid_aspect_change("bottom"))
+            rb.pack(side=tk.LEFT, padx=1)
+            if val == "adaptive":
+                ToolTip(rb,
+                        "Adaptive: this block fills the leftover space in the canvas "
+                        "after the other block (if fixed) takes its natural size, so "
+                        "the composite matches the requested canvas aspect ratio.\n"
+                        "If BOTH blocks are adaptive, the canvas is split 50/50.\n"
+                        "Falls back to the source aspect ratio when the canvas is "
+                        "\"Auto\" (no fixed canvas to fill).")
         ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
         self.hybrid_bot_crop_rb = ttk.Radiobutton(bot_aspect_frame, text="Crop",
                                                   variable=self.hybrid_bottom_mode_var, value="crop",
@@ -8509,6 +8819,20 @@ class VideoProcessorApp:
         orient = self._aspect_to_orientation(aspect, fallback="vertical")
         return "side_by_side" if orient == "horizontal" else "stacked"
 
+    @staticmethod
+    def _resolve_adaptive_span(total, size_a, size_b, is_a_adaptive, is_b_adaptive):
+        """Split a fixed canvas span between two blocks when at least one is adaptive."""
+        if is_a_adaptive and is_b_adaptive:
+            out_a = (total // 2 // 2) * 2
+            out_b = total - out_a
+        elif is_a_adaptive:
+            out_b = max(2, min(total - 2, size_b))
+            out_a = total - out_b
+        else:
+            out_a = max(2, min(total - 2, size_a))
+            out_b = total - out_a
+        return out_a, out_b
+
     def _compute_hybrid_layout(self, options, info_top, info_bot, orientation,
                                  target_w, target_h, verbose=False):
         """Single source of truth for hybrid block dims, composite pad
@@ -8597,11 +8921,15 @@ class VideoProcessorApp:
         if eff_layout == "side_by_side":
             left_aspect = options.get('hybrid_top_aspect')
             right_aspect = options.get('hybrid_bottom_aspect')
+            is_left_adaptive = str(left_aspect).lower() == "adaptive"
+            is_right_adaptive = str(right_aspect).lower() == "adaptive"
             num_l, den_l = self._resolve_aspect_ratio(left_aspect, info_top, '16:9')
             left_w = (int(target_h * num_l / den_l) // 2) * 2
             num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_other, '16:9')
             right_w = (int(target_h * num_r / den_r) // 2) * 2
             if is_auto:
+                # Under "auto" the canvas follows the content, so there is
+                # no leftover to fill -- "adaptive" == "original".
                 canvas_w = left_w + right_w
                 if cp_on and verbose:
                     print("[INFO] Composite padding is a no-op when merged "
@@ -8610,6 +8938,22 @@ class VideoProcessorApp:
                     "top_w": left_w, "top_h": target_h,
                     "bot_w": right_w, "bot_h": target_h,
                     "canvas_w": canvas_w, "canvas_h": target_h,
+                    "seam_x": left_w, "seam_y": target_h // 2,
+                })
+                return result
+            if is_left_adaptive or is_right_adaptive:
+                left_w, right_w = self._resolve_adaptive_span(
+                    target_w, left_w, right_w, is_left_adaptive, is_right_adaptive)
+                if verbose:
+                    print(f"[INFO] Adaptive SBS block(s) resolved under fixed "
+                          f"canvas {target_w}x{target_h}: left={left_w}, "
+                          f"right={right_w} "
+                          f"(left_adaptive={is_left_adaptive}, "
+                          f"right_adaptive={is_right_adaptive}).")
+                result.update({
+                    "top_w": left_w, "top_h": target_h,
+                    "bot_w": right_w, "bot_h": target_h,
+                    "canvas_w": target_w, "canvas_h": target_h,
                     "seam_x": left_w, "seam_y": target_h // 2,
                 })
                 return result
@@ -8663,6 +9007,8 @@ class VideoProcessorApp:
         # stacked
         top_aspect = options.get('hybrid_top_aspect')
         bot_aspect = options.get('hybrid_bottom_aspect')
+        is_top_adaptive = str(top_aspect).lower() == "adaptive"
+        is_bot_adaptive = str(bot_aspect).lower() == "adaptive"
         num_t, den_t = self._resolve_aspect_ratio(top_aspect, info_top, '16:9')
         top_h = (int(target_w * den_t / num_t) // 2) * 2
         num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_other, '4:5')
@@ -8676,6 +9022,22 @@ class VideoProcessorApp:
                 "top_w": target_w, "top_h": top_h,
                 "bot_w": target_w, "bot_h": bot_h,
                 "canvas_w": target_w, "canvas_h": canvas_h,
+                "seam_x": target_w // 2, "seam_y": top_h,
+            })
+            return result
+        if is_top_adaptive or is_bot_adaptive:
+            top_h, bot_h = self._resolve_adaptive_span(
+                target_h, top_h, bot_h, is_top_adaptive, is_bot_adaptive)
+            if verbose:
+                print(f"[INFO] Adaptive stacked block(s) resolved under "
+                      f"fixed canvas {target_w}x{target_h}: top={top_h}, "
+                      f"bot={bot_h} "
+                      f"(top_adaptive={is_top_adaptive}, "
+                      f"bot_adaptive={is_bot_adaptive}).")
+            result.update({
+                "top_w": target_w, "top_h": top_h,
+                "bot_w": target_w, "bot_h": bot_h,
+                "canvas_w": target_w, "canvas_h": target_h,
                 "seam_x": target_w // 2, "seam_y": top_h,
             })
             return result
@@ -10007,6 +10369,8 @@ class VideoProcessorApp:
         _src_filter_val = triggers.get("source_hdr_filter", "any")
         self.trigger_source_hdr_filter_var.set(
             TRIGGER_SOURCE_HDR_FILTER_REVERSE.get(_src_filter_val, TRIGGER_SOURCE_HDR_FILTER_ANY))
+        self.trigger_require_chapters_var.set(
+            bool(triggers.get("require_chapters", DEFAULT_TRIGGER_REQUIRE_CHAPTERS)))
         self.output_suffix_override_var.set(preset['options'].get("output_suffix_override", ""))
         self.current_preset_var.set(preset_name)
         selected_indices = self.job_listbox.curselection()
@@ -10112,6 +10476,7 @@ class VideoProcessorApp:
             if self.trigger_exclude_suffix_enable_var.get() else None,
             "source_hdr_filter": TRIGGER_SOURCE_HDR_FILTER_LOOKUP.get(
                 self.trigger_source_hdr_filter_var.get(), "any"),
+            "require_chapters": bool(self.trigger_require_chapters_var.get()),
         }
         self.preset_manager.save_preset(name, options, triggers)
         for job in self.processing_jobs:
@@ -10269,6 +10634,7 @@ class VideoProcessorApp:
                 active_preset_summaries.append(
                     f"'{p_name}' [fmt={p['options'].get('output_format')}, "
                     f"source_hdr_filter={trig.get('source_hdr_filter', 'any')!r}, "
+                    f"require_chapters={bool(trig.get('require_chapters', False))}, "
                     f"video_trigger={vt!r}, on_scan_subs={scan_s}, "
                     f"suffix_mode={s_mode!r}, suffix_filter={s_filter!r}, "
                     f"exclude={trig.get('exclude_suffix_filter')!r}]"
@@ -10291,6 +10657,12 @@ class VideoProcessorApp:
                 print(f"  [WARN] Unsaved GUI change detected on preset '{curr_gui_preset}': "
                       f"GUI source_hdr_filter is '{gui_hdr_filter}', but saved preset has "
                       f"'{saved_trig.get('source_hdr_filter', 'any')}'. Click 'Save Preset' to persist!")
+            if hasattr(self, 'trigger_require_chapters_var'):
+                gui_req_chap = bool(self.trigger_require_chapters_var.get())
+                if gui_req_chap != bool(saved_trig.get("require_chapters", False)):
+                    print(f"  [WARN] Unsaved GUI change detected on preset '{curr_gui_preset}': "
+                          f"GUI require_chapters is {gui_req_chap}, but saved preset has "
+                          f"{bool(saved_trig.get('require_chapters', False))}. Click 'Save Changes' to persist!")
         print("=" * 78)
 
         files_processed_count = 0
@@ -10329,6 +10701,8 @@ class VideoProcessorApp:
             else:
                 print(f"  [SUB-SUMMARY] 0 subtitles matched to '{video_basename}'.")
 
+            _video_chapters_checked = False
+            _video_has_chapters = False
             video_jobs_added = 0
             for preset_name in preset_names:
                 preset = self.preset_manager.get_preset(preset_name)
@@ -10362,6 +10736,16 @@ class VideoProcessorApp:
                     print(f"  [PRESET SKIP] '{preset_name}': source_hdr_filter is 'hdr_only', "
                           f"but '{os.path.basename(video_path)}' was detected as SDR.")
                     continue
+                if bool(triggers.get("require_chapters", False)):
+                    if not _video_chapters_checked:
+                        _chapters = get_video_chapters(video_path)
+                        _video_chapters_checked = True
+                        _video_has_chapters = len(_chapters) > 0
+                        print(f"  [DETECT] Chapters => {len(_chapters)} chapter marker(s) found")
+                    if not _video_has_chapters:
+                        print(f"  [PRESET SKIP] '{preset_name}': require_chapters=True, "
+                              f"but '{os.path.basename(video_path)}' has no chapter markers.")
+                        continue
                 is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
                 if is_hybrid_duo and not (video_basename.endswith("-top") or
                                           video_basename.endswith("_top") or
@@ -10397,17 +10781,19 @@ class VideoProcessorApp:
 
                 if video_trigger == "Always (Clean/Backup)":
                     print(f"  [PRESET MATCH] '{preset_name}': matched video_trigger='Always (Clean/Backup)' -> adding [No Subtitles] job.")
-                    self._create_job_entry(video_path, None, preset['options'],
-                                           preset_name, "[No Subtitles]")
-                    files_processed_count += 1
-                    video_jobs_added += 1
+                    if self._create_job_entry(video_path, None, preset['options'],
+                                              preset_name, "[No Subtitles]",
+                                              allow_auto_detect_subs=False):
+                        files_processed_count += 1
+                        video_jobs_added += 1
                 elif video_trigger == "Fallback (If No Subs)":
                     if not has_preset_subs:
                         print(f"  [PRESET MATCH] '{preset_name}': matched video_trigger='Fallback (If No Subs)' (0 subs) -> adding [No Subtitles] job.")
-                        self._create_job_entry(video_path, None, preset['options'],
-                                               preset_name, "[No Subtitles]")
-                        files_processed_count += 1
-                        video_jobs_added += 1
+                        if self._create_job_entry(video_path, None, preset['options'],
+                                                  preset_name, "[No Subtitles]",
+                                                  allow_auto_detect_subs=False):
+                            files_processed_count += 1
+                            video_jobs_added += 1
                     elif not on_scan_subs:
                         print(f"  [PRESET SKIP] '{preset_name}': video_trigger='Fallback (If No Subs)' and on_scan_subs=False, "
                               f"but video has {len(preset_detected_subs)} subtitle(s).")
@@ -10473,10 +10859,10 @@ class VideoProcessorApp:
                             if match:
                                 print(f"  [PRESET MATCH] '{preset_name}': subtitle {sub['display_tag']} "
                                       f"(suffix={sub['suffix']!r}) matched (mode={filter_mode!r}, filter={filter_suffix!r}).")
-                                self._create_job_entry(video_path, sub['path'], preset['options'],
-                                                       preset_name, sub['display_tag'])
-                                files_processed_count += 1
-                                video_jobs_added += 1
+                                if self._create_job_entry(video_path, sub['path'], preset['options'],
+                                                          preset_name, sub['display_tag']):
+                                    files_processed_count += 1
+                                    video_jobs_added += 1
                             else:
                                 print(f"  [SUB-SKIP] '{preset_name}': subtitle {sub['display_tag']} "
                                       f"(suffix={sub['suffix']!r}) skipped -> {reject_reason}")
@@ -10531,7 +10917,8 @@ class VideoProcessorApp:
                                        preset_name, preferred_sub["display_tag"])
             else:
                 self._create_job_entry(video_path, None, preset['options'],
-                                       preset_name, "[No Subtitles]")
+                                       preset_name, "[No Subtitles]",
+                                       allow_auto_detect_subs=False)
         self.update_status(f"Added {len(selected_indices)} jobs manually.")
 
     def remove_from_input_queue(self):
@@ -10560,12 +10947,12 @@ class VideoProcessorApp:
             del self.processing_jobs[index]
             self.job_listbox.delete(index)
 
-    def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag):
+    def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag, allow_auto_detect_subs=True):
         options = copy.deepcopy(options)
         orientation = options.get("orientation", DEFAULT_ORIENTATION)
         resolved_top = (self._resolve_to_top_sibling(video_path)
                         if orientation == "hybrid-duo (dual source)" else video_path)
-        if subtitle_path is None:
+        if subtitle_path is None and allow_auto_detect_subs:
             preset = self.preset_manager.get_preset(preset_name) if preset_name else None
             triggers = preset.get('triggers', {}) if preset else {}
             if triggers.get('auto_detect_subs'):
@@ -10587,24 +10974,10 @@ class VideoProcessorApp:
                 if preferred:
                     subtitle_path = preferred.get("path")
                     display_tag = preferred.get("display_tag", display_tag)
+
+        # Populate all hash-tracked per-job options BEFORE computing get_job_hash()
+        # so deduplication compares identical normalized states.
         if orientation == "hybrid-duo (dual source)":
-            new_job_hash = get_job_hash(options)
-            for existing_job in self.processing_jobs:
-                existing_path_resolved = self._resolve_to_top_sibling(existing_job.get("video_path"))
-                if existing_path_resolved == resolved_top:
-                    existing_job_hash = get_job_hash(existing_job.get("options"))
-                    # v8.61 FIX: also compare subtitle_path. Without it, a
-                    # hybrid-duo preset that matches two subtitles for the
-                    # same resolved source (e.g. the default .srt and its
-                    # -cn sibling) creates only the first job and silently
-                    # discards the rest as "duplicates". subtitle_path is
-                    # deliberately NOT part of get_job_hash, so it has to be
-                    # compared here.
-                    if (existing_job_hash == new_job_hash
-                            and existing_job.get("subtitle_path") == subtitle_path):
-                        print(f"[INFO] Skipping duplicate Hybrid Duo file for: "
-                              f"{os.path.basename(video_path)}")
-                        return
             video_path = resolved_top
             if not options.get("hybrid_top_path"):
                 options["hybrid_top_path"] = video_path
@@ -10630,18 +11003,6 @@ class VideoProcessorApp:
                         bot_path = bot_path_alt
                 if os.path.exists(bot_path):
                     options["hybrid_bottom_path"] = bot_path
-            try:
-                top_info = get_video_info(video_path)
-                bot_path = options.get("hybrid_bottom_path", "")
-                if bot_path and os.path.exists(bot_path):
-                    bot_info = get_video_info(bot_path)
-                    if top_info.get("color_transfer") != bot_info.get("color_transfer"):
-                        options["_duo_color_mismatch"] = True
-                        print(f"[WARN] Hybrid-duo color transfer mismatch: "
-                              f"top={top_info.get('color_transfer')}, "
-                              f"bottom={bot_info.get('color_transfer')}")
-            except Exception as e:
-                print(f"[WARN] Could not probe hybrid-duo pair: {e}")
 
         if subtitle_path:
             overrides = options.get("language_font_overrides", {})
@@ -10670,6 +11031,34 @@ class VideoProcessorApp:
             "display_tag": display_tag,
         }
         self._autofill_title_for_job(new_job, force=False)
+
+        new_job_hash = get_job_hash(options)
+        for existing_job in self.processing_jobs:
+            existing_orient = existing_job.get("options", {}).get("orientation", DEFAULT_ORIENTATION)
+            existing_vid = (self._resolve_to_top_sibling(existing_job.get("video_path"))
+                            if existing_orient == "hybrid-duo (dual source)"
+                            else existing_job.get("video_path"))
+            if (existing_vid == video_path
+                    and get_job_hash(existing_job.get("options", {})) == new_job_hash
+                    and existing_job.get("subtitle_path") == subtitle_path):
+                print(f"[INFO] Skipping duplicate job for: "
+                      f"{os.path.basename(video_path)} {display_tag} [{preset_name}]")
+                return False
+
+        if orientation == "hybrid-duo (dual source)":
+            try:
+                top_info = get_video_info(video_path)
+                bot_path = options.get("hybrid_bottom_path", "")
+                if bot_path and os.path.exists(bot_path):
+                    bot_info = get_video_info(bot_path)
+                    if top_info.get("color_transfer") != bot_info.get("color_transfer"):
+                        options["_duo_color_mismatch"] = True
+                        print(f"[WARN] Hybrid-duo color transfer mismatch: "
+                              f"top={top_info.get('color_transfer')}, "
+                              f"bottom={bot_info.get('color_transfer')}")
+            except Exception as e:
+                print(f"[WARN] Could not probe hybrid-duo pair: {e}")
+
         new_job["display_name"] = f"{os.path.basename(video_path)} {display_tag} [{preset_name}]"
         self.processing_jobs.append(new_job)
         self.job_listbox.insert(tk.END, new_job["display_name"])
@@ -10688,6 +11077,7 @@ class VideoProcessorApp:
         print(f"    -> [JOB CREATED] #{len(self.processing_jobs)}: \"{new_job['display_name']}\" | "
               f"fmt={options.get('output_format')} ({options.get('video_codec')}, {options.get('resolution')}) | "
               f"sub={_sub_label} | HDR->SDR LUT={_will_lut} | Embed HDR LUT={_will_embed}")
+        return True
 
     def _handle_listbox_empty_click(self, event, listbox):
         if listbox.size() > 0:
@@ -10749,6 +11139,9 @@ class VideoProcessorApp:
                     self.trigger_source_hdr_filter_var.set(
                         TRIGGER_SOURCE_HDR_FILTER_REVERSE.get(
                             _src_filter_val, TRIGGER_SOURCE_HDR_FILTER_ANY))
+                if hasattr(self, 'trigger_require_chapters_var'):
+                    self.trigger_require_chapters_var.set(
+                        bool(triggers.get("require_chapters", DEFAULT_TRIGGER_REQUIRE_CHAPTERS)))
         else:
             self.current_preset_var.set("")
             self.update_gui_from_job_options(selected_job)
@@ -10766,6 +11159,8 @@ class VideoProcessorApp:
                 self.trigger_exclude_suffix_var.set("")
             if hasattr(self, 'trigger_source_hdr_filter_var'):
                 self.trigger_source_hdr_filter_var.set(TRIGGER_SOURCE_HDR_FILTER_ANY)
+            if hasattr(self, 'trigger_require_chapters_var'):
+                self.trigger_require_chapters_var.set(False)
         self._suppress_subtitle_path_trace = True
         self.subtitle_path_var.set(selected_job.get('subtitle_path') or "")
         self._suppress_subtitle_path_trace = False
@@ -11894,31 +12289,43 @@ class VideoProcessorApp:
             left_aspect = options.get('hybrid_top_aspect')
             right_aspect = options.get('hybrid_bottom_aspect')
             info_r = info_bot if info_bot else info_top
+            is_left_adaptive = str(left_aspect).lower() == "adaptive"
+            is_right_adaptive = str(right_aspect).lower() == "adaptive"
             num_l, den_l = self._resolve_aspect_ratio(left_aspect, info_top, '16:9')
             left_w = (int(target_h * num_l / den_l) // 2) * 2
+            num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_r, '16:9')
+            right_w = (int(target_h * num_r / den_r) // 2) * 2
             if merged_aspect == "auto":
-                num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_r, '16:9')
-                right_w = (int(target_h * num_r / den_r) // 2) * 2
-            else:
-                right_w = max(2, target_w - left_w)
-                if left_w >= target_w:
-                    left_w = (target_w // 4) * 2
-                    right_w = target_w - left_w
+                return left_w, target_h, right_w, target_h
+            if is_left_adaptive or is_right_adaptive:
+                left_w, right_w = self._resolve_adaptive_span(
+                    target_w, left_w, right_w, is_left_adaptive, is_right_adaptive)
+                return left_w, target_h, right_w, target_h
+            right_w = max(2, target_w - left_w)
+            if left_w >= target_w:
+                left_w = (target_w // 4) * 2
+                right_w = target_w - left_w
             return left_w, target_h, right_w, target_h
         else:
             top_aspect = options.get('hybrid_top_aspect')
             bot_aspect = options.get('hybrid_bottom_aspect')
             info_b = info_bot if info_bot else info_top
+            is_top_adaptive = str(top_aspect).lower() == "adaptive"
+            is_bot_adaptive = str(bot_aspect).lower() == "adaptive"
             num_t, den_t = self._resolve_aspect_ratio(top_aspect, info_top, '16:9')
             top_h = (int(target_w * den_t / num_t) // 2) * 2
+            num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_b, '4:5')
+            bot_h = (int(target_w * den_b / num_b) // 2) * 2
             if merged_aspect == "auto":
-                num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_b, '4:5')
-                bot_h = (int(target_w * den_b / num_b) // 2) * 2
-            else:
-                bot_h = max(2, target_h - top_h)
-                if top_h >= target_h:
-                    top_h = (target_h // 4) * 2
-                    bot_h = target_h - top_h
+                return target_w, top_h, target_w, bot_h
+            if is_top_adaptive or is_bot_adaptive:
+                top_h, bot_h = self._resolve_adaptive_span(
+                    target_h, top_h, bot_h, is_top_adaptive, is_bot_adaptive)
+                return target_w, top_h, target_w, bot_h
+            bot_h = max(2, target_h - top_h)
+            if top_h >= target_h:
+                top_h = (target_h // 4) * 2
+                bot_h = target_h - top_h
             return target_w, top_h, target_w, bot_h
 
     def build_ffmpeg_command_and_run(self, job, orientation):
@@ -12061,7 +12468,9 @@ class VideoProcessorApp:
                 safe_ch_title = re.sub(r'[\\/*?:"<>|]', "", ch_title).strip().replace(" ", "_")
                 extra_hash_data = f"{job['video_path']}_{i}_{safe_ch_title}"
                 ch_job_hash = get_job_hash(ch_options, extra_hash_data)
-                base_chunk = f"{base_name_without_hash}_{i + 1:02d}_{safe_ch_title}_{ch_job_hash}"
+                base_chunk = _build_safe_output_base_chunk(
+                    output_dir, base_name_without_hash, ch_job_hash, ch_options,
+                    chapter_idx=i, safe_ch_title=safe_ch_title)
                 out_ext = ".mkv" if _should_embed_hdr_lut(ch_options) else ".mp4"
                 ch_output_file = os.path.join(output_dir, f"{base_chunk}{out_ext}")
                 ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
@@ -12086,7 +12495,8 @@ class VideoProcessorApp:
             else:
                 extra_hash_data = f"{job['video_path']}"
                 ch_job_hash = get_job_hash(ch_options, extra_hash_data)
-                base_chunk = f"{base_name_without_hash}_{ch_job_hash}"
+                base_chunk = _build_safe_output_base_chunk(
+                    output_dir, base_name_without_hash, ch_job_hash, ch_options)
                 out_ext = ".mkv" if _should_embed_hdr_lut(ch_options) else ".mp4"
                 ch_output_file = os.path.join(output_dir, f"{base_chunk}{out_ext}")
                 ch_srt_file = os.path.join(output_dir, f"{base_chunk}.srt")
@@ -12801,7 +13211,11 @@ class VideoProcessorApp:
         return ""
 
     def _resolve_aspect_ratio(self, aspect_val, video_info, default_ratio="16:9"):
-        if str(aspect_val).lower() == "original" and video_info:
+        # "adaptive" only has a meaning when there is a fixed canvas to
+        # fill (see _compute_hybrid_layout). Everywhere else -- auto canvas,
+        # superres prepass, target resolution math -- it falls back to the
+        # source's native aspect ratio, same as "original".
+        if str(aspect_val).lower() in ("original", "adaptive") and video_info:
             w = video_info.get("width", 16); h = video_info.get("height", 9)
             return w, h
         try:

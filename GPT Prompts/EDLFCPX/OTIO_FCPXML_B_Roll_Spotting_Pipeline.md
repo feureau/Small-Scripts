@@ -11,7 +11,7 @@ I have an edited talking-head / video-essay assembly in a project folder (`<proj
 Confirm or default cleanly to:
 1. **Track Layout**: **Option B (Recommended Default)** — Checkerboard B-roll on `V1/A1` & `V2/A2` (`enabled=true`) with Camera A-roll tucked on `V3` (`enabled=false`) for optional 1-click cut-ins. *(Alternative Option A: Camera on `V1`, B-roll checkerboard on `V2`–`V3`.)*
 2. **B-Roll Audio (`A1`/`A2`)**: Preserve **original channel layout (`5.1` `[1..6]`, `Stereo` `[1..2]`, or `Mono` `[1]`)** at `0 dB` (unmuted) for Fairlight mixing / punch-ins (or mute if explicitly requested).
-3. **Talking-Head Audio Routing (`A5`/`A6`)**: For multi-track OBS `.mkv` recordings (6×5.1 streams = 36 channels), include **both `A5` (`Ch 25`, OBS Track 5) and `A6` (`Ch 31`, OBS Track 6)** unless a single channel is requested.
+3. **Talking-Head Audio Routing (`A5`/`A6`)**: For multi-track OBS `.mkv` recordings (6×5.1 streams = 36 channels), route **OBS Track 5 (`Ch 25`)** to `A5`, and populate **`A6` (`Ch 31`, OBS Track 6)** only when `0:a:5` has active signal (`max_volume > -50.0 dB`) or is explicitly requested (otherwise keep `Audio 6` as an empty `"Mono"` spacer track).
 4. **Coverage Density**: `100%` continuous checkerboard B-roll from frame `0` to `total_edited_frames` (`0` black frames).
 
 ---
@@ -34,7 +34,7 @@ Confirm or default cleanly to:
      - `audio_channels` (`6` $\rightarrow$ `5.1`, `2` $\rightarrow$ `Stereo`, `1` $\rightarrow$ `Mono`; `36` total for 6-stream OBS `.mkv` where Track 5 = stream `4` / Ch `25`, Track 6 = stream `5` / Ch `31`).
 
 3. **Index All B-Roll Subtitles / Transcripts (`03_Transcripts/broll_transcript_index.json`)**:
-   - Parse every `.srt` (or structured episode `.txt`) matched 1:1 to each B-roll media file (`episode_code -> {filename, path, dur_ms, total_frames, src_fps, channels, subtitles: [{start_tc, end_tc, start_ms, end_ms, text}]}`).
+   - Recursively discover and parse every English `.srt` (or structured episode `.txt`) matched 1:1 to each B-roll media file by episode code (`SxxExx`) or title—handling mixed season layouts (`srt/English/* - English.srt`, `srt/eng/* - eng.srt`, and `Specials/` aliases such as `S01E08` $\rightarrow$ `S00E03`) (`episode_code -> {filename, path, dur_ms, total_frames, src_fps, channels, subtitles: [{start_tc, end_tc, start_ms, end_ms, text}]}`).
    - Filter or normalize formatting tags (`<i>`, `{\an8}`, etc.) when searching, while keeping exact `start_tc`, `start_ms`, and `end_ms`.
 
 ---
@@ -98,6 +98,16 @@ Generate the editorial B-roll plan (`03_Transcripts/broll_plan.json`) and 5-colu
 - Declare `<channelcount>36</channelcount>` on 6×5.1 OBS MKVs (`ntsc="TRUE"`), and exact `ep_channels` on `24.000` MP4s (`ntsc="FALSE"`).
 - **Bottom-of-Track Rule**: Always append `<enabled>TRUE|FALSE</enabled>` and `<locked>FALSE</locked>` at the **END** of every `<track>` (after all `<clipitem>` elements) so Resolve respects `V1/V2=TRUE` and `V3=FALSE`.
 - Emit `<sourcetrack><trackindex>25</trackindex></sourcetrack>` on `A5` and `<trackindex>31</trackindex>` on `A6`, linked `1:1` with `V3`. *(State explicitly in your final handoff that Resolve flattens `.xml` audio tracks, whereas `.otio` preserves true `5.1` + `Ch 25`/`31`.)*
+
+#### 3. Optional: Assemble Directly into an Open Template Timeline (DaVinci Resolve MCP)
+When the user explicitly asks to assemble the `.otio` into an **already-open template timeline** (e.g., `24p HDR` / `dolbyatmos5.1.2` templates) via the DaVinci Resolve MCP:
+- Import source media into a clean `02_Footage` bin (or import the `.otio` into a temp bin, move its clips into `02_Footage`, and delete the temp timeline/bin).
+- **10s MCP Timeout Batching Guard**: Call `mp.AppendToTimeline(...)` and `item.SetSourceAudioChannelMapping(...)` **per track** (or in chunks of `<= 200` items per `run_script_unsafe` call) so each call finishes well under the 10-second MCP timeout.
+- Apply exact channel mappings after appending:
+  - `A1`/`A2` (`5.1`): `'{"embedded_audio_channels":6,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[1,2,3,4,5,6],"mute":false,"type":"5.1"}}}'`
+  - `A5` (`Ch 25`): `'{"embedded_audio_channels":36,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[25],"mute":false,"type":"mono"}}}'`
+  - `A6` (`Ch 31`, if active): `'{"embedded_audio_channels":36,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[31],"mute":false,"type":"mono"}}}'`
+- Disable `V3` (`tl.SetTrackEnable("video", 3, False)`) to keep Camera A-Roll tucked above B-roll.
 
 ---
 

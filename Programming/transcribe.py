@@ -53,6 +53,7 @@ import warnings
 import numpy as np
 import av  # PyAV
 import re
+import json
 import traceback
 from datetime import datetime
 from collections import Counter
@@ -621,6 +622,256 @@ def apply_compression_limiter(input_path: str, output_dir: str = None, **kwargs)
         print(f"   ⚠️ Compression Failed: {e}")
         log_event(f"apply_compression_limiter error input={input_path} error={e}\n{traceback.format_exc()}")
         return None
+
+
+def _resolve_prompt_arg(val: str | None) -> str | None:
+    """Resolve inline prompt/hotwords text, or read UTF-8 file content when prefixed with '@'."""
+    if not val:
+        return None
+    s = val.strip()
+    if s.startswith("@") and len(s) > 1:
+        fpath = s[1:].strip()
+        if os.path.isfile(fpath):
+            with open(fpath, "r", encoding="utf-8") as f:
+                text = " ".join(f.read().split())
+            return text or None
+    return s or None
+
+
+def normalize_audio_peak_linear(input_path: str, output_dir: str = None, target_peak_db: float = -3.0) -> str | None:
+    """Boost quiet audio linearly to target_peak_db without dynamic compression."""
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-v", "info", "-i", input_path, "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        m = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", res.stderr or "")
+        if not m:
+            return None
+        max_vol = float(m.group(1))
+        gain_db = float(target_peak_db) - max_vol
+        if gain_db < 1.0:
+            log_event(f"normalize_audio_peak_linear skipped max_vol={max_vol} target={target_peak_db}")
+            return None
+        print(f"   🔊 Linear Peak Gain: {gain_db:+.1f} dB (max_volume {max_vol:.1f} -> {target_peak_db:.1f} dBFS)...")
+        wd = output_dir if output_dir else os.path.dirname(input_path)
+        out_wav = os.path.join(wd, f"{os.path.splitext(os.path.basename(input_path))[0]}_peaknorm.wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", input_path, "-af", f"volume={gain_db:.2f}dB", out_wav],
+            check=True
+        )
+        log_event(f"normalize_audio_peak_linear success input={input_path} output={out_wav} gain_db={gain_db:.2f}")
+        return out_wav
+    except Exception as e:
+        print(f"   ⚠️ Linear Gain Normalization Failed: {e}")
+        log_event(f"normalize_audio_peak_linear error input={input_path} error={e}\n{traceback.format_exc()}")
+        return None
+
+
+def apply_whisperx_alignment(audio_path: str, data: dict, language_code: str = None) -> tuple[dict, bool]:
+    """Refine word-level timestamps using WhisperX wav2vec2 phoneme forced alignment."""
+    raw_segments = data.get("segments", [])
+    if not raw_segments:
+        return data, False
+
+    lang = (language_code or data.get("language") or "en").strip().lower()
+    # Map ISO/dialect codes if needed; whisperx expects short codes like 'en', 'id', 'zh'.
+    if "-" in lang:
+        lang = lang.split("-", 1)[0]
+
+    align_input = []
+    orig_meta = []
+    for seg in raw_segments:
+        txt = (seg.get("text") or "").strip()
+        s = float(seg.get("start", 0.0))
+        e = float(seg.get("end", s))
+        if not txt or e <= s:
+            continue
+        align_input.append({"text": txt, "start": s, "end": e})
+        orig_meta.append({
+            "avg_logprob": seg.get("avg_logprob", -1.2),
+            "no_speech_prob": seg.get("no_speech_prob", 0.0),
+            "compression_ratio": seg.get("compression_ratio", 1.5),
+            "orig_words": seg.get("words", []),
+        })
+
+    if not align_input:
+        return data, False
+
+    try:
+        import whisperx
+    except Exception as e:
+        print(f"   ⚠️ WhisperX not available ({e}); keeping native word timestamps.")
+        log_event(f"apply_whisperx_alignment unavailable err={e}")
+        return data, False
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    align_model = None
+    prev_cudnn = torch.backends.cudnn.enabled
+    try:
+        print(f"   🎯 Running WhisperX phoneme forced alignment ({lang}, {device})...")
+        audio_arr = whisperx.load_audio(audio_path)
+        try:
+            # Avoid PyTorch cu130 vs injected nvidia-cudnn-cu12 sublibrary mismatch in Conv1D layers
+            torch.backends.cudnn.enabled = False
+            align_model, metadata = whisperx.load_align_model(language_code=lang, device=device)
+            aligned_raw = whisperx.align(
+                align_input, align_model, metadata, audio_arr, device, return_char_alignments=False
+            )
+        except Exception as cuda_err:
+            if device == "cuda":
+                print(f"   ⚠️ WhisperX CUDA alignment fallback to CPU ({cuda_err})...")
+                log_event(f"apply_whisperx_alignment cuda fallback err={cuda_err}")
+                if align_model is not None:
+                    del align_model
+                    align_model = None
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                device = "cpu"
+                align_model, metadata = whisperx.load_align_model(language_code=lang, device="cpu")
+                aligned_raw = whisperx.align(
+                    align_input, align_model, metadata, audio_arr, "cpu", return_char_alignments=False
+                )
+            else:
+                raise
+        finally:
+            torch.backends.cudnn.enabled = prev_cudnn
+        aligned_segs = aligned_raw.get("segments", []) if isinstance(aligned_raw, dict) else []
+        if not aligned_segs:
+            print("   ⚠️ WhisperX returned 0 aligned segments; keeping original timestamps.")
+            return data, False
+
+        no_space_langs = {"ja", "zh", "yue", "ko", "th"}
+        norm_segments = []
+        total_words = 0
+        for idx, seg in enumerate(aligned_segs):
+            seg_start = float(seg.get("start", 0.0))
+            seg_end = float(seg.get("end", seg_start))
+            seg_text = (seg.get("text") or "").strip()
+            if not seg_text:
+                continue
+
+            raw_words = seg.get("words") or []
+            clean_words = []
+            prev_t = seg_start
+            n_words = max(1, len(raw_words))
+            for wi, w in enumerate(raw_words):
+                wtxt = str(w.get("word", "") or "").strip()
+                if not wtxt:
+                    continue
+                ws = w.get("start")
+                we = w.get("end")
+                if ws is None or (isinstance(ws, float) and np.isnan(ws)):
+                    ws = prev_t
+                if we is None or (isinstance(we, float) and np.isnan(we)):
+                    we = min(seg_end, max(float(ws), seg_start + (seg_end - seg_start) * ((wi + 1) / n_words)))
+                ws_f = float(ws)
+                we_f = max(ws_f, float(we))
+                prev_t = we_f
+
+                # resegment_by_phrase merges tokens lacking leading whitespace for space-delimited scripts.
+                stored_word = wtxt if lang in no_space_langs else f" {wtxt}"
+                w_entry = {"start": ws_f, "end": we_f, "word": stored_word}
+                if "score" in w and w["score"] is not None and not (isinstance(w["score"], float) and np.isnan(w["score"])):
+                    w_entry["probability"] = float(w["score"])
+                clean_words.append(w_entry)
+                total_words += 1
+
+            meta = orig_meta[min(idx, len(orig_meta) - 1)] if orig_meta else {}
+            norm_segments.append({
+                "start": seg_start,
+                "end": max(seg_start, seg_end),
+                "text": seg_text,
+                "avg_logprob": float(seg.get("avg_logprob", meta.get("avg_logprob", -1.2))),
+                "no_speech_prob": float(meta.get("no_speech_prob", 0.0)),
+                "compression_ratio": float(meta.get("compression_ratio", 1.5)),
+                "words": clean_words,
+            })
+
+        out = dict(data)
+        out["segments"] = norm_segments
+        print(f"      ↳ Phoneme-aligned {total_words} words across {len(norm_segments)} segments.")
+        log_event(f"apply_whisperx_alignment success lang={lang} segments={len(norm_segments)} words={total_words}")
+        return out, True
+    except Exception as e:
+        print(f"   ⚠️ WhisperX alignment failed ({e}); keeping native timestamps.")
+        log_event(f"apply_whisperx_alignment error err={e}\n{traceback.format_exc()}")
+        return data, False
+    finally:
+        if align_model is not None:
+            del align_model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
+def export_word_timestamps_json(
+    word_source_data: dict,
+    segmented_data: dict,
+    json_path: str,
+    source_file: str,
+    audio_source: str,
+    model_name: str,
+    aligned_with_whisperx: bool = False,
+) -> bool:
+    """Write word-by-word timestamps plus phrase-level segments to JSON."""
+    def _serialize_word(w: dict, fallback_start: float) -> dict | None:
+        wt = (w.get("word") or "").strip()
+        if not wt:
+            return None
+        ws = round(float(w.get("start", fallback_start)), 3)
+        we = round(max(ws, float(w.get("end", ws))), 3)
+        item = {"word": wt, "start": ws, "end": we}
+        prob = w.get("probability", w.get("score"))
+        if prob is not None:
+            item["probability"] = round(float(prob), 4)
+        return item
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
+        flat_words = []
+        for s_idx, seg in enumerate(word_source_data.get("segments", [])):
+            seg_s = float(seg.get("start", 0.0))
+            for w in seg.get("words", []):
+                entry = _serialize_word(w, seg_s)
+                if not entry:
+                    continue
+                flat_words.append({"index": len(flat_words), **entry, "segment_index": s_idx})
+
+        out_segments = []
+        for idx, seg in enumerate(segmented_data.get("segments", []), 1):
+            seg_s = float(seg.get("start", 0.0))
+            seg_words = [
+                item for item in (_serialize_word(w, seg_s) for w in seg.get("words", []))
+                if item is not None
+            ]
+            out_segments.append({
+                "id": idx,
+                "start": round(seg_s, 3),
+                "end": round(float(seg.get("end", 0.0)), 3),
+                "text": (seg.get("text") or "").strip(),
+                "words": seg_words,
+            })
+
+        payload = {
+            "source_file": os.path.abspath(source_file),
+            "audio_source": os.path.abspath(audio_source) if audio_source else None,
+            "model": model_name,
+            "language": word_source_data.get("language") or None,
+            "duration": round(float(word_source_data.get("duration") or 0.0), 3),
+            "aligned_with_whisperx": bool(aligned_with_whisperx),
+            "word_count": len(flat_words),
+            "words": flat_words,
+            "segments": out_segments,
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        log_event(f"export_word_timestamps_json success path={json_path} words={len(flat_words)} segments={len(out_segments)}")
+        return True
+    except Exception as e:
+        print(f"   ⚠️ Failed writing word JSON ({json_path}): {e}")
+        log_event(f"export_word_timestamps_json error path={json_path} err={e}\n{traceback.format_exc()}")
+        return False
 
 # --- VAD ---
 def load_vad_model():
@@ -1822,6 +2073,16 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             transcription_source = new_source
             temp_files.append(new_source)
 
+    norm_peak_target = getattr(args, "normalize_peak", None)
+    if norm_peak_target is not None and os.path.isfile(transcription_source):
+        norm_wav = normalize_audio_peak_linear(transcription_source, args.output_dir, target_peak_db=norm_peak_target)
+        if norm_wav and os.path.exists(norm_wav):
+            transcription_source = norm_wav
+            temp_files.append(norm_wav)
+
+    resolved_initial_prompt = _resolve_prompt_arg(getattr(args, "initial_prompt", None))
+    resolved_hotwords = _resolve_prompt_arg(getattr(args, "hotwords", None))
+
     cleaned_data = None
 
     def _normalize_qwen_result(result):
@@ -1916,8 +2177,8 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             min_silence_duration_ms=args.whisper_vad_min_silence_ms,
             threshold=args.whisper_vad_threshold
         )
-        segments, info = transcription_model.transcribe(
-            transcription_source, language=args.lang, task=args.task,
+        tx_kwargs = dict(
+            language=args.lang, task=args.task,
             vad_filter=vad_filt,
             vad_parameters=vad_params,
             beam_size=args.beam_size, best_of=args.best_of, temperature=args.temperature,
@@ -1926,7 +2187,16 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             repetition_penalty=1.1,
             no_repeat_ngram_size=4
         )
-        res = {"segments": []}
+        if resolved_initial_prompt:
+            tx_kwargs["initial_prompt"] = resolved_initial_prompt
+        if resolved_hotwords:
+            tx_kwargs["hotwords"] = resolved_hotwords
+        segments, info = transcription_model.transcribe(transcription_source, **tx_kwargs)
+        res = {
+            "segments": [],
+            "language": getattr(info, "language", args.lang),
+            "duration": float(getattr(info, "duration", 0.0) or 0.0),
+        }
         with tqdm(total=round(info.duration, 2), unit='s', desc="   Whisper", dynamic_ncols=True, leave=False) as pbar:
             for seg in segments:
                 words_list = []
@@ -1936,7 +2206,11 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                         w_end = min(max(w.end, seg.start), seg.end)
                         if w_end < w_start:
                             w_end = w_start
-                        words_list.append({"start": w_start, "end": w_end, "word": w.word})
+                        w_dict = {"start": w_start, "end": w_end, "word": w.word}
+                        prob = getattr(w, "probability", None)
+                        if prob is not None:
+                            w_dict["probability"] = float(prob)
+                        words_list.append(w_dict)
                 res["segments"].append({
                     "start": seg.start,
                     "end": seg.end,
@@ -2081,6 +2355,9 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
 
     if not cleaned_data: return False, "Transcription failed"
 
+    detected_lang = cleaned_data.get("language") or args.lang
+    detected_dur = float(cleaned_data.get("duration") or 0.0) or get_audio_duration_seconds(transcription_source)
+
     if args.rescue_missed and not args.vad_filter:
         print("   >> Rescue pass skipped (primary VAD is already off; a second pass would be identical).")
     elif args.rescue_missed:
@@ -2098,7 +2375,15 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             print(f"      ⚠️ Rescue pass failed: {e}")
             log_event(f"rescue pass error={e}\n{traceback.format_exc()}")
 
-    if args.use_vad:
+    whisperx_aligned = False
+    if getattr(args, "whisperx_align", False):
+        cleaned_data, whisperx_aligned = apply_whisperx_alignment(
+            transcription_source,
+            cleaned_data,
+            language_code=detected_lang
+        )
+
+    if args.use_vad and not whisperx_aligned:
         print("   🔍 Aligning with Silero VAD...")
         true_regions = detect_true_speech_regions(
             transcription_source,
@@ -2113,6 +2398,15 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
                     w["start"], w["end"] = snap_to_vad(w["start"], w["end"], true_regions)
                     if w["start"] != old_s: c += 1
             print(f"      ↳ Aligned {c} words.")
+
+    word_source_data = {
+        "language": detected_lang,
+        "duration": detected_dur,
+        "segments": [
+            {**seg, "words": [dict(w) for w in seg.get("words", [])]}
+            for seg in cleaned_data.get("segments", [])
+        ],
+    }
 
     # Re-segment so each SRT entry is one phrase/sentence
     cleaned_data = resegment_by_phrase(cleaned_data, pause_split_s=args.phrase_pause_split_s)
@@ -2134,6 +2428,26 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             cleaned_data,
             getattr(args, 'hf_token', None)
         )
+
+    word_json_arg = getattr(args, "word_json", None)
+    if word_json_arg:
+        out_dir = args.output_dir if args.output_dir else os.path.dirname(file_path)
+        if word_json_arg == "__AUTO__":
+            json_path = os.path.join(out_dir, f"{base_name}_words.json")
+        elif os.path.isdir(word_json_arg) or word_json_arg.endswith(("/", "\\")):
+            json_path = os.path.join(word_json_arg, f"{base_name}_words.json")
+        else:
+            json_path = word_json_arg
+        if export_word_timestamps_json(
+            word_source_data,
+            cleaned_data,
+            json_path,
+            source_file=file_path,
+            audio_source=transcription_source,
+            model_name=resolve_model_alias(args.model),
+            aligned_with_whisperx=whisperx_aligned,
+        ):
+            print(f"   🧩 Word JSON: {json_path}")
 
     success = convert_data_to_srt(cleaned_data, final_srt_path)
     log_event(f"run_transcription finished success={success} output={final_srt_path} final_segments={len(cleaned_data.get('segments', []))}")
@@ -2205,6 +2519,11 @@ def main():
     parser.add_argument("--cl_ratio", type=float, default=2.0)
     parser.add_argument("--demucs_model", type=str, default="htdemucs_ft")
     parser.add_argument("--demucs_shifts", type=int, default=2)
+    parser.add_argument("--initial-prompt", type=str, default=None, help="Initial prompt text (or @path/to/file.txt) for Whisper proper nouns/style")
+    parser.add_argument("--hotwords", type=str, default=None, help="Boosted hotwords string (or @path/to/file.txt) for faster-whisper")
+    parser.add_argument("--word-json", nargs="?", const="__AUTO__", default=None, help="Export word-level timestamps JSON (auto path if omitted, or specify .json file/dir)")
+    parser.add_argument("--whisperx-align", action=argparse.BooleanOptionalAction, default=False, help="Refine word timestamps via WhisperX wav2vec2 phoneme forced alignment")
+    parser.add_argument("--normalize-peak", type=float, default=None, help="Linear peak gain target in dBFS (e.g. -3.0) before transcription without dynamic compression")
     parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=False, help="Write detailed per-run debug log")
 
     parser.add_argument("-d", "--diarize", action="store_true", help="Enable speaker diarization via pyannote.audio")

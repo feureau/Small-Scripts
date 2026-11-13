@@ -71,7 +71,7 @@ Video Track 1 (`V1`) contains the assembled talking-head / monologue edit (with 
          "iiurlwidth": 1600,
      }
      ```
-   - Save all downloaded images directly into **`<resolve_proj_dir>/img/<descriptive_slug>.jpg`** (or `.png`)—NEVER solely in the workspace or temp directory so the DaVinci Resolve project never goes `"Media Offline"`.
+   - Save all downloaded images directly into **`<resolve_proj_dir>/img/<alpha_slug>.jpg`** (or `.png`) using **strictly digit-free alphabetic-sort slugs** (e.g., `aa_subject_name`, `ab_other_subject` — **NEVER include numeric digits `[0-9]` anywhere in image filenames**, or Resolve's sequence detector may import them as `Type: Video` image sequences instead of `Still`)—NEVER solely in the workspace or temp directory so the DaVinci Resolve project never goes `"Media Offline"`.
 
 3. **Mandatory Pre-Import Image Validation Gate**:
    - Before importing into DaVinci Resolve, validate every file in `<resolve_proj_dir>/img/`:
@@ -86,7 +86,7 @@ Video Track 1 (`V1`) contains the assembled talking-head / monologue edit (with 
 1. **Idempotent Media Pool Bin `"B-Roll"`**:
    - Check the root folder of the Media Pool (`root = mp.GetRootFolder()`) for an existing subfolder named **`"B-Roll"`** (`for f in root.GetSubFolderList(): ...`).
    - Only call `mp.AddSubFolder(root, "B-Roll")` if `"B-Roll"` does not already exist (since `AddSubFolder` creates duplicate bins if called blindly).
-   - Set `"B-Roll"` as the active folder (`mp.SetCurrentFolder(broll_bin)`) and import the verified images from `<resolve_proj_dir>/img/` via `mp.ImportMedia([...])` (avoiding re-importing files already present in `"B-Roll"`).
+   - Set `"B-Roll"` as the active folder (`mp.SetCurrentFolder(broll_bin)`) and import the verified images from `<resolve_proj_dir>/img/` via `mp.ImportMedia([...])` (avoiding re-importing files already present in `"B-Roll"`). Assert right after import that every imported image returns `img_mpi.GetClipProperty("Type") == "Still"` (if Resolve ever returns `"Video"`, stop and verify digit-free filenames and Media Storage *Frame Display Mode $\rightarrow$ Individual*).
 
 2. **Still Image Duration Handling & `V7` Insertion**:
    - In DaVinci Resolve, imported still images have a finite default clip frame count (`int(img_mpi.GetClipProperty("Frames"))`, typically `120 frames` / `5 seconds`).
@@ -149,8 +149,9 @@ Video Track 1 (`V1`) contains the assembled talking-head / monologue edit (with 
        - **Landscape Kept as PiP (`aspect >= 1.30` when used for a quick conversational entity tag rather than a full-screen beat)**:
          - Frame as a left card (`ZoomX = 0.36–0.42`, `Pan = round(-520 * (tl_w / 1920.0))`, `Tilt = 40 to 100`).
 
-3. **Smooth Entry/Exit Transitions**:
-   - Where appropriate, apply a subtle `Cross Dissolve` transition (`6–8 frames`) on the start/end of `V7` image items via `item.AddTransition({"type": "Cross Dissolve", "category": "simple", "position": "start", "duration": 6})`.
+3. **Subtle Animation (`Dynamic Zoom`) & Per-Project Consistent Transitions**:
+   - Enable eased Ken Burns motion (`item.SetProperty("DynamicZoomEnabled", True)`, `item.SetProperty("DynamicZoomEase", 2)`) on `V7` image overlays *(using `Scaling = resolve.SCALE_FIT` first so full-screen & PiP photos never crop)*.
+   - Design **one cohesive editorial transition look per project** (`10` frames, `category="simple"`, `position="start"/"right"` and `position="end"/"left"`) and apply it consistently across all `V7` items by framing (`pip` vs `fullscreen`) using Resolve's verified transparent-safe built-ins: **`Blur Dissolve`**, **`Edge Wipe`**, **`Split`**, **`Non-Additive Dissolve`**, **`Center Wipe`**, or **`Cross Dissolve`**. *(When authoring live inside Resolve scripts, `"Pop Wobble"` IN + `"Crash Zoom"` OUT via `category="fusion"` are also valid, whereas `Pop Wobble Reverse` only animates incoming `MainInput2` and stays static on `Clip -> Empty Gap` exits; avoid `Push`, `Clock Wipe`, and mirror-tiled `Slide Up`/`Slide Down`/`Zoom In`.)*
 
 4. **Visual Verification Gate (`ExportCurrentFrameAsStill`)**:
    - Move the playhead (`tl.SetCurrentTimecode(...)`) to the midpoint of each inserted `V7` image.

@@ -6,7 +6,7 @@ I have raw talking-head / video-essay recordings in a project folder (`<proj_dir
 
 ### EXECUTION MODES
 
-- **Mode A (Monologue Assembly Only):** Prunes dead air, false starts, stumbles, and retakes against `* - monologue.txt` and outputs **`04_Timelines/Assembly/<stem>.otio` (Primary)** + `<stem>.edl` + `<stem>.xml` (`V1` camera + `A5`/`A6` isolated OBS vocals) + `03_Transcripts/<stem>_edited_timeline.srt`.
+- **Mode A (Video + Audio Monologue Assembly Only — Default):** Prunes dead air, false starts, stumbles, and retakes against `* - monologue.txt` and outputs **`04_Timelines/Assembly/<stem>.otio` (Primary)** + `<stem>.edl` + `<stem>.xml` (`V1` camera + `A5`/`A6` isolated OBS vocals, **zero image overlays**) + `03_Transcripts/<stem>_edited_timeline.srt`. *(Image overlays are sourced and compiled separately as an images-only `.otio` via `OTIO_Image_Sourcing_and_Insertion.md`.)*
 - **Mode B (Monologue + Checkerboard B-Roll Master):** Runs Mode A, generates a verified 2-tier high-density B-roll spotting sheet (`04_Timelines/B-Roll/<stem>_broll_spotting_sheet.md`) from the B-roll library transcripts, and compiles a standalone one-click **`04_Timelines/B-Roll/<stem>_broll.otio` (Primary)** + companion `<stem>_broll.xml` with 100% continuous `5.1` checkerboard B-roll on `V1/A1` & `V2/A2`, camera tucked on `V3` (disabled), and isolated OBS vocals on `A5`/`A6`.
 
 ---
@@ -26,8 +26,9 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
 │   ├── Assembly/         # <stem>.otio, <stem>.edl, <stem>.xml, edit_report.md
 │   ├── B-Roll/           # <stem>_broll.otio, <stem>_broll.xml, <stem>_broll_spotting_sheet.md
 │   └── Markers/          # <stem>_chapter_markers.edl
-├── 05_GFX_Audio/         # Thumbnails, title cards, SFX, music stems
-└── 06_Renders/           # Final exported MP4s (longform + vertical Shorts)
+├── 05_GFX_Audio/         # Motion graphics, title cards, SFX, music stems
+├── 06_Renders/           # Final exported MP4s (longform + vertical Shorts)
+└── 07_Thumbnails/        # YouTube 16:9 A/B variants & Shorts 9:16 cover thumbnails
 ```
 
 > **Never create or write files into an `o/` subfolder.** *(When opening an already-populated legacy project whose raw clips live in `<proj_dir>/v/` or root, organize into `01_Docs/` + `02_Footage/Camera/` + `03_Transcripts/` first—unless the user explicitly asks to keep existing paths unchanged.)*
@@ -64,7 +65,7 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
      ```bash
      ffmpeg -y -i "<clip.mkv>" -map 0:a:<stream_idx> -t 60 -af astats=metadata=0:reset=0 -f null -
      ```
-   - Determine which OBS Track(s) the user wants as the active vocal source (defaulting to mapping **OBS Track 5 $\rightarrow$ Channel `25` on `A5`**, and/or **OBS Track 6 $\rightarrow$ Channel `31` on `A6`**, unless the user specifies a solo track/channel override).
+   - Determine which OBS Track(s) have active vocal signal: map **OBS Track 5 $\rightarrow$ Channel `25` on `A5`** by default, and populate **OBS Track 6 $\rightarrow$ Channel `31` on `A6`** **only if `0:a:5` has active signal (`max_volume > -50.0 dB`) or is explicitly requested** (otherwise leave `Audio 6` as an empty `"Mono"` spacer track).
 
 4. **(Mode B Only) Index B-Roll Media Library**:
    - Probe every candidate B-roll `.mp4`/`.mkv` with `ffprobe` (`duration`, `total_frames`, `width`, `height`, `r_frame_rate`, `audio_channels` — e.g. `6` for 5.1 vs `2` for stereo).
@@ -87,6 +88,7 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
 
    - Compute a per-frame RMS dB envelope aligned to `src_fps` (`24000/1001` or `24.0`).
    - Threshold active speech frames (`rms_db > -45.0` dBFS, calibrated cleanly above the clip's noise floor), bridge intra-clause micro-dips `<= 8 frames` (`~0.33s`), and extract discrete speech chunks (`dur > 4 frames`).
+   - **Windows CUDA DLL Injection (`transcribe.py` pattern)**: Before importing `faster_whisper` on Windows, register `torch/lib` and `site-packages/nvidia/*/bin` via `os.add_dll_directory()` and `PATH` (matching `f:\GitHub\Small-Scripts\Programming\transcribe.py`, or invoke `transcribe.py` directly for full-file SRTs) so `cublas64_12.dll` resolves on CUDA; fall back to `device="cpu", compute_type="int8"` only if CUDA is genuinely unavailable.
    - Transcribe **each RMS speech chunk individually** with `faster-whisper` (`base.en` or better, `word_timestamps=True`, `vad_filter=False`), adding `0.25s` zero-silence padding before/after each chunk in memory and mapping returned word timestamps back to exact source frame indices (`round(sec * src_fps)`).
    - **Short-Word Blip Guard**: Scan gaps (`< 40 frames`) between adjacent chunks for `2–5 frame` high-energy spikes (`> -35 dBFS`, such as crisp lead-ins like *"Still,"* or *"So,"*) and merge/preserve them so short words are never dropped.
    - Cache the complete word/segment timestamps to `<proj_dir>/03_Transcripts/whisper_words_cache.json`.
@@ -144,7 +146,7 @@ Follow the 2-Tier High-Density Spotting Rules:
        - `Video 1` (`"enabled": true`): Camera A-roll (`events[]`).
        - `Audio 1`–`Audio 4`: Empty `"Mono"` spacer tracks (`"children": []`).
        - `Audio 5` (`"Audio Type": "Mono"`, `"enabled": true`): OBS Track 5 (`Source Track ID: 4, Source Channel ID: 0` $\rightarrow$ **`Ch 25`**), linked `1:1` with `Video 1`.
-       - `Audio 6` (`"Audio Type": "Mono"`, `"enabled": true`): OBS Track 6 (`Source Track ID: 5, Source Channel ID: 0` $\rightarrow$ **`Ch 31`**), linked `1:1` with `Video 1`. *(Emit BOTH `A5` and `A6` by default unless only one track is requested.)*
+       - `Audio 6` (`"Audio Type": "Mono"`, `"enabled": true`): OBS Track 6 (`Source Track ID: 5, Source Channel ID: 0` $\rightarrow$ **`Ch 31`**), linked `1:1` with `Video 1` when `0:a:5` has active signal (`max_volume > -50.0 dB`) or is requested; otherwise keep as an empty `"Mono"` spacer track (`"children": []`).
      - **Mode B Track Layout (`<stem>_broll.otio`: `V1–V3`, `A1–A6`)**:
        - `Video 1` (`"enabled": true`) / `Audio 1` (`"enabled": true`, `"Audio Type": "5.1"`): Odd B-Roll cuts (`1, 3, 5...`), `Channels`: `[{"Source Channel ID": c, "Source Track ID": 0} for c in range(6)]` for 5.1 sources (or `[0, 1]` + `"Audio Type": "Stereo"` / `[0]` + `"Mono"` matching `ffprobe`).
        - `Video 2` (`"enabled": true`) / `Audio 2` (`"enabled": true`, `"Audio Type": "5.1"`): Even B-Roll cuts (`2, 4, 6...`), alternating checkerboard with **100% continuous `0..total_edited_frames` coverage** (`0` black frames), unmuted (`0 dB`).
