@@ -9,7 +9,7 @@ Read ./YouTube_Packaging_Common.md from disk. It owns mode handling, source fide
 ## Inputs and mode
 
 - Required: approved five-block output from ./SEO_yt_Long.md or ./SEO_yt_Short.md, or equivalently explicit approved title, description, hashtags, and tags.
-- Accept mode=long or mode=short, exact target stem, and the shared packaging brief if present.
+- Accept mode=long or mode=short, exact target stem, and the shared packaging brief if present. Also accept batch=true (or batch Shorts array mode) when serializing multiple chapter-split Shorts into one `yt.py`-compatible `<base>-shorts.json` or `main.json` array.
 - Resolve mode from the approved source/brief and actual intended upload. Do not infer it from filename alone.
 - Preserve the selected/default title. For five-block input this is Title 1; it must match JSON title exactly after removing only the code fence.
 - If approved copy is missing, invoke the appropriate copy prompt within the user's authorized scope, or identify the missing input. Do not make up approval, silently write a second version, or guess the mode where it materially changes the output.
@@ -18,7 +18,7 @@ Read ./YouTube_Packaging_Common.md from disk. It owns mode handling, source fide
 
 ## Exact schema
 
-Return one object with exactly these keys and types:
+For a single upload (`<base>-youtube.json`), return one object with exactly these keys and types:
 
 {
   "title": "approved selected title",
@@ -27,7 +27,19 @@ Return one object with exactly these keys and types:
   "tags": []
 }
 
-title and description are strings. hashtags and tags are arrays of strings. Empty arrays are valid where the approved input has none. Do not add mode, alternatives, filename, thumbnail, source notes, or invented uploader settings.
+title and description are strings. hashtags and tags are arrays of strings. Empty arrays are valid where the approved input has none. Do not add mode, alternatives, filename, thumbnail, source notes, or invented uploader settings to a single-upload `<base>-youtube.json`.
+
+For **batch chapter-split Shorts** (`<base>-shorts.json` or `main.json`), return one UTF-8 JSON array (`[ {...}, ... ]`) in chapter order where each element contains exactly these keys and types:
+
+{
+  "filename": "<NN>_<Chapter_Title_Stem>",
+  "title": "approved selected Short title",
+  "description": "approved Short description without its terminal hashtag line",
+  "hashtags": [],
+  "tags": []
+}
+
+`"filename"` must be a unique non-empty string matching the chapter stem (for `yt.py`'s `match_main_json` lookup). Each element must obey all `mode=short` rules.
 
 ## Lossless conversion
 
@@ -46,10 +58,11 @@ title and description are strings. hashtags and tags are arrays of strings. Empt
 - Apply the shared title, assembled-description UTF-8 byte limit, tag-count/per-tag sanitizer rules, and platform effective tag-length calculation.
 - Confirm no duplicate terminal hashtag line in description, and no duplicate hashtags in the array.
 - Validate title and description against the relevant source copy prompt without duplicating its creative rules here.
-- For file workflows, require the exact target stem and <base>-youtube.json filename, including for Shorts. Do not write alternative metadata JSONs beside the video; the uploader's fuzzy matching can choose the wrong one.
+- For single-file workflows, require the exact target stem and `<base>-youtube.json` filename, including for rendered Shorts. Do not write a second single-object `{title, description, ...}` JSON beside the video; the uploader's fuzzy matching can choose the wrong one.
+- For batch chapter-split Shorts workflows, require a JSON array saved as `<base>-shorts.json` (matching the source video stem) or `main.json` (`yt.py` auto-discovery alias), verify unique non-empty `"filename"` values across all elements, and validate every element against all `mode=short` schema and limit checks.
 - Inspect the current uploader integration if requested. Generating a tags array or thumbnail image does not prove the upload path sends or applies it.
 - Do not upload, change visibility, schedule, or alter a video from this serialization task.
 
 ## Output
 
-Return exactly one valid JSON object, starting with { and ending with }, with no Markdown fences or surrounding prose. When saving, write UTF-8 JSON to <base>-youtube.json. Record QA separately if the surrounding workflow requests it.
+For single uploads, return exactly one valid JSON object, starting with `{` and ending with `}`, with no Markdown fences or surrounding prose; when saving, write UTF-8 JSON to `<base>-youtube.json`. For batch chapter-split Shorts, return or save one valid UTF-8 JSON array (`[` ... `]`) to `<base>-shorts.json` (or `main.json` when requested). Record QA separately if the surrounding workflow requests it.

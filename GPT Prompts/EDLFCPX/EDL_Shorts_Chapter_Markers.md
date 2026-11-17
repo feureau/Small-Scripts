@@ -72,7 +72,7 @@ Follow these strict formatting rules:
    - Range markers *(only if requested)*: `|D:<dur_frames>` with `[tc_in, tc_in + dur_frames]`.
 3. **Metadata Line (`|C:` / `|M:` / `|D:`)**:
    - **`|C:`**: Valid Resolve color prefix (default `ResolveColorBlue`; others: `ResolveColorCyan`, `ResolveColorGreen`, `ResolveColorYellow`, `ResolveColorRed`, `ResolveColorPink`, `ResolveColorPurple`, `ResolveColorFuchsia`, `ResolveColorRose`, `ResolveColorLavender`, `ResolveColorSky`, `ResolveColorMint`, `ResolveColorLemon`, `ResolveColorSand`, `ResolveColorCocoa`, `ResolveColorCream`).
-   - **`|M:` Payload**: Pack `<Title> (<dur>s, <IN>-<OUT>) -- Hook: "<opening cue>" -> Close: "<closing cue>"` cleanly on **one physical unbroken line**.
+   - **`|M:` Payload**: Pack `<Title> (<dur>s) — Hook: <opening cue> — Close: <closing cue>` cleanly on **one physical unbroken line** (using `—` as the pipe-free delimiter so it imports cleanly in EDLs and splits cleanly into `name` + `note` on ` — Hook: ` if later applied via `tl.AddMarker()`).
    - **Pipe & Newline Sanitization Guard**: **NEVER leave literal newlines (`\n`/`\r`) or literal `|` pipe characters inside the `|M:` payload** (replace any `|` inside text with `/` or `--`), because Resolve's marker EDL parser splits tokens exclusively on `|` (`|C:`, `|M:`, `|D:`).
    - **`|D:`**: Integer frame duration (`1` for point chapter markers).
 

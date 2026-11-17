@@ -89,8 +89,9 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
    - Compute a per-frame RMS dB envelope aligned to `src_fps` (`24000/1001` or `24.0`).
    - Threshold active speech frames (`rms_db > -45.0` dBFS, calibrated cleanly above the clip's noise floor), bridge intra-clause micro-dips `<= 8 frames` (`~0.33s`), and extract discrete speech chunks (`dur > 4 frames`).
    - **Windows CUDA DLL Injection (`transcribe.py` pattern)**: Before importing `faster_whisper` on Windows, register `torch/lib` and `site-packages/nvidia/*/bin` via `os.add_dll_directory()` and `PATH` (matching `f:\GitHub\Small-Scripts\Programming\transcribe.py`, or invoke `transcribe.py` directly for full-file SRTs) so `cublas64_12.dll` resolves on CUDA; fall back to `device="cpu", compute_type="int8"` only if CUDA is genuinely unavailable.
-   - Transcribe **each RMS speech chunk individually** with `faster-whisper` (`base.en` or better, `word_timestamps=True`, `vad_filter=False`), adding `0.25s` zero-silence padding before/after each chunk in memory and mapping returned word timestamps back to exact source frame indices (`round(sec * src_fps)`).
+   - Transcribe **each RMS speech chunk individually** with `faster-whisper` (`base.en` or better, `word_timestamps=True`, `vad_filter=True`, `vad_parameters={"min_silence_duration_ms": 300}`), adding `0.25s` zero-silence padding before/after each chunk in memory and mapping returned word timestamps back to exact source frame indices (`round(sec * src_fps)`).
    - **Short-Word Blip Guard**: Scan gaps (`< 40 frames`) between adjacent chunks for `2–5 frame` high-energy spikes (`> -35 dBFS`, such as crisp lead-ins like *"Still,"* or *"So,"*) and merge/preserve them so short words are never dropped.
+   - **Ambient-Noise Hallucination Guard**: Reject any Whisper segment where `no_speech_prob > 0.60`, `avg_logprob < -1.0`, `compression_ratio > 2.2`, non-ASCII characters exceed `25%` (when `language="en"`), any 1–3 word n-gram repeats `>= 3` times consecutively, or a short chunk (`<= 4` words) has mean word probability `< 0.55` (and only append words to the word cache *after* passing this guard).
    - Cache the complete word/segment timestamps to `<proj_dir>/03_Transcripts/whisper_words_cache.json`.
 
 ---
@@ -100,27 +101,31 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
 1. **Retake & False-Start Pruning (Chronological Winner Rule)**:
    - Align all transcribed RMS chunks across chronological recordings against `* - monologue.txt` (and cross-check any sidecar `.srt` if helpful).
    - Whenever a sentence or phrase is attempted multiple times (aborted earlier `.mkv` takes or mid-take restarts after a stumble), discard all earlier partial/stumbled attempts and keep **ONLY the final, complete, fluent delivery**.
+   - **Proper-Noun / Phonetic Prefix Retake Guard**: Before finalizing `cutlist.json`, compare adjacent kept chunks within a `<= 4`-chunk window using normalized word/consonant prefixes (to catch Whisper phonetic drift on proper nouns, e.g., *Vassago* $\rightarrow$ *Vasago/Visago/the sago*, *Stolas* $\rightarrow$ *Solas/Dolis/Stoleness*) so aborted partial starts (`similarity >= 0.70` against a longer subsequent chunk) are reliably pruned.
    - If a chunk contains a clean first half followed by a mid-chunk false start (gap `<= 8 frames`), perform a surgical word-level split using the chunk's word timestamps so the clean half is preserved and the stumble is cut.
    - Keep any fluent unscripted improv or outro if requested (or clarify with the user).
 
-2. **Snappy Essay Pacing & Breath Padding**:
-   - Coalesce adjacent kept chunks when raw silence between them is `<= 10 frames` (`~0.42s`) so natural comma pauses remain seamless.
-   - Pad every kept speech segment with **`3 frames` pre-roll** and **`6 frames` post-roll** (clamped to adjacent speech/silence midpoints so clips never overlap or clip trailing fricatives/plosives).
+2. **Snappy Essay Pacing, Coalescing & Silence-Bounded Padding**:
+   - Coalesce adjacent kept chunks when raw silence between them is `<= 32–48 frames` (`~1.3–2.0s`, provided no dropped retake/stumble sits between them) so natural phrase pauses remain seamless and micro-cuts are eliminated.
+   - Pad every kept speech segment with **`8 frames` pre-roll** and **`12 frames` post-roll** (clamped to adjacent speech/silence midpoints so clips never overlap or clip trailing words, clauses, or plosives).
+   - *(Optional Audio Audit)*: Before locking Mode A, cross-check boundary words against the original recording (`orig` vs `edited` audio) to ensure zero clipped clause endings and zero leftover mouth clicks or stumbles.
    - Output:
      - Human-readable cut report (`<proj_dir>/04_Timelines/Assembly/edit_report.md`) listing every kept event (`src_in..src_out`, `rec_in..rec_out`, text) and every dropped retake/stumble, plus `<proj_dir>/03_Transcripts/<stem>_cutlist.json`.
      - **`[MY EDIT SRT]`** (`<proj_dir>/03_Transcripts/<stem>_edited_timeline.srt`) formatted cleanly at timeline `00:00:00,000 --> end` using target timeline FPS (`24.000 fps`).
 
 ---
 
-### PHASE 3 (MODE B ONLY): HIGH-DENSITY 2-TIER B-ROLL SPOTTING & VERIFICATION
+### PHASE 3 (MODE B ONLY): LLM-FIRST 2-TIER B-ROLL SPOTTING & ZERO-SHIFT VERIFICATION
 
-Follow the 2-Tier High-Density Spotting Rules:
+Follow the LLM-First High-Density Spotting Rules (matching `OTIO_FCPXML_B_Roll_Spotting_Pipeline.md`):
 1. **5-to-12-Second High-Density Pacing**: Cover **100% of `[MY EDIT SRT]`** from `00:00:00,000` to the final frame with zero skipped sections. Sub-split any kept speech block longer than `~11–12s` at a natural internal clause/word boundary so every B-roll shot stays snappy (`~4–11s`).
-2. **2-Tier Visual Matching**:
-   - **Tier 1 (Literal Receipts):** Map explicit episode/event/quote callouts directly to the exact source episode and subtitle timestamp.
-   - **Tier 2 (Thematic B-Roll):** Pair commentary, analogies, and punchlines with fitting character reactions, atmospheric shots, or juxtaposition parallels.
-3. **Zero-Hallucination Anchor Assertion**:
-   - **NEVER guess or invent source timestamps.** Programmatically verify that every `anchor_srt_tc` exists verbatim in the indexed source episode `.srt`, apply `1–2s` lead-in handles, set `src_out = src_in + rec_dur` (`100%` speed), and clamp within `[0, ep.total_frames]`.
+2. **LLM-First 2-Tier Scene Selection (NO Programmatic Picking or Shifting)**:
+   - **NEVER select B-roll scenes programmatically** (no keyword/TF-IDF/regex matching, no blind `±900s` overlap-shifting loops, and no fallback substitutions).
+   - Export `slots.json` and `episodes/<ep_code>.txt` (`[MM:SS] subtitle` logs), and spot in parallel LLM batches (~`35–50` slots/batch) mapping **Tier 1 (Literal Receipts)** and **Tier 2 (Thematic B-Roll)** directly from the episode subtitle logs.
+   - **Zero-Image Quota Guard**: Do **NOT** generate or inspect frame contact sheets / verification images unless explicitly requested.
+3. **Strict Cross-Batch Overlap Audit & Zero-Shift Compilation**:
+   - Audit merged picks for same-episode overlaps (`> 0.05s`) and out-of-bounds cues, then hand-pick non-overlapping LLM replacements from free subtitle windows (`picks_<proj>_overrides.json`).
+   - Compile with **100% LLM coverage, `0` overlaps, `0` OOB, `0` shifting, `0` fallback**, and set `src_out = src_in + rec_dur` (`100%` speed).
 4. **Deliverable**: Write the 5-column Markdown spotting sheet (`<proj_dir>/04_Timelines/B-Roll/<stem>_broll_spotting_sheet.md`) with tags `[Pure B-Roll]`, `[Visual Receipt]`, `[Optional Audio Punch-In]`, and `[Split-Screen / Juxtaposition]`.
 
 ---

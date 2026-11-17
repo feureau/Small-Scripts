@@ -566,6 +566,7 @@ import glob
 import textwrap
 import hashlib
 from collections import Counter, deque
+from fractions import Fraction
 import signal
 
 # -------------------------- Configuration / Constants --------------------------
@@ -804,6 +805,17 @@ DEFAULT_HYBRID_COMPOSITE_OFFSET_Y = "0.0"
 DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS = "frac"
 DEFAULT_HORIZONTAL_ASPECT = "16:9"
 DEFAULT_VERTICAL_ASPECT = "4:5"
+HYBRID_ASPECT_PRESETS = [
+    ("16:9", "16:9"),
+    ("9:16", "9:16"),
+    ("4:5", "4:5"),
+    ("4:3", "4:3"),
+    ("1:1", "1:1"),
+    ("2.39:1", "2.39:1"),
+    ("Original", "original"),
+    ("Adaptive", "adaptive"),
+]
+HYBRID_ASPECT_PRESET_VALUES = {val for _, val in HYBRID_ASPECT_PRESETS}
 DEFAULT_VIDEO_OFFSET_X = "0"
 DEFAULT_VIDEO_OFFSET_Y = "0"
 DEFAULT_VIDEO_OFFSET_UNITS = "px"
@@ -812,6 +824,9 @@ DEFAULT_FRUC_FPS = "60"
 DEFAULT_BURN_SUBTITLES = True
 DEFAULT_RENDER_BY_CHAPTERS = False
 DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER = False
+DEFAULT_SPLIT_JSON_BY_CHAPTER = True
+DEFAULT_CHAPTER_JSON_SUFFIX = "-shorts"
+DEFAULT_CHAPTER_METADATA_JSON_PATH = ""
 DEFAULT_USE_SHARPENING = True
 DEFAULT_FFMPEG_DENOISE_VULKAN = False
 DEFAULT_ADD_BLANK_END = False
@@ -942,6 +957,8 @@ DEFAULT_SUBFOLDER_BY_SUBTITLE = False
 DEFAULT_GROUP_BY_PRESET = False
 DEFAULT_GROUP_BY_VIDEO = False
 DEFAULT_GROUP_BY_RESOLUTION = False
+DEFAULT_GROUP_BY_DR = True
+DEFAULT_GROUP_BY_LANGUAGE = True
 DEFAULT_SUBFOLDER_OVERRIDE = ""
 DEFAULT_SINGLE_OUTPUT_DIR_NAME = "Output"
 
@@ -1738,7 +1755,7 @@ def find_title_json_file(video_path, subtitle_path, json_suffix, remove_hashtags
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            raw_title = data.get('title', '')
+            raw_title = data.get('title', '') if isinstance(data, dict) else ''
             if raw_title:
                 return json_path, sanitize_title(raw_title, remove_hashtags=remove_hashtags,
                                                  keep_emoji=keep_emoji)
@@ -1746,6 +1763,145 @@ def find_title_json_file(video_path, subtitle_path, json_suffix, remove_hashtags
             debug_print(f"Failed to parse JSON title file {json_path}: {e}")
             continue
     return None, None
+
+
+def find_chapter_metadata_json_file(video_path, subtitle_path=None, explicit_path="",
+                                    json_suffix=DEFAULT_CHAPTER_JSON_SUFFIX, top_sibling_path=""):
+    """Locate a chapter metadata JSON file via explicit path or companion suffix (default '-shorts')."""
+    explicit = (explicit_path or "").strip()
+    if explicit and os.path.exists(explicit):
+        return explicit
+    sfx = (json_suffix or "").strip()
+    candidate_bases = []
+    for p in (top_sibling_path, video_path):
+        if p:
+            base = os.path.splitext(p)[0]
+            candidate_bases.append(f"{base}{sfx}" if sfx else base)
+    if subtitle_path and not str(subtitle_path).startswith("embedded:"):
+        sub_base = os.path.splitext(subtitle_path)[0]
+        candidate_bases.append(f"{sub_base}{sfx}" if sfx else sub_base)
+    seen = set()
+    for base in candidate_bases:
+        cand = f"{base}.json"
+        if cand not in seen:
+            seen.add(cand)
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
+def load_chapter_metadata_json(json_path):
+    """Load chapter metadata JSON from disk, returning None on missing or invalid JSON."""
+    if not json_path or not os.path.exists(json_path):
+        return None
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        debug_print(f"Failed to parse chapter metadata JSON {json_path}: {e}")
+        return None
+
+
+def _normalize_chapter_match_key(text):
+    """Normalize a chapter title or entry filename for fuzzy matching."""
+    s = (text or "").strip().lower()
+    s = os.path.splitext(s)[0]
+    s = re.sub(r'\(\s*\d+(?:\.\d+)?s(?:,[^)]*)?\)\s*$', '', s).strip()
+    s = re.sub(r'^\d+[_\-\s]+', '', s)
+    s = re.sub(r'[^a-z0-9]+', '_', s).strip('_')
+    return s
+
+
+def resolve_chapter_metadata_entry(metadata, chapter_idx, chapter):
+    """Match a chapter object against loaded chapter metadata (list, wrapped dict, or keyed dict)."""
+    if metadata is None:
+        return None
+    ch_title = (chapter.get("title") or "").strip() if isinstance(chapter, dict) else ""
+    ch_norm = _normalize_chapter_match_key(ch_title)
+
+    items = None
+    if isinstance(metadata, list):
+        items = metadata
+    elif isinstance(metadata, dict):
+        for key in ("chapters", "shorts", "segments"):
+            if isinstance(metadata.get(key), list):
+                items = metadata[key]
+                break
+        if items is None:
+            for k in (ch_title, str(chapter_idx + 1), str(chapter_idx)):
+                if k and isinstance(metadata.get(k), dict):
+                    return dict(metadata[k])
+            for k, v in metadata.items():
+                if ch_norm and isinstance(v, dict) and _normalize_chapter_match_key(k) == ch_norm:
+                    return dict(v)
+            return None
+
+    if not items:
+        return None
+
+    # 1. Exact or normalized filename / title match
+    if ch_norm:
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            for field in ("filename", "chapter_title", "title"):
+                val = entry.get(field)
+                if val and _normalize_chapter_match_key(str(val)) == ch_norm:
+                    return dict(entry)
+
+    # 2. Explicit index or leading NN_ prefix match
+    target_1based = chapter_idx + 1
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("index") == chapter_idx or entry.get("chapter_index") == target_1based:
+            return dict(entry)
+        fname = str(entry.get("filename") or "")
+        m = re.match(r'^(\d+)[_\-\s]', fname)
+        if m and int(m.group(1)) == target_1based:
+            return dict(entry)
+
+    # 3. Positional fallback
+    if 0 <= chapter_idx < len(items) and isinstance(items[chapter_idx], dict):
+        return dict(items[chapter_idx])
+    return None
+
+
+def _parse_test_chapter_indices(spec_str, total_chapters):
+    """Parse 1-based chapter spec (e.g. ''/'all' -> all, '2' -> [1], '1, 3, 5-7' -> [0, 2, 4, 5, 6])."""
+    if total_chapters <= 0:
+        return []
+    s = (spec_str or "").strip().lower()
+    if not s or s in ("all", "*"):
+        return list(range(total_chapters))
+    indices = []
+    seen = set()
+    for part in s.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            bounds = token.split("-", 1)
+            try:
+                start_1 = int(bounds[0].strip())
+                end_1 = int(bounds[1].strip())
+                step = 1 if end_1 >= start_1 else -1
+                for ch_num in range(start_1, end_1 + step, step):
+                    idx = ch_num - 1
+                    if 0 <= idx < total_chapters and idx not in seen:
+                        seen.add(idx)
+                        indices.append(idx)
+            except ValueError:
+                continue
+        else:
+            try:
+                idx = int(token) - 1
+                if 0 <= idx < total_chapters and idx not in seen:
+                    seen.add(idx)
+                    indices.append(idx)
+            except ValueError:
+                continue
+    return indices if indices else [0]
 
 
 def smart_wrap_text(text, limit):
@@ -3913,6 +4069,8 @@ class WorkflowPresetManager:
             "orientation": DEFAULT_ORIENTATION,
             "render_by_chapters": DEFAULT_RENDER_BY_CHAPTERS,
             "split_subtitles_by_chapter": DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER,
+            "split_json_by_chapter": DEFAULT_SPLIT_JSON_BY_CHAPTER,
+            "chapter_json_suffix": DEFAULT_CHAPTER_JSON_SUFFIX,
             "max_size_mb": DEFAULT_MAX_SIZE_MB,
             "max_duration": DEFAULT_MAX_DURATION,
             "add_blank_end": DEFAULT_ADD_BLANK_END,
@@ -3977,6 +4135,8 @@ class WorkflowPresetManager:
             "group_by_preset": DEFAULT_GROUP_BY_PRESET,
             "group_by_video": DEFAULT_GROUP_BY_VIDEO,
             "group_by_resolution": DEFAULT_GROUP_BY_RESOLUTION,
+            "group_by_dr": DEFAULT_GROUP_BY_DR,
+            "group_by_language": DEFAULT_GROUP_BY_LANGUAGE,
             "subfolder_override": DEFAULT_SUBFOLDER_OVERRIDE,
             "normalize_audio": DEFAULT_NORMALIZE_AUDIO,
             "use_dynaudnorm": DEFAULT_USE_DYNAUDNORM,
@@ -4352,6 +4512,10 @@ class VideoProcessorApp:
         self.trigger_suffix_var = tk.StringVar(value="")
         self.trigger_exclude_suffix_enable_var = tk.BooleanVar(value=False)
         self.trigger_exclude_suffix_var = tk.StringVar(value="")
+        self.trigger_video_exclude_enable_var = tk.BooleanVar(value=False)
+        self.trigger_video_exclude_var = tk.StringVar(value="")
+        self.trigger_duo_top_suffix_var = tk.StringVar(value="")
+        self.trigger_duo_bot_suffix_var = tk.StringVar(value="")
         self.trigger_source_hdr_filter_var = tk.StringVar(value=TRIGGER_SOURCE_HDR_FILTER_ANY)
         self.trigger_require_chapters_var = tk.BooleanVar(value=DEFAULT_TRIGGER_REQUIRE_CHAPTERS)
         self.output_suffix_override_var = tk.StringVar(value="")
@@ -4521,10 +4685,21 @@ class VideoProcessorApp:
         self.group_by_preset_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_PRESET)
         self.group_by_video_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_VIDEO)
         self.group_by_resolution_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_RESOLUTION)
+        self.group_by_dr_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_DR)
+        self.group_by_language_var = tk.BooleanVar(value=DEFAULT_GROUP_BY_LANGUAGE)
         self.subfolder_override_var = tk.StringVar(value=DEFAULT_SUBFOLDER_OVERRIDE)
         self.subfolder_override_var.trace_add('write', lambda *args: self._update_selected_jobs('subfolder_override'))
         self.render_by_chapters_var = tk.BooleanVar(value=DEFAULT_RENDER_BY_CHAPTERS)
         self.split_subtitles_by_chapter_var = tk.BooleanVar(value=DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER)
+        self.split_json_by_chapter_var = tk.BooleanVar(value=DEFAULT_SPLIT_JSON_BY_CHAPTER)
+        self.chapter_json_suffix_var = tk.StringVar(value=DEFAULT_CHAPTER_JSON_SUFFIX)
+        self.chapter_json_suffix_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('chapter_json_suffix'))
+        self.chapter_metadata_json_path_var = tk.StringVar(value=DEFAULT_CHAPTER_METADATA_JSON_PATH)
+        self.chapter_metadata_json_path_var.trace_add(
+            'write', lambda *args: self._update_selected_jobs('chapter_metadata_json_path'))
+        self.test_all_chapters_var = tk.BooleanVar(value=False)
+        self.test_chapters_spec_var = tk.StringVar(value="")
         self.orientation_var = tk.StringVar(value=DEFAULT_ORIENTATION)
         self.aspect_mode_var = tk.StringVar(value=DEFAULT_ASPECT_MODE)
         self.aspect_blur_var = tk.BooleanVar(value=False)
@@ -4794,6 +4969,8 @@ class VideoProcessorApp:
             'write', lambda *args: self._update_selected_jobs(
                 'hybrid_block_offset_units'))
         self.hybrid_top_aspect_var = tk.StringVar(value="16:9")
+        self.hybrid_top_aspect_choice_var = tk.StringVar(value="16:9")
+        self.hybrid_top_custom_aspect_var = tk.StringVar(value="2.35:1")
         self.hybrid_top_mode_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_MODE)
         self.hybrid_top_offset_x_var = tk.StringVar(value=DEFAULT_HYBRID_TOP_OFFSET_X)
         self.hybrid_top_offset_x_var.trace_add(
@@ -4810,6 +4987,8 @@ class VideoProcessorApp:
         self.hybrid_top_path_var = tk.StringVar(value="")
         self.hybrid_top_path_var.trace_add('write', lambda *args: self._update_selected_jobs('hybrid_top_path'))
         self.hybrid_bottom_aspect_var = tk.StringVar(value="4:5")
+        self.hybrid_bottom_aspect_choice_var = tk.StringVar(value="4:5")
+        self.hybrid_bottom_custom_aspect_var = tk.StringVar(value="2.35:1")
         self.hybrid_bottom_mode_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_MODE)
         self.hybrid_bottom_offset_x_var = tk.StringVar(value=DEFAULT_HYBRID_BOTTOM_OFFSET_X)
         self.hybrid_bottom_offset_x_var.trace_add(
@@ -5564,6 +5743,16 @@ class VideoProcessorApp:
                                                variable=self.group_by_preset_var,
                                                command=lambda: self._update_selected_jobs("group_by_preset"))
         self.cb_group_preset.pack(side=tk.LEFT)
+        sf_row1b = ttk.Frame(subfolder_group)
+        sf_row1b.pack(fill=tk.X, pady=(2, 2))
+        self.cb_group_dr = ttk.Checkbutton(sf_row1b, text="Also Group by DR (HDR/SDR)",
+                                           variable=self.group_by_dr_var,
+                                           command=lambda: self._update_selected_jobs("group_by_dr"))
+        self.cb_group_dr.pack(side=tk.LEFT, padx=(0, 15))
+        self.cb_group_language = ttk.Checkbutton(sf_row1b, text="Also Group by Language",
+                                                 variable=self.group_by_language_var,
+                                                 command=lambda: self._update_selected_jobs("group_by_language"))
+        self.cb_group_language.pack(side=tk.LEFT)
         sf_row2 = ttk.Frame(subfolder_group)
         sf_row2.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(sf_row2, text="Subfolder Override:").pack(side=tk.LEFT, padx=(0, 5))
@@ -5583,6 +5772,54 @@ class VideoProcessorApp:
                                         variable=self.split_subtitles_by_chapter_var,
                                         command=lambda: self._update_selected_jobs('split_subtitles_by_chapter'))
         cb_split_subs.pack(anchor="w", padx=20, pady=(2, 0))
+        cb_split_json = ttk.Checkbutton(split_group, text="Export Metadata JSON chunks per split",
+                                        variable=self.split_json_by_chapter_var,
+                                        command=lambda: self._update_selected_jobs('split_json_by_chapter'))
+        cb_split_json.pack(anchor="w", padx=20, pady=(2, 2))
+        json_meta_row = ttk.Frame(split_group)
+        json_meta_row.pack(fill=tk.X, padx=20, pady=(2, 0))
+        ttk.Label(json_meta_row, text="JSON Suffix:").pack(side=tk.LEFT, padx=(0, 4))
+        ch_sfx_entry = ttk.Entry(json_meta_row, textvariable=self.chapter_json_suffix_var, width=10)
+        ch_sfx_entry.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(ch_sfx_entry, "Auto-detect chapter metadata JSON named <video><suffix>.json (default: -shorts)")
+        ttk.Label(json_meta_row, text="Metadata JSON:").pack(side=tk.LEFT, padx=(0, 4))
+        ch_json_entry = ttk.Entry(json_meta_row, textvariable=self.chapter_metadata_json_path_var)
+        ch_json_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ToolTip(ch_json_entry, "Optional explicit JSON file overriding auto-detected <video>-shorts.json")
+        ttk.Button(json_meta_row, text="Browse...", width=9,
+                   command=self._browse_chapter_metadata_json).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(json_meta_row, text="Clear", width=6,
+                   command=lambda: self.chapter_metadata_json_path_var.set("")).pack(side=tk.LEFT, padx=(4, 0))
+        test_ch_row = ttk.Frame(split_group)
+        test_ch_row.pack(fill=tk.X, padx=20, pady=(4, 0))
+        cb_test_ch = ttk.Checkbutton(
+            test_ch_row,
+            text="Test Render: All / Specific Chapters (unchecked = Chapter 1 only):",
+            variable=self.test_all_chapters_var,
+        )
+        cb_test_ch.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(
+            cb_test_ch,
+            "Unchecked (default): Test Render (5s) only tests Chapter 1.\n"
+            "Checked: tests ALL chapters (if box is blank) or specific 1-based chapters (e.g. 2, 1,3,5, or 2-4).",
+        )
+        test_ch_entry = ttk.Entry(test_ch_row, textvariable=self.test_chapters_spec_var, width=14)
+        test_ch_entry.pack(side=tk.LEFT)
+        test_ch_entry.bind("<KeyRelease>", lambda _e: self._on_test_chapters_spec_edit())
+        ToolTip(test_ch_entry, "Leave blank for ALL chapters, or enter 1-based chapters/ranges (e.g. 2 or 1,3,5 or 2-4)")
+        ttk.Label(test_ch_row, text="(blank = all, or e.g. 2, 1,3, 2-4)").pack(side=tk.LEFT, padx=(6, 0))
+
+    def _on_test_chapters_spec_edit(self):
+        if (self.test_chapters_spec_var.get() or "").strip():
+            self.test_all_chapters_var.set(True)
+
+    def _browse_chapter_metadata_json(self):
+        path = filedialog.askopenfilename(
+            title="Select Chapter Metadata JSON",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self.chapter_metadata_json_path_var.set(path)
 
     def _on_subfolder_mode_selected(self, event=None):
         self._update_subfolder_modifier_states()
@@ -5873,6 +6110,28 @@ class VideoProcessorApp:
                 "the source video contains chapter markers.\n"
                 "If checked and the video has no chapters, the preset is skipped even if "
                 "Video or Subtitle triggers match.")
+        row2_1c = ttk.Frame(row2)
+        row2_1c.pack(fill=tk.X, pady=2)
+        cb_video_exclude = ttk.Checkbutton(row2_1c, text="Exclude Video Suffix:",
+                                           variable=self.trigger_video_exclude_enable_var)
+        cb_video_exclude.pack(side=tk.LEFT, padx=(0, 2))
+        entry_video_exclude_widget = ttk.Entry(row2_1c, textvariable=self.trigger_video_exclude_var, width=18)
+        entry_video_exclude_widget.pack(side=tk.LEFT, padx=2)
+        ToolTip(entry_video_exclude_widget,
+                "Comma-separated video filename suffixes to skip for this preset (e.g. -top, -bot, _Replay).\n"
+                "Applies only to the video filename, independent of subtitle suffix filters.")
+        ttk.Label(row2_1c, text="Duo Top/Left:").pack(side=tk.LEFT, padx=(10, 2))
+        entry_duo_top = ttk.Entry(row2_1c, textvariable=self.trigger_duo_top_suffix_var, width=14)
+        entry_duo_top.pack(side=tk.LEFT, padx=2)
+        ttk.Label(row2_1c, text="Bot/Right:").pack(side=tk.LEFT, padx=(6, 2))
+        entry_duo_bot = ttk.Entry(row2_1c, textvariable=self.trigger_duo_bot_suffix_var, width=14)
+        entry_duo_bot.pack(side=tk.LEFT, padx=2)
+        ToolTip(entry_duo_top,
+                "Comma-separated Top/Left video suffixes for Hybrid Duo pairing (paired by position with Bot/Right).\n"
+                "Leave blank for defaults: -top, _top, -left, _left")
+        ToolTip(entry_duo_bot,
+                "Comma-separated Bot/Right video suffixes for Hybrid Duo pairing (paired by position with Top/Left).\n"
+                "Leave blank for defaults: -bot, _bot, -right, _right")
         row2_2a = ttk.Frame(row2)
         row2_2a.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(row2_2a, text="Trigger on Subtitle",
@@ -5902,11 +6161,13 @@ class VideoProcessorApp:
             suffix_restrict = self.trigger_suffix_enable_var.get()
             suffix_include = self.trigger_include_suffix_var.get()
             suffix_exclude = self.trigger_exclude_suffix_enable_var.get()
+            video_exclude = self.trigger_video_exclude_enable_var.get()
             entry_state = "normal" if (scan_on and (suffix_restrict or suffix_include)) else "disabled"
             entry_widget.config(state=entry_state)
             exclude_state = "normal" if ((scan_on or autodetect_on) and suffix_exclude) else (
                 "normal" if suffix_exclude else "disabled")
             entry_exclude_widget.config(state=exclude_state)
+            entry_video_exclude_widget.config(state="normal" if video_exclude else "disabled")
 
         def on_restrict_toggle(*args):
             if self.trigger_suffix_enable_var.get():
@@ -5923,6 +6184,7 @@ class VideoProcessorApp:
         self.trigger_suffix_enable_var.trace_add("write", on_restrict_toggle)
         self.trigger_include_suffix_var.trace_add("write", on_include_toggle)
         self.trigger_exclude_suffix_enable_var.trace_add("write", lambda *a: update_trigger_ui())
+        self.trigger_video_exclude_enable_var.trace_add("write", lambda *a: update_trigger_ui())
         update_trigger_ui()
 
     def setup_input_pane(self, parent):
@@ -6015,6 +6277,9 @@ class VideoProcessorApp:
         self.sort_sub_button = ttk.Button(jb_row2, text="Subtitle", width=9,
                                           command=lambda: self.sort_jobs("subtitle"))
         self.sort_sub_button.pack(side=tk.LEFT, padx=1)
+        self.sort_lang_button = ttk.Button(jb_row2, text="Language", width=10,
+                                           command=lambda: self.sort_jobs("language"))
+        self.sort_lang_button.pack(side=tk.LEFT, padx=1)
         file_buttons_frame = ttk.Frame(file_group)
         file_buttons_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
         ttk.Button(file_buttons_frame, text="Add Files...", command=self.add_files).pack(side=tk.LEFT)
@@ -6215,24 +6480,10 @@ class VideoProcessorApp:
                    command=lambda: self._browse_hybrid_file('top'), width=7).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(self.top_file_frame, text="Clear",
                    command=lambda: self.hybrid_top_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5, 0))
+        self._build_hybrid_aspect_row(self.top_video_frame, "top")
         top_aspect_frame = ttk.Frame(self.top_video_frame)
-        top_aspect_frame.pack(fill=tk.X)
-        ttk.Label(top_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0, 5))
-        for label, val in [("16:9", "16:9"), ("9:16", "9:16"), ("4:5", "4:5"),
-                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original"),
-                           ("Adaptive", "adaptive")]:
-            rb = ttk.Radiobutton(top_aspect_frame, text=label, variable=self.hybrid_top_aspect_var, value=val,
-                                 command=lambda: self._on_hybrid_aspect_change("top"))
-            rb.pack(side=tk.LEFT, padx=1)
-            if val == "adaptive":
-                ToolTip(rb,
-                        "Adaptive: this block fills the leftover space in the canvas "
-                        "after the other block (if fixed) takes its natural size, so "
-                        "the composite matches the requested canvas aspect ratio.\n"
-                        "If BOTH blocks are adaptive, the canvas is split 50/50.\n"
-                        "Falls back to the source aspect ratio when the canvas is "
-                        "\"Auto\" (no fixed canvas to fill).")
-        ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
+        top_aspect_frame.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(top_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(0, 5))
         self.hybrid_top_crop_rb = ttk.Radiobutton(top_aspect_frame, text="Crop",
                                                   variable=self.hybrid_top_mode_var, value="crop",
                                                   command=lambda: (self._update_selected_jobs("hybrid_top_mode"),
@@ -6310,24 +6561,10 @@ class VideoProcessorApp:
                    command=lambda: self._browse_hybrid_file('bottom'), width=7).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(self.bot_file_frame, text="Clear",
                    command=lambda: self.hybrid_bottom_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5, 0))
+        self._build_hybrid_aspect_row(self.bottom_video_frame, "bottom")
         bot_aspect_frame = ttk.Frame(self.bottom_video_frame)
-        bot_aspect_frame.pack(fill=tk.X)
-        ttk.Label(bot_aspect_frame, text="Aspect:").pack(side=tk.LEFT, padx=(0, 5))
-        for label, val in [("16:9", "16:9"), ("9:16", "9:16"), ("4:5", "4:5"),
-                           ("4:3", "4:3"), ("1:1", "1:1"), ("Original", "original"),
-                           ("Adaptive", "adaptive")]:
-            rb = ttk.Radiobutton(bot_aspect_frame, text=label, variable=self.hybrid_bottom_aspect_var, value=val,
-                                 command=lambda: self._on_hybrid_aspect_change("bottom"))
-            rb.pack(side=tk.LEFT, padx=1)
-            if val == "adaptive":
-                ToolTip(rb,
-                        "Adaptive: this block fills the leftover space in the canvas "
-                        "after the other block (if fixed) takes its natural size, so "
-                        "the composite matches the requested canvas aspect ratio.\n"
-                        "If BOTH blocks are adaptive, the canvas is split 50/50.\n"
-                        "Falls back to the source aspect ratio when the canvas is "
-                        "\"Auto\" (no fixed canvas to fill).")
-        ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(15, 5))
+        bot_aspect_frame.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(bot_aspect_frame, text="Handling:").pack(side=tk.LEFT, padx=(0, 5))
         self.hybrid_bot_crop_rb = ttk.Radiobutton(bot_aspect_frame, text="Crop",
                                                   variable=self.hybrid_bottom_mode_var, value="crop",
                                                   command=lambda: (self._update_selected_jobs("hybrid_bottom_mode"),
@@ -7973,6 +8210,19 @@ class VideoProcessorApp:
         self.test_button = ttk.Button(parent, text="Test Render (5s)", command=self.test_render,
                                       style="Start.TButton")
         self.test_button.pack(side=tk.LEFT, padx=5, ipady=5)
+        self.test_chapters_cb = ttk.Checkbutton(
+            parent, text="Test Chapters:", variable=self.test_all_chapters_var
+        )
+        self.test_chapters_cb.pack(side=tk.LEFT, padx=(6, 2))
+        ToolTip(
+            self.test_chapters_cb,
+            "Unchecked (default): Test Render (5s) only tests Chapter 1.\n"
+            "Checked: tests ALL chapters (if box is blank) or specific 1-based chapters (e.g. 2, 1,3,5, or 2-4).",
+        )
+        self.test_chapters_entry = ttk.Entry(parent, textvariable=self.test_chapters_spec_var, width=8)
+        self.test_chapters_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self.test_chapters_entry.bind("<KeyRelease>", lambda _e: self._on_test_chapters_spec_edit())
+        ToolTip(self.test_chapters_entry, "Leave blank for ALL chapters, or enter 1-based chapters/ranges (e.g. 2 or 1,3,5 or 2-4)")
         self.generate_log_checkbox = ttk.Checkbutton(parent, text="Generate Log File",
                                                      variable=self.generate_log_var,
                                                      command=lambda: self._update_selected_jobs("generate_log"))
@@ -8417,7 +8667,8 @@ class VideoProcessorApp:
             tag = display_tag if display_tag is not None else self._build_display_tag_for_subtitle(subtitle_path)
             self._apply_subtitle_to_job(index, subtitle_path, tag)
 
-    def _matches_suffix_pattern(self, sub_item, patterns):
+    def _matches_suffix_pattern(self, sub_item, patterns, match_basename=False):
+        """Match a subtitle's suffix (or a video's basename when match_basename=True) against patterns."""
         if not patterns or not sub_item:
             return False
         sub_sfx = (sub_item.get('suffix') or '').lower().strip()
@@ -8435,7 +8686,7 @@ class VideoProcessorApp:
             for p in candidates:
                 if sub_sfx == p or sub_sfx.endswith(p):
                     return True
-                if sub_base.endswith(p):
+                if match_basename and sub_base.endswith(p):
                     return True
         return False
 
@@ -8542,10 +8793,51 @@ class VideoProcessorApp:
                           f"(suffix='', tag='{emb_entry['display_tag']}')")
         return detected_subs
 
-    def _detect_subtitles_for_video(self, video_path, verbose=False):
+    def _get_duo_pair_rules(self, triggers=None):
+        """Return (pairs, top_suffixes, bot_to_top) for Hybrid-Duo video pairing."""
+        default_pairs = [("-top", "-bot"), ("_top", "_bot"), ("-left", "-right"), ("_left", "_right")]
+        top_raw = (triggers or {}).get("duo_top_suffix") if triggers else None
+        bot_raw = (triggers or {}).get("duo_bot_suffix") if triggers else None
+        top_list = [s.strip() for s in top_raw.split(",") if s.strip()] if top_raw else []
+        bot_list = [s.strip() for s in bot_raw.split(",") if s.strip()] if bot_raw else []
+        if top_list or bot_list:
+            if not top_list:
+                top_list = [t for t, _ in default_pairs[:len(bot_list)]]
+            if not bot_list:
+                bot_list = [b for _, b in default_pairs[:len(top_list)]]
+            pairs = []
+            for idx, t in enumerate(top_list):
+                b = bot_list[idx] if idx < len(bot_list) else bot_list[-1]
+                pairs.append((t, b))
+            bot_to_top = {b: t for t, b in pairs}
+        else:
+            pairs = default_pairs
+            bot_to_top = {b: t for t, b in pairs}
+            bot_to_top.update({"-bottom": "-top", "_bottom": "_top"})
+        return pairs, [t for t, _ in pairs], bot_to_top
+
+    def _match_duo_top_suffix(self, basename, triggers=None):
+        """Return the matching top/left suffix if basename ends with one, else None."""
+        _, top_suffixes, _ = self._get_duo_pair_rules(triggers)
+        for s in top_suffixes:
+            if basename.endswith(s):
+                return s
+        return None
+
+    def _derive_duo_bot_path(self, file_path, triggers=None):
+        """Derive the paired bottom/right video path from a top/left video path."""
+        pairs, _, _ = self._get_duo_pair_rules(triggers)
+        base_name, ext = os.path.splitext(file_path)
+        for t, b in pairs:
+            if base_name.endswith(t):
+                return base_name[:-len(t)] + b + ext
+        default_bot = pairs[0][1] if pairs else "-bot"
+        return base_name + default_bot + ext
+
+    def _detect_subtitles_for_video(self, video_path, verbose=False, triggers=None):
         base, ext = os.path.splitext(video_path)
-        suffixes_top = ["-top", "_top"]
-        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom"]
+        pairs, suffixes_top, bot_to_top = self._get_duo_pair_rules(triggers)
+        suffixes_bot = list(bot_to_top.keys())
         is_paired = False
         prefix = None
         for s in suffixes_top + suffixes_bot:
@@ -8565,24 +8857,27 @@ class VideoProcessorApp:
                     top_file = candidate
                     break
             if not top_file:
-                top_file = prefix + "-top" + ext
+                top_file = prefix + (suffixes_top[0] if suffixes_top else "-top") + ext
             for s in suffixes_bot:
                 candidate = prefix + s + ext
                 if os.path.exists(candidate):
                     bot_file = candidate
                     break
             if not bot_file:
-                bot_file = prefix + "-bot" + ext
+                bot_file = prefix + (pairs[0][1] if pairs else "-bot") + ext
             top_subs = self._detect_subtitles_for_video_single(top_file, verbose=verbose)
             bot_subs = self._detect_subtitles_for_video_single(bot_file, verbose=verbose)
             base_subs = self._detect_subtitles_for_video_single(
                 None, mock_dir=os.path.dirname(video_path),
                 mock_basename=os.path.basename(prefix), verbose=verbose)
+            # Deduplicate by subtitle suffix (top > base > bot) so paired videos
+            # don't produce duplicate jobs when both -top and -bot .srt files exist.
             combined = []
-            seen = set()
-            for sub in top_subs + bot_subs + base_subs:
-                if sub['path'] not in seen:
-                    seen.add(sub['path'])
+            seen_suffixes = set()
+            for sub in top_subs + base_subs + bot_subs:
+                sfx_key = (sub.get('suffix') or '').lower()
+                if sfx_key not in seen_suffixes:
+                    seen_suffixes.add(sfx_key)
                     combined.append(sub)
             return combined
         else:
@@ -8768,24 +9063,18 @@ class VideoProcessorApp:
                 self._set_widget_state_recursive(self.bot_file_frame, "disabled")
         self._update_selected_jobs("orientation", "subtitle_alignment", "burn_subtitles")
 
-    def _resolve_to_top_sibling(self, video_path):
+    def _resolve_to_top_sibling(self, video_path, triggers=None):
         if not video_path:
             return video_path
         base, ext = os.path.splitext(video_path)
-        suffixes_top = ["-top", "_top", "-left", "_left"]
-        suffixes_bot = ["-bot", "_bot", "-bottom", "_bottom", "-right", "_right"]
+        _, suffixes_top, bot_to_top = self._get_duo_pair_rules(triggers)
         for s in suffixes_top:
             if base.endswith(s):
                 return video_path
-        for s in suffixes_bot:
+        for s, paired_suffix in bot_to_top.items():
             if base.endswith(s):
                 prefix = base[:-len(s)]
-                delim = "_" if s.startswith("_") else "-"
-                paired_suffix = delim + ("left" if s in ["-right", "_right"] else "top")
-                pair_candidates = [paired_suffix,
-                                   ("_left" if paired_suffix == "-left" else "-left")
-                                   if "left" in paired_suffix else
-                                   ("_top" if paired_suffix == "-top" else "-top")]
+                pair_candidates = [paired_suffix] + [t for t in suffixes_top if t != paired_suffix]
                 for st in pair_candidates:
                     candidate = prefix + st + ext
                     if os.path.exists(candidate):
@@ -9087,6 +9376,93 @@ class VideoProcessorApp:
             "seam_x": target_w // 2, "seam_y": top_h,
         })
         return result
+
+    def _build_hybrid_aspect_row(self, parent_frame, block):
+        """Build Aspect Ratio radio buttons (including CinemaScope and Custom entry) for a hybrid block."""
+        choice_var = self.hybrid_top_aspect_choice_var if block == "top" else self.hybrid_bottom_aspect_choice_var
+        custom_var = self.hybrid_top_custom_aspect_var if block == "top" else self.hybrid_bottom_custom_aspect_var
+        row = ttk.Frame(parent_frame)
+        row.pack(fill=tk.X)
+        ttk.Label(row, text="Aspect:").pack(side=tk.LEFT, padx=(0, 5))
+        for label, val in HYBRID_ASPECT_PRESETS:
+            rb = ttk.Radiobutton(
+                row, text=label, variable=choice_var, value=val,
+                command=lambda b=block, v=val: self._on_hybrid_aspect_preset_select(b, v),
+            )
+            rb.pack(side=tk.LEFT, padx=1)
+            if val == "2.39:1":
+                ToolTip(rb, "CinemaScope (2.39:1)")
+            elif val == "adaptive":
+                ToolTip(rb,
+                        "Adaptive: this block fills the leftover space in the canvas "
+                        "after the other block (if fixed) takes its natural size, so "
+                        "the composite matches the requested canvas aspect ratio.\n"
+                        "If BOTH blocks are adaptive, the canvas is split 50/50.\n"
+                        "Falls back to the source aspect ratio when the canvas is "
+                        "\"Auto\" (no fixed canvas to fill).")
+        custom_rb = ttk.Radiobutton(
+            row, text="Custom:", variable=choice_var, value="custom",
+            command=lambda b=block: self._on_hybrid_aspect_custom_select(b),
+        )
+        custom_rb.pack(side=tk.LEFT, padx=(4, 2))
+        custom_entry = ttk.Entry(row, textvariable=custom_var, width=8)
+        custom_entry.pack(side=tk.LEFT, padx=(0, 2))
+        ToolTip(custom_entry, "Custom aspect ratio (e.g. 2.35:1, 21:9, 1.85:1, or 2.39)")
+        custom_entry.bind("<FocusIn>", lambda _e, b=block: self._on_hybrid_aspect_custom_select(b))
+        custom_entry.bind("<KeyRelease>", lambda _e, b=block: self._on_hybrid_custom_aspect_edit(b))
+        custom_entry.bind("<FocusOut>", lambda _e, b=block: self._on_hybrid_custom_aspect_edit(b))
+        if block == "top":
+            self.hybrid_top_custom_aspect_entry = custom_entry
+        else:
+            self.hybrid_bottom_custom_aspect_entry = custom_entry
+
+    def _on_hybrid_aspect_preset_select(self, block, val):
+        """Select a built-in aspect ratio preset for the Top/Left or Bottom/Right block."""
+        aspect_var = self.hybrid_top_aspect_var if block == "top" else self.hybrid_bottom_aspect_var
+        aspect_var.set(val)
+        self._on_hybrid_aspect_change(block)
+
+    def _on_hybrid_aspect_custom_select(self, block):
+        """Select the Custom aspect ratio radio button and apply the custom entry text."""
+        choice_var = self.hybrid_top_aspect_choice_var if block == "top" else self.hybrid_bottom_aspect_choice_var
+        custom_var = self.hybrid_top_custom_aspect_var if block == "top" else self.hybrid_bottom_custom_aspect_var
+        aspect_var = self.hybrid_top_aspect_var if block == "top" else self.hybrid_bottom_aspect_var
+        choice_var.set("custom")
+        val = custom_var.get().strip()
+        if not val:
+            val = "2.35:1"
+            custom_var.set(val)
+        if aspect_var.get() != val:
+            aspect_var.set(val)
+            self._on_hybrid_aspect_change(block)
+
+    def _on_hybrid_custom_aspect_edit(self, block):
+        """Update the canonical aspect var when editing the Custom aspect ratio entry."""
+        choice_var = self.hybrid_top_aspect_choice_var if block == "top" else self.hybrid_bottom_aspect_choice_var
+        custom_var = self.hybrid_top_custom_aspect_var if block == "top" else self.hybrid_bottom_custom_aspect_var
+        aspect_var = self.hybrid_top_aspect_var if block == "top" else self.hybrid_bottom_aspect_var
+        choice_var.set("custom")
+        val = custom_var.get().strip()
+        if val and aspect_var.get() != val:
+            aspect_var.set(val)
+            self._on_hybrid_aspect_change(block)
+
+    def _sync_hybrid_aspect_ui(self, block=None):
+        """Sync the preset/custom radio choice and custom entry from hybrid_*_aspect_var."""
+        blocks = ("top", "bottom") if block is None else (block,)
+        for b in blocks:
+            aspect_var = self.hybrid_top_aspect_var if b == "top" else self.hybrid_bottom_aspect_var
+            choice_var = self.hybrid_top_aspect_choice_var if b == "top" else self.hybrid_bottom_aspect_choice_var
+            custom_var = self.hybrid_top_custom_aspect_var if b == "top" else self.hybrid_bottom_custom_aspect_var
+            val = (aspect_var.get() or "").strip()
+            if not val:
+                val = "16:9" if b == "top" else "4:5"
+                aspect_var.set(val)
+            if val in HYBRID_ASPECT_PRESET_VALUES:
+                choice_var.set(val)
+            else:
+                choice_var.set("custom")
+                custom_var.set(val)
 
     def _on_hybrid_aspect_change(self, block):
         """Handle changes to Top or Bottom hybrid video aspect ratio radio buttons."""
@@ -10094,6 +10470,9 @@ class VideoProcessorApp:
             "hibernate_when_done": self.hibernate_when_done_var.get(),
             "render_by_chapters": self.render_by_chapters_var.get(),
             "split_subtitles_by_chapter": self.split_subtitles_by_chapter_var.get(),
+            "split_json_by_chapter": self.split_json_by_chapter_var.get(),
+            "chapter_json_suffix": self.chapter_json_suffix_var.get(),
+            "chapter_metadata_json_path": self.chapter_metadata_json_path_var.get(),
             "orientation": self.orientation_var.get(), "aspect_mode": self.aspect_mode_var.get(),
             "aspect_blur": self.aspect_blur_var.get(), "aspect_pixelate": self.aspect_pixelate_var.get(),
             "aspect_ambient": self.aspect_ambient_var.get(),
@@ -10215,6 +10594,8 @@ class VideoProcessorApp:
             "output_subfolder_by_subtitle": self.output_subfolder_by_subtitle_var.get(),
             "group_by_preset": self.group_by_preset_var.get(),
             "group_by_video": self.group_by_video_var.get(),
+            "group_by_dr": self.group_by_dr_var.get(),
+            "group_by_language": self.group_by_language_var.get(),
             "subfolder_override": self.subfolder_override_var.get(),
             "use_sharpening": self.use_sharpening_var.get(),
             "ffmpeg_denoise_vulkan": self.ffmpeg_denoise_vulkan_var.get(),
@@ -10366,6 +10747,15 @@ class VideoProcessorApp:
         else:
             self.trigger_exclude_suffix_enable_var.set(False)
             self.trigger_exclude_suffix_var.set("")
+        v_ex_val = triggers.get('video_exclude_suffix')
+        if v_ex_val:
+            self.trigger_video_exclude_enable_var.set(True)
+            self.trigger_video_exclude_var.set(v_ex_val)
+        else:
+            self.trigger_video_exclude_enable_var.set(False)
+            self.trigger_video_exclude_var.set("")
+        self.trigger_duo_top_suffix_var.set(triggers.get('duo_top_suffix') or "")
+        self.trigger_duo_bot_suffix_var.set(triggers.get('duo_bot_suffix') or "")
         _src_filter_val = triggers.get("source_hdr_filter", "any")
         self.trigger_source_hdr_filter_var.set(
             TRIGGER_SOURCE_HDR_FILTER_REVERSE.get(_src_filter_val, TRIGGER_SOURCE_HDR_FILTER_ANY))
@@ -10474,6 +10864,10 @@ class VideoProcessorApp:
                                                  tk.BooleanVar(value=False)).get() else "all"),
             "exclude_suffix_filter": self.trigger_exclude_suffix_var.get().strip()
             if self.trigger_exclude_suffix_enable_var.get() else None,
+            "video_exclude_suffix": self.trigger_video_exclude_var.get().strip()
+            if self.trigger_video_exclude_enable_var.get() else None,
+            "duo_top_suffix": self.trigger_duo_top_suffix_var.get().strip() or None,
+            "duo_bot_suffix": self.trigger_duo_bot_suffix_var.get().strip() or None,
             "source_hdr_filter": TRIGGER_SOURCE_HDR_FILTER_LOOKUP.get(
                 self.trigger_source_hdr_filter_var.get(), "any"),
             "require_chapters": bool(self.trigger_require_chapters_var.get()),
@@ -10635,9 +11029,10 @@ class VideoProcessorApp:
                     f"'{p_name}' [fmt={p['options'].get('output_format')}, "
                     f"source_hdr_filter={trig.get('source_hdr_filter', 'any')!r}, "
                     f"require_chapters={bool(trig.get('require_chapters', False))}, "
-                    f"video_trigger={vt!r}, on_scan_subs={scan_s}, "
+                    f"video_trigger={vt!r}, video_exclude={trig.get('video_exclude_suffix')!r}, "
+                    f"on_scan_subs={scan_s}, "
                     f"suffix_mode={s_mode!r}, suffix_filter={s_filter!r}, "
-                    f"exclude={trig.get('exclude_suffix_filter')!r}]"
+                    f"sub_exclude={trig.get('exclude_suffix_filter')!r}]"
                 )
 
         print("\n" + "=" * 78)
@@ -10692,12 +11087,13 @@ class VideoProcessorApp:
                 _source_is_hdr = False
                 print(f"  [PROBE ERROR] Failed to probe video info: {e} -> defaulting to SDR")
 
-            detected_subs = self._detect_subtitles_for_video(video_path, verbose=True)
-            if detected_subs:
+            default_detected_subs = self._detect_subtitles_for_video(video_path, verbose=True)
+            _subs_cache = {("", ""): default_detected_subs}
+            if default_detected_subs:
                 sub_summary = ", ".join(
-                    f"{s['display_tag']} (suffix={s['suffix']!r})" for s in detected_subs
+                    f"{s['display_tag']} (suffix={s['suffix']!r})" for s in default_detected_subs
                 )
-                print(f"  [SUB-SUMMARY] {len(detected_subs)} subtitle(s) matched to '{video_basename}': {sub_summary}")
+                print(f"  [SUB-SUMMARY] {len(default_detected_subs)} subtitle(s) matched to '{video_basename}': {sub_summary}")
             else:
                 print(f"  [SUB-SUMMARY] 0 subtitles matched to '{video_basename}'.")
 
@@ -10747,26 +11143,33 @@ class VideoProcessorApp:
                               f"but '{os.path.basename(video_path)}' has no chapter markers.")
                         continue
                 is_hybrid_duo = preset['options'].get("orientation") == "hybrid-duo (dual source)"
-                if is_hybrid_duo and not (video_basename.endswith("-top") or
-                                          video_basename.endswith("_top") or
-                                          video_basename.endswith("-left") or
-                                          video_basename.endswith("_left")):
+                if is_hybrid_duo and not self._match_duo_top_suffix(video_basename, triggers):
+                    _, expected_tops, _ = self._get_duo_pair_rules(triggers)
                     print(f"  [PRESET SKIP] '{preset_name}': hybrid-duo requires video basename "
-                          f"ending in -top/_top/-left/_left (got '{video_basename}').")
+                          f"ending in {'/'.join(expected_tops)} (got '{video_basename}').")
                     continue
+                video_exclude = triggers.get('video_exclude_suffix')
+                video_exclude_patterns = ([s.strip() for s in video_exclude.split(',') if s.strip()]
+                                          if video_exclude else None)
+                if video_exclude_patterns and self._matches_suffix_pattern(
+                        {'suffix': '', 'basename': video_basename}, video_exclude_patterns, match_basename=True):
+                    print(f"  [PRESET SKIP] '{preset_name}': video basename '{video_basename}' "
+                          f"matched video_exclude_suffix={video_exclude_patterns}.")
+                    continue
+
+                _duo_key = (
+                    (triggers.get("duo_top_suffix") or "").strip(),
+                    (triggers.get("duo_bot_suffix") or "").strip(),
+                )
+                if _duo_key not in _subs_cache:
+                    _subs_cache[_duo_key] = self._detect_subtitles_for_video(
+                        video_path, verbose=False, triggers=triggers
+                    )
+                detected_subs = _subs_cache[_duo_key]
+
                 exclude_suffix = triggers.get('exclude_suffix_filter')
                 exclude_patterns = ([s.strip() for s in exclude_suffix.split(',') if s.strip()]
                                     if exclude_suffix else None)
-                # Exclude suffix gates all triggers for this video:
-                # a video whose own base name matches an excluded suffix
-                # is completely skipped for this preset.
-                video_excluded = bool(exclude_patterns) and self._matches_suffix_pattern(
-                    {'suffix': '', 'basename': video_basename}, exclude_patterns)
-                if video_excluded:
-                    print(f"  [PRESET SKIP] '{preset_name}': video basename '{video_basename}' "
-                          f"matched exclude_suffix_filter={exclude_patterns}.")
-                    continue
-
                 if exclude_patterns:
                     preset_detected_subs = []
                     for s in detected_subs:
@@ -10901,7 +11304,7 @@ class VideoProcessorApp:
             video_path = self.input_files[actual_index]
             if os.path.splitext(video_path)[1].lower() not in SUPPORTED_VIDEO_EXTS:
                 continue
-            detected_subs = self._detect_subtitles_for_video(video_path, verbose=True)
+            detected_subs = self._detect_subtitles_for_video(video_path, verbose=True, triggers=triggers)
             if exclude_patterns:
                 detected_subs = [s for s in detected_subs
                                  if not self._matches_suffix_pattern(s, exclude_patterns)]
@@ -10950,13 +11353,13 @@ class VideoProcessorApp:
     def _create_job_entry(self, video_path, subtitle_path, options, preset_name, display_tag, allow_auto_detect_subs=True):
         options = copy.deepcopy(options)
         orientation = options.get("orientation", DEFAULT_ORIENTATION)
-        resolved_top = (self._resolve_to_top_sibling(video_path)
+        preset = self.preset_manager.get_preset(preset_name) if preset_name else None
+        triggers = preset.get('triggers', {}) if preset else {}
+        resolved_top = (self._resolve_to_top_sibling(video_path, triggers=triggers)
                         if orientation == "hybrid-duo (dual source)" else video_path)
         if subtitle_path is None and allow_auto_detect_subs:
-            preset = self.preset_manager.get_preset(preset_name) if preset_name else None
-            triggers = preset.get('triggers', {}) if preset else {}
             if triggers.get('auto_detect_subs'):
-                detected_subs = self._detect_subtitles_for_video(resolved_top)
+                detected_subs = self._detect_subtitles_for_video(resolved_top, triggers=triggers)
                 exclude_suffix = triggers.get('exclude_suffix_filter')
                 if exclude_suffix:
                     exclude_patterns = [s.strip() for s in exclude_suffix.split(',') if s.strip()]
@@ -10982,23 +11385,12 @@ class VideoProcessorApp:
             if not options.get("hybrid_top_path"):
                 options["hybrid_top_path"] = video_path
             if not options.get("hybrid_bottom_path"):
-                base_name, ext = os.path.splitext(video_path)
-                bot_path = ""
-                if base_name.endswith("-top"):
-                    bot_path = base_name[:-4] + "-bot" + ext
-                elif base_name.endswith("_top"):
-                    bot_path = base_name[:-4] + "_bot" + ext
-                elif base_name.endswith("-left"):
-                    bot_path = base_name[:-5] + "-right" + ext
-                elif base_name.endswith("_left"):
-                    bot_path = base_name[:-5] + "_right" + ext
-                else:
-                    bot_path = base_name + "-bot" + ext
+                bot_path = self._derive_duo_bot_path(video_path, triggers=triggers)
                 if not os.path.exists(bot_path):
-                    bot_path_alt = (video_path.replace("-top", "-bot")
-                                    .replace("_top", "_bot")
-                                    .replace("-left", "-right")
-                                    .replace("_left", "_right"))
+                    pairs, _, _ = self._get_duo_pair_rules(triggers)
+                    bot_path_alt = video_path
+                    for t, b in pairs:
+                        bot_path_alt = bot_path_alt.replace(t, b)
                     if os.path.exists(bot_path_alt):
                         bot_path = bot_path_alt
                 if os.path.exists(bot_path):
@@ -11134,6 +11526,15 @@ class VideoProcessorApp:
                     self.trigger_exclude_suffix_enable_var.set(bool(ex_val))
                 if hasattr(self, 'trigger_exclude_suffix_var'):
                     self.trigger_exclude_suffix_var.set(ex_val if ex_val else "")
+                v_ex_val = triggers.get('video_exclude_suffix')
+                if hasattr(self, 'trigger_video_exclude_enable_var'):
+                    self.trigger_video_exclude_enable_var.set(bool(v_ex_val))
+                if hasattr(self, 'trigger_video_exclude_var'):
+                    self.trigger_video_exclude_var.set(v_ex_val if v_ex_val else "")
+                if hasattr(self, 'trigger_duo_top_suffix_var'):
+                    self.trigger_duo_top_suffix_var.set(triggers.get('duo_top_suffix') or "")
+                if hasattr(self, 'trigger_duo_bot_suffix_var'):
+                    self.trigger_duo_bot_suffix_var.set(triggers.get('duo_bot_suffix') or "")
                 _src_filter_val = triggers.get("source_hdr_filter", "any")
                 if hasattr(self, 'trigger_source_hdr_filter_var'):
                     self.trigger_source_hdr_filter_var.set(
@@ -11157,6 +11558,14 @@ class VideoProcessorApp:
                 self.trigger_exclude_suffix_enable_var.set(False)
             if hasattr(self, 'trigger_exclude_suffix_var'):
                 self.trigger_exclude_suffix_var.set("")
+            if hasattr(self, 'trigger_video_exclude_enable_var'):
+                self.trigger_video_exclude_enable_var.set(False)
+            if hasattr(self, 'trigger_video_exclude_var'):
+                self.trigger_video_exclude_var.set("")
+            if hasattr(self, 'trigger_duo_top_suffix_var'):
+                self.trigger_duo_top_suffix_var.set("")
+            if hasattr(self, 'trigger_duo_bot_suffix_var'):
+                self.trigger_duo_bot_suffix_var.set("")
             if hasattr(self, 'trigger_source_hdr_filter_var'):
                 self.trigger_source_hdr_filter_var.set(TRIGGER_SOURCE_HDR_FILTER_ANY)
             if hasattr(self, 'trigger_require_chapters_var'):
@@ -11281,11 +11690,19 @@ class VideoProcessorApp:
             options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE))
         self.group_by_preset_var.set(options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET))
         self.group_by_video_var.set(options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO))
+        self.group_by_dr_var.set(options.get("group_by_dr", DEFAULT_GROUP_BY_DR))
+        self.group_by_language_var.set(options.get("group_by_language", DEFAULT_GROUP_BY_LANGUAGE))
         self.subfolder_override_var.set(options.get("subfolder_override", DEFAULT_SUBFOLDER_OVERRIDE))
         self._update_subfolder_modifier_states()
         self.render_by_chapters_var.set(options.get("render_by_chapters", DEFAULT_RENDER_BY_CHAPTERS))
         self.split_subtitles_by_chapter_var.set(
             options.get("split_subtitles_by_chapter", DEFAULT_SPLIT_SUBTITLES_BY_CHAPTER))
+        self.split_json_by_chapter_var.set(
+            options.get("split_json_by_chapter", DEFAULT_SPLIT_JSON_BY_CHAPTER))
+        self.chapter_json_suffix_var.set(
+            options.get("chapter_json_suffix", DEFAULT_CHAPTER_JSON_SUFFIX))
+        self.chapter_metadata_json_path_var.set(
+            options.get("chapter_metadata_json_path", DEFAULT_CHAPTER_METADATA_JSON_PATH))
         raw_orientation = options.get("orientation", DEFAULT_ORIENTATION)
         if raw_orientation == "vertical":
             self.merged_aspect_var.set(
@@ -11389,6 +11806,7 @@ class VideoProcessorApp:
             options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR))
         self.hybrid_top_path_var.set(options.get("hybrid_top_path", ""))
         self.hybrid_bottom_aspect_var.set(options.get("hybrid_bottom_aspect", "4:5"))
+        self._sync_hybrid_aspect_ui()
         self.hybrid_bottom_mode_var.set(
             options.get("hybrid_bottom_mode", DEFAULT_HYBRID_BOTTOM_MODE))
         self.hybrid_bottom_offset_x_var.set(
@@ -12150,6 +12568,100 @@ class VideoProcessorApp:
             output_audio_index += 1
         return ["-filter_complex", ";".join(fc_parts)] + final_maps
 
+    def _get_dynamic_range_subfolder_name(self, options):
+        """Return 'HDR' or 'SDR' based on the job's target output_format."""
+        fmt = (options.get("output_format", DEFAULT_OUTPUT_FORMAT) or "sdr").strip().lower()
+        return "HDR" if fmt in ("hdr", "dolby_vision", "dv", "hlg", "truehdr") else "SDR"
+
+    def _get_language_subfolder_name(self, job):
+        """Extract a clean language folder name from job display_tag (e.g. '(-en)' -> 'en'), or '' if none."""
+        tag = (job.get("display_tag") or "").strip()
+        if not tag or tag in ("[No Subtitles]", "(Default)"):
+            return ""
+        if tag.startswith("[Embedded:"):
+            inner = tag[len("[Embedded:"):].rstrip("]").strip()
+            lang = inner.split("-", 1)[0].strip()
+            return re.sub(r'[\\/*?:"<>|]', "", lang).strip()
+        cleaned = tag.strip("()[]").lstrip("-_.").strip()
+        return re.sub(r'[\\/*?:"<>|]', "", cleaned).strip()
+
+    def _build_output_sub_paths(self, options, job, orientation):
+        """Build ordered list of relative output subfolder segments for a job."""
+        sub_paths = []
+        override = (options.get("subfolder_override") or "").strip()
+        if override:
+            safe_ov = re.sub(r'[\\/*?:"<>|]', "", override).strip()
+            if safe_ov:
+                sub_paths.append(safe_ov)
+            return sub_paths
+        mode = options.get("subfolder_mode")
+        if not mode:
+            if options.get("group_by_resolution"):
+                mode = "resolution"
+            elif options.get("output_to_subfolders"):
+                mode = "format_layout"
+            elif options.get("group_by_preset") and not options.get("group_by_video"):
+                mode = "preset"
+            elif options.get("group_by_video") and not options.get("group_by_preset"):
+                mode = "video"
+            else:
+                mode = "none"
+        if mode == "resolution":
+            res_folder = self._get_resolution_subfolder_name(options, job, orientation)
+            safe_res = re.sub(r'[\\/*?:"<>|]', "", res_folder).strip()
+            if safe_res:
+                sub_paths.append(safe_res)
+        elif mode == "format_layout":
+            folder_name = (f"{options.get('resolution', DEFAULT_RESOLUTION)}_"
+                           f"{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}")
+            if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
+                eff_layout = self._resolve_hybrid_layout(options)
+                folder_name += ("_Hybrid_SideBySide" if eff_layout == "side_by_side"
+                                else "_Hybrid_Stacked")
+            elif orientation == "vertical":
+                folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
+            elif orientation == "original":
+                folder_name += "_Original"
+            else:
+                h_aspect = options.get('horizontal_aspect').replace(':', 'x')
+                if h_aspect != "16x9":
+                    folder_name += f"_Horizontal_{h_aspect}"
+            sub_paths.append(folder_name)
+        elif mode == "preset":
+            preset_name = job.get('preset_name', "Default")
+            safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
+            sub_paths.append(safe_preset)
+        elif mode == "video":
+            original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+            safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
+            sub_paths.append(safe_video_name)
+        else:
+            if (not options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO)
+                    and not options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET)
+                    and not options.get("group_by_dr", DEFAULT_GROUP_BY_DR)
+                    and not options.get("group_by_language", DEFAULT_GROUP_BY_LANGUAGE)):
+                sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
+        if mode != "preset" and options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
+            preset_name = job.get('preset_name', "Default")
+            safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
+            sub_paths.append(safe_preset)
+        if mode != "video" and options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO):
+            original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
+            safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
+            sub_paths.append(safe_video_name)
+        if options.get("group_by_dr", DEFAULT_GROUP_BY_DR):
+            sub_paths.append(self._get_dynamic_range_subfolder_name(options))
+        if options.get("group_by_language", DEFAULT_GROUP_BY_LANGUAGE):
+            lang_folder = self._get_language_subfolder_name(job)
+            if lang_folder:
+                sub_paths.append(lang_folder)
+        if options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE):
+            tag = job.get('display_tag', "Subtitles")
+            safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
+            if safe_subtitle_folder_name:
+                sub_paths.append(safe_subtitle_folder_name)
+        return sub_paths
+
     def _get_resolution_subfolder_name(self, options, job, orientation):
         res_key = options.get('resolution', DEFAULT_RESOLUTION)
         if str(res_key).lower() == "original":
@@ -12352,69 +12864,7 @@ class VideoProcessorApp:
                 options["vertical_aspect"] = merged_aspect
             else:
                 options["horizontal_aspect"] = merged_aspect
-        sub_paths = []
-        override = options.get("subfolder_override", "").strip()
-        if override:
-            sub_paths.append(re.sub(r'[\\/*?:"<>|]', "", override).strip())
-        else:
-            mode = options.get("subfolder_mode")
-            if not mode:
-                if options.get("group_by_resolution"):
-                    mode = "resolution"
-                elif options.get("output_to_subfolders"):
-                    mode = "format_layout"
-                elif options.get("group_by_preset") and not options.get("group_by_video"):
-                    mode = "preset"
-                elif options.get("group_by_video") and not options.get("group_by_preset"):
-                    mode = "video"
-                else:
-                    mode = "none"
-            if mode == "resolution":
-                res_folder = self._get_resolution_subfolder_name(options, job, orientation)
-                safe_res = re.sub(r'[\\/*?:"<>|]', "", res_folder).strip()
-                if safe_res:
-                    sub_paths.append(safe_res)
-            elif mode == "format_layout":
-                folder_name = (f"{options.get('resolution', DEFAULT_RESOLUTION)}_"
-                               f"{options.get('output_format', DEFAULT_OUTPUT_FORMAT).upper()}")
-                if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
-                    eff_layout = self._resolve_hybrid_layout(options)
-                    folder_name += ("_Hybrid_SideBySide" if eff_layout == "side_by_side"
-                                    else "_Hybrid_Stacked")
-                elif orientation == "vertical":
-                    folder_name += f"_Vertical_{options.get('vertical_aspect').replace(':', 'x')}"
-                elif orientation == "original":
-                    folder_name += "_Original"
-                else:
-                    h_aspect = options.get('horizontal_aspect').replace(':', 'x')
-                    if h_aspect != "16x9":
-                        folder_name += f"_Horizontal_{h_aspect}"
-                sub_paths.append(folder_name)
-            elif mode == "preset":
-                preset_name = job.get('preset_name', "Default")
-                safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
-                sub_paths.append(safe_preset)
-            elif mode == "video":
-                original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
-                safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
-                sub_paths.append(safe_video_name)
-            else:
-                if not options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO) and not \
-                        options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
-                    sub_paths.append(DEFAULT_SINGLE_OUTPUT_DIR_NAME)
-            if mode != "preset" and options.get("group_by_preset", DEFAULT_GROUP_BY_PRESET):
-                preset_name = job.get('preset_name', "Default")
-                safe_preset = re.sub(r'[\\/*?:"<>|]', "", preset_name).strip() or "Default_Preset"
-                sub_paths.append(safe_preset)
-            if mode != "video" and options.get("group_by_video", DEFAULT_GROUP_BY_VIDEO):
-                original_basename = os.path.splitext(os.path.basename(job['video_path']))[0]
-                safe_video_name = re.sub(r'[\\/*?:"<>|]', "", original_basename).strip()
-                sub_paths.append(safe_video_name)
-            if options.get("output_subfolder_by_subtitle", DEFAULT_SUBFOLDER_BY_SUBTITLE):
-                tag = job.get('display_tag', "Subtitles")
-                safe_subtitle_folder_name = re.sub(r'[\\/*?:"<>|]', "", tag).strip()
-                if safe_subtitle_folder_name:
-                    sub_paths.append(safe_subtitle_folder_name)
+        sub_paths = self._build_output_sub_paths(options, job, orientation)
         final_sub_path = os.path.join(*sub_paths) if sub_paths else DEFAULT_SINGLE_OUTPUT_DIR_NAME
         base_dir = os.path.dirname(job['video_path']) if self.output_mode == 'local' else os.getcwd()
         output_dir = os.path.join(base_dir, final_sub_path)
@@ -12460,8 +12910,37 @@ class VideoProcessorApp:
                 temp_extracted_srt = extract_embedded_subtitle(job['video_path'], idx, output_dir)
             else:
                 temp_extracted_srt = sub
+        chapter_metadata = None
+        if options.get("render_by_chapters"):
+            need_ch_meta = (
+                options.get("split_json_by_chapter")
+                or bool((options.get("chapter_metadata_json_path") or "").strip())
+                or (options.get("title_burn_enabled") and options.get("title_autodetect", DEFAULT_TITLE_AUTODETECT))
+            )
+            if need_ch_meta:
+                top_sibling = (options.get("hybrid_top_path") or "").strip() if orientation == "hybrid-duo (dual source)" else ""
+                ch_meta_path = find_chapter_metadata_json_file(
+                    job['video_path'],
+                    subtitle_path=job.get('subtitle_path'),
+                    explicit_path=options.get("chapter_metadata_json_path", ""),
+                    json_suffix=options.get("chapter_json_suffix", DEFAULT_CHAPTER_JSON_SUFFIX),
+                    top_sibling_path=top_sibling,
+                )
+                if ch_meta_path:
+                    chapter_metadata = load_chapter_metadata_json(ch_meta_path)
+                    if chapter_metadata is not None:
+                        print(f"[INFO] Loaded chapter metadata JSON: {os.path.basename(ch_meta_path)}")
         last_rendered_file = None
-        for i, chapter in enumerate(chapters):
+        chapter_iter = list(enumerate(chapters))
+        if options.get("render_by_chapters") and options.get("_is_test_render"):
+            if options.get("_test_all_chapters"):
+                sel_indices = _parse_test_chapter_indices(options.get("_test_chapters_spec", ""), len(chapters))
+            else:
+                sel_indices = [0]
+            chapter_iter = [(idx, chapters[idx]) for idx in sel_indices if 0 <= idx < len(chapters)]
+            print(f"[TEST] Chapter split test mode: rendering {len(chapter_iter)}/{total_chapters} chapter(s) "
+                  f"(chapters: {[idx + 1 for idx, _ in chapter_iter]})")
+        for i, chapter in chapter_iter:
             ch_options = copy.deepcopy(options)
             if options.get("render_by_chapters"):
                 ch_title = chapter.get('title') or f"Chapter_{i + 1}"
@@ -12477,7 +12956,10 @@ class VideoProcessorApp:
                 print(f"\n[INFO] Processing Chapter {i + 1}/{total_chapters}: {ch_title}")
                 ch_options["seek_start"] = chapter['start_time']
                 if chapter['end_time'] is not None:
-                    ch_options["seek_duration"] = chapter['end_time'] - chapter['start_time']
+                    ch_dur = chapter['end_time'] - chapter['start_time']
+                    ch_options["seek_duration"] = min(5.0, ch_dur) if options.get("_is_test_render") else ch_dur
+                elif options.get("_is_test_render"):
+                    ch_options["seek_duration"] = 5.0
                 if ch_options.get("audio_passthrough"):
                     ch_options["audio_passthrough"] = False
                     if not any([ch_options.get("audio_mono"),
@@ -12492,6 +12974,21 @@ class VideoProcessorApp:
                     if success:
                         print(f"       -> Exported {os.path.basename(ch_srt_file)}")
                         ch_options["segment_subtitle_path"] = ch_srt_file
+                if chapter_metadata is not None:
+                    ch_meta = resolve_chapter_metadata_entry(chapter_metadata, i, chapter)
+                    if ch_meta:
+                        ch_meta_title = (ch_meta.get("title") or "").strip()
+                        if ch_meta_title:
+                            ch_options["segment_title_override"] = ch_meta_title
+                        if options.get("split_json_by_chapter"):
+                            ch_json_file = os.path.join(output_dir, f"{base_chunk}.json")
+                            try:
+                                with open(ch_json_file, "w", encoding="utf-8") as jf:
+                                    json.dump(ch_meta, jf, indent=2, ensure_ascii=False)
+                                    jf.write("\n")
+                                print(f"       -> Exported {os.path.basename(ch_json_file)}")
+                            except Exception as e:
+                                print(f"[WARN] Failed to export chapter metadata JSON {ch_json_file}: {e}")
             else:
                 extra_hash_data = f"{job['video_path']}"
                 ch_job_hash = get_job_hash(ch_options, extra_hash_data)
@@ -12634,8 +13131,15 @@ class VideoProcessorApp:
                 # previously detected/legacy title -> preset fallback text.
                 keep_emoji = options.get('title_enable_emoji', DEFAULT_TITLE_ENABLE_EMOJI)
                 stored_title = (options.get("title_override_text", "") or "").strip()
+                segment_title = (options.get("segment_title_override", "") or "").strip()
                 title_text = ""
-                if stored_title and options.get("_title_source") == TITLE_SOURCE_MANUAL:
+                if segment_title:
+                    title_text = sanitize_title(
+                        segment_title,
+                        remove_hashtags=options.get('title_remove_hashtags', DEFAULT_TITLE_REMOVE_HASHTAGS),
+                        keep_emoji=keep_emoji,
+                    )
+                elif stored_title and options.get("_title_source") == TITLE_SOURCE_MANUAL:
                     title_text = sanitize_title(stored_title, remove_hashtags=False,
                                                 keep_emoji=keep_emoji)
                 else:
@@ -13189,23 +13693,13 @@ class VideoProcessorApp:
             return bot_path
         if not file_path:
             return ""
-        base_name, ext = os.path.splitext(file_path)
-        if base_name.endswith("-top"):
-            bot_path = base_name[:-4] + "-bot" + ext
-        elif base_name.endswith("_top"):
-            bot_path = base_name[:-4] + "_bot" + ext
-        elif base_name.endswith("-left"):
-            bot_path = base_name[:-5] + "-right" + ext
-        elif base_name.endswith("_left"):
-            bot_path = base_name[:-5] + "_right" + ext
-        else:
-            bot_path = base_name + "-bot" + ext
+        bot_path = self._derive_duo_bot_path(file_path)
         if os.path.exists(bot_path):
             return bot_path
-        bot_path_alt = (file_path.replace("-top", "-bot")
-                        .replace("_top", "_bot")
-                        .replace("-left", "-right")
-                        .replace("_left", "_right"))
+        pairs, _, _ = self._get_duo_pair_rules()
+        bot_path_alt = file_path
+        for t, b in pairs:
+            bot_path_alt = bot_path_alt.replace(t, b)
         if bot_path_alt != file_path and os.path.exists(bot_path_alt):
             return bot_path_alt
         return ""
@@ -13219,14 +13713,24 @@ class VideoProcessorApp:
             w = video_info.get("width", 16); h = video_info.get("height", 9)
             return w, h
         try:
-            num, den = map(int, str(aspect_val).split(':'))
-            return num, den
+            s = str(aspect_val).strip()
+            if ":" in s:
+                w_str, h_str = [p.strip() for p in s.split(":", 1)]
+                ratio = Fraction(w_str) / Fraction(h_str)
+            else:
+                ratio = Fraction(s)
+            if ratio > 0:
+                return ratio.numerator, ratio.denominator
         except Exception:
-            try:
-                num, den = map(int, default_ratio.split(':'))
-                return num, den
-            except Exception:
-                return 16, 9
+            pass
+        try:
+            w_str, h_str = [p.strip() for p in str(default_ratio).split(":", 1)]
+            ratio = Fraction(w_str) / Fraction(h_str)
+            if ratio > 0:
+                return ratio.numerator, ratio.denominator
+        except Exception:
+            pass
+        return 16, 9
 
     def compute_target_resolution_for_options(self, options, info, orientation, info_bot=None):
         orientation = self._resolve_orientation(options, orientation)
@@ -14512,22 +15016,12 @@ class VideoProcessorApp:
             if explicit_bot and os.path.exists(explicit_bot):
                 bot_path = explicit_bot
             else:
-                base_name, ext = os.path.splitext(file_path)
-                if base_name.endswith("-top"):
-                    bot_path = base_name[:-4] + "-bot" + ext
-                elif base_name.endswith("_top"):
-                    bot_path = base_name[:-4] + "_bot" + ext
-                elif base_name.endswith("-left"):
-                    bot_path = base_name[:-5] + "-right" + ext
-                elif base_name.endswith("_left"):
-                    bot_path = base_name[:-5] + "_right" + ext
-                else:
-                    bot_path = base_name + "-bot" + ext
+                bot_path = self._derive_duo_bot_path(file_path)
                 if not os.path.exists(bot_path):
-                    bot_path_alt = (file_path.replace("-top", "-bot")
-                                    .replace("_top", "_bot")
-                                    .replace("-left", "-right")
-                                    .replace("_left", "_right"))
+                    pairs, _, _ = self._get_duo_pair_rules()
+                    bot_path_alt = file_path
+                    for t, b in pairs:
+                        bot_path_alt = bot_path_alt.replace(t, b)
                     if os.path.exists(bot_path_alt):
                         bot_path = bot_path_alt
                     else:
@@ -16046,9 +16540,14 @@ class VideoProcessorApp:
             jobs_to_test = [copy.deepcopy(self.processing_jobs[i]) for i in selected_indices]
         else:
             jobs_to_test = [copy.deepcopy(self.processing_jobs[0])]
+        test_all_ch = bool(getattr(self, 'test_all_chapters_var', tk.BooleanVar(value=False)).get())
+        test_ch_spec = (getattr(self, 'test_chapters_spec_var', tk.StringVar(value="")).get() or "").strip()
         for job in jobs_to_test:
             job['options']['seek_duration'] = 5.0
             job['options']['seek_start'] = 0.0
+            job['options']['_is_test_render'] = True
+            job['options']['_test_all_chapters'] = test_all_ch
+            job['options']['_test_chapters_spec'] = test_ch_spec
             job['display_name'] = f"[TEST 5s] {job['display_name']}"
             job['options']['output_suffix_override'] = "_test"
         tracker = BatchTracker(jobs_to_test)
@@ -16361,7 +16860,7 @@ class VideoProcessorApp:
             return False
 
     def sort_jobs(self, key):
-        """Sort the processing job queue by 'name', 'preset', or 'subtitle'.
+        """Sort the processing job queue by 'name', 'preset', 'subtitle', or 'language'.
         Clicking the same key again toggles ascending/descending."""
         if not self.processing_jobs:
             return
@@ -16387,10 +16886,18 @@ class VideoProcessorApp:
         def sub_tag_key(job):
             return self._natural_sort_key(job.get("display_tag") or "")
 
+        def lang_key(job):
+            lang = self._get_language_subfolder_name(job)
+            if lang:
+                return (0, self._natural_sort_key(lang))
+            return (1, self._natural_sort_key(job.get("display_tag") or ""))
+
         if key == "name":
             sort_fn = lambda j: (name_key(j), preset_key(j), has_sub_key(j), sub_tag_key(j))
         elif key == "preset":
             sort_fn = lambda j: (preset_key(j), name_key(j), has_sub_key(j), sub_tag_key(j))
+        elif key == "language":
+            sort_fn = lambda j: (lang_key(j), name_key(j), preset_key(j), has_sub_key(j), sub_tag_key(j))
         else:
             sort_fn = lambda j: (has_sub_key(j), name_key(j), preset_key(j), sub_tag_key(j))
 
@@ -16427,6 +16934,9 @@ class VideoProcessorApp:
         if hasattr(self, "sort_sub_button"):
             self.sort_sub_button.config(
                 text="Subtitle" + (arrow if self._job_sort_key == "subtitle" else ""))
+        if hasattr(self, "sort_lang_button"):
+            self.sort_lang_button.config(
+                text="Language" + (arrow if self._job_sort_key == "language" else ""))
 
     def invert_selection(self):
         selected_indices = self.job_listbox.curselection()

@@ -2433,7 +2433,17 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
     if word_json_arg:
         out_dir = args.output_dir if args.output_dir else os.path.dirname(file_path)
         if word_json_arg == "__AUTO__":
-            json_path = os.path.join(out_dir, f"{base_name}_words.json")
+            json_dir = out_dir
+            for candidate_root in (
+                os.path.abspath(out_dir),
+                os.path.dirname(os.path.abspath(out_dir)),
+                os.path.dirname(os.path.dirname(os.path.abspath(file_path))),
+            ):
+                transcripts_dir = os.path.join(candidate_root, "03_Transcripts")
+                if os.path.isdir(transcripts_dir):
+                    json_dir = transcripts_dir
+                    break
+            json_path = os.path.join(json_dir, f"{base_name}_words.json")
         elif os.path.isdir(word_json_arg) or word_json_arg.endswith(("/", "\\")):
             json_path = os.path.join(word_json_arg, f"{base_name}_words.json")
         else:
@@ -2450,6 +2460,11 @@ def run_transcription(file_path: str, args: argparse.Namespace) -> tuple[bool, s
             print(f"   🧩 Word JSON: {json_path}")
 
     success = convert_data_to_srt(cleaned_data, final_srt_path)
+    if success and getattr(args, "seo", False) and (detected_lang or "").split("-")[0].lower() == "en":
+        en_srt_path = os.path.join(os.path.dirname(final_srt_path), f"{base_name}-en.srt")
+        if os.path.abspath(en_srt_path) != os.path.abspath(final_srt_path):
+            shutil.copyfile(final_srt_path, en_srt_path)
+            print(f"   📄 English sidecar: {en_srt_path}")
     log_event(f"run_transcription finished success={success} output={final_srt_path} final_segments={len(cleaned_data.get('segments', []))}")
 
     if not args.keep:
@@ -2468,7 +2483,7 @@ def main():
     parser.add_argument("-u", "--url", action="append", help="URLs")
     parser.add_argument("-o", "--output_dir", type=str)
     parser.add_argument(
-        "-m", "--model", type=str, default=DEFAULT_MODEL_KEY,
+        "-m", "--model", type=str, default=None,
         help=(
             "Model alias/path. Supported aliases: "
             "default, large-v2, large-v3, turbo, distil, medium, small, "
@@ -2522,8 +2537,9 @@ def main():
     parser.add_argument("--initial-prompt", type=str, default=None, help="Initial prompt text (or @path/to/file.txt) for Whisper proper nouns/style")
     parser.add_argument("--hotwords", type=str, default=None, help="Boosted hotwords string (or @path/to/file.txt) for faster-whisper")
     parser.add_argument("--word-json", nargs="?", const="__AUTO__", default=None, help="Export word-level timestamps JSON (auto path if omitted, or specify .json file/dir)")
-    parser.add_argument("--whisperx-align", action=argparse.BooleanOptionalAction, default=False, help="Refine word timestamps via WhisperX wav2vec2 phoneme forced alignment")
+    parser.add_argument("--whisperx-align", action=argparse.BooleanOptionalAction, default=None, help="Refine word timestamps via WhisperX wav2vec2 phoneme forced alignment")
     parser.add_argument("--normalize-peak", type=float, default=None, help="Linear peak gain target in dBFS (e.g. -3.0) before transcription without dynamic compression")
+    parser.add_argument("--seo", action="store_true", help="SEO pipeline preset: large-v3 + --whisperx-align + --normalize-peak -3.0 + --word-json (no compression/limiter)")
     parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=False, help="Write detailed per-run debug log")
 
     parser.add_argument("-d", "--diarize", action="store_true", help="Enable speaker diarization via pyannote.audio")
@@ -2583,6 +2599,21 @@ def main():
             args.pipeline.remove('cl')
     # If the user passed -cl, PipelineAction has already added it to
     # args.pipeline and set args.cl = True. Otherwise leave CL off.
+
+    if args.seo:
+        if args.model is None:
+            args.model = "large-v3"
+        if args.whisperx_align is None:
+            args.whisperx_align = True
+        if args.normalize_peak is None:
+            args.normalize_peak = -3.0
+        if args.word_json is None:
+            args.word_json = "__AUTO__"
+    else:
+        if args.model is None:
+            args.model = DEFAULT_MODEL_KEY
+        if args.whisperx_align is None:
+            args.whisperx_align = False
 
     if args.high_quality:
         args.model = "large-v3"

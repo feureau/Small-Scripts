@@ -11,10 +11,13 @@ Desktop (Tkinter) tool for two workflows:
 
 - Authenticates with the YouTube Data API (OAuth installed app flow).
 - Loads existing channel videos or videos from a specific playlist.
-- Matches local `.txt`/`.json` descriptions and subtitle files to videos.
+- Matches local JSON metadata and subtitle files to videos.
 - Bulk updates titles/descriptions/tags/category/language/scheduling/privacy.
-- Uploads local files as private videos (with optional post-upload file moving).
+- Uploads local files with title, description, tags, and category as private videos.
+- Previews upload requests without authentication or file movement in Dry Run.
+- Optionally moves files after a successful upload.
 - Provides guardrails (blank metadata-file skip, dry-run mode, log persistence).
+- Preserves unspecified metadata during updates and rejects invalid or ambiguous sources.
 
 ---
 
@@ -28,13 +31,14 @@ Desktop (Tkinter) tool for two workflows:
 - Optional "save log on exit" writes buffered logs to `yt_manager.log`.
 
 ### 3) Utility helpers
-- Text normalization/sanitization for matching and YouTube-safe payloads.
-- JSON cleaning for tolerant metadata parsing from metadata files (`.txt`/`.json`).
+- Text normalization for matching; validation for approved metadata payloads.
+- Strict JSON metadata reading with field-presence and source-shape checks.
 - File moving helpers for uploaded/failed organization.
 
 ### 4) Data models
 - `VideoData`: existing YouTube video + API metadata cache.
 - `VideoEntry`: local file queued for upload + inferred metadata/subtitle.
+- `UploadJobOptions`: immutable selection/options snapshot passed to the upload worker.
 
 ### 5) GUI controller (`MainApp`)
 - Builds the interface, handles mode switching, filtering, selection, and actions.
@@ -67,10 +71,14 @@ Notes:
 
 ## Upload Mode Flow
 1. Load local files matching video patterns.
-2. Script auto-finds matching `.txt`/`.json` description and subtitle files.
-3. Select desired rows and click `PROCESS`.
-4. Each upload is inserted as private (optionally with `publishAt` if set).
-5. Optional file moves into organized `uploaded/...` folders.
+2. Explicit main.json mappings take priority, then exact `<video-stem>-youtube.json`,
+   then a unique legacy metadata match. Invalid exact files and tied matches block the item.
+3. Select desired rows and execution options, then click `PROCESS`.
+4. Dry Run previews the file, metadata source, sanitized tags, and request settings;
+   no authentication, media upload, API insertion, or file movement occurs.
+5. Actual uploads require authentication and insert the prepared title, description,
+   tags, and category as private (optionally with `publishAt` if set).
+6. Optional file moves into organized `uploaded/...` folders follow upload success.
 
 ---
 
@@ -80,7 +88,7 @@ Notes:
 - `playlistItems().list(...)`: enumerate video IDs in a playlist.
 - `videos().list(...)`: fetch `snippet,status,fileDetails,contentDetails`.
 - `videos().update(...)`: apply metadata/status changes.
-- `videos().insert(...)`: upload new videos.
+- `videos().insert(...)`: resumable upload with `snippet.tags` in the initial request.
 
 Key fields used:
 - `status.publishAt`: schedule timestamp.
@@ -99,10 +107,17 @@ Key fields used:
 
 ### Text and metadata sanitizers
 - `normalize_for_matching`: normalize text for loose matching.
-- `sanitize_for_youtube`: strips `<` and `>` and truncates.
-- `sanitize_description`: removes control chars and enforces 5000 chars.
-- `sanitize_tags`: enforces character/count/length constraints.
-- `sanitize_and_parse_json`: tolerant extraction of JSON blocks from metadata files.
+- `sanitize_for_youtube`: legacy filename/matching cleanup.
+- `validate_title`: validates approved titles without truncating them.
+- `sanitize_description`: validates the 5000 UTF-8 byte limit; rejects forbidden
+  characters or oversized copy instead of truncating it.
+- `assemble_description`: appends hashtags once, then validates the assembled bytes.
+- `prepare_tags`: validates at most 15 unique tags, each 1-30 ASCII letters/numbers/spaces,
+  and the platform budget including separators and space-related quoting overhead.
+  The count, per-tag, and ASCII limits are local compatibility choices.
+- `sanitize_tags`: explicit legacy cleanup with diagnostics for changed/dropped tags.
+- `read_metadata_file`: strict JSON and sidecar-shape validation.
+- `sanitize_and_parse_json`: retained tolerant parser for legacy GUI/import helpers.
 
 ### File movement and logs
 - `generate_batch_id`: unique batch key.
@@ -117,7 +132,7 @@ Key fields used:
   - `is_likely_short()` for scheduling heuristics.
 - `VideoEntry`:
   - represents local upload candidate.
-  - auto-loads adjacent `.txt`/`.json` metadata + subtitle if present.
+  - resolves adjacent JSON metadata and subtitles; retains metadata errors for safe rejection.
 
 ### GUI class (`MainApp`)
 - `build_gui`: constructs all widgets and binds callbacks.
@@ -144,12 +159,17 @@ Key fields used:
 
 ### Processing functions
 - `update_videos_on_youtube(service, processing_data)`:
-  - builds request body per selected video.
+  - overlays explicitly supplied metadata on cached remote mutable snippet values.
+  - absent fields preserve remote values; `tags: []` explicitly clears tags.
+  - missing required preservation data or invalid metadata rejects that item.
   - applies scheduling/visibility/metadata options.
   - supports dry run and blank-file safety skip.
-- `upload_new_videos(service, video_entries, skip_subtitles, move_files=True)`:
-  - resumable upload loop.
-  - optional post-upload file movement.
+- `upload_new_videos(service, video_entries, skip_subtitles, move_files=True, *, dry_run=False, legacy_tag_cleanup=False)`:
+  - validates supplied tags through the same helper used by metadata updates.
+  - prepares one request body for both execution and preview.
+  - Dry Run counts planned uploads separately from successful uploads; no video URL
+    is reported for a preview. The full prepared body is available at DEBUG log level.
+  - retains the resumable upload loop and optional post-success file movement.
 
 ---
 
@@ -158,7 +178,26 @@ Key fields used:
 - Blank metadata files (`.txt`/`.json`) are skipped.
 - Invalid date input for scheduling aborts update run with log error.
 - Network/API exceptions are logged; app continues where possible.
-- Dry-run mode logs intended updates without calling `videos().update(...)`.
+- Dry Run logs intended updates without calling `videos().update(...)` and previews
+  uploads before `MediaFileUpload`, `videos().insert(...)`, or `next_chunk()`.
+- Upload selections, skip-subtitle, move-files, and Dry Run options are captured on
+  the GUI thread; the worker does not read Tk variables for these options.
+- Sidecars contain only title, description, hashtags, and tags. Partial metadata is
+  allowed; null, invalid field types, malformed JSON, and timing-export fields are rejected.
+- Empty or unchanged GUI description/tag fields mean no override. Use an explicit
+  empty array in source metadata to clear tags on an existing video.
+- Untouched remote tags, including Unicode tags, retain their original values.
+- Python callers can opt into lossy legacy tag cleanup with `legacy_tag_cleanup=True`
+  for uploads or `processing_data['legacy_tag_cleanup'] = True` for updates. The GUI
+  uses strict validation. Cleanup reports every changed or dropped value.
+
+## Focused Regression Tests
+
+Run `python -m unittest discover -s Programming/tests -p "test_yt*.py"`
+from the repository root with the application dependencies installed. Tests capture
+requests through a fake API client; they do not open the GUI or upload media.
+Coverage includes uploads/Dry Run, partial-update preservation, deterministic matching,
+invalid inputs, explicit legacy cleanup, and platform byte/character boundaries.
 
 ---
 
@@ -189,8 +228,10 @@ import glob
 import math
 import random
 import threading
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime, timedelta, time, timezone
+from dataclasses import dataclass
 
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -216,6 +257,7 @@ UPLOADED_FOLDER = "uploaded"
 UPLOADED_VIDEOS_SUBFOLDER = "videos"
 UPLOADED_DESCRIPTIONS_SUBFOLDER = "descriptions"
 UPLOADED_SUBTITLES_SUBFOLDER = "subtitles"
+UPLOADED_THUMBNAILS_SUBFOLDER = "thumbnails"
 UPLOADED_LOGS_SUBFOLDER = "logs"
 LOG_FILE = "yt_manager.log"
 OAUTH_PORT = 0
@@ -223,9 +265,12 @@ API_TIMEOUT_SECONDS = 60
 VIDEO_PATTERNS = ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.wmv"]
 SUBTITLE_PATTERNS = ["*.srt", "*.sbv", "*.vtt", "*.scc", "*.ttml"]
 METADATA_EXTENSIONS = {".json"}
+THUMBNAIL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+YOUTUBE_THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024
 YOUTUBE_TAGS_MAX_LENGTH = 500
 YOUTUBE_TAGS_MAX_COUNT = 15
 YOUTUBE_TITLE_MAX_LENGTH = 100
+YOUTUBE_DESCRIPTION_MAX_BYTES = 5000
 LANGUAGES_MAP = {"Don't Change": None, "English": "en", "Spanish": "es", "French": "fr", "German": "de", "Japanese": "ja", "Chinese": "zh"}
 STATIC_CATEGORY_MAP = {"Film & Animation": "1", "Autos & Vehicles": "2", "Music": "10", "Pets & Animals": "15", "Sports": "17", "Travel & Events": "19", "Gaming": "20", "People & Blogs": "22", "Comedy": "23", "Entertainment": "24", "News & Politics": "25", "Howto & Style": "26", "Education": "27", "Science & Technology": "28", "Nonprofits & Activism": "29"}
 
@@ -316,7 +361,7 @@ def has_eng_token(text: str) -> bool:
 def extract_trailing_hash8(text: str):
     if not text:
         return None
-    stem = Path(str(text)).stem
+    stem = re.sub(r'\.[a-z0-9]{2,4}$', '', str(text), flags=re.IGNORECASE)
     m = re.search(r'[_\-]([a-f0-9]{8})$', stem, flags=re.IGNORECASE)
     return m.group(1).lower() if m else None
 
@@ -340,18 +385,95 @@ def sanitize_for_youtube(text: str, max_len=None) -> str:
     return sanitized[:max_len] if max_len else sanitized
 
 def sanitize_description(desc: str) -> str:
-    desc = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F]', '', desc)
-    return desc[:5000]
+    """Validate approved copy without truncating or rewriting it."""
+    if not isinstance(desc, str):
+        raise ValueError("Description must be a string.")
+    if '<' in desc or '>' in desc or re.search(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', desc):
+        raise ValueError("Description contains forbidden <, >, or control characters.")
+    size = len(desc.encode('utf-8'))
+    if size > YOUTUBE_DESCRIPTION_MAX_BYTES:
+        raise ValueError(f"Description exceeds {YOUTUBE_DESCRIPTION_MAX_BYTES} UTF-8 bytes ({size}); correct the source instead of truncating it.")
+    return desc
 
-def sanitize_tags(raw_tags):
-    clean = []; total_len = 0
-    for t in raw_tags:
-        tag = re.sub(r'[\x00-\x1F\x7F]', '', t.strip())
-        tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)[:30]
-        if not tag: continue
-        if total_len + len(tag) > YOUTUBE_TAGS_MAX_LENGTH or len(clean) >= YOUTUBE_TAGS_MAX_COUNT: break
-        clean.append(tag); total_len += len(tag)
+
+def validate_title(title):
+    if not isinstance(title, str) or not title.strip() or len(title) > YOUTUBE_TITLE_MAX_LENGTH:
+        raise ValueError(f"Title must be a nonempty string of at most {YOUTUBE_TITLE_MAX_LENGTH} characters.")
+    if '<' in title or '>' in title or re.search(r'[\x00-\x1F\x7F]', title):
+        raise ValueError("Title contains forbidden <, >, or control characters.")
+    return title
+
+
+def require_string_list(values, field):
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise ValueError(f"{field} must be an array of strings; null is invalid.")
+    return values
+
+
+def effective_tag_length(tags):
+    require_string_list(tags, 'Tags')
+    return sum(len(tag) for tag in tags) + max(0, len(tags) - 1) + 2 * sum(' ' in tag for tag in tags)
+
+
+def validate_tag_budget(tags):
+    if effective_tag_length(tags) > YOUTUBE_TAGS_MAX_LENGTH:
+        raise ValueError(f"Tags exceed the {YOUTUBE_TAGS_MAX_LENGTH}-character effective platform budget.")
+
+
+def sanitize_tags(raw_tags, *, diagnostics=None):
+    """Explicit legacy cleanup. Each discarded or changed value produces a diagnostic."""
+    require_string_list(raw_tags, 'Tags')
+    losses = []
+    clean = []
+    for index, raw in enumerate(raw_tags, 1):
+        tag = re.sub(r'[\x00-\x1F\x7F]', '', raw.strip())
+        tag = re.sub(r'[^A-Za-z0-9 ]+', '', tag)[:30].strip()
+        if tag != raw:
+            losses.append(f"Tag {index} changed by ASCII/whitespace cleanup or the 30-character limit: {raw!r} -> {tag!r}")
+        if not tag:
+            losses.append(f"Tag {index} dropped because it is empty after cleanup.")
+        elif tag in clean:
+            losses.append(f"Tag {index} dropped as a duplicate: {tag!r}")
+        elif len(clean) >= YOUTUBE_TAGS_MAX_COUNT or effective_tag_length(clean + [tag]) > YOUTUBE_TAGS_MAX_LENGTH:
+            losses.append(f"Tag {index} dropped because the tag count or platform budget is exhausted: {tag!r}")
+        else:
+            clean.append(tag)
+    if diagnostics is not None:
+        diagnostics.extend(losses)
+    elif losses:
+        logger.warning("Legacy tag cleanup: %s", '; '.join(losses))
     return clean
+
+
+def prepare_tags(tags, *, legacy_cleanup=False):
+    require_string_list(tags, 'Tags')
+    if legacy_cleanup:
+        return sanitize_tags(tags)
+    if len(tags) > YOUTUBE_TAGS_MAX_COUNT:
+        raise ValueError(f"Local policy allows at most {YOUTUBE_TAGS_MAX_COUNT} tags; no keywords were dropped.")
+    for index, tag in enumerate(tags, 1):
+        if not tag or tag != tag.strip() or len(tag) > 30 or not re.fullmatch(r'[A-Za-z0-9 ]+', tag):
+            raise ValueError(f"Tag {index} violates local policy: use 1-30 ASCII letters/numbers/spaces with no outer whitespace; correct the source or explicitly enable legacy_tag_cleanup.")
+    if len(set(tags)) != len(tags):
+        raise ValueError("Duplicate tags are invalid; correct the source or explicitly enable legacy_tag_cleanup.")
+    validate_tag_budget(tags)
+    return list(tags)
+
+
+def assemble_description(description, hashtags):
+    require_string_list(hashtags, 'Hashtags')
+    if any(not re.fullmatch(r'#[^\s#<>]+', tag) for tag in hashtags) or len(set(hashtags)) != len(hashtags):
+        raise ValueError("Hashtags must be unique, nonempty #tokens without spaces or angle brackets.")
+    if not isinstance(description, str):
+        raise ValueError("Description must be a string.")
+    body = description.strip()
+    if hashtags:
+        terminal = body.splitlines()[-1].split() if body else []
+        if terminal != hashtags:
+            if terminal and all(token.startswith('#') for token in terminal) and set(terminal) & set(hashtags):
+                raise ValueError("Description has a conflicting terminal hashtag line; correct the source.")
+            body = f"{body}\n\n{' '.join(hashtags)}".strip()
+    return sanitize_description(body)
 
 def sanitize_and_parse_json(content: str) -> dict | None:
     # Clean control characters first
@@ -382,6 +504,172 @@ def sanitize_and_parse_json(content: str) -> dict | None:
         return json.loads(json_str, strict=False)
     except Exception:
         return None
+
+ALLOWED_METADATA_FIELDS = {'title', 'description', 'hashtags', 'tags', 'filename', 'id', 'video_id'}
+
+def validate_metadata_object(data):
+    """Validate supplied fields without losing the distinction between absent and empty."""
+    if not isinstance(data, dict) or not ({'title', 'description', 'hashtags', 'tags'} & data.keys()):
+        raise ValueError("Metadata must be an object containing title, description, hashtags, or tags.")
+    if 'filename' in data and not isinstance(data['filename'], str):
+        raise ValueError("Metadata filename must be a string.")
+    for field in ('title', 'description'):
+        if field in data and not isinstance(data[field], str):
+            raise ValueError(f"Metadata {field} must be a string.")
+    for field in ('hashtags', 'tags'):
+        if field in data and (not isinstance(data[field], list) or any(not isinstance(value, str) for value in data[field])):
+            raise ValueError(f"Metadata {field} must be an array of strings; null is invalid.")
+    return data
+
+
+def read_metadata_file(path, *, allow_unrelated=False):
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+        if allow_unrelated and (not isinstance(data, dict) or not ({'title', 'description', 'hashtags', 'tags'} & data.keys())):
+            return None
+        if isinstance(data, dict):
+            unexpected = data.keys() - ALLOWED_METADATA_FIELDS
+            if unexpected:
+                raise ValueError(f"Unexpected sidecar fields: {', '.join(sorted(unexpected))}; use only title, description, hashtags, and tags.")
+        return validate_metadata_object(data)
+    except (ValueError, UnicodeError) as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+def unique_metadata_match(matches, label):
+    if not matches:
+        return None
+    best_rank = min(rank for rank, value in matches)
+    best = [value for rank, value in matches if rank == best_rank]
+    if len(best) > 1:
+        names = sorted(str(value.get('video_id') or value.get('id') or value.get('filename') or value.get('title') or '<unnamed entry>') if isinstance(value, dict) else str(value) for value in best)
+        raise ValueError(f"Ambiguous {label}: {'; '.join(names)}")
+    return best[0]
+
+
+def match_main_json(items, *, filename=None, video_id=None, title=None):
+    """Explicit IDs/filenames outrank normalized matches, regardless of list order."""
+    matches = []
+    filename = str(filename or '')
+    names = {name for name in (filename, Path(filename).stem if filename else '', title) if name}
+    normalized = {normalize_for_matching(name) for name in names} - {''}
+    nuclear = {nuclear_clean(name) for name in names} - {''}
+    for item in items or []:
+        if not isinstance(item, dict):
+            raise ValueError("Each main.json entry must be a metadata object.")
+        item_id = item.get('video_id') or item.get('id')
+        if video_id and item_id:
+            if str(item_id) == str(video_id):
+                matches.append((0, item))
+            continue
+        item_filename = item.get('filename', '')
+        if not isinstance(item_filename, str):
+            raise ValueError("main.json filename must be a string.")
+        if item_filename and (item_filename in names or Path(item_filename).stem in names):
+            matches.append((1, item))
+        elif item_filename and normalize_for_matching(Path(item_filename).stem) in normalized:
+            matches.append((2, item))
+        elif item_filename and nuclear_clean(item_filename) in nuclear:
+            matches.append((3, item))
+        elif title and isinstance(item.get('title'), str) and normalize_for_matching(item['title']) in normalized:
+            matches.append((4, item))
+    match = unique_metadata_match(matches, f"main.json mapping for {video_id or filename}")
+    return validate_metadata_object(match) if match is not None else None
+
+
+def compatible_render_variant(source_stem, candidate_stem):
+    pattern = r'(?:^|[\s_-])(top|bottom)(?=[\s_-]|$)'
+    source = set(re.findall(pattern, source_stem.lower()))
+    candidate = set(re.findall(pattern, candidate_stem.lower()))
+    if source and candidate and source != candidate:
+        return False
+    orient_pattern = r'(?:^|[\s_-])(horz|horizontal|vert|vertical)(?=[\s_-]|$)'
+    norm_orient = lambda s: {'horz' if t.startswith('hor') else 'vert' for t in re.findall(orient_pattern, s.lower())}
+    src_orient = norm_orient(source_stem)
+    cand_orient = norm_orient(candidate_stem)
+    return not (src_orient and cand_orient and src_orient != cand_orient)
+
+
+def find_upload_metadata(video_path):
+    video_path = Path(video_path)
+    exact = video_path.with_name(f"{video_path.stem}-youtube.json")
+    if exact.is_file():
+        if exact.stat().st_size:
+            read_metadata_file(exact)  # An invalid exact sidecar blocks fallback matching.
+        return exact
+    matches = []
+    nuclear = nuclear_clean(video_path.stem)
+    marker = extract_marker_number(video_path.stem)
+    for candidate in sorted(video_path.parent.iterdir()):
+        if not candidate.is_file() or candidate.suffix.lower() not in METADATA_EXTENSIONS or candidate.name.lower() == 'main.json' or not candidate.stat().st_size:
+            continue
+        if not compatible_render_variant(video_path.stem, candidate.stem):
+            continue
+        candidate_nuclear = nuclear_clean(candidate.stem)
+        score = None
+        if nuclear and candidate_nuclear == nuclear:
+            score = 0
+        elif nuclear and candidate_nuclear and (nuclear in candidate_nuclear or candidate_nuclear in nuclear):
+            score = 1
+        elif marker is not None and extract_marker_number(candidate.stem) == marker:
+            score = 1.5 if has_eng_token(video_path.stem) and has_eng_token(candidate.stem) else 2
+        if score is not None:
+            try:
+                if read_metadata_file(candidate, allow_unrelated=True) is None:
+                    continue
+            except (ValueError, OSError):
+                pass  # A malformed matching source must block the item, not become filename defaults.
+            matches.append((score, candidate))
+    match = unique_metadata_match(matches, f"metadata for {video_path.name}")
+    if match is not None:
+        read_metadata_file(match)
+    return match
+
+
+def prepare_update_snippet(video, options):
+    """Overlay intentionally supplied fields on the last fetched mutable snippet."""
+    if getattr(video, 'metadata_error', None):
+        raise ValueError(video.metadata_error)
+    fields = ('title', 'description', 'tags', 'categoryId', 'defaultLanguage', 'defaultAudioLanguage')
+    snippet = {key: deepcopy(value) for key, value in video.video_snippet.items() if key in fields}
+    data = {}
+    if video.main_json_dict is not None:
+        data = validate_metadata_object(video.main_json_dict)
+    elif video.description_file_path:
+        path = Path(video.description_file_path)
+        data = {'description': path.read_text(encoding='utf-8')} if path.suffix.lower() == '.txt' else read_metadata_file(path)
+    if 'title' in data:
+        snippet['title'] = data['title']
+    if 'description' in data:
+        snippet['description'] = assemble_description(data['description'], data.get('hashtags', []))
+    elif 'hashtags' in data:
+        raise ValueError("Supply description together with hashtags so existing copy can be preserved.")
+    if 'tags' in data:
+        snippet['tags'] = prepare_tags(data['tags'], legacy_cleanup=options.get('legacy_tag_cleanup', False))
+    description_override = options.get('description_override', '')
+    if description_override.strip():
+        snippet['description'] = description_override
+    tags_override = options.get('tags_override', '')
+    if tags_override.strip():
+        tags = [value.strip() for value in tags_override.split(',') if value.strip()]
+        if not tags:
+            raise ValueError("Tags override must contain at least one tag; an empty field means no override.")
+        snippet['tags'] = prepare_tags(tags, legacy_cleanup=options.get('legacy_tag_cleanup', False))
+    if options.get('category_id'):
+        snippet['categoryId'] = options['category_id']
+    for required in ('title', 'categoryId'):
+        if not snippet.get(required):
+            raise ValueError(f"Cannot preserve {required}: required remote value is unavailable; reload the video or supply it explicitly.")
+    validate_title(snippet['title'])
+    if not isinstance(snippet['categoryId'], str):
+        raise ValueError("Category ID must be a string.")
+    if 'description' in snippet:
+        sanitize_description(snippet['description'])
+    if 'tags' in snippet:
+        validate_tag_budget(snippet['tags'])
+    return snippet
+
 
 # File Management Functions
 def generate_batch_id():
@@ -421,6 +709,7 @@ def move_uploaded_files(video_entry, batch_id, upload_success=True):
     (target_dir / UPLOADED_VIDEOS_SUBFOLDER).mkdir(parents=True, exist_ok=True)
     (target_dir / UPLOADED_DESCRIPTIONS_SUBFOLDER).mkdir(parents=True, exist_ok=True)
     (target_dir / UPLOADED_SUBTITLES_SUBFOLDER).mkdir(parents=True, exist_ok=True)
+    (target_dir / UPLOADED_THUMBNAILS_SUBFOLDER).mkdir(parents=True, exist_ok=True)
     
     video_src = Path(video_entry.filepath)
     video_dst = target_dir / UPLOADED_VIDEOS_SUBFOLDER / video_src.name
@@ -436,8 +725,60 @@ def move_uploaded_files(video_entry, batch_id, upload_success=True):
         sub_src = Path(video_entry.subtitle_path)
         sub_dst = target_dir / UPLOADED_SUBTITLES_SUBFOLDER / sub_src.name
         if safe_move_file(sub_src, sub_dst): moved_files['subtitle'] = (str(sub_src), str(sub_dst))
+
+    if hasattr(video_entry, 'thumbnail_path') and video_entry.thumbnail_path:
+        thumb_src = Path(video_entry.thumbnail_path)
+        thumb_dst = target_dir / UPLOADED_THUMBNAILS_SUBFOLDER / thumb_src.name
+        if safe_move_file(thumb_src, thumb_dst): moved_files['thumbnail'] = (str(thumb_src), str(thumb_dst))
     
     return moved_files
+
+
+def find_matching_thumbnail_for_stem(parent_dir: Path, stems: list[str]) -> Path | None:
+    """Find a non-empty thumbnail file in parent_dir matching any candidate stem."""
+    if not parent_dir.is_dir():
+        return None
+    ext_priority = {".jpg": 0, ".jpeg": 1, ".png": 2, ".webp": 3}
+    candidates = [
+        f for f in parent_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in THUMBNAIL_EXTENSIONS and f.stat().st_size > 0
+    ]
+    for stem in stems:
+        if not stem:
+            continue
+        stem_lower = stem.lower()
+        matching = [f for f in candidates if f.stem.lower() == stem_lower]
+        if matching:
+            matching.sort(key=lambda f: (ext_priority.get(f.suffix.lower(), 99), f.name.lower()))
+            return matching[0]
+    return None
+
+
+def upload_video_thumbnail(service, video_id: str, thumb_path: str | Path, *, is_dry_run: bool = False) -> bool:
+    """Validate size and upload a custom thumbnail image to YouTube via thumbnails.set."""
+    p = Path(thumb_path)
+    if not p.is_file() or p.stat().st_size == 0:
+        logger.warning(f"Skipping thumbnail upload for {video_id}: '{p}' missing or empty.")
+        return False
+    file_size = p.stat().st_size
+    if file_size > YOUTUBE_THUMBNAIL_MAX_BYTES:
+        logger.error(f"Thumbnail '{p.name}' exceeds 2 MB limit ({file_size} bytes); skipping thumbnail upload.")
+        return False
+    if is_dry_run:
+        logger.info(f"DRY RUN Thumbnail: video_id={video_id} <- '{p.name}'")
+        return True
+    media = MediaFileUpload(str(p), resumable=False)
+    try:
+        service.thumbnails().set(
+            videoId=video_id,
+            media_body=media,
+        ).execute()
+    finally:
+        stream = media.stream() if hasattr(media, 'stream') else None
+        if stream is not None and hasattr(stream, 'close'):
+            stream.close()
+    logger.info(f"Uploaded thumbnail '{p.name}' for video {video_id}.")
+    return True
 
 def save_upload_log(batch_id, upload_data):
     log_file = Path(UPLOADED_FOLDER) / UPLOADED_LOGS_SUBFOLDER / f"{batch_id}.json"
@@ -461,9 +802,11 @@ class VideoData:
         self.upload_date = self.video_snippet.get('publishedAt', '')
         self.description_file_path, self.description_filename = None, "N/A"
         self.subtitle_file_path, self.subtitle_filename = None, "N/A"
+        self.thumbnail_file_path, self.thumbnail_filename = None, "N/A"
         self.width, self.height = 0, 0
         self.original_upload_filename = None
         self.main_json_dict = None
+        self.metadata_error = None
         if video_file_details:
             self.original_upload_filename = video_file_details.get('fileName')
             if 'videoStreams' in video_file_details and video_file_details['videoStreams']:
@@ -503,60 +846,56 @@ class VideoData:
 
 class VideoEntry:
     def __init__(self, filepath, main_json_data=None):
-        p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.tags = []; self.description_file_path = None
-        
-        main_json_match = None
-        if main_json_data:
-            for item in main_json_data:
-                item_fn = item.get("filename", "")
-                if item_fn and (item_fn == p.stem or item_fn == p.name or nuclear_clean(item_fn) == nuclear_clean(p.stem)):
-                    main_json_match = item
-                    break
-
-        if main_json_match:
-            logger.info(f"Found matching entry in main.json for video '{p.name}'.")
-            self.title = sanitize_for_youtube(main_json_match.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH)
-            hashtags = " ".join(main_json_match.get("hashtags", []))
-            self.description = f"{main_json_match.get('description', '')}\n\n{hashtags}".strip()
-            self.tags = main_json_match.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
-            self.description_source = "main.json"
-        else:
-            try:
-                # Skip blank files during scan
-                matching_metadata_files = [f for f in p.parent.iterdir() if f.is_file() and f.suffix.lower() in METADATA_EXTENSIONS and f.stat().st_size > 0]
-                best_metadata_file, best_score = None, float('inf')
-                p_nuclear = nuclear_clean(p.stem)
-                p_marker = extract_marker_number(p.stem)
-                p_has_eng = has_eng_token(p.stem)
-                for candidate in matching_metadata_files:
-                    c_stem = candidate.stem
-                    c_nuclear = nuclear_clean(c_stem)
-                    score = float('inf')
-                    # Strong: direct nuclear containment
-                    if c_nuclear and p_nuclear and (c_nuclear in p_nuclear or p_nuclear in c_nuclear):
-                        score = 0
-                    else:
-                        # Fallback: marker-number alignment (handles "... - eng-yt.json" style names)
-                        c_marker = extract_marker_number(c_stem)
-                        if p_marker is not None and c_marker == p_marker:
-                            score = 1
-                            if p_has_eng and has_eng_token(c_stem):
-                                score = 0.5
-                    if score < best_score:
-                        best_score = score
-                        best_metadata_file = candidate
-                if best_metadata_file:
-                    metadata_file = best_metadata_file; logger.info(f"Found matching description file '{metadata_file.name}' for video '{p.name}'."); content = metadata_file.read_text(encoding='utf-8'); data = sanitize_and_parse_json(content)
-                    if data: self.title = sanitize_for_youtube(data.get("title", self.title), YOUTUBE_TITLE_MAX_LENGTH); hashtags = " ".join(data.get("hashtags", [])); self.description = f"{data.get('description', '')}\n\n{hashtags}".strip(); self.tags = data.get("tags", [])[:YOUTUBE_TAGS_MAX_COUNT]
-                    else: self.description = content
-                    self.description_source = metadata_file.name; self.description_file_path = str(metadata_file)
-            except Exception as e: logger.error(f"Error reading description file for '{p.name}': {e}")
+        p = Path(filepath); self.filepath = str(p); self.title = sanitize_for_youtube(p.stem, YOUTUBE_TITLE_MAX_LENGTH); self.description, self.description_source = "", "None"; self.subtitle_path, self.subtitle_source = None, "None"; self.thumbnail_path, self.thumbnail_source = None, "None"; self.tags = []; self.description_file_path = None
+        self.metadata_error = None
+        try:
+            data = match_main_json(main_json_data, filename=p.name)
+            if data is not None:
+                self.description_source = "main.json"
+            else:
+                metadata_file = find_upload_metadata(p)
+                if metadata_file:
+                    self.description_source = metadata_file.name
+                    self.description_file_path = str(metadata_file)
+                    if metadata_file.stat().st_size:
+                        data = read_metadata_file(metadata_file)
+            if data is not None:
+                self.title = data.get('title', self.title)
+                self.description = assemble_description(data.get('description', ''), data.get('hashtags', []))
+                self.tags = list(data.get('tags', []))
+                logger.info("Loaded metadata from %s for '%s'.", self.description_source, p.name)
+        except (ValueError, OSError) as error:
+            self.metadata_error = str(error)
+            logger.error("Metadata error for '%s': %s", p.name, error)
         try:
             for pattern in SUBTITLE_PATTERNS:
                 found_subs = list(p.parent.glob(f"{p.stem}*.srt"))
                 if found_subs: sub_file = found_subs[0]; logger.info(f"Found matching subtitle file '{sub_file.name}' for video '{p.name}'."); self.subtitle_path = str(sub_file); self.subtitle_source = sub_file.name; break
         except Exception as e: logger.error(f"Error searching for subtitle file for '{p.name}': {e}")
+        try:
+            candidate_stems = [p.stem]
+            if self.description_file_path:
+                candidate_stems.append(Path(self.description_file_path).stem)
+            thumb_file = find_matching_thumbnail_for_stem(p.parent, candidate_stems)
+            if thumb_file:
+                logger.info(f"Found matching thumbnail file '{thumb_file.name}' for video '{p.name}'.")
+                self.thumbnail_path = str(thumb_file)
+                self.thumbnail_source = thumb_file.name
+        except Exception as e:
+            logger.error(f"Error searching for thumbnail file for '{p.name}': {e}")
         self.categoryId = '24'; self.videoLanguage = 'en'; self.defaultLanguage = 'en'; self.recordingDate = None; self.notifySubscribers = False; self.madeForKids = False; self.embeddable = True; self.publicStatsViewable = False; self.playlistId = ''; self.publishAt = None
+
+
+@dataclass(frozen=True)
+class UploadJobOptions:
+    """Selection and execution options captured on the GUI thread."""
+
+    video_entries: tuple[VideoEntry, ...]
+    skip_subtitles: bool
+    move_files: bool = True
+    dry_run: bool = False
+    upload_thumbnails: bool = False
+
 
 def calculate_default_start_time():
     now = datetime.now(); minimum_time = now + timedelta(hours=1); midnight_today = datetime.combine(now.date(), time()); minutes_from_midnight_to_minimum = (minimum_time - midnight_today).total_seconds() / 60; interval_minutes = 144; num_intervals = math.ceil(minutes_from_midnight_to_minimum / interval_minutes); scheduled_time = midnight_today + timedelta(minutes=num_intervals * interval_minutes)
@@ -598,7 +937,7 @@ class MainApp:
 
         list_lf = ttk.LabelFrame(frm, text="Video List", padding=5); list_lf.pack(fill=tk.BOTH, expand=True, pady=5)
         tree_frame = ttk.Frame(list_lf); tree_frame.pack(fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(tree_frame, columns=('id_or_path', 'title', 'views', 'likes', 'comments', 'desc_file', 'sub_file', 'status', 'publish_at', 'upload_date'), show='headings', selectmode="extended")
+        self.tree = ttk.Treeview(tree_frame, columns=('id_or_path', 'title', 'views', 'likes', 'comments', 'desc_file', 'sub_file', 'thumb_file', 'status', 'publish_at', 'upload_date'), show='headings', selectmode="extended")
         for col in self.tree['columns']: self.tree.heading(col, command=lambda c=col: self._sort_column(c, False))
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview); self.tree.configure(yscrollcommand=vsb.set); self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); vsb.pack(side=tk.RIGHT, fill=tk.Y); self.tree.bind('<<TreeviewSelect>>', self.on_video_select_display_info)
 
@@ -606,7 +945,7 @@ class MainApp:
         ttk.Label(list_controls, text="Search:").pack(side=tk.LEFT, padx=(0, 2))
         self.search_var = tk.StringVar(); self.search_var.trace_add("write", lambda *args: self.apply_filters())
         self.search_entry = ttk.Entry(list_controls, textvariable=self.search_var, width=20); self.search_entry.pack(side=tk.LEFT, padx=(0, 10))
-        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_main_json", "no_main_json", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Main JSON Match", variable=self.filter_vars["has_main_json"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Main JSON Match", variable=self.filter_vars["no_main_json"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
+        self.filter_menubutton = ttk.Menubutton(list_controls, text="Filter by...", state=tk.DISABLED); self.filter_menubutton.pack(side=tk.LEFT, padx=(0, 10)); self.filter_menu = tk.Menu(self.filter_menubutton, tearoff=0); self.filter_menubutton["menu"] = self.filter_menu; self.filter_vars = {k: tk.BooleanVar() for k in ["public", "not_public", "private", "not_private", "unlisted", "not_unlisted", "has_schedule", "no_schedule", "has_main_json", "no_main_json", "has_desc_file", "no_desc_file", "has_sub_file", "no_sub_file", "has_thumb_file", "no_thumb_file", "is_horizontal", "is_vertical"]}; self.filter_menu.add_checkbutton(label="Public", variable=self.filter_vars["public"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Public", variable=self.filter_vars["not_public"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Private", variable=self.filter_vars["private"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Private", variable=self.filter_vars["not_private"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Unlisted", variable=self.filter_vars["unlisted"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Unlisted", variable=self.filter_vars["not_unlisted"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Schedule", variable=self.filter_vars["has_schedule"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Not Scheduled", variable=self.filter_vars["no_schedule"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Main JSON Match", variable=self.filter_vars["has_main_json"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Main JSON Match", variable=self.filter_vars["no_main_json"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Description File", variable=self.filter_vars["has_desc_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Description File", variable=self.filter_vars["no_desc_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Subtitle File", variable=self.filter_vars["has_sub_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Subtitle File", variable=self.filter_vars["no_sub_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Has Thumbnail File", variable=self.filter_vars["has_thumb_file"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="No Thumbnail File", variable=self.filter_vars["no_thumb_file"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_checkbutton(label="Horizontal Video", variable=self.filter_vars["is_horizontal"], command=self.apply_filters); self.filter_menu.add_checkbutton(label="Vertical Video", variable=self.filter_vars["is_vertical"], command=self.apply_filters); self.filter_menu.add_separator(); self.filter_menu.add_command(label="Clear All Filters", command=self.clear_filters)
         ttk.Button(list_controls, text='Select All Visible', command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Select Main JSON', command=self.select_main_json_matches).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Deselect All', command=lambda: self.tree.selection_remove(self.tree.selection())).pack(side=tk.LEFT, padx=2); ttk.Button(list_controls, text='Export Data', command=self.export_data).pack(side=tk.RIGHT, padx=2)
 
         bottom_frame = ttk.Frame(frm); bottom_frame.pack(fill=tk.X, pady=5)
@@ -674,6 +1013,9 @@ class MainApp:
         self.skip_subs_var = tk.BooleanVar(value=True)
         skip_subs_cb = ttk.Checkbutton(action_frame, text="Skip Subtitle Uploads", variable=self.skip_subs_var)
         skip_subs_cb.pack(side=tk.LEFT, padx=(0, 15))
+        self.upload_thumbnails_var = tk.BooleanVar(value=False)
+        upload_thumbs_cb = ttk.Checkbutton(action_frame, text="Upload Matched Thumbnails", variable=self.upload_thumbnails_var)
+        upload_thumbs_cb.pack(side=tk.LEFT, padx=(0, 15))
         self.move_files_var = tk.BooleanVar(value=True)
         move_files_cb = ttk.Checkbutton(action_frame, text="Move files to 'uploaded' folder after success", variable=self.move_files_var)
         move_files_cb.pack(side=tk.LEFT, padx=(0, 15))
@@ -779,10 +1121,10 @@ class MainApp:
     def _update_gui_for_mode(self):
         self.tree.delete(*self.tree.get_children())
         if self.app_mode == "update":
-            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('title', text='Title'); self.tree.heading('views', text='Views'); self.tree.column('views', width=60); self.tree.heading('likes', text='Likes'); self.tree.column('likes', width=60); self.tree.heading('comments', text='Comments'); self.tree.column('comments', width=70); self.tree.heading('desc_file', text='Description File'); self.tree.heading('sub_file', text='Subtitle File'); self.tree.heading('status', text='Privacy'); self.tree.heading('publish_at', text='Publish At (UTC)'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
+            self.filter_menubutton.config(state=tk.NORMAL); self.process_button.config(text="PROCESS SELECTED VIDEOS"); self.tree.heading('id_or_path', text='Video ID'); self.tree.heading('title', text='Title'); self.tree.heading('views', text='Views'); self.tree.column('views', width=60); self.tree.heading('likes', text='Likes'); self.tree.column('likes', width=60); self.tree.heading('comments', text='Comments'); self.tree.column('comments', width=70); self.tree.heading('desc_file', text='Description File'); self.tree.heading('sub_file', text='Subtitle File'); self.tree.heading('thumb_file', text='Thumbnail File'); self.tree.heading('status', text='Privacy'); self.tree.heading('publish_at', text='Publish At (UTC)'); self.tree.heading('upload_date', text='Upload Date (UTC)'); self.tree.column('upload_date', width=150); self.vis_cb.config(state=tk.NORMAL); self.rad_private.config(state=tk.NORMAL); self.rad_unlisted.config(state=tk.NORMAL); self.rad_public.config(state=tk.NORMAL)
             self.update_status("UPDATE MODE: Load existing videos or select from list.")
         elif self.app_mode == "upload":
-            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('title', text='Title'); self.tree.heading('views', text=''); self.tree.heading('likes', text=''); self.tree.heading('comments', text=''); self.tree.heading('desc_file', text='Description Source'); self.tree.heading('sub_file', text=''); self.tree.heading('status', text=''); self.tree.heading('publish_at', text=''); self.tree.heading('upload_date', text='Subtitle Source'); self.tree.column('upload_date', width=120)
+            self.clear_filters(); self.filter_menubutton.config(state=tk.DISABLED); self.process_button.config(text="UPLOAD SELECTED FILES"); self.tree.heading('id_or_path', text='File Path'); self.tree.heading('title', text='Title'); self.tree.heading('views', text=''); self.tree.heading('likes', text=''); self.tree.heading('comments', text=''); self.tree.heading('desc_file', text='Description Source'); self.tree.heading('sub_file', text=''); self.tree.heading('thumb_file', text='Thumbnail Source'); self.tree.heading('status', text=''); self.tree.heading('publish_at', text=''); self.tree.heading('upload_date', text='Subtitle Source'); self.tree.column('upload_date', width=120)
             self.vis_cb.config(state=tk.DISABLED); self.rad_private.config(state=tk.DISABLED); self.rad_unlisted.config(state=tk.DISABLED); self.rad_public.config(state=tk.DISABLED)
             self.update_status("UPLOAD MODE: Load local files or select from list to upload.")
         self._update_ui_states()
@@ -879,7 +1221,7 @@ class MainApp:
                 status = vd.video_status.get('privacyStatus'); has_schedule = bool(vd.video_status.get('publishAt'))
                 has_main = bool(getattr(vd, 'main_json_dict', None))
                 has_desc = bool(vd.description_file_path or has_main)
-                conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_main_json": has_main, "no_main_json": not has_main, "has_desc_file": has_desc, "no_desc_file": not has_desc, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path}
+                conditions = {"public": status == 'public', "not_public": status != 'public', "private": status == 'private', "not_private": status != 'private', "unlisted": status == 'unlisted', "not_unlisted": status != 'unlisted', "has_schedule": has_schedule, "no_schedule": not has_schedule, "has_main_json": has_main, "no_main_json": not has_main, "has_desc_file": has_desc, "no_desc_file": not has_desc, "has_sub_file": bool(vd.subtitle_file_path), "no_sub_file": not vd.subtitle_file_path, "has_thumb_file": bool(vd.thumbnail_file_path), "no_thumb_file": not vd.thumbnail_file_path}
                 if vd.width > 0 and vd.height > 0: conditions.update({"is_horizontal": vd.width > vd.height, "is_vertical": vd.height >= vd.width})
                 if active_filters and not all(conditions.get(key, True) for key in active_filters): continue
                 filtered_list.append(vd)
@@ -907,9 +1249,9 @@ class MainApp:
                 if upload_date:
                     try: upload_date = datetime.fromisoformat(upload_date.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M UTC')
                     except (ValueError, TypeError): pass
-                self.tree.insert('', tk.END, values=(vd.video_id, vd.current_title, vd.view_count, vd.like_count, vd.comment_count, vd.description_filename, vd.subtitle_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date), iid=vd.video_id)
+                self.tree.insert('', tk.END, values=(vd.video_id, vd.current_title, vd.view_count, vd.like_count, vd.comment_count, vd.description_filename, vd.subtitle_filename, vd.thumbnail_filename, vd.video_status.get('privacyStatus', 'N/A'), publish_at, upload_date), iid=vd.video_id)
         elif self.app_mode == "upload":
-            for ve in videos_to_display: self.tree.insert('', tk.END, values=(ve.filepath, ve.title, '', '', '', ve.description_source, '', '', '', ve.subtitle_source), iid=ve.filepath)
+            for ve in videos_to_display: self.tree.insert('', tk.END, values=(ve.filepath, ve.title, '', '', '', ve.description_source, '', ve.thumbnail_source, '', '', ve.subtitle_source), iid=ve.filepath)
         self.update_status(f"Displaying {len(videos_to_display)} videos in {self.app_mode.upper()} mode.")
     
     def on_video_select_display_info(self, event):
@@ -927,6 +1269,10 @@ class MainApp:
                 ve_obj = next((ve for ve in self.videos_to_process if isinstance(ve, VideoEntry) and ve.filepath == item_iid), None)
                 if ve_obj: self.desc_txt.delete('1.0', tk.END); self.desc_txt.insert('1.0', ve_obj.description); self.tags_ent.delete(0, tk.END); self.tags_ent.insert(0, ", ".join(ve_obj.tags))
         elif len(selected_items) != 1: self.desc_txt.delete('1.0', tk.END); self.tags_ent.delete(0, tk.END); self.category_cb.set("Don't Change"); self.metadata_lang_cb.set("English"); self.audio_lang_cb.set("English"); self.recording_date_var.set(datetime.now().strftime('%Y-%m-%d')); self.allow_embedding_var.set(True); self.public_stats_var.set(False); self.made_for_kids_var.set('no')
+        self._displayed_metadata_values = {
+            'description': self.desc_txt.get('1.0', 'end-1c'),
+            'tags': self.tags_ent.get(),
+        }
     
     def select_credentials_and_auth(self):
         path = filedialog.askopenfilename(title='Select client_secrets.json', filetypes=[('JSON files', '*.json')])
@@ -941,48 +1287,15 @@ class MainApp:
         except Exception as e: logger.error(f"Failed to load video categories: {e}"); self.update_status("Error: Could not load categories.")
     
     def _match_video_to_main_json(self, vd_obj: VideoData) -> dict | None:
-        if not getattr(self, 'main_json_data', None):
+        try:
+            return match_main_json(
+                getattr(self, 'main_json_data', None), video_id=vd_obj.video_id,
+                filename=vd_obj.original_upload_filename, title=vd_obj.original_title,
+            )
+        except ValueError as error:
+            vd_obj.metadata_error = str(error)
+            logger.error("Metadata error for '%s': %s", vd_obj.original_title, error)
             return None
-        orig_title = vd_obj.original_title or ""
-        orig_fn = vd_obj.original_upload_filename or ""
-        orig_fn_stem = Path(orig_fn).stem if orig_fn else ""
-        norm_orig_title = normalize_for_matching(orig_title)
-        norm_orig_fn = normalize_for_matching(orig_fn_stem)
-        nuc_orig_title = nuclear_clean(orig_title)
-        nuc_orig_fn = nuclear_clean(orig_fn)
-
-        for item in self.main_json_data:
-            if not isinstance(item, dict):
-                continue
-            item_vid = item.get("video_id") or item.get("id")
-            if item_vid and str(item_vid) == vd_obj.video_id:
-                return item
-
-            item_fn = str(item.get("filename", "") or "").strip()
-            if item_fn:
-                item_fn_stem = Path(item_fn).stem
-                nuc_fn = nuclear_clean(item_fn)
-                norm_fn = normalize_for_matching(item_fn_stem)
-                if (
-                    item_fn in (orig_title, orig_fn, orig_fn_stem)
-                    or item_fn_stem in (orig_title, orig_fn_stem)
-                    or (nuc_fn and nuc_fn in (nuc_orig_title, nuc_orig_fn))
-                    or (norm_fn and norm_fn in (norm_orig_title, norm_orig_fn))
-                ):
-                    return item
-
-            item_title = str(item.get("title", "") or "").strip()
-            if item_title:
-                sanitized_title = sanitize_for_youtube(item_title, YOUTUBE_TITLE_MAX_LENGTH)
-                nuc_item_title = nuclear_clean(item_title)
-                norm_item_title = normalize_for_matching(item_title)
-                if (
-                    orig_title in (item_title, sanitized_title)
-                    or (norm_item_title and norm_item_title == norm_orig_title)
-                    or (nuc_item_title and nuc_item_title == nuc_orig_title)
-                ):
-                    return item
-        return None
 
     def _apply_main_json_to_video(self, vd_obj: VideoData, main_json_item: dict, apply_metadata: bool | None = None):
         vd_obj.main_json_dict = main_json_item
@@ -1177,15 +1490,25 @@ class MainApp:
             local_files = [f for f in Path.cwd().rglob('*') if f.is_file()]
             logger.info(f"--- DEBUG: FOUND {len(local_files)} LOCAL FILES ---")
             metadata_title_cache = {}
+            valid_metadata_files = set()
+            metadata_file_errors = {}
             for f in local_files:
-                if f.suffix.lower() in METADATA_EXTENSIONS:
-                    metadata_title_cache[f] = normalize_for_matching(extract_title_from_metadata_file(f) or "")
+                if f.suffix.lower() in METADATA_EXTENSIONS and f.name.lower() != 'main.json':
+                    try:
+                        data = read_metadata_file(f, allow_unrelated=True)
+                        if data is None:
+                            continue
+                        valid_metadata_files.add(f)
+                        metadata_title_cache[f] = normalize_for_matching(data.get('title', ''))
+                    except (ValueError, OSError) as error:
+                        metadata_file_errors[f] = str(error)
             
             # High-Precision TIMESTAMP_PATTERN (Captures Seconds)
             TIMESTAMP_PATTERN = re.compile(r'(202\d)[\.\-\s_]?([01]\d)[\.\-\s_]?([0-3]\d).*?([0-2]\d)[\.\-\s_]?([0-5]\d)[\.\-\s_]?([0-5]\d)?')
             
             used_metadata_files = set()
             used_subtitle_files = set()
+            used_thumbnail_files = set()
 
             for i in range(0, len(video_ids), 50):
                 self.update_status(f"Fetching details... ({min(i + 50, len(video_ids))}/{len(video_ids)})")
@@ -1222,6 +1545,8 @@ class MainApp:
                         if ts_orig: yt_timestamps.add(ts_orig)
 
                     yt_norm_title = normalize_for_matching(vd_obj.current_title)
+                    orig_upload_stem = re.sub(r'\.[a-z0-9]{2,4}$', '', vd_obj.original_upload_filename, flags=re.IGNORECASE) if vd_obj.original_upload_filename else None
+                    orig_norm_stem = normalize_for_matching(orig_upload_stem) if orig_upload_stem else ""
                     nuclear_title = nuclear_clean(vd_obj.current_title)
                     marker_num_title = extract_marker_number(vd_obj.current_title)
                     
@@ -1237,20 +1562,49 @@ class MainApp:
                         h = extract_trailing_hash8(src)
                         if h:
                             yt_hash_tokens.add(h)
-                    best_txt_match = None; best_sub_match = None
+                    best_txt_match = None; best_sub_match = None; best_thumb_match = None
                     best_txt_score = float('inf')
                     best_sub_score = float('inf')
+                    best_thumb_score = float('inf')
                     if not main_json_item:
                         best_meta_match_name = None
                     best_sub_match_name = None
+                    best_thumb_match_name = None
                     best_txt_hash_tiebreak = -1
                     best_sub_hash_tiebreak = -1
+                    best_thumb_hash_tiebreak = -1
+                    best_metadata_candidates = []
+                    exact_metadata = None
+                    if not main_json_item and not vd_obj.metadata_error:
+                        try:
+                            stems = [orig_upload_stem] if orig_upload_stem else [vd_obj.current_title]
+                            exact_yt_names = {f'{stem}-youtube.json'.lower() for stem in stems if stem}
+                            exact_json_names = {f'{stem}.json'.lower() for stem in stems if stem}
+                            exact_candidates = [
+                                (0, path) for path in local_files
+                                if path not in used_metadata_files and path.name.lower() in exact_yt_names
+                            ] + [
+                                (1, path) for path in local_files
+                                if path not in used_metadata_files and path.name.lower() in exact_json_names and (path in valid_metadata_files or path in metadata_file_errors)
+                            ]
+                            exact_metadata = unique_metadata_match(exact_candidates, f"metadata for {vd_obj.original_title}")
+                            if exact_metadata in metadata_file_errors:
+                                raise ValueError(metadata_file_errors[exact_metadata])
+                            if exact_metadata is not None and exact_metadata not in valid_metadata_files:
+                                raise ValueError(f"{exact_metadata}: exact sidecar must contain a metadata object, not a timing export or another JSON type.")
+                        except ValueError as error:
+                            vd_obj.metadata_error = str(error)
+                            logger.error("Metadata error for '%s': %s", vd_obj.original_title, error)
 
                     for file_path in local_files:
+                        ext_lower = file_path.suffix.lower()
+                        if ext_lower in METADATA_EXTENSIONS and (file_path not in valid_metadata_files and file_path not in metadata_file_errors or vd_obj.metadata_error): continue
+                        if (ext_lower in METADATA_EXTENSIONS or ext_lower in THUMBNAIL_EXTENSIONS) and orig_upload_stem and not compatible_render_variant(orig_upload_stem, file_path.stem): continue
                         # Guard: Skip blank files
-                        if file_path.suffix.lower() in METADATA_EXTENSIONS and file_path.stat().st_size == 0: continue
-                        if file_path.suffix.lower() in METADATA_EXTENSIONS and file_path in used_metadata_files: continue
-                        if any(file_path.suffix.lower() == p.replace('*', '') for p in SUBTITLE_PATTERNS) and file_path in used_subtitle_files: continue
+                        if (ext_lower in METADATA_EXTENSIONS or ext_lower in THUMBNAIL_EXTENSIONS) and file_path.stat().st_size == 0: continue
+                        if ext_lower in METADATA_EXTENSIONS and file_path in used_metadata_files: continue
+                        if any(ext_lower == p.replace('*', '') for p in SUBTITLE_PATTERNS) and file_path in used_subtitle_files: continue
+                        if ext_lower in THUMBNAIL_EXTENSIONS and file_path in used_thumbnail_files: continue
                         
                         current_score = float('inf')
                         file_ts = get_ts(file_path.name)
@@ -1259,10 +1613,9 @@ class MainApp:
                         file_hash = extract_trailing_hash8(file_path.stem)
                         hash_tiebreak = 1 if (file_hash and file_hash in yt_hash_tokens) else 0
 
-                        # A. EXACT NORMALIZED TITLE <-> STEM MATCH (strongest non-timestamp signal)
-                        if file_norm_stem and yt_norm_title:
-                            if file_norm_stem == yt_norm_title:
-                                current_score = 0.1
+                        # A. EXACT NORMALIZED TITLE/ORIGINAL-FILENAME <-> STEM MATCH (strongest non-timestamp signal)
+                        if file_norm_stem and (file_norm_stem == yt_norm_title or (orig_norm_stem and file_norm_stem == orig_norm_stem)):
+                            current_score = 0.1
 
                         # B. TIMESTAMP MATCH (Score 0 or 5 based on Replay status)
                         if file_ts and file_ts in yt_timestamps:
@@ -1304,6 +1657,8 @@ class MainApp:
                         # F. Hash Priority Override
                         if hash_tiebreak == 1:
                             current_score = -1
+                        if file_path == exact_metadata:
+                            current_score = -2
 
                         if current_score < float('inf'):
                             ext = file_path.suffix.lower()
@@ -1314,14 +1669,38 @@ class MainApp:
                                     best_txt_match = file_path
                                     best_meta_match_name = file_path.name
                                     best_txt_hash_tiebreak = hash_tiebreak
+                                    best_metadata_candidates = [file_path]
+                                elif current_score == best_txt_score and hash_tiebreak == best_txt_hash_tiebreak:
+                                    best_metadata_candidates.append(file_path)
                             elif any(ext == p.replace('*', '') for p in SUBTITLE_PATTERNS):
                                 if (current_score < best_sub_score) or (current_score == best_sub_score and hash_tiebreak > best_sub_hash_tiebreak):
                                     best_sub_score = current_score
                                     best_sub_match = file_path
                                     best_sub_match_name = file_path.name
                                     best_sub_hash_tiebreak = hash_tiebreak
+                            elif ext in THUMBNAIL_EXTENSIONS:
+                                if (current_score < best_thumb_score) or (current_score == best_thumb_score and hash_tiebreak > best_thumb_hash_tiebreak):
+                                    best_thumb_score = current_score
+                                    best_thumb_match = file_path
+                                    best_thumb_match_name = file_path.name
+                                    best_thumb_hash_tiebreak = hash_tiebreak
 
-                    if best_txt_match or best_sub_match:
+                    if len(best_metadata_candidates) > 1:
+                        vd_obj.metadata_error = f"Ambiguous metadata for {vd_obj.original_title}: {'; '.join(str(path) for path in sorted(best_metadata_candidates))}"
+                        logger.error(vd_obj.metadata_error)
+                        best_txt_match = None
+                        best_meta_match_name = None
+                    elif best_txt_match in metadata_file_errors:
+                        vd_obj.metadata_error = metadata_file_errors[best_txt_match]
+                        logger.error("Metadata error for '%s': %s", vd_obj.original_title, vd_obj.metadata_error)
+                        best_txt_match = None
+                        best_meta_match_name = None
+                    if best_txt_match and (best_thumb_match is None or best_thumb_score > best_txt_score):
+                        sibling_thumb = find_matching_thumbnail_for_stem(best_txt_match.parent, [best_txt_match.stem])
+                        if sibling_thumb and sibling_thumb not in used_thumbnail_files:
+                            best_thumb_match = sibling_thumb
+                            best_thumb_match_name = sibling_thumb.name
+                    if best_txt_match or best_sub_match or best_thumb_match:
                          if best_txt_match:
                              vd_obj.description_file_path = str(best_txt_match)
                              vd_obj.description_filename = best_txt_match.name
@@ -1330,7 +1709,11 @@ class MainApp:
                              vd_obj.subtitle_file_path = str(best_sub_match)
                              vd_obj.subtitle_filename = best_sub_match.name
                              used_subtitle_files.add(best_sub_match)
-                         logger.info(f"  > MATCH FOUND -> metadata={best_meta_match_name or 'None'}, subtitle={best_sub_match_name or 'None'}")
+                         if best_thumb_match:
+                             vd_obj.thumbnail_file_path = str(best_thumb_match)
+                             vd_obj.thumbnail_filename = best_thumb_match.name
+                             used_thumbnail_files.add(best_thumb_match)
+                         logger.info(f"  > MATCH FOUND -> metadata={best_meta_match_name or 'None'}, subtitle={best_sub_match_name or 'None'}, thumbnail={best_thumb_match_name or 'None'}")
                     elif not main_json_item:
                          logger.info("  > NO LOCAL MATCH FOUND")
 
@@ -1356,7 +1739,12 @@ class MainApp:
                 selected_videos.sort(key=lambda x: str(x.original_upload_filename or x.current_title).lower(), reverse=True)
             elif order == 'Random':
                 random.shuffle(selected_videos)
-            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_metadata": getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get(), "update_schedule": self.update_schedule_var.get(), "remove_schedule": getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": self.desc_txt.get('1.0', 'end-1c'), "tags_override": self.tags_ent.get(), "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
+            description_override = self.desc_txt.get('1.0', 'end-1c')
+            tags_override = self.tags_ent.get()
+            displayed = getattr(self, '_displayed_metadata_values', {})
+            if description_override == displayed.get('description'): description_override = ''
+            if tags_override == displayed.get('tags'): tags_override = ''
+            processing_data = {"videos": selected_videos, "start_time_str": self.start_ent.get(), "interval_hours": int(self.interval_hour_var.get()), "interval_mins": int(self.interval_minute_var.get()), "playlist_id": self.playlist_id_var.get().strip(), "is_dry_run": self.dry_run_var.get(), "update_metadata": getattr(self, 'update_metadata_var', tk.BooleanVar(value=True)).get(), "upload_thumbnails": getattr(self, 'upload_thumbnails_var', tk.BooleanVar(value=False)).get(), "update_schedule": self.update_schedule_var.get(), "remove_schedule": getattr(self, 'remove_schedule_var', tk.BooleanVar(value=False)).get(), "update_visibility": self.update_visibility_var.get(), "visibility_to_set": self.visibility_choice_var.get(), "notify_subscribers": self.notify_subscribers_var.get(), "category_id": self.dynamic_category_map.get(self.category_var.get()) if self.category_var.get() != "Don't Change" else None, "description_override": description_override, "tags_override": tags_override, "metadata_lang_name": self.metadata_lang_var.get(), "audio_lang_name": self.audio_lang_var.get(), "recording_date": self.recording_date_var.get().strip(), "allow_embedding": self.allow_embedding_var.get(), "public_stats_viewable": self.public_stats_var.get(), "made_for_kids": self.made_for_kids_var.get()}
             self.update_status("Updating... Check console."); threading.Thread(target=self.run_update_processing, args=(processing_data,), daemon=True).start()
         elif self.app_mode == "upload":
             selected_videos = []
@@ -1369,7 +1757,15 @@ class MainApp:
                 selected_videos.sort(key=lambda x: Path(x.filepath).name.lower(), reverse=True)
             elif order == 'Random':
                 random.shuffle(selected_videos)
-            self.update_status("Uploading... Check console."); threading.Thread(target=self.run_upload_processing, args=(selected_videos,), daemon=True).start()
+            job_options = UploadJobOptions(
+                video_entries=tuple(selected_videos),
+                skip_subtitles=self.skip_subs_var.get(),
+                move_files=self.move_files_var.get(),
+                dry_run=self.dry_run_var.get(),
+                upload_thumbnails=getattr(self, 'upload_thumbnails_var', tk.BooleanVar(value=False)).get(),
+            )
+            self.update_status("Previewing uploads... Check console." if job_options.dry_run else "Uploading... Check console.")
+            threading.Thread(target=self.run_upload_processing, args=(job_options,), daemon=True).start()
 
     def _finish_update_ui(self):
         selected = self.tree.selection()
@@ -1388,12 +1784,23 @@ class MainApp:
         except Exception as e: logger.error(f"Overall update process failed: {e}"); self.update_status("Update process failed.")
         finally: self.root.after(100, self._finish_update_ui)
 
-    def run_upload_processing(self, selected_videos):
+    def run_upload_processing(self, job_options):
+        completion_status = "Upload preview complete." if job_options.dry_run else "Upload process complete."
         try:
-            if not self.service: self.update_status("Error: Not authenticated."); return
-            upload_new_videos(self.service, selected_videos, self.skip_subs_var.get(), self.move_files_var.get())
-        except Exception as e: logger.error(f"Overall upload process failed: {e}"); self.update_status("Upload process failed.")
-        finally: self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL)); self.root.after(100, lambda: self.update_status("Upload process complete."))
+            if self.service is None and not job_options.dry_run:
+                completion_status = "Error: Not authenticated."
+                return
+            upload_new_videos(
+                self.service, job_options.video_entries, job_options.skip_subtitles,
+                job_options.move_files, dry_run=job_options.dry_run,
+                upload_thumbnails=job_options.upload_thumbnails,
+            )
+        except Exception as e:
+            logger.error(f"Overall upload process failed: {e}")
+            completion_status = "Upload process failed."
+        finally:
+            self.root.after(100, lambda: self.process_button.config(state=tk.NORMAL))
+            self.root.after(100, lambda: self.update_status(completion_status))
 
     def on_exit(self):
         if self.save_log_var.get():
@@ -1403,6 +1810,7 @@ class MainApp:
 def update_videos_on_youtube(service, processing_data):
     videos = processing_data["videos"]; is_dry_run = processing_data["is_dry_run"]
     update_metadata = processing_data.get("update_metadata", True)
+    upload_thumbnails = processing_data.get("upload_thumbnails", False)
     start_dt, delta = None, None
     if processing_data.get("update_schedule"):
         try:
@@ -1425,20 +1833,12 @@ def update_videos_on_youtube(service, processing_data):
         parts, body = [], {'id': vd.video_id}
         display_title = vd.current_title
         if update_metadata:
-            description_content = vd.current_description; tags_content = vd.current_tags; title_content = vd.current_title
-            if processing_data["description_override"].strip(): description_content = processing_data["description_override"]
-            elif hasattr(vd, 'main_json_dict') and vd.main_json_dict:
-                data = vd.main_json_dict
-                title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
-            elif vd.description_file_path:
-                try:
-                    file_content = Path(vd.description_file_path).read_text(encoding='utf-8'); data = sanitize_and_parse_json(file_content)
-                    if data: title_content = data.get("title", title_content); hashtags = " ".join(data.get("hashtags", [])); description_content = f"{data.get('description', '')}\n\n{hashtags}".strip(); tags_content = data.get("tags", [])
-                    else: description_content = file_content
-                except Exception as e: logger.error(f"Error reading file: {e}")
-                
-            snippet = {'title': sanitize_for_youtube(title_content, YOUTUBE_TITLE_MAX_LENGTH), 'description': sanitize_description(description_content), 'tags': sanitize_tags(tags_content)}
-            snippet['categoryId'] = processing_data["category_id"] if processing_data["category_id"] else vd.current_category_id
+            try:
+                snippet = prepare_update_snippet(vd, processing_data)
+            except (ValueError, OSError) as error:
+                logger.error("Skipping metadata update for '%s': %s", vd.original_title, error)
+                failed_videos.append(vd.original_title)
+                continue
             body['snippet'] = snippet; parts.append('snippet')
             display_title = snippet['title']
         
@@ -1451,6 +1851,10 @@ def update_videos_on_youtube(service, processing_data):
             for k in ('embeddable', 'publicStatsViewable', 'selfDeclaredMadeForKids'):
                 if k in vd.video_status:
                     status[k] = vd.video_status[k]
+
+        for key in ('license', 'containsSyntheticMedia'):
+            if key in vd.video_status:
+                status[key] = vd.video_status[key]
 
         status['privacyStatus'] = vd.video_status.get('privacyStatus', 'private')
         if processing_data["update_schedule"]:
@@ -1475,6 +1879,8 @@ def update_videos_on_youtube(service, processing_data):
         
         if is_dry_run:
             logger.info(f"DRY RUN ({i+1}/{len(videos)}): '{vd.original_title}' -> parts={','.join(parts)}, privacyStatus={status.get('privacyStatus')}, publishAt={status.get('publishAt')}")
+            if upload_thumbnails and getattr(vd, 'thumbnail_file_path', None):
+                upload_video_thumbnail(service, vd.video_id, vd.thumbnail_file_path, is_dry_run=True)
             success_count += 1
             continue
         try:
@@ -1485,10 +1891,14 @@ def update_videos_on_youtube(service, processing_data):
             else:
                 vd.video_status.pop('publishAt', None)
             if 'snippet' in body:
+                vd.video_snippet.update(deepcopy(body['snippet']))
                 vd.current_title = body['snippet']['title']
-                vd.current_description = body['snippet']['description']
-                vd.current_tags = body['snippet']['tags']
+                vd.current_description = body['snippet'].get('description', '')
+                vd.current_tags = body['snippet'].get('tags', [])
+                vd.current_category_id = body['snippet']['categoryId']
             logger.info(f"({i+1}/{len(videos)}) Updated '{display_title}' (parts={','.join(parts)}, privacy={status.get('privacyStatus')}).")
+            if upload_thumbnails and getattr(vd, 'thumbnail_file_path', None):
+                upload_video_thumbnail(service, vd.video_id, vd.thumbnail_file_path, is_dry_run=False)
             success_count += 1
         except HttpError as e:
             logger.error(f"FAILED update: {e.reason}")
@@ -1506,9 +1916,11 @@ def update_videos_on_youtube(service, processing_data):
         for fv in failed_videos: logger.error(f"  - {fv}")
     logger.info("------------------------------")
 
-def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
-    batch_id = generate_batch_id(); uploaded_log = []
-    success_count = 0; failed_videos = []; skipped_videos = []
+def upload_new_videos(service, video_entries, skip_subtitles, move_files=True, *, dry_run=False, legacy_tag_cleanup=False, upload_thumbnails=False):
+    if service is None and not dry_run:
+        raise ValueError("Not authenticated.")
+    batch_id = generate_batch_id()
+    success_count = 0; planned_count = 0; failed_videos = []; skipped_videos = []
     
     for e in video_entries:
         # Blank File Safety Guard
@@ -1517,12 +1929,37 @@ def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
             skipped_videos.append(e.title)
             continue
 
-        try: 
+        try:
+            if getattr(e, 'metadata_error', None):
+                raise ValueError(e.metadata_error)
+            snippet = {
+                'title': validate_title(e.title),
+                'description': sanitize_description(e.description),
+                'categoryId': e.categoryId,
+                'tags': prepare_tags(e.tags, legacy_cleanup=legacy_tag_cleanup),
+            }
+            body = {'snippet': snippet, 'status': {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids}}
+            logger.debug("Prepared upload body for %s: %s", e.filepath, body)
+            if dry_run:
+                logger.info(
+                    "DRY RUN: file=%s | metadata=%s | thumbnail=%s | tags=%s | part=snippet,status | categoryId=%s | status=%s | skip_subtitles=%s | upload_thumbnails=%s | move_files=%s (disabled for preview)",
+                    e.filepath, e.description_file_path or e.description_source,
+                    getattr(e, 'thumbnail_path', None) or getattr(e, 'thumbnail_source', 'None'),
+                    snippet['tags'], snippet['categoryId'], body['status'], skip_subtitles, upload_thumbnails, move_files,
+                )
+                planned_count += 1
+                continue
             media = MediaFileUpload(e.filepath, chunksize=-1, resumable=True)
-            body = {'snippet': {'title': e.title, 'description': sanitize_description(e.description), 'categoryId': e.categoryId}, 'status': {'privacyStatus': 'private', 'publishAt': e.publishAt, 'selfDeclaredMadeForKids': e.madeForKids}}
-            req = service.videos().insert(part='snippet,status', body=body, media_body=media); resp = None
-            while resp is None: progress, resp = req.next_chunk()
+            try:
+                req = service.videos().insert(part='snippet,status', body=body, media_body=media); resp = None
+                while resp is None: progress, resp = req.next_chunk()
+            finally:
+                stream = media.stream() if hasattr(media, 'stream') else None
+                if stream is not None and hasattr(stream, 'close'):
+                    stream.close()
             vid = resp['id']; logger.info(f"Uploaded: https://youtu.be/{vid}")
+            if upload_thumbnails and getattr(e, 'thumbnail_path', None):
+                upload_video_thumbnail(service, vid, e.thumbnail_path, is_dry_run=False)
             success_count += 1
             if move_files: move_uploaded_files(e, batch_id, True)
         except Exception as ex: 
@@ -1534,6 +1971,7 @@ def upload_new_videos(service, video_entries, skip_subtitles, move_files=True):
             
     logger.info("\n--- Upload Process Summary ---")
     logger.info(f"Total processed: {len(video_entries)}")
+    if dry_run: logger.info(f"Planned uploads (Dry Run): {planned_count}")
     logger.info(f"Successfully uploaded: {success_count}")
     if skipped_videos: logger.info(f"Skipped (blank metadata): {len(skipped_videos)}")
     if failed_videos:

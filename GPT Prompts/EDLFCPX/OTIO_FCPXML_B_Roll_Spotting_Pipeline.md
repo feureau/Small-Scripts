@@ -48,14 +48,22 @@ Generate the editorial B-roll plan (`03_Transcripts/broll_plan.json`) and 5-colu
    - Coalesce rapid micro-events when cohesive (`< 3.5s`), and **sub-split** any single speech block longer than `~11–12s` at a natural internal phrase/clause boundary using word timestamps so average shot length stays dynamic (`~4–11s`, zero 30-second static holds).
    - Alternate every adjacent cue sequentially between **Odd (`V1/A1`)** and **Even (`V2/A2`)** tracks (`track_pair = 1 if clip_idx % 2 == 1 else 2`).
 
-2. **2-Tier Visual Matching System**:
-   - **Tier 1 — Literal Receipts (Direct Callouts):** Whenever the voiceover quotes dialogue, cites a specific plot beat, character interaction, visual gag, or prop, match the **exact episode and exact subtitle timestamp** in `broll_transcript_index.json`.
-   - **Tier 2 — Thematic B-Roll (Metaphors, Tangents & Analysis):** Whenever the voiceover makes an abstract argument, punchline, or cross-season comparison, pair it with an expressive reaction shot, environmental atmosphere, or visual contrast from `[SOURCE MEDIA SRTs]`.
+2. **LLM-First 2-Tier Scene Selection (NO Programmatic Keyword Picking or Shifting)**:
+   - **NEVER select or score B-roll scenes programmatically** (no keyword/TF-IDF/regex matching, no blind `±900s` overlap-shifting loops like `place()`, and no fallback substitutions).
+   - Export compact LLM-readable spotting inputs:
+     - `slots.json`: every cue slot (`clip_idx`, `rec_in`, `rec_out`, `dur_s`, `spoken_text`, `monologue_paragraph`, `short_label`).
+     - `episodes/<ep_code>.txt`: `[MM:SS] subtitle` logs for every source video.
+   - Spot in parallel LLM batches (~`35–50` slots per batch) by reading the monologue context + `episodes/*.txt` subtitle logs and outputting `picks_<proj>_<batch>.json` (`clip_idx`, `episode_code`, `src_in_tc`, `rationale`):
+     - **Tier 1 — Literal Receipts (Direct Callouts):** Whenever the voiceover quotes dialogue, cites a specific plot beat, character interaction, visual gag, or prop, match the **exact episode and exact subtitle timestamp** in `episodes/<ep_code>.txt`.
+     - **Tier 2 — Thematic B-Roll (Metaphors, Tangents & Analysis):** Whenever the voiceover makes an abstract argument, punchline, or cross-season comparison, pair it with an expressive reaction shot, environmental atmosphere, or visual contrast from `episodes/<ep_code>.txt`.
+   - **Zero-Image Quota Guard**: Do **NOT** generate or inspect frame contact sheets / verification images unless the user explicitly asks for visual frame inspection (subtitle logs + LLM reasoning are sufficient and preserve token/image quota).
 
-3. **Strict Anti-Hallucination & Duration Clamping**:
-   - **NEVER invent or guess source timestamps.** Programmatically look up and assert every candidate `anchor_srt_tc` directly against `subtitles[]` in `broll_transcript_index.json` (plus optional fuzzy/substring assertion that the matched dialogue text is genuinely in that block).
-   - Apply a **`1–2s` lead-in handle** (`src_in_ms = max(0, anchor.start_ms - handle_ms)`), convert to frames (`src_in = round((src_in_ms / 1000.0) * ep.src_fps)`), and compute **`src_out = src_in + rec_dur`** (`100%` playback speed — `(src_out - src_in) == (rec_out - rec_in)`).
-   - Clamp `[src_in, src_out]` cleanly within `[0, ep.total_frames]` (`if src_out > total_frames: src_out = total_frames; src_in = total_frames - rec_dur`).
+3. **Strict Cross-Batch Overlap Audit, LLM Overrides & Zero-Shift Compilation**:
+   - **NEVER invent or guess source timestamps.** Assert every pick's `src_in_tc` + `rec_dur` lies within `[0, ep.total_frames]`.
+   - Run a deterministic cross-batch overlap audit (`conflict_audit.py`) across all merged batches to detect any same-episode overlaps (`> 0.05s`) and print unused free windows per episode.
+   - Hand-pick non-overlapping LLM replacements from those free subtitle windows into `picks_<proj>_overrides.json`.
+   - Compile via strict zero-shift validation (`compile_picks.py`): require **100% LLM coverage, `0` overlaps (`> 0.05s`), `0` out-of-bounds cues, `0` programmatic shifting, and `0` fallback**—failing loudly if any conflict remains rather than silently moving clips.
+   - Compute `src_in = round((src_in_ms / 1000.0) * ep.src_fps)` and **`src_out = src_in + rec_dur`** (`100%` playback speed — `(src_out - src_in) == (rec_out - rec_in)`).
 
 4. **5-Column Spotting Sheet Deliverable (`<proj_dir>/04_Timelines/B-Roll/<stem>_broll_spotting_sheet.md`)**:
    - Organize chronologically by essay section using:
@@ -99,15 +107,25 @@ Generate the editorial B-roll plan (`03_Transcripts/broll_plan.json`) and 5-colu
 - **Bottom-of-Track Rule**: Always append `<enabled>TRUE|FALSE</enabled>` and `<locked>FALSE</locked>` at the **END** of every `<track>` (after all `<clipitem>` elements) so Resolve respects `V1/V2=TRUE` and `V3=FALSE`.
 - Emit `<sourcetrack><trackindex>25</trackindex></sourcetrack>` on `A5` and `<trackindex>31</trackindex>` on `A6`, linked `1:1` with `V3`. *(State explicitly in your final handoff that Resolve flattens `.xml` audio tracks, whereas `.otio` preserves true `5.1` + `Ch 25`/`31`.)*
 
-#### 3. Optional: Assemble Directly into an Open Template Timeline (DaVinci Resolve MCP)
-When the user explicitly asks to assemble the `.otio` into an **already-open template timeline** (e.g., `24p HDR` / `dolbyatmos5.1.2` templates) via the DaVinci Resolve MCP:
-- Import source media into a clean `02_Footage` bin (or import the `.otio` into a temp bin, move its clips into `02_Footage`, and delete the temp timeline/bin).
-- **10s MCP Timeout Batching Guard**: Call `mp.AppendToTimeline(...)` and `item.SetSourceAudioChannelMapping(...)` **per track** (or in chunks of `<= 200` items per `run_script_unsafe` call) so each call finishes well under the 10-second MCP timeout.
-- Apply exact channel mappings after appending:
-  - `A1`/`A2` (`5.1`): `'{"embedded_audio_channels":6,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[1,2,3,4,5,6],"mute":false,"type":"5.1"}}}'`
-  - `A5` (`Ch 25`): `'{"embedded_audio_channels":36,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[25],"mute":false,"type":"mono"}}}'`
-  - `A6` (`Ch 31`, if active): `'{"embedded_audio_channels":36,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[31],"mute":false,"type":"mono"}}}'`
-- Disable `V3` (`tl.SetTrackEnable("video", 3, False)`) to keep Camera A-Roll tucked above B-roll.
+#### 3. Optional: Assemble Directly into a Template Timeline or New Project (DaVinci Resolve MCP)
+When the user asks to create a new project from a `.drt` template (e.g., `f:\GitHub\Small-Scripts\DaVinci Resolve\1. Assembly 24p HDR.drt`) or assemble into an **already-open template timeline** (e.g., `24p HDR` / `dolbyatmos5.1.2`) via the DaVinci Resolve MCP:
+- **Project, Bins & Render Output**:
+  - If creating a new project, name it after `<proj_dir>`, set `timelineResolutionWidth="1920"`, `timelineResolutionHeight="1080"`, `timelineFrameRate="24"`, `timelinePlaybackFrameRate="24"`, and set the Deliver render output location via `project.SetRenderSettings({"TargetDir": "<proj_dir>\\06_Renders"})`.
+  - Organize source media into clean Media Pool bins (`02_Footage/Camera` for A-roll MKVs, `02_Footage/B-Roll` for referenced B-roll files, and `04_Timelines` for the imported `.drt` template).
+- **10s MCP Timeout Batching Guard**:
+  - `mp.ImportMedia(...)`: batch `<= 6` large MKV/MP4 files per call.
+  - `mp.AppendToTimeline(...)`: batch `<= 75–90` B-roll cues or `<= 30–40` A-roll events per call (split `ImportMedia`/clear/append/link into separate calls if a full timeline update approaches `10s`).
+  - `tl.SetClipsLinked(...)`: batch `<= 90` pairs per call using `zip(v[s:e], a[s:e])` or `GetStart()` matching (keep per-call work short).
+- **Track Target, Channel Mapping & Spilled-Stream Cleanup**:
+  - B-Roll (`broll_plan.json`): set `5.1` mapping on each `MediaPoolItem` via `mpi.SetAudioMapping(...)` before appending (and/or `item.SetSourceAudioChannelMapping(...)`), then append Video (`mediaType=1`) to `V1`/`V2` and Audio (`mediaType=2`) to `A1`/`A2`:
+    `'{"embedded_audio_channels":6,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[1,2,3,4,5,6],"mute":false,"type":"5.1"}}}'`
+  - **Non-Destructive B-Roll Refresh**: When regenerating B-roll on an already-assembled timeline, delete **only** `V1`/`V2` and `A1`/`A2`/`A6`–`A10` (`tl.DeleteClips(items, False)`), leaving `V5`/`A5` (A-roll), `V8` adjustment clips, and `Blue` markers intact.
+  - Camera A-Roll (`cutlist.json`): append Video (`mediaType=1`) to **`V5`** (leaving `V3`–`V4` free for overlays/graphics; or `V3` if requested) and Audio (`mediaType=2`) to **`A5` (`Vocal 1`)**, mapping `A5` to `Ch 25`:
+    `'{"embedded_audio_channels":36,"linked_audio":{},"track_mapping":{"1":{"channel_idx":[25],"mute":false,"type":"mono"}}}'`
+    *(Populate `A6` `Vocal 2` with `Ch 31` only if `0:a:5` has active signal `max_volume > -50.0 dB`; otherwise leave `A6` empty.)*
+  - **Spilled Multi-Stream Cleanup**: Appending 6-stream OBS MKVs onto `A5` (`mediaType=2`) causes Resolve to spill streams 2–6 onto `A6`–`A10` (`Vocal 2`, `Rec`, `BGM 2.0`, `BGM 5.1`, `Atmos Binaural Bounce`). Explicitly delete all spilled items on `A7`–`A10` (and `A6` if `0:a:5` is silent) via `tl.DeleteClips(items, False)`.
+  - **Explicit Linking, Track Visibility & Save**: Separate `mediaType=1` and `mediaType=2` appends do not auto-link—link `(V1, A1)`, `(V2, A2)`, and `(V5, A5)` via `tl.SetClipsLinked([v_it, a_it], True)`. Keep **all video tracks (`V1`–`V12`) enabled/visible** (`tl.SetTrackEnable("video", i, True)`) when A-roll is on `V5` (or disable `V3` only if A-roll was placed on `V3`). Save via **`resolve.GetProjectManager().SaveProject()`** (NOT `project.SaveProject()`, which raises `TypeError`).
+  - **Track-End Verification & Adjustment Clip UI Note**: Verify `max(it.GetEnd() - tl.GetStartFrame())` on `V1`/`V2`/`V5` rather than `tl.GetEndFrame()` alone, because timeline-only Adjustment Clips (e.g., `Film Look Creator` on `Video 8`, `has_mpi: False`) cannot be resized via Resolve's API (`SetRightOffset`)—remind the user to adjust `V8` in the UI via `Ctrl+D` if needed.
 
 ---
 

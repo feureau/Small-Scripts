@@ -1,13 +1,20 @@
 YouTube thumbnail entry point
 
-Read ../SEO/YouTube_Packaging_Common.md first. It owns action modes, source fidelity, visual preferences, limits, export profiles, and testing rules.
+Read ../SEO/YouTube_Packaging_Common.md from disk first. It owns action modes, source fidelity, visual preferences, reference assignments, generation briefs, export profiles, testing rules, and validation.
 
-For long videos, read and follow ./SEO_Thumbnail_Long.md.
-For YouTube Shorts, read and follow ./SEO_Thumbnail_Short.md.
-Resolve the intended asset from the actual source and request; do not rely on the folder name alone.
+Select the workflow from the user's intended upload and the actual source:
 
-Honor the requested action: discussion produces discussion, concepts produce concepts, and explicit generation produces images. Editing these prompts does not execute them.
+- Long video: read and follow ./SEO_Thumbnail_Long.md.
+- YouTube Short: read and follow ./SEO_Thumbnail_Short.md.
 
-Use the shared defaults unless the user overrides them. Keep title-copy coordination through ../SEO/SEO_yt_Long.md or ../SEO/SEO_yt_Short.md, then serialize approved metadata with ../SEO/SEO_yt_JSON.md when requested.
+Inspect the video's displayed dimensions and rotation before choosing the output shape. Filename fragments such as Horz, Vertical, or Stacked may describe an internal layout. Use the shared export profile for the intended asset unless the user requests another format.
 
-Do not maintain another independent set of thumbnail rules in this entry point.
+Honor the requested action and asset count. Review produces findings; concept work produces concepts; explicit generation produces images. Editing these prompt files does not execute their workflows. Do not force three images for every request or multiply title candidates by image variants without authorization.
+
+Preserve existing title selections, concept IDs, and session preferences. Coordinate title copy through ../SEO/SEO_yt_Long.md or ../SEO/SEO_yt_Short.md and the shared packaging brief; use ../SEO/SEO_yt_JSON.md only when metadata serialization is requested.
+
+Keep the shared no-text, no-host-portrait, full-frame visual defaults unless the user overrides them. Let the source and request determine illustration or photographic treatment; do not force photorealism, a named creator's style, exaggerated emotion, or unverifiable claims of worldwide originality.
+
+For a Shorts batch, follow the Shorts prompt's discovery, reuse, progress-record, and resume procedure. Generate only the selected concepts that still need work.
+
+Keep rules in their owning files. Do not automatically import other thumbnail prompts or earlier project-specific examples as additional instructions.

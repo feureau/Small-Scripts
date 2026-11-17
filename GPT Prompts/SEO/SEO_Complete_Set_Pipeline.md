@@ -111,13 +111,22 @@ For the YouTube steps, first read ./YouTube_Packaging_Common.md from disk. Use t
    - Call `./SEO_Tumblr.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_Tumblr.md`)
    - Save as: `<base>-tumblr.txt`
 
-### OPTIONAL PHASE 3B: CHAPTER-SPLIT SHORTS SUBFOLDERS (ONLY IF PRESENT)
-If chapter-split Shorts subfolders (`1440p/`, `1080p/`, `Shorts/`) exist in the output directory, process each Short `<short_stem>`:
-- If a Short `.mp4`/`.mkv` lacks a local `.srt`, run `./SEO_Transcribe_Video.md` on that Short first.
-- Call `./SEO_yt_Short.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_yt_Short.md`) → `<short_stem>-youtube_shorts.txt`
-- Call `./SEO_Tiktok.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_Tiktok.md`) → `<short_stem>-tiktok.txt`
-- Call `./SEO_Instagram.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_Instagram.md`) → `<short_stem>-instagram.txt`
-- If an excerpt requires an uploader JSON sidecar, call ./SEO_yt_JSON.md with its approved copy and exact rendered stem. Use mode=short only for an actual intended YouTube Short; a horizontal chapter excerpt is not automatically eligible because its folder is called Shorts. Use the matching copy mode and source transcript.
+### OPTIONAL PHASE 3B: CHAPTER-SPLIT SHORTS (IF PRESENT OR REQUESTED)
+
+1. **Rendered Shorts Subfolders (`1440p/`, `1080p/`, `Shorts/` present):**
+   Process each Short `<short_stem>`:
+   - If a Short `.mp4`/`.mkv` lacks a local `.srt`, run `./SEO_Transcribe_Video.md` on that Short first.
+   - Call `./SEO_yt_Short.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_yt_Short.md`) → `<short_stem>-youtube_shorts.txt`
+   - Call `./SEO_Tiktok.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_Tiktok.md`) → `<short_stem>-tiktok.txt`
+   - Call `./SEO_Instagram.md` (`f:\GitHub\Small-Scripts\GPT Prompts\SEO\SEO_Instagram.md`) → `<short_stem>-instagram.txt`
+   - If an excerpt requires an uploader JSON sidecar, call `./SEO_yt_JSON.md` with its approved copy and exact rendered stem. Use `mode=short` only for an actual intended YouTube Short; a horizontal chapter excerpt is not automatically eligible because its folder is called Shorts. Use the matching copy mode and source transcript.
+
+2. **Pre-Split / Single-File Chapter Shorts JSON (`*chapter_markers*.edl` present & one combined JSON requested):**
+   When the user asks for chapter-split Shorts metadata as one JSON file from the root video (`<base>-en.srt` + `*chapter_markers*.edl`):
+   - Parse 24 fps `[start, end)` intervals from `*chapter_markers*.edl` (skip `< 10s` `Outro` / sign-off markers unless requested).
+   - Slice `<base>-en.srt` cues by cue midpoint into per-chapter transcripts so each chapter is authored strictly from its own spoken lines.
+   - Author each chapter via `./SEO_yt_Short.md` and serialize all chapters together via `./SEO_yt_JSON.md` (`mode=short`, batch array mode).
+   - Save as `<base>-shorts.json` matching the source video stem (or `main.json` if `yt.py` auto-discovery is requested).
 
 ### OPTIONAL PHASE 3C: YOUTUBE THUMBNAILS (ONLY WHEN REQUESTED)
 
@@ -137,6 +146,7 @@ Before reporting completion, run a single script-based verification pass checkin
    - Assert Chinese subtitle filename uses `-zh.srt` (zero `-cn.srt` files created).
 3. **YouTube JSON & `yt.py` Pipeline Check:**
    - Parse `<base>-youtube.json` cleanly via `json.loads()`.
+   - When `<base>-shorts.json` (or `main.json`) is generated, also parse it as a JSON array, verify unique non-empty `"filename"` values on every entry, and validate every element against `./SEO_yt_JSON.md` (`mode=short` batch) and `./YouTube_Packaging_Common.md`.
    - Execute the validation contract in ./SEO_yt_JSON.md and ./YouTube_Packaging_Common.md: exact schema/types, selected-title equality, reconstructed-description equality, assembled-description encoding budget, no duplicate terminal hashtags, and sanitizer-compatible tags with correct effective platform length. Use the appropriate long/short source prompt; do not duplicate old tag quotas or description targets here.
 4. **Per-Platform Constraint Check:**
    - Verify hard limits and output layouts owned by each called prompt, and review faithful thesis polarity and repetitive phrasing. For YouTube, distinguish platform/uploader failures from soft editorial preferences; a character-count script does not establish hook quality, visual accuracy, or audience response.

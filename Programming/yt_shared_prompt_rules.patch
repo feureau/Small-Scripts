@@ -1,0 +1,21 @@
+--- a/GPT Prompts/SEO/YouTube_Packaging_Common.md
++++ b/GPT Prompts/SEO/YouTube_Packaging_Common.md
+@@ -101,14 +101,15 @@
+ 
+ ### Tag compatibility for this repository
+ 
+-Inspect the active Programming/yt.py if a compatibility discrepancy appears. Current local sanitizer behavior requires at most 15 tags, each at most 30 characters, containing only ASCII letters, numbers, and spaces. These are local uploader restrictions, not universal YouTube tag rules.
++Inspect the active Programming/yt.py if a compatibility discrepancy appears. Supplied tags are validated before upload or metadata update: at most 15 unique tags, each 1-30 characters, containing only ASCII letters, numbers, and spaces with no outer whitespace. These are local uploader restrictions, not universal YouTube tag rules. Incompatible tags are rejected instead of silently changed. Python callers may explicitly select legacy_tag_cleanup=True; that lossy mode reports every changed or dropped value.
+ 
+ - Use only useful tags; there is no mandatory minimum and no filler to reach a quota.
+ - Platform effective tag length = sum of tag lengths + one comma between tags + two extra characters for each tag containing a space. Require the effective total to be <= 500.
+-- Validate the actual sanitized values. Do not allow silent truncation or empty tags to change intended keywords.
++- Validate the supplied values exactly. Empty tag arrays are valid; empty-string tags, invalid types, incompatible keywords, and oversized assembled descriptions are rejected. Correct the source rather than relying on silent cleanup or truncation.
+ - The ASCII restriction can conflict with localized metadata. Preserve the correct language in titles/descriptions and report the tag limitation; do not describe stripped non-Latin tags as localized SEO.
+ - Prioritize relevant names and useful spelling variants. Do not claim that a particular tag position receives a documented ranking boost.
+-- Verify that the chosen upload path actually sends tags. Do not claim prompt output fixes uploader code.
++- Programming/yt.py sends validated tags in snippet.tags for new uploads and metadata updates. Upload Dry Run previews the same prepared body without authentication, media upload, or file movement; it does not verify remote metadata. Request-level tests: python -m unittest discover -s Programming/tests -p "test_yt*.py". Thumbnail application remains a separate integration check.
++- Metadata updates preserve absent fields; tags: [] explicitly clears tags. Empty or unchanged GUI overrides preserve source intent. Explicit batch mappings take priority over exact <video-stem>-youtube.json files and unique legacy matches; malformed sources and ambiguous matches block the item.
+ 
+ ### Chapters
+ 
