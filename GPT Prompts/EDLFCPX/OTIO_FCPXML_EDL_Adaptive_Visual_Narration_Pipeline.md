@@ -79,7 +79,8 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
    - Measure `max_volume` via `ffmpeg ... -af volumedetect -f null -`.
    - Compute `linear_gain_db = -3.0 - measured_max_peak_db` and extract 16 kHz mono WAV (`-af "volume=<gain_db>dB" -ac 1 -ar 16000`).
    - **Windows CUDA DLL Injection (`transcribe.py` pattern)**: Before importing `faster_whisper` on Windows, register `torch/lib` and `site-packages/nvidia/*/bin` via `os.add_dll_directory()` and `PATH` so `cublas64_12.dll` resolves on CUDA; fall back to `device="cpu", compute_type="int8"` only if CUDA is unavailable.
-   - Run **RMS-chunked `faster-whisper`** (`word_timestamps=True`, `vad_filter=True`, `vad_parameters={"min_silence_duration_ms": 300}`, `0.25s` zero-silence padding per chunk, plus the **Short-Word Blip Guard** for `2–5 frame` high-energy spikes `> -35 dBFS`).
+   - Run **RMS-chunked `faster-whisper`** (prefer `medium.en` or `large-v3-turbo` on CUDA `float16`, falling back to `base.en` only if constrained; `word_timestamps=True`, `vad_filter=False`, `condition_on_previous_text=False`, `0.25s` zero-silence padding per chunk, plus the **Short-Word Blip Guard** for `2–5 frame` high-energy spikes `> -35 dBFS`).
+   - **Anti-Syllable-Clipping Edge Rule**: Compute chunk RMS on a **high-pass-only waveform (`highpass=f=120`, NEVER `lowpass=f=3500`)** so `3.5–10 kHz` sibilants/plosives are preserved, use a **`5 ms` two-threshold hysteresis edge walk** down to `th_floor = p5 + 3.0 dB` for `25 ms` quantized outward (`floor`/`ceil`), and snap any surgical word split across `±150 ms` to the deepest local `5 ms` valley (never `pin_out=True` `0f` raw Whisper truncation).
    - **Ambient-Noise Hallucination Guard**: Reject any Whisper segment where `no_speech_prob > 0.60`, `avg_logprob < -1.0`, `compression_ratio > 2.2`, non-ASCII characters exceed `25%` (when `language="en"`), any 1–3 word n-gram repeats `>= 3` times consecutively, or a short chunk (`<= 4` words) has mean word probability `< 0.55` (and only append words to the word cache *after* passing this guard). Cache to `03_Transcripts/whisper_words_cache.json`.
 
 2. **Adaptive Visual Inspection (Mode V1 Silent Action / Mode V2 / Mode V3)**:
@@ -93,7 +94,7 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
 ### PHASE 2: MODE-SPECIFIC CUT SELECTION & DELIVERABLES
 
 - **Mode V1 (Hybrid Talk + Action):**
-  - Spoken segments: Apply the **Chronological Winner Rule** (prune aborted false starts/stumbles/earlier takes while keeping fluent riffing), coalesce gaps `<= 10 frames`, pad with `3 frames` pre-roll / `6 frames` post-roll.
+  - Spoken segments: Apply the **Chronological Winner Rule** (prune aborted false starts/stumbles/earlier takes while keeping fluent riffing), coalesce gaps `<= 10 frames`, pad with **`8f` pre / `12f` post** (or compact handles) using **valley-seeking cut placement** next to dropped retakes/splits, and run the **3-frame outside-boundary RMS guard (`> th_floor + 6.0 dB`)** (no audio micro-fades/crossfades).
   - Silent action segments: Keep active hands-on work intact; only trim dead camera-setup/drop tails and flag any overly long static stretches (`> 15s` with minimal change) in `edit_report.md` for optional manual speed-up.
   - Output `04_Timelines/Assembly/edit_report.md`, `03_Transcripts/<stem>_cutlist.json`, and `03_Transcripts/<stem>_edited_timeline.srt` (covering spoken segments).
 
@@ -104,7 +105,7 @@ Organize project folders cleanly **before** probing or compiling paths so `.otio
     - `03_Transcripts/<stem>_cutlist.json` and `04_Timelines/Assembly/edit_report.md`.
 
 - **Mode V3 (Narration-Driven Visual Edit):**
-  - Generate `[MY EDIT SRT]` (`03_Transcripts/<stem>_edited_timeline.srt`) from the VO (retake-pruned, `3f` pre-roll / `6f` post-roll).
+  - Generate `[MY EDIT SRT]` (`03_Transcripts/<stem>_edited_timeline.srt`) from the VO (retake-pruned with high-pass-only `5 ms` hysteresis + valley-seeking drop padding and 3-frame outside-boundary RMS guard; straight audio cuts, no audio micro-fades/crossfades).
   - Sub-split any VO block `> 11–12s` at natural clause boundaries so visual cuts stay `5–12s`.
   - Match each `[MY EDIT SRT]` beat to the best visually verified camera subclip (or still), setting `src_out = src_in + rec_dur` (`100%` speed, clamped within `[0, clip.total_frames]`) with **`0` black frames** across `0..total_edited_frames`.
   - Write `04_Timelines/B-Roll/<stem>_broll_spotting_sheet.md`.

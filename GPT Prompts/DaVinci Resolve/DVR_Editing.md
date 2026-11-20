@@ -35,23 +35,23 @@ I have raw talking-head / video-essay recordings in DaVinci Resolve Studio (mult
 
 > **CRITICAL**: Do NOT rely solely on `.srt` sidecar files in `v/` for cut points—those sidecars only have coarse multi-second subtitle chunk boundaries, not word-level timestamps. Always use word-level timestamps refined by actual audio waveform energy.
 
-1. **Extract Clean Vocal Stream (`0:a:0`) per Source `.mkv`**:
+1. **Extract Clean Vocal Stream (`0:a:0` or target raw vocal stream `0:a:4` / `0:a:5`) per Source `.mkv` Using Constant Linear Gain**:
    - Each OBS `.mkv` recording contains 6 multi-channel audio streams (`36` channels total), where stream `0:a:0` carries the full-volume (`~ -18 dB`) vocal mix and streams `0:a:4` / `0:a:5` carry the raw mono tracks mapped to `A5 (Vocal 1)` and `A6 (Vocal 2)`.
-   - For each unique `.mkv` clip on `V1`, extract stream `0:a:0` to a temporary 16kHz mono WAV file in `<resolve_proj_dir>/v/` (or `tempfile.gettempdir()`) and cache word timestamps in `<resolve_proj_dir>/v/whisper_words_cache.json`:
+   - Extract 16 kHz mono WAV into `<v_dir>/raw_<clip_stem>.wav` (or `tempfile.gettempdir()`) with **constant linear gain** (`-af "volume=<gain_db>dB"`, never dynamic `loudnorm`/`dynaudnorm`):
      ```bash
-     ffmpeg -y -i "<clip.mkv>" -map 0:a:0 -ac 1 -ar 16000 -c:a pcm_s16le "<v_dir>/raw_<clip_stem>.wav"
+     ffmpeg -y -i "<clip.mkv>" -map 0:a:<stream_idx> -af "volume=<gain_db>dB" -ac 1 -ar 16000 -c:a pcm_s16le "<v_dir>/raw_<clip_stem>.wav"
      ```
+   - Never apply `lowpass=f=3500` during speech-boundary analysis; use a **high-pass-only filter (`highpass=f=120`, NO low-pass)** so `3.5–10 kHz` fricatives and trailing plosives/sibilants (`/s/`, `/ts/`, `/t/`, `/k/`, `/f/`, `/th/`) retain full energy.
 
 2. **Word-Level Transcription (`faster-whisper`)**:
-   - Run `faster-whisper` with `word_timestamps=True` and `vad_filter=False` across all extracted WAV files (cache results to `<v_dir>/whisper_words_cache.json`, and clean up temporary `raw_*.wav` files after caching).
-   - Capture every spoken word `[word, start_sec, end_sec, probability]` for every `.mkv` clip.
+   - Run `faster-whisper` (prefer **`medium.en` or `large-v3-turbo`** on CUDA `float16`, falling back to `base.en` only if constrained) with `word_timestamps=True`, `vad_filter=False`, and `condition_on_previous_text=False` on RMS-chunked speech windows (`0.25s` silence padding) and cache results to `<v_dir>/whisper_words_cache.json`.
+   - Capture every spoken word `[word, start_sec, end_sec, probability]` for every `.mkv` clip, rounding outward (`floor(start_sec * src_fps)`, `ceil(end_sec * src_fps)`).
 
-3. **Waveform-Verified Edge Snapping (Anti-Clipping Protection)**:
-   - Whisper word timestamps can drift by `±80–150ms`, which risks shaving off quiet leading fricatives (`s`, `f`, `th`, `h`) or trailing plosives (`t`, `k`, `p`, `d`).
-   - Compute 10ms RMS energy frames (in dBFS) from each `raw_<clip_stem>.wav`.
-   - For every kept speech segment `[seg_start, seg_end]`:
-     - Walk backward up to `180ms` from `seg_start` until the 10ms RMS drops below the local noise-floor threshold (`~ -48 dBFS`), ensuring the true acoustic onset of the first word is captured.
-     - Walk forward up to `200ms` from `seg_end` until the 10ms RMS drops below the local noise-floor threshold (`~ -48 dBFS`), ensuring the full trailing consonant decay is preserved.
+3. **Full-Band `5 ms` Hysteresis Edge Snapping & Seed-to-Valley Split Alignment (Anti-Clipping Protection)**:
+   - Whisper word timestamps can drift by `±80–150ms`, and `lowpass=f=3500` shaves off quiet leading fricatives (`s`, `f`, `th`, `h`) and trailing plosives/sibilants (`-s`, `-ts`, `-t`, `-k`, `-p`, `-d`).
+   - Compute **`5 ms` sub-frame RMS energy (dBFS)** on the **high-pass-only (`highpass=f=120`, NO `lowpass=f=3500`)** full-band waveform, calibrating core speech threshold (`th_core`) and local room-noise floor (`th_floor = p5 + 3.0 dB`).
+   - **Hysteresis Outward Edge Walk**: From every kept segment `[seg_start, seg_end]`, walk outward in `5 ms` steps up to `200 ms` until RMS stays at or below `th_floor` (`p5 + 3.0 dB`) for at least `25 ms` (`5` consecutive `5 ms` windows), then quantize outward (`floor` on `src_in`, `ceil` on `src_out`).
+   - **Seed-to-Valley Surgical Split Snapping**: When splitting inside a chunk at a Whisper word boundary, treat Whisper's timestamp as a search seed (`±150 ms`) and snap the cut to the **deepest local `5 ms` full-band RMS valley** between the kept word and the rejected stumble (never set `0f` post-roll blindly on raw Whisper `end_frame`).
 
 ---
 
@@ -64,14 +64,14 @@ I have raw talking-head / video-essay recordings in DaVinci Resolve Studio (mult
      - **CUT**: Aborted mid-sentence false starts, stumbles, explicit self-corrections/meta-talk (`"wait"`, `"let me retry that"`, `"what do you want to do"`), mic checks, coughs, throat-clearing, and trailing post-take sighs.
      - **KEEP**: Any fluent, completed sentence or riff—even if it does **not** appear in `* - monologue.txt` (spontaneous improv, ad-libs, and on-the-fly script changes must never be deleted just for being off-script).
 
-2. **Snappy Essay Pacing & Breath Padding**:
+2. **Snappy Essay Pacing, Valley-Seeking Padding & Boundary Energy Guard**:
    - **Dead-Air Removal Threshold (`> 0.35s – 0.50s`)**: Split a take into separate sub-clips whenever an internal pause, hesitation, or silence between sentences/clauses exceeds **`0.40s` (`~10 frames` at 24fps)**.
-   - **Breath Padding (`3–4 Frames`)**:
-     - Add **`3 frames` (`~0.125s`) of pre-roll padding** before the waveform-snapped speech onset (`start_frame = max(0, speech_onset_frame - 3)`).
-     - Add **`4 frames` (`~0.167s`) of post-roll padding** after the waveform-snapped speech decay (`end_frame = min(clip_total_frames - 1, speech_end_frame + 4)`).
-     - Clamp padding so it never extends into an adjacent cough, lip-smack, or rejected word.
-   - **Micro-Gap Coalescing**: If two consecutive kept intervals within the same `.mkv` clip are separated by **`≤ 6 frames` (`0.25s`)** after padding, merge them into a single continuous sub-clip to avoid jarring micro-jump-cuts.
-   - **Transition Handle Safety**: Whenever possible without including unwanted noise, ensure `startFrame >= 6` and `endFrame <= (clip_total_frames - 7)` so every sub-clip has at least `6 frames` of source handle on both edges for `Smooth Cut` transitions.
+   - **Valley-Seeking Drop-Boundary Padding & Standard Handles**:
+     - In open silence gaps, pad with **`8 frames` pre-roll / `12 frames` post-roll** (clamped to silence midpoints) or compact essay handles as requested (`3–8f` pre / `4–12f` post).
+     - When a kept segment borders a rejected retake/stumble, **do not use a fixed `4f`/`5f` clamp**: scan the `5 ms` full-band RMS gap between the kept end and the rejected onset (`2f` safety margin) and place the cut cleanly at the **deepest acoustic valley**.
+   - **Automated Post-Compile Boundary Energy Guard**: Before locking `final_segments`, check full-band RMS across the **`3 frames` immediately outside every cut edge** (`[startFrame - 3, startFrame]` and `[endFrame, endFrame + 3]`): if any outside frame exceeds `th_floor + 6.0 dB` (and is not within `2 frames` of a dropped take's onset), walk outward to the local valley or flag for LLM `.wav` boundary listening. Keep straight audio cuts on `A5`/`A6` without audio micro-fades or crossfades.
+   - **Micro-Gap Coalescing**: If two consecutive kept intervals within the same `.mkv` clip (with no dropped retake between them) are separated by **`≤ 32–48 frames`** (or **`≤ 6 frames`** for strict tight cuts) after padding, merge them into a single continuous sub-clip to avoid jarring micro-jump-cuts.
+   - **Transition Handle Safety**: Whenever possible without including unwanted noise, ensure `startFrame >= 6` and `endFrame <= (clip_total_frames - 7)` so every sub-clip has at least `6 frames` of source handle on both edges for `Smooth Cut` transitions on `V1`.
 
 ---
 

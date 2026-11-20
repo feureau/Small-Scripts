@@ -49,6 +49,9 @@ Core Feature Sets
         matrix-based `unsharp` filters. Enabled by default for all jobs.
     *   **Motion**: FRUC (Frame Rate Up-Conversion) via `minterpolate`.
     *   **Hybrid (Stacked) Mode**: Specialized layout for vertical from horizontal.
+    *   **Hybrid Duo Source Swap**: Exchange Video 1 and Video 2 between fixed
+        top/bottom or left/right positions. Position settings and sizes stay
+        fixed, including Original/Adaptive aspects; audio stays with Video 1.
     *   **YouTube Compliance**: faststart moov, no edit lists, auto deinterlace.
 
 2. **Audio Mastering & "Loudness War" Tools**:
@@ -75,6 +78,16 @@ Workflow Logic
 -------------------------------------------------------------------------------
 Version History
 -------------------------------------------------------------------------------
+v8.73 - Hybrid Duo source swapping (2026-11-18)
+    • FEATURE: Added a preset/job-level "Swap video sources" checkbox for
+      Hybrid Duo, with stable Video 1/Video 2 file controls and a routing
+      indicator for stacked, side-by-side, and automatic layouts.
+    • PIPELINE: Swap video feeds before positional crop/pad/zoom processing,
+      retaining the original pair's layout metadata through multi-stage
+      upscaling. Audio, pairing, titles, subtitles, and seam geometry retain
+      their existing identities and positions.
+    • COMPAT: Missing hybrid_swap_sources defaults to false. Only enabled
+      Hybrid Duo swaps add a hash marker; existing output hashes stay intact.
 v8.72 - Adaptive aspect ratio for hybrid blocks (2026-11-XX)
     • FEATURE: Added "Adaptive" to the per-block aspect ratio pickers
       for Hybrid (stacked) and Hybrid-Duo (dual source) modes. When the
@@ -777,6 +790,7 @@ DEFAULT_MAX_SIZE_MB = 0
 DEFAULT_MAX_DURATION = 0
 DEFAULT_ORIENTATION = "horizontal + vertical"
 DEFAULT_HYBRID_LAYOUT = "auto"
+DEFAULT_HYBRID_SWAP_SOURCES = False
 DEFAULT_ASPECT_MODE = "crop"
 DEFAULT_PAD_COLOR = "#000000"
 DEFAULT_PIXELATE_MULTIPLIER = "16"
@@ -1626,6 +1640,8 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
         CURRENT_FFMPEG_PROCESS = process
         recent_lines = deque(maxlen=400)
         time_pattern = re.compile(r'time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)')
+        exit_code_pattern = re.compile(r'^Exiting with exit code (-?\d+)\s*$')
+        reported_exit_code = None
         carry = ""
         progress_line_active = False
         last_progress_len = 0
@@ -1640,6 +1656,9 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
                         recent_lines.append(line)
                         sys.stdout.write(("\n" if progress_line_active else "") + line + "\n")
                         sys.stdout.flush()
+                        exit_match = exit_code_pattern.match(line)
+                        if exit_match:
+                            reported_exit_code = int(exit_match.group(1))
                     break
                 continue
             if ch in ("\r", "\n"):
@@ -1670,11 +1689,35 @@ def safe_ffmpeg_execution(cmd, operation="encoding", duration=None, progress_cal
                         last_progress_len = 0
                     sys.stdout.write(line + "\n")
                     sys.stdout.flush()
+                exit_match = exit_code_pattern.match(line)
+                if exit_match:
+                    reported_exit_code = int(exit_match.group(1))
+                    break
             else:
                 carry += ch
+        try:
+            return_code = process.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            print(
+                f"[WARN] FFmpeg hung during process teardown after reporting exit code "
+                f"{reported_exit_code}; terminating zombie process."
+            )
+            try:
+                process.kill()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=2.0)
+            except Exception:
+                pass
+            return_code = reported_exit_code if reported_exit_code is not None else -1
+        if reported_exit_code is not None and return_code != reported_exit_code:
+            return_code = reported_exit_code
         if process.stdout is not None:
-            process.stdout.close()
-        return_code = process.wait()
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
         CURRENT_FFMPEG_PROCESS = None
         if progress_line_active:
             sys.stdout.write("\n")
@@ -3483,6 +3526,12 @@ def get_bitrate(output_resolution_key, framerate, is_hdr, source_height=None, so
     return BITRATES.get(key, {}).get(mapped_key, BITRATES["SDR_NORMAL_FPS"]["1080p"])
 
 
+def _hybrid_sources_swapped(options, orientation=None):
+    """Swap only video routing for dual-source hybrid jobs."""
+    return ((orientation or options.get("orientation")) == "hybrid-duo (dual source)"
+            and bool(options.get("hybrid_swap_sources", DEFAULT_HYBRID_SWAP_SOURCES)))
+
+
 def get_job_hash(job_options, extra_data=""):
     keys_to_hash = [
         job_options.get('manual_bitrate', ''),
@@ -3668,6 +3717,9 @@ def get_job_hash(job_options, extra_data=""):
         # === v8.72 ===
         job_options.get('merged_aspect', ''),
     ]
+    # Keep legacy hashes byte-for-byte unchanged for every unswapped job.
+    if _hybrid_sources_swapped(job_options):
+        keys_to_hash.append("hybrid_swap_sources=True")
     hash_str = "|".join(str(k) for k in keys_to_hash)
     if extra_data:
         hash_str += f"|{extra_data}"
@@ -4117,6 +4169,7 @@ class WorkflowPresetManager:
             "hybrid_composite_offset_y": DEFAULT_HYBRID_COMPOSITE_OFFSET_Y,
             "hybrid_composite_offset_units": DEFAULT_HYBRID_COMPOSITE_OFFSET_UNITS,
             "hybrid_layout": DEFAULT_HYBRID_LAYOUT,
+            "hybrid_swap_sources": DEFAULT_HYBRID_SWAP_SOURCES,
             "hybrid_top_suffix": "-top",
             "hybrid_bot_suffix": "-bot",
             "fruc": DEFAULT_FRUC,
@@ -4963,6 +5016,9 @@ class VideoProcessorApp:
         self.hybrid_layout_var = tk.StringVar(value=DEFAULT_HYBRID_LAYOUT)
         self.hybrid_layout_var.trace_add('write', lambda *args: (
             self._update_hybrid_ui_labels(), self._update_selected_jobs('hybrid_layout')))
+        self.hybrid_swap_sources_var = tk.BooleanVar(value=DEFAULT_HYBRID_SWAP_SOURCES)
+        self.hybrid_swap_sources_var.trace_add('write', lambda *args: (
+            self._update_hybrid_ui_labels(), self._update_selected_jobs('hybrid_swap_sources')))
         self.hybrid_block_offset_units_var = tk.StringVar(
             value=DEFAULT_HYBRID_BLOCK_OFFSET_UNITS)
         self.hybrid_block_offset_units_var.trace_add(
@@ -6353,6 +6409,47 @@ class VideoProcessorApp:
                         variable=self.hybrid_layout_var, value="side_by_side",
                         command=lambda: (self._update_hybrid_ui_labels(),
                                          self._update_selected_jobs("hybrid_layout"))).pack(side=tk.LEFT)
+        self.hybrid_swap_sources_cb = ttk.Checkbutton(
+            self.hybrid_layout_frame, text="Swap video sources",
+            variable=self.hybrid_swap_sources_var)
+        self.hybrid_swap_sources_cb.pack(side=tk.LEFT, padx=(15, 0))
+        ToolTip(self.hybrid_swap_sources_cb,
+                "Exchange only the video feeds. Each position keeps its size, "
+                "aspect, handling, zoom, offsets, and pad color. Audio stays "
+                "with Video 1. Original/Adaptive sizes use the original pair.")
+        self.hybrid_routing_label = ttk.Label(self.hybrid_frame)
+        self.hybrid_routing_label.pack(fill=tk.X, pady=(0, 3))
+
+        self.hybrid_sources_frame = ttk.LabelFrame(
+            self.hybrid_frame, text="Video Sources", padding=5)
+        self.hybrid_sources_frame.pack(fill=tk.X, pady=(0, 5))
+        for position, label, path_var, suffix_var in (
+                ("top", "Video 1", self.hybrid_top_path_var, self.hybrid_top_suffix_var),
+                ("bottom", "Video 2", self.hybrid_bottom_path_var, self.hybrid_bot_suffix_var)):
+            source_frame = ttk.LabelFrame(self.hybrid_sources_frame, text=label, padding=3)
+            source_frame.pack(fill=tk.X, pady=2)
+            if position == "top":
+                self.top_file_frame = source_frame
+            else:
+                self.bot_file_frame = source_frame
+            file_row = ttk.Frame(source_frame)
+            file_row.pack(fill=tk.X)
+            ttk.Label(file_row, text="File Override:").pack(side=tk.LEFT, padx=(0, 5))
+            ttk.Entry(file_row, textvariable=path_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ttk.Button(file_row, text="Browse", width=7,
+                       command=lambda pos=position: self._browse_hybrid_file(pos)).pack(
+                           side=tk.LEFT, padx=(5, 0))
+            ttk.Button(file_row, text="Clear", width=5,
+                       command=lambda var=path_var: var.set("")).pack(side=tk.LEFT, padx=(5, 0))
+            suffix_row = ttk.Frame(source_frame)
+            suffix_row.pack(fill=tk.X, pady=(3, 0))
+            ttk.Label(suffix_row, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
+            suffix_entry = ttk.Entry(suffix_row, textvariable=suffix_var, width=10)
+            suffix_entry.pack(side=tk.LEFT)
+            if position == "top":
+                self.hybrid_top_suffix_entry = suffix_entry
+            else:
+                self.hybrid_bot_suffix_entry = suffix_entry
 
         # === Composite Padding group ===
         self.composite_pad_frame = ttk.LabelFrame(
@@ -6471,15 +6568,6 @@ class VideoProcessorApp:
 
         self.top_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Top Video", padding=5)
         self.top_video_frame.pack(fill=tk.X, pady=(5, 0))
-        self.top_file_frame = ttk.Frame(self.top_video_frame)
-        self.top_file_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(self.top_file_frame, text="File Override:").pack(side=tk.LEFT, padx=(0, 5))
-        top_entry = ttk.Entry(self.top_file_frame, textvariable=self.hybrid_top_path_var)
-        top_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(self.top_file_frame, text="Browse",
-                   command=lambda: self._browse_hybrid_file('top'), width=7).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(self.top_file_frame, text="Clear",
-                   command=lambda: self.hybrid_top_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5, 0))
         self._build_hybrid_aspect_row(self.top_video_frame, "top")
         top_aspect_frame = ttk.Frame(self.top_video_frame)
         top_aspect_frame.pack(fill=tk.X, pady=(2, 0))
@@ -6544,23 +6632,8 @@ class VideoProcessorApp:
                 "Ignored in Pad and Stretch modes.")
         ToolTip(self.hybrid_top_pad_btn,
                 "Pad color for this block. Only used in Pad mode.")
-        top_suffix_frame = ttk.Frame(self.top_video_frame)
-        top_suffix_frame.pack(fill=tk.X, pady=(3, 0))
-        ttk.Label(top_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
-        self.hybrid_top_suffix_entry = ttk.Entry(top_suffix_frame,
-                                                 textvariable=self.hybrid_top_suffix_var, width=10)
-        self.hybrid_top_suffix_entry.pack(side=tk.LEFT)
         self.bottom_video_frame = ttk.LabelFrame(self.hybrid_frame, text="Bottom Video", padding=5)
         self.bottom_video_frame.pack(fill=tk.X, pady=5)
-        self.bot_file_frame = ttk.Frame(self.bottom_video_frame)
-        self.bot_file_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(self.bot_file_frame, text="File Override:").pack(side=tk.LEFT, padx=(0, 5))
-        bot_entry = ttk.Entry(self.bot_file_frame, textvariable=self.hybrid_bottom_path_var)
-        bot_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(self.bot_file_frame, text="Browse",
-                   command=lambda: self._browse_hybrid_file('bottom'), width=7).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(self.bot_file_frame, text="Clear",
-                   command=lambda: self.hybrid_bottom_path_var.set(""), width=5).pack(side=tk.LEFT, padx=(5, 0))
         self._build_hybrid_aspect_row(self.bottom_video_frame, "bottom")
         bot_aspect_frame = ttk.Frame(self.bottom_video_frame)
         bot_aspect_frame.pack(fill=tk.X, pady=(2, 0))
@@ -6625,12 +6698,6 @@ class VideoProcessorApp:
                 "Ignored in Pad and Stretch modes.")
         ToolTip(self.hybrid_bot_pad_btn,
                 "Pad color for this block. Only used in Pad mode.")
-        bot_suffix_frame = ttk.Frame(self.bottom_video_frame)
-        bot_suffix_frame.pack(fill=tk.X, pady=(3, 0))
-        ttk.Label(bot_suffix_frame, text="File Suffix:").pack(side=tk.LEFT, padx=(0, 5))
-        self.hybrid_bot_suffix_entry = ttk.Entry(bot_suffix_frame,
-                                                 textvariable=self.hybrid_bot_suffix_var, width=10)
-        self.hybrid_bot_suffix_entry.pack(side=tk.LEFT)
         aspect_handling_frame = ttk.Frame(geometry_group)
         aspect_handling_frame.pack(fill=tk.X, pady=(5, 2))
         ttk.Label(aspect_handling_frame, text="Handling:").pack(side=tk.LEFT, padx=(0, 5))
@@ -8983,7 +9050,8 @@ class VideoProcessorApp:
 
     def _browse_hybrid_file(self, position):
         ext_str = ";".join([f"*{ext}" for ext in SUPPORTED_VIDEO_EXTS])
-        file_path = filedialog.askopenfilename(title=f"Select {position.capitalize()} Video",
+        source_label = "Video 1" if position == "top" else "Video 2"
+        file_path = filedialog.askopenfilename(title=f"Select {source_label}",
                                                filetypes=[("Video Files", ext_str),
                                                           ("All Files", "*.*")])
         if file_path:
@@ -9532,11 +9600,20 @@ class VideoProcessorApp:
         opts = {"hybrid_layout": layout_mode, "merged_aspect": aspect}
         eff_layout = self._resolve_hybrid_layout(opts)
         if eff_layout == "side_by_side":
-            self.top_video_frame.config(text="Left Video (Video 1)")
-            self.bottom_video_frame.config(text="Right Video (Video 2)")
+            first, second = "Left", "Right"
         else:
-            self.top_video_frame.config(text="Top Video (Video 1)")
-            self.bottom_video_frame.config(text="Bottom Video (Video 2)")
+            first, second = "Top", "Bottom"
+        self.top_video_frame.config(text=f"{first} Position")
+        self.bottom_video_frame.config(text=f"{second} Position")
+        is_duo = self.orientation_var.get() == "hybrid-duo (dual source)"
+        if hasattr(self, "hybrid_swap_sources_cb"):
+            self.hybrid_swap_sources_cb.config(state="normal" if is_duo else "disabled")
+        if hasattr(self, "hybrid_routing_label"):
+            swapped = is_duo and self.hybrid_swap_sources_var.get()
+            routing = (f"{first}: Video {2 if swapped else 1} · "
+                       f"{second}: Video {1 if swapped else 2}")
+            self.hybrid_routing_label.config(
+                text=routing if is_duo else "Both positions use the same video")
         # Anchor labels differ by layout.
         if hasattr(self, "composite_anchor_start_rb"):
             if eff_layout == "side_by_side":
@@ -10546,6 +10623,7 @@ class VideoProcessorApp:
             "hybrid_composite_offset_y": self.hybrid_composite_offset_y_var.get(),
             "hybrid_composite_offset_units": self.hybrid_composite_offset_units_var.get(),
             "hybrid_layout": self.hybrid_layout_var.get(),
+            "hybrid_swap_sources": self.hybrid_swap_sources_var.get(),
             "hybrid_top_suffix": self.hybrid_top_suffix_var.get(),
             "hybrid_bot_suffix": self.hybrid_bot_suffix_var.get(),
             "subtitle_font": self.subtitle_font_var.get(),
@@ -11790,6 +11868,8 @@ class VideoProcessorApp:
         self.audio_delivery_target_var.set(
             DELIVERY_TARGET_REVERSE.get(target_code, DELIVERY_TARGET_CUSTOM))
         self.hybrid_layout_var.set(options.get("hybrid_layout", DEFAULT_HYBRID_LAYOUT))
+        self.hybrid_swap_sources_var.set(
+            options.get("hybrid_swap_sources", DEFAULT_HYBRID_SWAP_SOURCES))
         self.hybrid_block_offset_units_var.set(
             options.get("hybrid_block_offset_units",
                         DEFAULT_HYBRID_BLOCK_OFFSET_UNITS))
@@ -12677,7 +12757,7 @@ class VideoProcessorApp:
             return "original"
         return str(res_key)
 
-    def _resolve_multi_stage_config(self, options, info, orientation):
+    def _resolve_multi_stage_config(self, options, info, orientation, info_bot=None):
         """Resolve the multi-stage plan for one job.
 
         Returns a dict:
@@ -12728,7 +12808,7 @@ class VideoProcessorApp:
             return result
         try:
             tgt_w, tgt_h = self.compute_target_resolution_for_options(
-                options, info, orientation)
+                options, info, orientation, info_bot=info_bot)
         except Exception:
             return result
         if not tgt_w or not tgt_h:
@@ -12789,56 +12869,14 @@ class VideoProcessorApp:
 
     def _compute_hybrid_block_dims(self, options, info_top, info_bot,
                                      orientation, target_w, target_h):
-        """Return (top_w, top_h, bot_w, bot_h) for a hybrid composite
-        of target_w x target_h. Mirrors the block-size math used by
-        construct_ffmpeg_command's hybrid branch so callers (e.g. the
-        superres prepass) can target the exact same dimensions.
-        info_top is the source for the first block; info_bot is the
-        second (may be None for single-source hybrid-stacked)."""
-        eff_layout = self._resolve_hybrid_layout(options)
-        merged_aspect = str(options.get("merged_aspect", "")).lower()
-        if eff_layout == "side_by_side":
-            left_aspect = options.get('hybrid_top_aspect')
-            right_aspect = options.get('hybrid_bottom_aspect')
-            info_r = info_bot if info_bot else info_top
-            is_left_adaptive = str(left_aspect).lower() == "adaptive"
-            is_right_adaptive = str(right_aspect).lower() == "adaptive"
-            num_l, den_l = self._resolve_aspect_ratio(left_aspect, info_top, '16:9')
-            left_w = (int(target_h * num_l / den_l) // 2) * 2
-            num_r, den_r = self._resolve_aspect_ratio(right_aspect, info_r, '16:9')
-            right_w = (int(target_h * num_r / den_r) // 2) * 2
-            if merged_aspect == "auto":
-                return left_w, target_h, right_w, target_h
-            if is_left_adaptive or is_right_adaptive:
-                left_w, right_w = self._resolve_adaptive_span(
-                    target_w, left_w, right_w, is_left_adaptive, is_right_adaptive)
-                return left_w, target_h, right_w, target_h
-            right_w = max(2, target_w - left_w)
-            if left_w >= target_w:
-                left_w = (target_w // 4) * 2
-                right_w = target_w - left_w
-            return left_w, target_h, right_w, target_h
-        else:
-            top_aspect = options.get('hybrid_top_aspect')
-            bot_aspect = options.get('hybrid_bottom_aspect')
-            info_b = info_bot if info_bot else info_top
-            is_top_adaptive = str(top_aspect).lower() == "adaptive"
-            is_bot_adaptive = str(bot_aspect).lower() == "adaptive"
-            num_t, den_t = self._resolve_aspect_ratio(top_aspect, info_top, '16:9')
-            top_h = (int(target_w * den_t / num_t) // 2) * 2
-            num_b, den_b = self._resolve_aspect_ratio(bot_aspect, info_b, '4:5')
-            bot_h = (int(target_w * den_b / num_b) // 2) * 2
-            if merged_aspect == "auto":
-                return target_w, top_h, target_w, bot_h
-            if is_top_adaptive or is_bot_adaptive:
-                top_h, bot_h = self._resolve_adaptive_span(
-                    target_h, top_h, bot_h, is_top_adaptive, is_bot_adaptive)
-                return target_w, top_h, target_w, bot_h
-            bot_h = max(2, target_h - top_h)
-            if top_h >= target_h:
-                top_h = (target_h // 4) * 2
-                bot_h = target_h - top_h
-            return target_w, top_h, target_w, bot_h
+        """Return position dimensions from the compositor's layout, before routing.
+
+        Source metadata stays in Video 1/Video 2 order even when swapping.
+        Using the shared layout also includes composite padding in AI targets.
+        """
+        layout = self._compute_hybrid_layout(
+            options, info_top, info_bot, orientation, target_w, target_h)
+        return layout["top_w"], layout["top_h"], layout["bot_w"], layout["bot_h"]
 
     def build_ffmpeg_command_and_run(self, job, orientation):
         global CURRENT_TEMP_FILE, CURRENT_JOB_TEMP_DIR
@@ -13017,15 +13055,19 @@ class VideoProcessorApp:
             info = get_video_info(job['video_path'])
             self._resolve_dv_auto_match(options, info)
 
+            hybrid_layout_info = None
             _seam_info_bot = None
             if orientation == "hybrid-duo (dual source)":
-                _seam_bot_path = self._resolve_hybrid_bot_path(job.get('video_path', ''), options)
-                if _seam_bot_path and os.path.exists(_seam_bot_path):
-                    options["hybrid_bottom_path"] = _seam_bot_path
-                    try:
-                        _seam_info_bot = get_video_info(_seam_bot_path)
-                    except Exception:
-                        _seam_info_bot = None
+                _source1_path, _source2_path = self._resolve_hybrid_source_paths(
+                    job['video_path'], options)
+                _layout_info = get_video_info(_source1_path)
+                _seam_info_bot = get_video_info(_source2_path)
+                options["hybrid_bottom_path"] = _source2_path
+                # Keep geometry tied to the original pair, never AI intermediates
+                # or the swapped video routing. This tuple is render-local.
+                hybrid_layout_info = (_layout_info, _seam_info_bot)
+            else:
+                _layout_info = info
 
             # v8.59 MULTI-STAGE PLAN
             # Both hops can carry their own algorithm/level via the
@@ -13034,7 +13076,8 @@ class VideoProcessorApp:
             # intermediate resolution can be targeted, and it always
             # records its plan in _multi_stage_plan for the prepass and
             # the final NVEncC pass to consume.
-            _stage_cfg = self._resolve_multi_stage_config(options, info, orientation)
+            _stage_cfg = self._resolve_multi_stage_config(
+                options, _layout_info, orientation, info_bot=_seam_info_bot)
             options.pop("_multi_stage_plan", None)
             if _stage_cfg["needs_chain"]:
                 if encoder_backend in ("nvencc_only",
@@ -13056,11 +13099,11 @@ class VideoProcessorApp:
                 options.pop("_preproc_scale_override", None)
 
             sub_target_w, sub_target_h = self.compute_target_resolution_for_options(
-                options, info, orientation, info_bot=_seam_info_bot)
+                options, _layout_info, orientation, info_bot=_seam_info_bot)
             if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
                 try:
                     _seam_layout = self._compute_hybrid_layout(
-                        options, info, _seam_info_bot, orientation,
+                        options, _layout_info, _seam_info_bot, orientation,
                         sub_target_w, sub_target_h, verbose=False)
                     sub_target_w = _seam_layout["canvas_w"]
                     sub_target_h = _seam_layout["canvas_h"]
@@ -13345,20 +13388,20 @@ class VideoProcessorApp:
                         # single-leg path below would leave the bottom
                         # source at original resolution when the FFmpeg
                         # preprocessor stacks them.
-                        _top_src = (options.get("hybrid_top_path")
-                                    or effective_job["video_path"])
-                        _bot_src = options.get("hybrid_bottom_path", "")
+                        _top_src, _bot_src = _source1_path, _source2_path
                         if not _bot_src or not os.path.exists(_bot_src):
                             raise VideoProcessingError(
                                 "Multi-stage superres on hybrid-duo requires "
-                                "both top and bottom sources.")
+                                "both Video 1 and Video 2 sources.")
                         _top_info = get_video_info(_top_src)
                         _bot_info = get_video_info(_bot_src)
                         _bw_t, _bh_t, _bw_b, _bh_b = self._compute_hybrid_block_dims(
-                            options, _top_info, _bot_info, orientation,
+                            options, *hybrid_layout_info, orientation,
                             _sr_w, _sr_h)
+                        if _hybrid_sources_swapped(options, orientation):
+                            _bw_t, _bh_t, _bw_b, _bh_b = _bw_b, _bh_b, _bw_t, _bh_t
                         print("[INFO] Multi-stage superres (hybrid-duo): "
-                              "prepass top {}x{} -> {}x{}, bottom {}x{} -> {}x{} ...".format(
+                              "prepass Video 1 {}x{} -> {}x{}, Video 2 {}x{} -> {}x{} ...".format(
                                   _top_info["width"], _top_info["height"],
                                   _bw_t, _bh_t,
                                   _bot_info["width"], _bot_info["height"],
@@ -13448,7 +13491,8 @@ class VideoProcessorApp:
                 pre_title_ass = None if _defer_subs_to_nvencc else title_ass_path
                 pre_cmd = self.construct_ffmpeg_command(effective_job, temp_preproc, orientation,
                                                         pre_ass, options, pre_title_ass,
-                                                        encoder_backend="preprocess", base_dir=base_dir)
+                                                        encoder_backend="preprocess", base_dir=base_dir,
+                                                        hybrid_layout_info=hybrid_layout_info)
                 if self.run_ffmpeg_command(pre_cmd, duration, options=options, cwd=base_dir) != 0:
                     raise VideoProcessingError(f"Error preprocessing {job['video_path']}")
                 if not _defer_lut and _should_apply_hdr_to_sdr_lut(options, effective_info, _seam_info_bot):
@@ -13687,8 +13731,20 @@ class VideoProcessorApp:
                 bitrate_kbps = 100
         return bitrate_kbps, max_duration, input_duration
 
+    def _resolve_hybrid_source_paths(self, file_path, options):
+        """Resolve stable Video 1/Video 2 inputs independently of screen positions."""
+        explicit_top = options.get("hybrid_top_path", "").strip()
+        if explicit_top and os.path.exists(explicit_top):
+            file_path = explicit_top
+        bot_path = self._resolve_hybrid_bot_path(file_path, options)
+        if not bot_path:
+            expected = self._derive_duo_bot_path(file_path)
+            raise VideoProcessingError(
+                f"Hybrid-Duo requires a Video 2 source. Could not find: {expected}")
+        return file_path, bot_path
+
     def _resolve_hybrid_bot_path(self, file_path, options):
-        bot_path = options.get("hybrid_bottom_path", "")
+        bot_path = options.get("hybrid_bottom_path", "").strip()
         if bot_path and os.path.exists(bot_path):
             return bot_path
         if not file_path:
@@ -14988,13 +15044,12 @@ class VideoProcessorApp:
 
     def construct_ffmpeg_command(self, job, output_file, orientation, ass_burn_path=None,
                                  options=None, title_ass_path=None, encoder_backend="ffmpeg",
-                                 base_dir=None):
+                                 base_dir=None, hybrid_layout_info=None):
+        """Build the graph; optional original-pair metadata keeps AI layout fixed."""
         options = options or job['options']
         file_path = job['video_path']
         if orientation == "hybrid-duo (dual source)":
-            explicit_top = options.get("hybrid_top_path", "").strip()
-            if explicit_top and os.path.exists(explicit_top):
-                file_path = explicit_top
+            file_path, bot_path = self._resolve_hybrid_source_paths(file_path, options)
         info = get_video_info(file_path)
         decoder_available, _ = check_decoder_availability(info["codec_name"])
         decoder_map = {"h264": "h264_cuvid", "hevc": "hevc_cuvid",
@@ -15012,23 +15067,6 @@ class VideoProcessorApp:
         info_bot = None
         use_cuda_decoder_bot = False
         if orientation == "hybrid-duo (dual source)":
-            explicit_bot = options.get("hybrid_bottom_path", "").strip()
-            if explicit_bot and os.path.exists(explicit_bot):
-                bot_path = explicit_bot
-            else:
-                bot_path = self._derive_duo_bot_path(file_path)
-                if not os.path.exists(bot_path):
-                    pairs, _, _ = self._get_duo_pair_rules()
-                    bot_path_alt = file_path
-                    for t, b in pairs:
-                        bot_path_alt = bot_path_alt.replace(t, b)
-                    if os.path.exists(bot_path_alt):
-                        bot_path = bot_path_alt
-                    else:
-                        eff_layout = self._resolve_hybrid_layout(options)
-                        label = "right" if eff_layout == "side_by_side" else "bottom"
-                        raise VideoProcessingError(
-                            f"Hybrid-Duo requires a {label} video. Could not find: {bot_path}")
             info_bot = get_video_info(bot_path)
             decoder_available_bot, _ = check_decoder_availability(info_bot["codec_name"])
             decoder_bot = (decoder_map.get(info_bot["codec_name"], info_bot["codec_name"])
@@ -15186,6 +15224,14 @@ class VideoProcessorApp:
         except ValueError:
             pass
         if orientation in ["hybrid (stacked)", "hybrid-duo (dual source)"]:
+            # Layout always uses the original, unswapped pair. Actual frame
+            # metadata and tags below follow the source routed into each slot.
+            layout_info, layout_info_bot = hybrid_layout_info or (info, info_bot)
+            top_source_info = info
+            bot_source_info = info_bot if info_bot is not None else info
+            if _hybrid_sources_swapped(options, orientation):
+                cuda_video_in_top, cuda_video_in_bot = cuda_video_in_bot, cuda_video_in_top
+                top_source_info, bot_source_info = bot_source_info, top_source_info
             # v8.35 SUPERRES FULL FIX: when the multi-stage superres
             # prepass has already built the legs at half-block size,
             # the FFmpeg stage must target half the final canvas. The
@@ -15195,7 +15241,7 @@ class VideoProcessorApp:
                 target_w, total_h = _ffmpeg_stage_ov
             else:
                 target_w, total_h = self.compute_target_resolution_for_options(
-                    options, info, orientation, info_bot=info_bot)
+                    options, layout_info, orientation, info_bot=layout_info_bot)
             eff_layout = self._resolve_hybrid_layout(options)
             _hybrid_block_offset_units = str(options.get(
                 "hybrid_block_offset_units",
@@ -15341,7 +15387,7 @@ class VideoProcessorApp:
             if not safe_algo:
                 raise VideoProcessingError("Upscale algorithm not specified in preset.")
             _layout = self._compute_hybrid_layout(
-                options, info, info_bot, orientation, target_w, total_h,
+                options, layout_info, layout_info_bot, orientation, target_w, total_h,
                 verbose=True)
             _cp_filter = _layout["cp_filter"]
             _top_pad_c = options.get("hybrid_top_pad_color", DEFAULT_HYBRID_TOP_PAD_COLOR)
@@ -15355,38 +15401,36 @@ class VideoProcessorApp:
             if eff_layout == "side_by_side":
                 left_aspect = options.get('hybrid_top_aspect')
                 right_aspect = options.get('hybrid_bottom_aspect')
-                info_right = info_bot if orientation == "hybrid-duo (dual source)" else info
                 left_w = _layout["top_w"]
                 right_w = _layout["bot_w"]
                 target_w = _layout["canvas_w"]
                 total_h = _layout["canvas_h"]
                 top_vf, top_cpu, _, _ = get_block_filters(
                     left_aspect, options.get('hybrid_top_mode'), safe_algo, left_w, total_h,
-                    src_info=info, offset_x=_top_ox, offset_y=_top_oy,
+                    src_info=top_source_info, offset_x=_top_ox, offset_y=_top_oy,
                     pad_color_hex=_top_pad_c, zoom=_top_z,
                     units=_hybrid_block_offset_units)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
                     right_aspect, options.get('hybrid_bottom_mode'), safe_algo, right_w, total_h,
-                    src_info=info_right, offset_x=_bot_ox, offset_y=_bot_oy,
+                    src_info=bot_source_info, offset_x=_bot_ox, offset_y=_bot_oy,
                     pad_color_hex=_bot_pad_c, zoom=_bot_z,
                     units=_hybrid_block_offset_units)
                 stack_filter = "hstack=inputs=2[stacked]"
             else:
                 top_aspect = options.get('hybrid_top_aspect')
                 bot_aspect = options.get('hybrid_bottom_aspect')
-                info_bottom = info_bot if orientation == "hybrid-duo (dual source)" else info
                 top_h = _layout["top_h"]
                 bot_h = _layout["bot_h"]
                 target_w = _layout["canvas_w"]
                 total_h = _layout["canvas_h"]
                 top_vf, top_cpu, _, _ = get_block_filters(
                     top_aspect, options.get('hybrid_top_mode'), safe_algo, target_w, top_h,
-                    src_info=info, offset_x=_top_ox, offset_y=_top_oy,
+                    src_info=top_source_info, offset_x=_top_ox, offset_y=_top_oy,
                     pad_color_hex=_top_pad_c, zoom=_top_z,
                     units=_hybrid_block_offset_units)
                 bot_vf, bot_cpu, _, _ = get_block_filters(
                     bot_aspect, options.get('hybrid_bottom_mode'), safe_algo, target_w, bot_h,
-                    src_info=info_bottom, offset_x=_bot_ox, offset_y=_bot_oy,
+                    src_info=bot_source_info, offset_x=_bot_ox, offset_y=_bot_oy,
                     pad_color_hex=_bot_pad_c, zoom=_bot_z,
                     units=_hybrid_block_offset_units)
                 stack_filter = "vstack=inputs=2[stacked]"
@@ -15404,9 +15448,8 @@ class VideoProcessorApp:
                     f"scale=in_color_matrix=bt709:out_color_matrix=bt709,format={cuda_work_fmt},"
                     f"setparams=color_primaries={_cp_fix}:color_trc={_ct_fix}:colorspace={_cm_fix}:range={_r_fix}"
                 )
-                _top_is_hdr = bool((info or {}).get("is_hdr"))
-                _bot_is_hdr = (bool((info_bot or {}).get("is_hdr"))
-                               if orientation == "hybrid-duo (dual source)" else _top_is_hdr)
+                _top_is_hdr = bool(top_source_info.get("is_hdr"))
+                _bot_is_hdr = bool(bot_source_info.get("is_hdr"))
                 if _top_is_hdr and _bot_is_hdr:
                     cpu_chain.append(_lut_expr)
                 elif _top_is_hdr:
@@ -16951,7 +16994,25 @@ class VideoProcessorApp:
         self.fruc_fps_entry.config(state="normal" if self.fruc_var.get() else "disabled")
 
 
+def disable_windows_console_quick_edit():
+    """Disable Windows Console QuickEdit mode so stray mouse clicks don't pause batch encodes."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h_stdin = kernel32.GetStdHandle(-10)
+        if h_stdin and h_stdin != -1:
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+                new_mode = (mode.value & ~0x0040) | 0x0080
+                kernel32.SetConsoleMode(h_stdin, new_mode)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    disable_windows_console_quick_edit()
     atexit.register(cleanup_tracked_temp_files)
     signal.signal(signal.SIGINT, handle_sigint)
     if hasattr(signal, "SIGTERM"):

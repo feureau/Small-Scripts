@@ -2,8 +2,8 @@
 SCRIPT: iaupload.py
 PURPOSE: Internet Archive (archive.org) Smart Uploader & Syncer
 AUTHOR: Assistant (AI)
-DATE: 2026-08-22
-VERSION: 6.62 (Individual Multipart Thread Progress Bars)
+DATE: 2026-11-20
+VERSION: 6.63 (Rate-Limit Resilience, System File Filtering & Batch Status Fix)
 
 ================================================================================
 DOCUMENTATION & UPDATE POLICY
@@ -39,6 +39,29 @@ ARCHITECTURE & DESIGN RATIONALE
 ================================================================================
 CHANGE LOG
 ================================================================================
+[2026-11-20] VERSION 6.63 UPDATE
+   - FIXED: Preflight HEAD requests in IAS3Client.request() return empty
+            HTTP 503 bodies, which failed the body-text slowdown check and
+            skipped rate-limit backoff/retries. HEAD 503s and empty-body 503s
+            now trigger _note_rate_limit() and exponential backoff, and
+            SlowDown concurrency phrases ("reduce your request concurrency",
+            "too many parallel requests", "global-overload") are recognized.
+   - FIXED: upload_worker() did not retry IA SlowDown concurrency errors
+            ("reduce your request concurrency" / "too many parallel requests")
+            or trigger global cooldown on 429/503/509 responses.
+   - FIXED: Serialized large multipart uploads using _multipart_active_lock
+            in worker_wrapper() so multiple >4.4 GB files do not launch
+            concurrent 12-thread pools and flood IA's bucket queue together.
+   - FIXED: Excluded IA-protected system files (*_meta.sqlite, *_files.xml,
+            *_meta.xml, *_archive.torrent, __ia_thumb.jpg) and .git/
+            directories from bundling, splitting, local/remote indexing, and
+            orphan detection.
+   - FIXED: Batch mode child processes now exit with code 1 when any file
+            fails or is cancelled, track and report failed folders, forward
+            --parts-per-file and non-default --verify-timeout (180s default),
+            and delete already-synced local folders when --delete-folder-on-success
+            is active.
+
 [2026-10-12] VERSION 6.62 UPDATE
    - ADDED: Live individual progress bars for each concurrent multipart upload thread.
             Each active thread gets its own progress bar showing part number, chunk
@@ -663,6 +686,36 @@ DEFAULT_SPLIT_SIZE_STR = "4480M"
 
 _BUNDLE_EXCLUDE_NAMES = {"metadata.json", "metadata.xml", "_meta.xml"}
 
+_IA_SYSTEM_SUFFIXES = (
+    "_meta.sqlite",
+    "_files.xml",
+    "_meta.xml",
+    "_archive.torrent",
+)
+_IA_SYSTEM_NAMES = {
+    "__ia_thumb.jpg",
+    "_meta.sqlite",
+    "_files.xml",
+    "_meta.xml",
+}
+
+
+def _is_ia_system_file(name):
+    """Return True if `name` is an Internet Archive protected/system file."""
+    low = name.lower()
+    return low in _IA_SYSTEM_NAMES or low.endswith(_IA_SYSTEM_SUFFIXES)
+
+
+def _is_ignored_path(path, root_path=None):
+    """Return True for files inside .git directories or IA system files."""
+    try:
+        parts = path.relative_to(root_path).parts if root_path else path.parts
+    except Exception:
+        parts = path.parts
+    if ".git" in parts:
+        return True
+    return _is_ia_system_file(path.name)
+
 
 def parse_size_mb(s):
     if s is None:
@@ -1014,6 +1067,8 @@ def bundle_dir(directory, min_files=DEFAULT_BUNDLE_MIN):
             if f.suffix.lower() not in exts:
                 continue
             if f.name in _BUNDLE_EXCLUDE_NAMES:
+                continue
+            if _is_ia_system_file(f.name):
                 continue
             if f.name.endswith(".iaupload.json"):
                 continue
@@ -2452,6 +2507,7 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
 
                 # Check for rate limiting in status code (if 429 or 503 wasn't handled by custom adapter)
                 if r and r[0].status_code in [429, 503, 509]:
+                    _note_rate_limit()
                     tqdm.write(
                         f"Rate limited ({r[0].status_code}) for {display_name}. Retrying in {backoff_time}s..."
                     )
@@ -2480,17 +2536,47 @@ def upload_worker(identifier, file_data, metadata=None, position=0, session=None
                 error_str = str(e).lower()
                 vlog(f"  EXCEPTION for '{remote_key}': {type(e).__name__}: {e}")
 
+                if "accesskey_tasks_queued" in error_str:
+                    _note_account_quota()
+                    record_result("failed", f"{remote_key} ({str(e)})")
+                    return (False, str(e))
+
                 # Check specifically for network issues, bucket limits, or timeouts
                 retryable_errors = [
                     "bucket_tasks_queued",
                     "reduce your request rate",
+                    "reduce your request concurrency",
+                    "too many parallel requests",
+                    "global-overload",
+                    "slowdown",
+                    "rationed",
+                    "too many requests",
+                    "503",
+                    "429",
+                    "502",
+                    "504",
                     "timed out",
+                    "timeout",
+                    "temporarily unavailable",
                     "connection aborted",
                     "connection reset",
                     "remotely closed",
                 ]
 
                 if any(err in error_str for err in retryable_errors):
+                    rate_limit_indicators = (
+                        "slowdown",
+                        "bucket_tasks_queued",
+                        "reduce your request",
+                        "too many parallel requests",
+                        "global-overload",
+                        "rationed",
+                        "too many requests",
+                        "503",
+                        "429",
+                    )
+                    if any(ind in error_str for ind in rate_limit_indicators):
+                        _note_rate_limit()
                     tqdm.write(
                         f"Rate Limit/Network issue for {display_name}: {e}. Pausing {backoff_time}s..."
                     )
@@ -2787,14 +2873,21 @@ class IAS3Client:
             # list below, where it correctly identifies BOTH variants as
             # rate-limit responses.
             is_account_quota = "accesskey_tasks_queued" in body_lower
-            is_slowdown = any(s in body_lower for s in (
-                "slowdown",
-                "reduce your request rate",
-                "bucket_tasks_queued",
-                "accesskey_tasks_queued",
-                "rationed",
-                "too many requests",
-            ))
+            is_slowdown = (
+                method == "HEAD"
+                or not body_lower.strip()
+                or any(s in body_lower for s in (
+                    "slowdown",
+                    "reduce your request rate",
+                    "reduce your request concurrency",
+                    "too many parallel requests",
+                    "global-overload",
+                    "bucket_tasks_queued",
+                    "accesskey_tasks_queued",
+                    "rationed",
+                    "too many requests",
+                ))
+            )
             if not is_slowdown:
                 return r
 
@@ -4326,7 +4419,7 @@ def main():
 
     max_workers = args.threads
 
-    print(f"--- Archive.org Smart Uploader (iaupload v6.62) ---")
+    print(f"--- Archive.org Smart Uploader (iaupload v6.63) ---")
     print(f"--- Threads: {max_workers} ---")
     print(f"--- Max in-flight requests: {getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT)} ---")
     print(f"--- Max request rate: {getattr(args, 'max_rpm', DEFAULT_MAX_RPM)} req/min ---")
@@ -4501,12 +4594,13 @@ def main():
             if getattr(args, 'no_resume', False): child_flags.append("--no-resume")
             if getattr(args, 'multipart', False): child_flags.append("--multipart")
             if getattr(args, 'chunk_size', None): child_flags.extend(["--chunk-size", str(args.chunk_size)])
+            if getattr(args, 'parts_per_file', None) is not None: child_flags.extend(["--parts-per-file", str(args.parts_per_file)])
             if getattr(args, 'multipart_threshold', DEFAULT_MULTIPART_THRESHOLD_MB) != DEFAULT_MULTIPART_THRESHOLD_MB: child_flags.extend(["--multipart-threshold", str(args.multipart_threshold)])
             if getattr(args, 'multipart_concurrency', DEFAULT_MULTIPART_CONCURRENCY) != DEFAULT_MULTIPART_CONCURRENCY: child_flags.extend(["--multipart-concurrency", str(args.multipart_concurrency)])
             if getattr(args, 'max_inflight', DEFAULT_MAX_INFLIGHT) != DEFAULT_MAX_INFLIGHT: child_flags.extend(["--max-inflight", str(args.max_inflight)])
             if getattr(args, 'max_rpm', DEFAULT_MAX_RPM) != DEFAULT_MAX_RPM: child_flags.extend(["--max-rpm", str(args.max_rpm)])
             if getattr(args, 'delete_originals_after_upload', False): child_flags.append("--delete-originals-after-upload")
-            if getattr(args, 'verify_timeout', 60) != 60: child_flags.extend(["--verify-timeout", str(args.verify_timeout)])
+            if getattr(args, 'verify_timeout', 180) != 180: child_flags.extend(["--verify-timeout", str(args.verify_timeout)])
             if getattr(args, 'no_part_bars', False): child_flags.append("--no-part-bars")
             if not getattr(args, 'use_ia_library', True): child_flags.append("--use-s3-put")
             
@@ -4515,6 +4609,7 @@ def main():
             
             import subprocess
             success_count = 0
+            failed_dirs = []
             for i, d in enumerate(subdirs):
                 print(f"\n{'='*60}")
                 print(f"BATCH {i+1}/{len(subdirs)}: Processing '{d.name}'")
@@ -4526,6 +4621,7 @@ def main():
                     ident = sanitize_identifier(d.name)
                     
                 cmd = [sys.executable, sys.argv[0]] + child_flags + [str(d), ident]
+                res = None
                 try:
                     res = subprocess.run(cmd)
                 except KeyboardInterrupt:
@@ -4535,9 +4631,15 @@ def main():
                     print("\nBatch processing aborted by user.")
                     break
 
-                if res.returncode == 0:
+                if res is not None and res.returncode == 0:
                     success_count += 1
+                else:
+                    failed_dirs.append(d.name)
                     
+            if failed_dirs:
+                print("\n=== BATCH FAILURES ===")
+                for fname in failed_dirs:
+                    print(f"  [x] {fname}")
             print(f"\n=== BATCH COMPLETE: {success_count}/{len(subdirs)} successful ===")
             sys.exit(0 if success_count == len(subdirs) else 1)
 
@@ -4612,7 +4714,7 @@ def main():
             try:
                 dirs = set()
                 for f in folder_path.rglob("*"):
-                    if f.is_file():
+                    if f.is_file() and not _is_ignored_path(f, folder_path):
                         dirs.add(f.parent)
                 made_total = 0
                 for d in sorted(dirs):
@@ -4648,6 +4750,8 @@ def main():
                 try:
                     for f in folder_path.rglob("*"):
                         if not f.is_file():
+                            continue
+                        if _is_ignored_path(f, folder_path):
                             continue
                         if f.name.endswith(".iaupload.json") or \
                            f.name.endswith(".iaupload.json.tmp"):
@@ -4779,6 +4883,8 @@ def main():
                 continue
             if p.name == script_name:
                 continue
+            if _is_ignored_path(p, folder_path):
+                continue
             if p.name.endswith(".iaupload.json") or \
                p.name.endswith(".iaupload.json.tmp"):
                 continue
@@ -4809,6 +4915,8 @@ def main():
             total_remote_files = len(item.files)
             for f in item.files:
                 if "name" in f and f["name"] != script_name:
+                    if _is_ignored_path(Path(f["name"])):
+                        continue
                     if f["source"] == "original":  # Only consider original files
                         total_remote_originals += 1
                         norm_path = normalize_path(f["name"])
@@ -4906,6 +5014,8 @@ def main():
         if item.exists:
             for f in item.files:
                 if f["source"] == "original" and f["name"] != script_name:
+                    if _is_ignored_path(Path(f["name"])):
+                        continue
                     if f["name"].endswith(".iaupload.json") or \
                        f["name"].endswith(".iaupload.json.tmp"):
                         continue
@@ -4969,6 +5079,16 @@ def main():
 
         if upload_count == 0 and len(files_to_delete) == 0:
             print("\nSync complete. No changes needed.")
+            if (
+                getattr(args, "delete_folder_on_success", False)
+                and matched_count > 0
+                and not shutdown_event.is_set()
+            ):
+                try:
+                    safe_rmtree(folder_path)
+                    print(f"Deleted: {folder_path}")
+                except Exception as e:
+                    print(f"Error deleting folder: {e}")
             sys.exit(0)
 
         if upload_count > 0:
@@ -5123,20 +5243,20 @@ def main():
                                 f"worker_wrapper: routing '{f_data[0]}' "
                                 f"({f_size:,} bytes) to multipart_upload_worker"
                             )
-                            # v6.67: no _multipart_active_lock. All queued
-                            # multipart files run concurrently; the global
-                            # _inflight_slot semaphore (--max-inflight) caps
-                            # total concurrent HTTP uploads across files.
-                            return multipart_upload_worker(
-                                identifier,
-                                f_data,
-                                None,
-                                position=slot,
-                                session=custom_session,
-                                chunk_size_mb=args.chunk_size,
-                                max_concurrency=args.multipart_concurrency,
-                                parts_per_file=args.parts_per_file,
-                            )
+                            # v6.63: serialize large multipart uploads via
+                            # _multipart_active_lock so multiple large files do not
+                            # flood IA's bucket queue simultaneously.
+                            with _multipart_active_lock:
+                                return multipart_upload_worker(
+                                    identifier,
+                                    f_data,
+                                    None,
+                                    position=slot,
+                                    session=custom_session,
+                                    chunk_size_mb=args.chunk_size,
+                                    max_concurrency=args.multipart_concurrency,
+                                    parts_per_file=args.parts_per_file,
+                                )
 
                         if args.use_ia_library:
                             vlog(
@@ -5443,6 +5563,8 @@ def main():
             else:
                 if not getattr(args, "keep_folder_on_success", False):
                     print("Local folder kept.")
+        else:
+            sys.exit(1)
 
     except KeyboardInterrupt:
         print("\n\n!!! KEYBOARD INTERRUPT DETECTED !!!")
